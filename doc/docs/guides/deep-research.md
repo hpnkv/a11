@@ -217,8 +217,8 @@ exposes the same `deep-research` action boundary as the Python handler.
 
 !!! note "Running the demo backend"
 
-    The default endpoint runs Ollama beside the service and needs no key.
-    Claude and Gemini require one. To run the backend locally:
+    The default endpoint uses the hosted demo resources; bring your own key
+    for a different provider. To run the backend locally:
 
     ```sh
     python -m a11.demos.web_demos_server
@@ -235,14 +235,26 @@ exposes the same `deep-research` action boundary as the Python handler.
   <div class="a11-toolbar">
     <input id="research-server" class="wide" aria-label="Demo server URL"
            value="wss://a11.to/ws/demoserver">
-    <select id="research-provider" aria-label="Provider">
-      <option value="ollama">Ollama</option>
-      <option value="claude">Claude</option>
-      <option value="gemini">Gemini</option>
-    </select>
-    <input id="research-model" aria-label="Model" value="glm-4.7-flash">
-    <input id="research-api-key" type="password" aria-label="API key" placeholder="API key (Claude or Gemini)">
-    <input id="research-base-url" aria-label="Base URL" value="http://127.0.0.1:11434">
+    <span class="a11-field">
+      <label for="research-provider">Provider</label>
+      <select id="research-provider">
+        <option value="ollama">Ollama</option>
+        <option value="claude">Claude</option>
+        <option value="gemini">Gemini</option>
+      </select>
+    </span>
+    <span class="a11-field">
+      <label for="research-model">Model</label>
+      <input id="research-model" value="glm-5.3-flash:cloud">
+    </span>
+    <span class="a11-field">
+      <label for="research-api-key">API key</label>
+      <input id="research-api-key" value="use-a11-demo-resources">
+    </span>
+    <span class="a11-field">
+      <label for="research-base-url">Base URL</label>
+      <input id="research-base-url" value="https://ollama.com">
+    </span>
   </div>
   <div id="research-errors" class="a11-errors" role="alert" aria-live="polite"></div>
   <form id="research-form" class="a11-compose">

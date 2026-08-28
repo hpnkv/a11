@@ -36,6 +36,7 @@ import {
     addLine,
     connect,
     need,
+    probeConnection,
     reportExampleSuccess,
     runTurn,
     showError,
@@ -805,4 +806,8 @@ if (root) {
         input.value = '';
         void whileBusy(form, () => demo.send(prompt));
     };
+    // Early connection check so the page tells the user right away.
+    const serverInput = document.querySelector<HTMLInputElement>('#tools-server')!;
+    const errors = document.querySelector<HTMLDivElement>('#tools-errors')!;
+    void probeConnection(serverInput.value.trim() || DEFAULT_SERVER_URL, errors);
 }

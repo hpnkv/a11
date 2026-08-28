@@ -24,6 +24,7 @@ import {
   interactionText,
   makeCall,
   need,
+  probeConnection,
   reportExampleSuccess,
   runTurn,
   showError,
@@ -184,6 +185,9 @@ class ChatDemo {
 
   /** What the page does on load: reopen whatever the URL names. */
   async start(): Promise<void> {
+    // Probe the server before the user does anything.
+    const url = this.backend.server.value.trim() || DEFAULT_SERVER_URL;
+    this.connection = await probeConnection(url, this.errors) ?? null;
     const wanted = new URL(window.location.href).searchParams.get('conversation');
     if (wanted) await this.open(wanted);
   }

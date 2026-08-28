@@ -77,10 +77,13 @@ export interface Backend {
  * demo backend's local Ollama instance and requires no API key.
  */
 export const BACKEND_DEFAULTS: Record<string, { model: string; baseUrl: string }> = {
-    ollama: {model: 'glm-4.7-flash', baseUrl: 'http://127.0.0.1:11434'},
+    ollama: {model: 'glm-5.3-flash:cloud', baseUrl: 'https://ollama.com'},
     claude: {model: 'claude-sonnet-4-6', baseUrl: ''},
     gemini: {model: 'gemini-3.5-flash', baseUrl: ''},
 };
+
+/** The visible demo key; the server substitutes the real one. */
+export const DEMO_API_KEY = 'use-a11-demo-resources';
 
 /**
  * The provider/model/key/base-URL controls of a demo, as one value.
@@ -102,6 +105,8 @@ export class BackendControls {
         this.apiKey = document.querySelector<HTMLInputElement>(`#${prefix}-api-key`)!;
         this.baseUrl = document.querySelector<HTMLInputElement>(`#${prefix}-base-url`)!;
         this.server = document.querySelector<HTMLInputElement>(`#${prefix}-server`)!;
+        // Pre-fill the demo key so a visitor sees the demo work without setup.
+        if (!this.apiKey.value) this.apiKey.value = DEMO_API_KEY;
         this.provider.onchange = () => {
             const defaults = BACKEND_DEFAULTS[this.provider.value];
             if (defaults) {
@@ -155,6 +160,31 @@ export function webSocketUrl(url: string): string {
 }
 
 /**
+ * A lightweight browser/device fingerprint for rate-limit bucketing.
+ *
+ * This is not a tracking identifier — it distinguishes devices that share
+ * an IP so the rate limiter can give each one its own budget. Sent as a
+ * query parameter because the browser WebSocket API does not support
+ * custom handshake headers.
+ */
+function deviceFingerprint(): string {
+    const parts = [
+        navigator.userAgent,
+        navigator.language,
+        `${screen.width}x${screen.height}x${screen.colorDepth}`,
+        Intl.DateTimeFormat().resolvedOptions().timeZone,
+        navigator.hardwareConcurrency?.toString() ?? '',
+    ];
+    // A simple hash: turn the concatenation into a short hex string.
+    let hash = 0;
+    const joined = parts.join('|');
+    for (let i = 0; i < joined.length; i++) {
+        hash = ((hash << 5) - hash + joined.charCodeAt(i)) | 0;
+    }
+    return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+/**
  * Open a session to the demo server over one WebSocket.
  *
  * `registry` is what the *page* serves: an empty one for a demo that only calls
@@ -163,12 +193,44 @@ export function webSocketUrl(url: string): string {
  * call cannot arrive before there is a handler for it -- and so that the
  * backend, which asks this session what it serves over `__list_actions__`, gets
  * the right answer whenever it asks. There is nothing to announce.
+ *
+ * A lightweight device fingerprint is appended to the URL so the server
+ * can rate-limit by device without custom WebSocket headers.
  */
 export async function connect(url: string, registry = new ActionRegistry()): Promise<Connection> {
     const session = need(Session.create({actionRegistry: registry, noStreamTimeoutMs: null}));
-    const stream = need(WebSocketWireStream.connect(webSocketUrl(url)));
+    const wsUrl = new URL(webSocketUrl(url));
+    wsUrl.searchParams.set('fp', deviceFingerprint());
+    const stream = need(WebSocketWireStream.connect(wsUrl.toString()));
     need(await session.addStream(stream, StreamMode.START));
     return {session, stream};
+}
+
+/**
+ * Try to reach the demo server early, so the page tells the user right away
+ * if it cannot connect rather than waiting for the first action.
+ *
+ * Returns the established connection on success, or shows a polished
+ * message in `errorRegion` and returns null.
+ */
+export async function probeConnection(
+    url: string,
+    errorRegion: HTMLElement,
+    registry?: ActionRegistry,
+): Promise<Connection | null> {
+    try {
+        return await connect(url, registry);
+    } catch {
+        errorRegion.innerHTML = '';
+        const banner = document.createElement('div');
+        banner.className = 'a11-connection-banner';
+        banner.innerHTML =
+            '<strong>Could not reach the demo server.</strong> ' +
+            'Check that the server URL above is correct and reachable. ' +
+            'If you are running your own backend, make sure it is started.';
+        errorRegion.append(banner);
+        return null;
+    }
 }
 
 /** Make an action on a connection, ready to be `call`ed on the far side. */
@@ -310,6 +372,20 @@ export async function runTurn(request: TurnRequest): Promise<Interaction[]> {
     for (const definition of definitions) need(await tools.put(definition));
     need(await tools.finalize());
 
+    // Start waiting for the action's terminal status early.  If the handler
+    // fails before writing any output (wrong model, rate limit, bad key), the
+    // promise settles with the error immediately; the race below surfaces it
+    // instead of hanging on a port read that will never produce data.
+    const termination = call.wait(READ_TIMEOUT_MS);
+
+    // A non-OK terminal status, turned into a rejection so Promise.race
+    // can pick it up.  On success the promise never settles, letting the
+    // normal port read win the race.
+    const earlyFailure = termination.then((result) => {
+        need(result);
+        return new Promise<void>(() => {});
+    });
+
     // Thoughts and interactions are read alongside the text, not after it: all
     // three are written from the one provider stream as it arrives, and reading
     // them in sequence would hold a model's thinking back until it stopped
@@ -321,10 +397,13 @@ export async function runTurn(request: TurnRequest): Promise<Interaction[]> {
         : Promise.resolve();
     const interactionsOut = readPort(call, 'new_interactions', (value) => {
         produced.push(value as Interaction);
-    });
+    }).catch(() => {});
     const events = drainPort(call, 'event_stream');
 
-    await readPort(call, 'text_output', (value) => request.onToken?.(String(value)));
+    await Promise.race([
+        readPort(call, 'text_output', (value) => request.onToken?.(String(value))),
+        earlyFailure,
+    ]);
     await thoughts;
     await interactionsOut;
     await events;
@@ -332,7 +411,7 @@ export async function runTurn(request: TurnRequest): Promise<Interaction[]> {
     // The turn's terminal status is the only place a failure *after* the first
     // token shows up, so dropping it would turn "the turn died" into "the model
     // said nothing".
-    need(await call.wait(READ_TIMEOUT_MS));
+    need(await termination);
 
     return [question, ...produced];
 }

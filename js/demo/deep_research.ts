@@ -24,6 +24,7 @@ import {
   connect,
   makeCall,
   need,
+  probeConnection,
   readLogFrom,
   readPort,
   reportExampleSuccess,
@@ -104,10 +105,14 @@ if (root) {
   const demo = new DeepResearchDemo();
   const form = document.querySelector<HTMLFormElement>('#research-form')!;
   const input = document.querySelector<HTMLInputElement>('#research-topic')!;
+  const errors = document.querySelector<HTMLDivElement>('#research-errors')!;
   form.onsubmit = (event) => {
     event.preventDefault();
     const topic = input.value.trim();
     if (!topic) return;
     void whileBusy(form, () => demo.run(topic));
   };
+  // Early connection check so the page tells the user right away.
+  const serverInput = document.querySelector<HTMLInputElement>('#research-server')!;
+  void probeConnection(serverInput.value.trim() || DEFAULT_SERVER_URL, errors);
 }

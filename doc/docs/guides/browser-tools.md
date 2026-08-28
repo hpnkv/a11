@@ -24,7 +24,7 @@ touches the canvas; and the model sees three ordinary A11 actions.
     browser blocks it.
 
     Use a model with reliable tool-schema support. The example has been tested
-    with `glm-4.7-flash` on Ollama, Claude, and Gemini.
+    with `glm-5.3-flash:cloud` on Ollama, Claude, and Gemini.
 
 ## Try it
 
@@ -37,14 +37,26 @@ pane above it.
   <div class="a11-toolbar">
     <input id="tools-server" class="wide" aria-label="Demo server URL"
            value="wss://a11.to/ws/demoserver">
-    <select id="tools-provider" aria-label="Provider">
-      <option value="ollama">Ollama</option>
-      <option value="claude">Claude</option>
-      <option value="gemini">Gemini</option>
-    </select>
-    <input id="tools-model" aria-label="Model" value="glm-4.7-flash">
-    <input id="tools-api-key" type="password" aria-label="API key" placeholder="API key (Claude or Gemini)">
-    <input id="tools-base-url" aria-label="Base URL" value="http://127.0.0.1:11434">
+    <span class="a11-field">
+      <label for="tools-provider">Provider</label>
+      <select id="tools-provider">
+        <option value="ollama">Ollama</option>
+        <option value="claude">Claude</option>
+        <option value="gemini">Gemini</option>
+      </select>
+    </span>
+    <span class="a11-field">
+      <label for="tools-model">Model</label>
+      <input id="tools-model" value="glm-5.3-flash:cloud">
+    </span>
+    <span class="a11-field">
+      <label for="tools-api-key">API key</label>
+      <input id="tools-api-key" value="use-a11-demo-resources">
+    </span>
+    <span class="a11-field">
+      <label for="tools-base-url">Base URL</label>
+      <input id="tools-base-url" value="https://ollama.com">
+    </span>
   </div>
   <div id="tools-errors" class="a11-errors" role="alert" aria-live="polite"></div>
   <div class="a11-panes tools">

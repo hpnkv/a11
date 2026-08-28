@@ -46,14 +46,26 @@ there, on a port of its own, while `text_output` streams the answer.
   <div class="a11-toolbar">
     <input id="chat-server" class="wide" aria-label="Demo server URL"
            value="wss://a11.to/ws/demoserver">
-    <select id="chat-provider" aria-label="Provider">
-      <option value="ollama">Ollama</option>
-      <option value="claude">Claude</option>
-      <option value="gemini">Gemini</option>
-    </select>
-    <input id="chat-model" aria-label="Model" value="glm-4.7-flash">
-    <input id="chat-api-key" type="password" aria-label="API key" placeholder="API key (Claude or Gemini)">
-    <input id="chat-base-url" aria-label="Base URL" value="http://127.0.0.1:11434">
+    <span class="a11-field">
+      <label for="chat-provider">Provider</label>
+      <select id="chat-provider">
+        <option value="ollama">Ollama</option>
+        <option value="claude">Claude</option>
+        <option value="gemini">Gemini</option>
+      </select>
+    </span>
+    <span class="a11-field">
+      <label for="chat-model">Model</label>
+      <input id="chat-model" value="glm-5.3-flash:cloud">
+    </span>
+    <span class="a11-field">
+      <label for="chat-api-key">API key</label>
+      <input id="chat-api-key" value="use-a11-demo-resources">
+    </span>
+    <span class="a11-field">
+      <label for="chat-base-url">Base URL</label>
+      <input id="chat-base-url" value="https://ollama.com">
+    </span>
     <button id="chat-new" type="button">New</button>
   </div>
   <div id="chat-errors" class="a11-errors" role="alert" aria-live="polite"></div>
@@ -107,8 +119,8 @@ const call = need(Action.create(INTERACT_WITH_LLM_SCHEMA, {
     nodeMap: session.getNodeMap(),
 }));
 need(call.setHeader(LlmHeaders.PROVIDER, 'ollama'));
-need(call.setHeader(LlmHeaders.MODEL, 'glm-4.7-flash'));
-need(call.setHeader(LlmHeaders.BASE_URL, 'http://127.0.0.1:11434'));
+need(call.setHeader(LlmHeaders.MODEL, 'glm-5.3-flash:cloud'));
+need(call.setHeader(LlmHeaders.BASE_URL, 'https://ollama.com'));
 need(await call.call());
 ```
 

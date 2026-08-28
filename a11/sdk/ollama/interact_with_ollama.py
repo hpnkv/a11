@@ -499,7 +499,9 @@ def _build_backend_specific_metadata(snapshot: Any) -> dict[str, bytes]:
 
 def _build_options(config: CreateChatConfig) -> dict[str, Any]:
     """Assemble Ollama's `options` bag from the sampling knobs on the config."""
-    options: dict[str, Any] = {"num_predict": config.num_predict}
+    options: dict[str, Any] = {}
+    if config.num_predict >= 0:
+        options["num_predict"] = config.num_predict
     if config.temperature is not None:
         options["temperature"] = config.temperature
     if config.top_p is not None:

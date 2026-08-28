@@ -19,6 +19,7 @@ import {
   connect,
   makeCall,
   need,
+  probeConnection,
   readPort,
   reportExampleSuccess,
   showError,
@@ -121,4 +122,8 @@ if (root) {
     if (!prompt) return;
     void whileBusy(form, () => demo.draw(prompt));
   };
+  // Early connection check so the page tells the user right away.
+  const serverInput = document.querySelector<HTMLInputElement>('#media-server')!;
+  const errors = document.querySelector<HTMLDivElement>('#media-errors')!;
+  void probeConnection(serverInput.value.trim() || DEFAULT_SERVER_URL, errors);
 }

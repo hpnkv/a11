@@ -43,8 +43,14 @@ step, from the `progress` port; the image appears when `image` closes.
   <div class="a11-toolbar">
     <input id="media-server" class="wide" aria-label="Demo server URL"
            value="wss://a11.to/ws/demoserver">
-    <input id="media-steps" type="number" min="1" max="100" aria-label="Steps" value="20">
-    <input id="media-seed" aria-label="Seed" placeholder="seed (optional)">
+    <span class="a11-field">
+      <label for="media-steps">Steps</label>
+      <input id="media-steps" type="number" min="1" max="100" value="20">
+    </span>
+    <span class="a11-field">
+      <label for="media-seed">Seed</label>
+      <input id="media-seed" placeholder="optional">
+    </span>
   </div>
   <div id="media-errors" class="a11-errors" role="alert" aria-live="polite"></div>
   <form id="media-form" class="a11-compose">

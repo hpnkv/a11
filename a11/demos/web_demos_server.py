@@ -67,6 +67,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import os
 import pathlib
 from typing import Any
@@ -78,6 +79,7 @@ from a11 import flow, net
 from a11.cli import backends
 from a11.cli.commands import serve as serve_command
 from a11.demos import echo_server, split_lines
+from a11.demos.rate_limit import RateLimiter
 from a11.gateway import conversation_actions, conversations
 from a11.gateway.tool_bridge import RemoteToolBridge
 from a11.sdk.interact_with_llm import interact_with_llm
@@ -85,6 +87,7 @@ from a11.sdk.interact_with_llm_schema import INTERACT_WITH_LLM_SCHEMA
 from a11.sdk.llm import LlmHeaders
 from a11.service.service import Service, ServiceOptions
 from a11.service.session import Session
+from a11.status import Status, StatusCode
 
 # The flows name `a11.sdk.Interaction`, and a tag resolves only to a type this
 # process has been told about; importing the module is what tells it.
@@ -103,6 +106,15 @@ CONVERSATION_ROOT_ENV = "A11_DEMOS_CONVERSATION_ROOT"
 #: Set to ``0`` to leave ``text_to_image`` unregistered.
 TEXT_TO_IMAGE_ENV = "A11_DEMOS_TEXT_TO_IMAGE"
 
+#: The environment variable holding the real API key for the demo backend.
+DEMO_API_KEY_ENV = "A11_DEMO_API_KEY"
+
+#: The placeholder key browsers send; the server swaps it for the real one.
+DEMO_API_KEY_PLACEHOLDER = "use-a11-demo-resources"
+
+#: The ``fp`` query parameter on the WebSocket URL carries the browser's
+#: device fingerprint for rate-limit bucketing.
+
 #: The deep-research composition, beside this file.
 DEEP_RESEARCH_FLOW = HERE / "deep_research.flow"
 
@@ -113,14 +125,13 @@ DEEP_RESEARCH_FLOW = HERE / "deep_research.flow"
 #: provider uses local Ollama. A11 forwards ``x-a11-`` headers to nested model
 #: calls, so callers only need to provide the research topic.
 #:
-#: The values are the ones the guide and the console's own flow template already
-#: quote, and the model comes from `a11.cli.backends`, which is where this
-#: project decides what "ollama" means. ``127.0.0.1`` is right because it is
-#: read *on the server*: this demo server runs on the box that has ollama.
+#: The demo server uses the hosted Ollama endpoint at ``https://ollama.com``
+#: with the ``glm-5.3-flash:cloud`` model, so visitors can try the demos
+#: without running a local model.
 OLLAMA_DEFAULTS: dict[str, str] = {
     LlmHeaders.PROVIDER: "ollama",
-    LlmHeaders.MODEL: backends.PROVIDERS["ollama"].default_model,
-    LlmHeaders.BASE_URL: "http://127.0.0.1:11434",
+    LlmHeaders.MODEL: "glm-5.3-flash:cloud",
+    LlmHeaders.BASE_URL: "https://ollama.com",
 }
 
 #: The headers the deep-research flows advertise, with those defaults on them.
@@ -141,20 +152,19 @@ RESEARCH_HEADERS = a11.DEFAULT_ACTION_HEADERS | {
     LlmHeaders.MODEL: a11.ActionHeaderSchema(
         LlmHeaders.MODEL,
         "The model to ask. Defaults to"
-        f" {OLLAMA_DEFAULTS[LlmHeaders.MODEL]}, which is what this server's"
-        " own ollama serves.",
+        f" {OLLAMA_DEFAULTS[LlmHeaders.MODEL]}.",
         default=OLLAMA_DEFAULTS[LlmHeaders.MODEL].encode(),
     ),
     LlmHeaders.BASE_URL: a11.ActionHeaderSchema(
         LlmHeaders.BASE_URL,
-        "Where that provider lives. Defaults to the ollama on this server;"
-        " a hosted provider needs no base URL and an API key instead.",
+        "Where that provider lives. Defaults to the hosted demo"
+        " endpoint; a hosted provider needs no base URL.",
         default=OLLAMA_DEFAULTS[LlmHeaders.BASE_URL].encode(),
     ),
     LlmHeaders.API_KEY: a11.ActionHeaderSchema(
         LlmHeaders.API_KEY,
-        "API key for the provider, where it needs one. Left empty for the"
-        " local default.",
+        "API key for the provider. The demo default is substituted on"
+        " the server; bring your own for a different provider.",
     ),
 }
 
@@ -171,6 +181,132 @@ ASK_MODEL_SCHEMA = a11.ActionSchema(
     outputs=INTERACT_WITH_LLM_SCHEMA.outputs,
     headers=INTERACT_WITH_LLM_SCHEMA.headers,
 )
+
+#: The one rate limiter shared across all connections. In-memory for the
+#: single-instance demo server; the ``RateLimiter`` interface is designed
+#: so this can be swapped for a distributed store.
+_RATE_LIMITER = RateLimiter(
+    hourly_limit=5,
+    hourly_period_seconds=3600.0,
+    daily_limit=10,
+    daily_period_seconds=86400.0,
+)
+
+#: LLM-enabled action names that count against the rate limit when
+#: the caller is using the demo API key.
+_LLM_ACTION_NAMES: set[str] = set()
+
+
+def _real_api_key() -> str:
+    """The actual API key the demo backend uses, from the environment."""
+    return os.environ.get(DEMO_API_KEY_ENV, "")
+
+
+def _is_demo_key(action: a11.Action) -> bool:
+    """Whether the caller sent the demo placeholder key."""
+    key = action.get_header(LlmHeaders.API_KEY.value, decode=True) or ""
+    return key.strip() == DEMO_API_KEY_PLACEHOLDER
+
+
+#: The only model the demo key is allowed to use.
+DEMO_ALLOWED_MODEL = "glm-5.3-flash:cloud"
+
+#: Hard server-side timeout for every LLM-enabled demo action.
+_LLM_TIMEOUT = a11.Duration.seconds(120)
+
+
+def _ip_identity(ip: str) -> str:
+    """A hashed identity key for the IP-only rate-limit pool."""
+    return hashlib.sha256(f"ip:{ip}".encode()).hexdigest()[:32]
+
+
+def _device_identity(ip: str, fingerprint: str) -> str:
+    """A hashed identity key for the per-device rate-limit pool."""
+    raw = f"dev:{ip}|{fingerprint}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:32]
+
+
+def _extract_ip(stream: net.WireStream) -> str:
+    """Best-effort remote IP from the WebSocket request headers.
+
+    Checks ``x-forwarded-for`` first (a reverse proxy in front), then
+    ``x-real-ip``, then falls back to the stream id.
+    """
+    headers: dict[str, str] = {}
+    if hasattr(stream, "request_headers"):
+        for name, value in stream.request_headers:
+            headers[name.lower()] = value
+    forwarded = headers.get("x-forwarded-for", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return headers.get("x-real-ip", stream.get_id())
+
+
+def _wrap_llm_handler(
+    handler: a11.ActionHandler,
+    ip: str,
+    fingerprint: str,
+) -> a11.ActionHandler:
+    """Wrap an LLM handler with API-key substitution and rate limiting.
+
+    When the caller sends the demo placeholder key, the wrapper:
+
+    1. Checks the rate limiter — and raises ``RESOURCE_EXHAUSTED`` if the
+       caller has used their allowance.
+    2. Substitutes the real API key so the downstream provider sees it.
+
+    Callers who bring their own key skip both checks.
+
+    A two-minute deadline is enforced for every call, regardless of
+    key, so that a runaway model call cannot hold a connection open
+    indefinitely.
+    """
+
+    async def _inner(action: a11.Action) -> None:
+        # Server-enforced timeout: cap every LLM action at 2 minutes.
+        a11.set_deadline_header(action, a11.now() + _LLM_TIMEOUT)
+        if _is_demo_key(action):
+            real_key = _real_api_key()
+            if not real_key:
+                raise Status(
+                    code=StatusCode.FAILED_PRECONDITION,
+                    message=(
+                        "The demo server's API key is not configured."
+                        " Please provide your own key."
+                    ),
+                ).to_exception()
+
+            # Only the designated model is available with the demo key.
+            model = (
+                action.get_header(
+                    LlmHeaders.MODEL.value, decode=True,
+                ) or ""
+            )
+            if model and model != DEMO_ALLOWED_MODEL:
+                raise Status(
+                    code=StatusCode.INVALID_ARGUMENT,
+                    message=(
+                        f"The demo key only supports"
+                        f" {DEMO_ALLOWED_MODEL}. Bring your own"
+                        f" API key for a different model."
+                    ),
+                ).to_exception()
+
+            ip_key = _ip_identity(ip)
+            dev_key = _device_identity(ip, fingerprint)
+            decision = _RATE_LIMITER.check(ip_key, dev_key)
+            if not decision.allowed:
+                raise Status(
+                    code=StatusCode.RESOURCE_EXHAUSTED,
+                    message=decision.reason,
+                ).to_exception()
+
+            action.set_header(LlmHeaders.API_KEY.value, real_key)
+
+        return await handler(action)
+
+    return _inner
+
 
 _PROGRAM: flow.Program | None = None
 
@@ -223,6 +359,9 @@ def make_registry(
     # resolves by id (from the URL) instead of browsing.
     registry.unregister(conversation_actions.GET_CONVERSATIONS_SCHEMA.name)
 
+    # interact_with_llm is LLM-enabled.
+    _LLM_ACTION_NAMES.add(INTERACT_WITH_LLM_SCHEMA.name)
+
     # The same action without the recording, under its own name. A composition's
     # model calls are steps, not chat turns: recorded, each one would arrive in
     # the conversation list as a conversation of its own. So the deep-research
@@ -231,6 +370,7 @@ def make_registry(
     registry.register(
         ASK_MODEL_SCHEMA.name, ASK_MODEL_SCHEMA, interact_with_llm
     )
+    _LLM_ACTION_NAMES.add(ASK_MODEL_SCHEMA.name)
 
     # The one primitive the Flow language does not have (see the module).
     registry.register(
@@ -259,6 +399,9 @@ def make_registry(
         registry.register(
             flow_name, research_schema(entry.schema), entry.handler
         )
+        # Every flow entry is a composition that calls ask_model, so the
+        # outer action is LLM-enabled.
+        _LLM_ACTION_NAMES.add(flow_name)
 
     if text_to_image:
         from a11.demos import text_to_image as t2i
@@ -272,6 +415,23 @@ def make_registry(
     return registry
 
 
+def _extract_fingerprint(stream: net.WireStream) -> str:
+    """The browser-supplied fingerprint from the WebSocket request path.
+
+    Browsers cannot set custom WebSocket handshake headers, so the
+    fingerprint arrives as the ``fp`` query parameter on the URL the
+    client connected to. ``request_path`` includes the query string.
+    """
+    if hasattr(stream, "request_path"):
+        from urllib.parse import parse_qs, urlparse
+
+        parsed = urlparse(stream.request_path)
+        values = parse_qs(parsed.query).get("fp", [])
+        if values:
+            return values[0]
+    return ""
+
+
 def make_service(registry: a11.ActionRegistry) -> Service:
     """A service whose every connection can serve the page's own actions back.
 
@@ -280,6 +440,9 @@ def make_service(registry: a11.ActionRegistry) -> Service:
     visible on anyone else's session. Same reasoning as
     [a11.gateway.app.A11Gateway][a11.gateway.app.A11Gateway], which is where
     this shape comes from.
+
+    LLM-enabled actions are wrapped per-connection with API-key substitution
+    and rate limiting, keyed to the caller's IP and fingerprint.
     """
 
     async def on_connection(session: Session, stream: net.WireStream) -> None:
@@ -297,6 +460,24 @@ def make_service(registry: a11.ActionRegistry) -> Service:
         )
 
         per_connection = registry.copy()
+
+        # Wrap every LLM-enabled Python handler with the demo-key proxy
+        # and rate limiter, bound to this connection's identity.
+        # NativeActionHandlers (flow-compiled compositions) are not wrapped
+        # directly: they call `ask_model` internally, which is a Python
+        # handler and gets its own wrapper.
+        ip = _extract_ip(stream)
+        fingerprint = _extract_fingerprint(stream)
+        for action_name in _LLM_ACTION_NAMES:
+            handler = per_connection.get_handler(action_name)
+            if handler is not None and callable(handler):
+                schema = per_connection.get_schema(action_name)
+                per_connection.register(
+                    action_name,
+                    schema,
+                    _wrap_llm_handler(handler, ip, fingerprint),
+                )
+
         bridge = RemoteToolBridge()
         bridge.install(per_connection)
         session.set_action_registry(per_connection)

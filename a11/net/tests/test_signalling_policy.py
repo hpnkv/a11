@@ -445,3 +445,112 @@ async def test_client_options_ask_for_http_1_1():
     )
     assert not options.http2_options.enable_h2
     assert not options.http2_options.enable_h2c
+
+
+async def test_a_takeover_is_reported_as_an_arrival_and_not_a_departure():
+    admitted: list[str] = []
+    departed: list[str] = []
+
+    async def on_admit(request):
+        admitted.append(request.identity)
+
+    service = net.SignallingService.create()
+    server = net.WebSocketSignallingServer.create(
+        service,
+        server_options(
+            replace_existing=True,
+            on_admit=on_admit,
+            on_departed=departed.append,
+        ),
+    )
+    try:
+        first = await connect(server.port, "restarting")
+        assert admitted == ["restarting"]
+        assert departed == []
+
+        # The predecessor is still registered, as it is after a network drop
+        # the server has not noticed yet.
+        second = await connect(server.port, "restarting")
+        assert second.connected()
+
+        # Give the displaced socket's own close callbacks time to arrive: they
+        # are what used to evict the newcomer.
+        await asyncio.sleep(0.5)
+        assert admitted == ["restarting", "restarting"]
+        assert departed == [], (
+            "a takeover was reported as a departure, so whoever is keeping"
+            " presence now believes a connected host has left"
+        )
+        assert second.connected()
+
+        # And the identity still routes to the socket that holds it.
+        received: asyncio.Queue = asyncio.Queue()
+
+        async def on_message(message):
+            await received.put(message)
+
+        second.set_on_message(on_message)
+        caller = await connect(server.port, "caller")
+        caller.send(
+            net.SignallingMessage(
+                type=net.SignallingMessageType.DESCRIPTION,
+                recipient="restarting",
+                description="v=0 for the survivor",
+                description_type="offer",
+            )
+        )
+        arrived = await asyncio.wait_for(received.get(), timeout=5)
+        assert arrived.description == "v=0 for the survivor"
+
+        caller.close()
+        second.close()
+        del first
+    finally:
+        server.stop()
+
+
+async def test_a_departure_is_reported_when_the_identity_really_leaves():
+    """The other half: an ordinary disconnect is still a departure.
+
+    Suppressing the takeover's departure must not suppress the real one, which
+    is what presence is kept by.
+    """
+    departed: list[str] = []
+    service = net.SignallingService.create()
+    server = net.WebSocketSignallingServer.create(
+        service,
+        server_options(replace_existing=True, on_departed=departed.append),
+    )
+    try:
+        client = await connect(server.port, "leaving")
+        assert client.connected()
+        client.close()
+        for _ in range(50):
+            if departed:
+                break
+            await asyncio.sleep(0.1)
+        assert departed == ["leaving"]
+    finally:
+        server.stop()
+
+
+async def test_a_superseded_socket_closing_late_leaves_its_replacement_alone():
+    service = net.SignallingService.create()
+    server = net.WebSocketSignallingServer.create(
+        service, server_options(replace_existing=True)
+    )
+    try:
+        first = await connect(server.port, "handover")
+        second = await connect(server.port, "handover")
+        assert second.connected()
+
+        # Close the displaced client explicitly: this is the callback that used
+        # to take the replacement down with it.
+        first.close()
+        await asyncio.sleep(0.5)
+        assert second.connected()
+        assert "handover" in service.identities()
+
+        second.close()
+    finally:
+        server.stop()

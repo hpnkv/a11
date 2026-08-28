@@ -459,6 +459,7 @@ struct WebSocketSignallingServer::State {
   struct Connection {
     std::shared_ptr<internal::BinaryChannel> channel;
     std::shared_ptr<SignallingEndpoint> endpoint;
+    std::uint64_t serial = 0;
   };
 
   State(std::shared_ptr<SignallingService> value_service,
@@ -471,6 +472,7 @@ struct WebSocketSignallingServer::State {
   const WebSocketSignallingServerOptions options;
   std::shared_ptr<Http2Server> server ABSL_GUARDED_BY(mu);
   absl::flat_hash_map<std::string, Connection> connections ABSL_GUARDED_BY(mu);
+  std::uint64_t next_serial ABSL_GUARDED_BY(mu) = 1;
 };
 
 absl::StatusOr<std::shared_ptr<WebSocketSignallingServer>>
@@ -570,7 +572,7 @@ a11::Task WebSocketSignallingServer::Register(
     // The displaced connection goes first: SignallingService::Connect refuses
     // an identity that is already registered, and a host taking its own name
     // back after a crash would otherwise be locked out by the socket its dead.
-    Remove(held_state, identity);
+    Remove(held_state, identity, /*only=*/0, /*report=*/false);
   }
 
   absl::StatusOr<std::shared_ptr<internal::BinaryChannel>> channel =
@@ -601,14 +603,20 @@ a11::Task WebSocketSignallingServer::Register(
     return a11::FailedTask(endpoint.status());
   }
 
+  std::uint64_t serial = 0;
+  {
+    thread::MutexLock lock(&held_state->mu);
+    serial = held_state->next_serial++;
+  }
+
   std::weak_ptr<State> state_weak = held_state;
   const std::string pinned_identity = identity;
   std::weak_ptr<SignallingEndpoint> endpoint_weak = *endpoint;
   internal::BinaryChannelCallbacks callbacks{
       .on_open = []() {},
       .on_message =
-          [state_weak, endpoint_weak, weak_channel,
-           pinned_identity](std::string raw) {
+          [state_weak, endpoint_weak, weak_channel, pinned_identity,
+           serial](std::string raw) {
             std::shared_ptr<State> alive = state_weak.lock();
             std::shared_ptr<SignallingEndpoint> held_endpoint =
                 endpoint_weak.lock();
@@ -621,7 +629,7 @@ a11::Task WebSocketSignallingServer::Register(
             // is the connection misbehaving rather than one bad message.
             if (!message.ok() || (!message->sender.empty() &&
                                   message->sender != pinned_identity)) {
-              Remove(alive, pinned_identity);
+              Remove(alive, pinned_identity, serial);
               return;
             }
             message->sender = pinned_identity;
@@ -639,37 +647,38 @@ a11::Task WebSocketSignallingServer::Register(
             if (routed.ok()) {
               return;
             }
+            if (absl::IsInvalidArgument(routed) ||
+                absl::IsPermissionDenied(routed)) {
+              Remove(alive, pinned_identity, serial);
+              return;
+            }
+            absl::Status elsewhere = routed;
             if (absl::IsNotFound(routed)) {
-              // The recipient is not here. Somewhere else, perhaps: that is
-              // what on_unroutable is for. Either way the *sender* has done
-              // nothing wrong, so its connection survives and it is told.
-              absl::Status elsewhere = absl::NotFoundError(
+              elsewhere = absl::NotFoundError(
                   absl::StrCat("Signalling recipient is not connected: ",
                                message->recipient));
               if (alive->options.on_unroutable) {
                 elsewhere = alive->options.on_unroutable(*message);
               }
-              if (!elsewhere.ok()) {
-                ReportUndeliverable(weak_channel, *message, elsewhere);
-              }
-              return;
             }
-            Remove(alive, pinned_identity);
+            if (!elsewhere.ok()) {
+              ReportUndeliverable(weak_channel, *message, elsewhere);
+            }
           },
       .on_error =
-          [state_weak, pinned_identity](absl::Status status) {
+          [state_weak, pinned_identity, serial](absl::Status status) {
             LOG(ERROR) << "Signalling WebSocket for " << pinned_identity
                        << " failed: " << status;
             if (std::shared_ptr<State> alive = state_weak.lock();
                 alive != nullptr) {
-              Remove(alive, pinned_identity);
+              Remove(alive, pinned_identity, serial);
             }
           },
       .on_closed =
-          [state_weak, pinned_identity]() {
+          [state_weak, pinned_identity, serial]() {
             if (std::shared_ptr<State> alive = state_weak.lock();
                 alive != nullptr) {
-              Remove(alive, pinned_identity);
+              Remove(alive, pinned_identity, serial);
             }
           },
       .on_buffered_amount_low = []() {},
@@ -686,12 +695,13 @@ a11::Task WebSocketSignallingServer::Register(
       return a11::FailedTask(absl::CancelledError("Signalling server stopped"));
     }
     held_state->connections.insert_or_assign(
-        identity,
-        State::Connection{.channel = *channel, .endpoint = *endpoint});
+        identity, State::Connection{.channel = *channel,
+                                    .endpoint = *endpoint,
+                                    .serial = serial});
   }
   validation = (*channel)->Open();
   if (!validation.ok()) {
-    Remove(held_state, identity);
+    Remove(held_state, identity, serial);
     return a11::FailedTask(validation);
   }
   return a11::ReadyTask();
@@ -711,12 +721,16 @@ absl::Status WebSocketSignallingServer::Disconnect(std::string_view identity) {
 }
 
 void WebSocketSignallingServer::Remove(const std::shared_ptr<State>& state,
-                                       const std::string& identity) {
+                                       const std::string& identity,
+                                       std::uint64_t only, bool report) {
   State::Connection connection;
   {
     thread::MutexLock lock(&state->mu);
     const auto found = state->connections.find(identity);
     if (found == state->connections.end()) {
+      return;
+    }
+    if (only != 0 && found->second.serial != only) {
       return;
     }
     connection = std::move(found->second);
@@ -729,7 +743,7 @@ void WebSocketSignallingServer::Remove(const std::shared_ptr<State>& state,
   if (connection.endpoint != nullptr) {
     (void)connection.endpoint->Close();
   }
-  if (state->options.on_departed) {
+  if (report && state->options.on_departed) {
     state->options.on_departed(identity);
   }
 }

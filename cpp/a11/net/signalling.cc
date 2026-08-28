@@ -288,7 +288,8 @@ absl::Status SignallingService::Deliver(SignallingMessage message) {
   {
     thread::MutexLock lock(&recipient->mu);
     if (!recipient->connected) {
-      return recipient->status;
+      return absl::NotFoundError(absl::StrCat(
+          "Signalling recipient is not connected: ", message.recipient));
     }
     recipient->incoming.push_back(std::move(message));
     if (!recipient->pumping) {
@@ -337,7 +338,8 @@ absl::Status SignallingService::Route(
   {
     thread::MutexLock lock(&recipient->mu);
     if (!recipient->connected) {
-      return recipient->status;
+      return absl::NotFoundError(absl::StrCat(
+          "Signalling recipient is not connected: ", message.recipient));
     }
     recipient->incoming.push_back(std::move(message));
     if (!recipient->pumping) {

@@ -67,10 +67,9 @@ class EchoDemo {
     need(registry.register('echo', echoSchema));
     this.session = need(Session.create({ actionRegistry: registry, noStreamTimeoutMs: null }));
     const base = new URL(this.server.value);
-    const prefix = base.pathname.replace(/\/$/, '');
     const transport = need(HttpSseClientWireStream.create(base.origin, {
-      connectEndpoint: `${prefix}/connect`,
-      messageEndpoint: `${prefix}/streams/{id}/message`,
+      connectEndpoint: base.pathname.replace(/\/$/, ''),
+      messageEndpoint: '/streams/{id}/message',
     }));
     this.stream = new ObservedStream(transport, (event) => this.addEvent(event));
     need(await this.session.addStream(this.stream, StreamMode.START));

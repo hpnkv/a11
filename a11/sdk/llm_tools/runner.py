@@ -203,7 +203,16 @@ class ExecutedActions:
         return f"{status.code.name}: {status.message}"
 
 
-async def _user_facing_log(node: a11.AsyncNode, deadline: a11.Duration) -> str:
+DRAIN_AFTER_COMPLETION = a11.Duration.seconds(5)
+
+
+def _drain_timeout(deadline: a11.Time) -> a11.Duration:
+    """How long to wait for what a finished call still owes us."""
+    remaining = max(deadline - a11.now(), a11.zero_duration())
+    return min(remaining, DRAIN_AFTER_COMPLETION)
+
+
+async def _user_facing_log(node: a11.AsyncNode, timeout: a11.Duration) -> str:
     """What a call logged for the person watching, as one block of text.
 
     Reads the call's log port and keeps the entries that are *not* marked
@@ -214,23 +223,22 @@ async def _user_facing_log(node: a11.AsyncNode, deadline: a11.Duration) -> str:
     what the ``a11.action`` logger uses, so a line reads the same wherever it is
     shown.
 
-    Log decoding is best effort and does not fail the tool. The read uses the
-    turn's deadline.
     """
     parts: list[str] = []
-    async for chunk in node.iter_chunks(
-        timeout=max(deadline - a11.now(), a11.zero_duration())
-    ):
-        if chunk is None or chunk.is_null() or _native.is_status_chunk(chunk):
-            continue
-        try:
-            record = _native.log_record_from_chunk(chunk)
-        except Exception:
-            logging.debug("undecodable log chunk", exc_info=True)
-            continue
-        if record["internal"]:
-            continue
-        parts.append(record["text"])
+    try:
+        async for chunk in node.iter_chunks(timeout=timeout):
+            if chunk is None or chunk.is_null() or _native.is_status_chunk(chunk):
+                continue
+            try:
+                record = _native.log_record_from_chunk(chunk)
+            except Exception:
+                logging.debug("undecodable log chunk", exc_info=True)
+                continue
+            if record["internal"]:
+                continue
+            parts.append(record["text"])
+    except StatusException:
+        logging.debug("a tool's log port did not end", exc_info=True)
     return "".join(parts)
 
 
@@ -339,10 +347,8 @@ async def execute_actions_from_interaction(
             action_outputs[output_name] = []
             try:
                 node = nested_action[output_name]
-                # The turn deadline also bounds output reads. An action may
-                # finish while an unclosed or stale output remains active.
                 async for fragment in node.iter_fragments(
-                    timeout=max(deadline - a11.now(), a11.zero_duration())
+                    timeout=_drain_timeout(deadline)
                 ):
                     fragment.id = output_name
                     fragment.continued = True
@@ -364,7 +370,7 @@ async def execute_actions_from_interaction(
         node = log_nodes.get(nested_action.id)
         if node is not None:
             try:
-                if log := await _user_facing_log(node, deadline):
+                if log := await _user_facing_log(node, _drain_timeout(deadline)):
                     logs[nested_action.id] = log
             except StatusException as error:
                 errors.setdefault(nested_action.id, error.status)

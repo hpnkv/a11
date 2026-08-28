@@ -31,12 +31,15 @@
 
 /* The browser-tools guide: the scene and the conversation about it, side by side,
    so one screen holds both. The canvas is sized by its pane rather than the other
-   way round -- `min-height: 0` on the flex child is what lets it shrink, and the
-   backing store stays 620x300 whatever it is drawn at, so blob coordinates do not
-   move with the layout. */
+   way round -- `min-height: 0` on the flex child is what lets it shrink. Its box
+   comes from `aspect-ratio` rather than from the width/height attributes,
+   because the WebGL renderer owns those now: it sets the backing store to the
+   size the canvas is laid out at, and a height derived from them would chase
+   itself. Blob coordinates are world units, so they do not move with the
+   layout either way. */
 .a11-panes.tools { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); height: min(28rem, 60vh); min-height: 20rem; }
 .a11-canvas-wrap { display: flex; flex: 1; min-height: 0; align-items: center; justify-content: center; padding: .75rem; background: var(--md-default-bg-color); }
-#tools-canvas { display: block; width: 100%; max-width: 620px; max-height: 100%; height: auto; border: 1px solid var(--md-default-fg-color--lightest); border-radius: .35rem; background: var(--md-code-bg-color); }
+#tools-canvas { display: block; width: 100%; max-width: 620px; max-height: 100%; aspect-ratio: 620 / 300; touch-action: none; border: 1px solid var(--md-default-fg-color--lightest); border-radius: .35rem; background: var(--md-code-bg-color); }
 /* Two stacked regions in the right-hand pane: what the model said, and what this
    page was asked to run. The log is the smaller of the two. */
 .a11-panes.tools .a11-messages { flex: 3; }

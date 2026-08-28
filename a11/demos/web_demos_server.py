@@ -15,6 +15,8 @@ Run with ``python -m a11.demos.web_demos_server``. It serves, on
   field to offer and a call that names no provider cannot be answered.
 * ``text_to_image``, when [a11.demos.text_to_image][a11.demos.text_to_image] can
   reach a Stable Diffusion checkpoint.
+* ``echo``, for the browser-clients guide: the smallest action there is, so a
+  page can watch a transport work without a model in the way.
 * `__list_actions__` — which every A11 peer answers, and which is how this
   server learns what a page serves without the page announcing anything.
   [a11.gateway.tool_bridge][a11.gateway.tool_bridge]).
@@ -75,7 +77,7 @@ import a11
 from a11 import flow, net
 from a11.cli import backends
 from a11.cli.commands import serve as serve_command
-from a11.demos import split_lines
+from a11.demos import echo_server, split_lines
 from a11.gateway import conversation_actions, conversations
 from a11.gateway.tool_bridge import RemoteToolBridge
 from a11.sdk.interact_with_llm import interact_with_llm
@@ -232,6 +234,10 @@ def make_registry(
         split_lines.SPLIT_LINES_SCHEMA.name,
         split_lines.SPLIT_LINES_SCHEMA,
         split_lines.split_lines,
+    )
+
+    registry.register(
+        echo_server.ECHO_SCHEMA.name, echo_server.ECHO_SCHEMA, echo_server.echo
     )
 
     # A composition, as text. The deep-research guide's whole backend is the

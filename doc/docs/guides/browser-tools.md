@@ -28,9 +28,9 @@ touches the canvas; and the model sees three ordinary A11 actions.
 
 ## Try it
 
-Try "make blob 2 red and move it left", "spread them out", or "give them a warm
-palette". The right pane logs every call the page served, including what each
-tool narrated; the model's own sentence arrives underneath the canvas.
+Try "make blob 2 red and move it up", "spread them out", or "give them a warm palette". Drag the scene to orbit it. The
+right pane logs every call the page served, including what each tool narrated; the model's own sentence arrives in the
+pane above it.
 
 <link rel="stylesheet" href="../assets/web-demos.css">
 <div id="tools-demo" class="a11-demo">
@@ -51,7 +51,7 @@ tool narrated; the model's own sentence arrives underneath the canvas.
     <section class="a11-pane" aria-label="The scene this page serves">
       <header>the page</header>
       <div class="a11-canvas-wrap">
-        <canvas id="tools-canvas" width="620" height="300" aria-label="Five coloured blobs"></canvas>
+        <canvas id="tools-canvas" width="620" height="300" aria-label="Five coloured blobs in a 3D scene; drag to orbit"></canvas>
       </div>
       <form id="tools-form" class="a11-compose">
         <input id="tools-input" aria-label="Instruction" autocomplete="off" placeholder="Make blob 2 red and move it left...">
@@ -69,36 +69,40 @@ tool narrated; the model's own sentence arrives underneath the canvas.
 <script type="module" src="../assets/browser-tools.js"></script>
 
 The page is
-[`js/demo/browser_tools.ts`](https://github.com/hpnkv/a11/blob/main/js/demo/browser_tools.ts).
-The IntelliJ plugin's webview does the same thing with the IDE's editor and index
-instead of a canvas — see `intellij-plugin/webview/src/ideTools.ts`.
+[`js/demo/browser_tools.ts`](https://github.com/hpnkv/a11/blob/main/js/demo/browser_tools.ts). The IntelliJ plugin's
+webview does the same thing with the IDE's editor and index instead of a scene — see
+`intellij-plugin/webview/src/ideTools.ts`.
 
 ## 1. Ports are the model's arguments
 
 An A11 action's tool definition is derived from its *ports*
-([`ToolAdapter`](../llm-sdk/action-tools.md)): one port per argument,
-a streaming port becoming an array. So the action is designed the way the model
-should see it —
+([`ToolAdapter`](../llm-sdk/action-tools.md)): one port per argument, a streaming port becoming an array. So the action
+is designed the way the model should see it —
 
 ```ts
 const SET_COLOR_SCHEMA = new ActionSchema({
     name: 'set_color',
     description: 'Recolour blobs: the i-th id is given the i-th colour.',
     inputs: {
-        ids: new ActionPortSchema({name: 'ids', type: 'application/json', required: true,
-            description: 'Which blobs to recolour.'}),
-        colors: new ActionPortSchema({name: 'colors', type: 'text/plain', required: true,
-            description: 'One `#rrggbb` per id, in the same order.'}),
+        ids: new ActionPortSchema({
+            name: 'ids', type: 'application/json', required: true,
+            description: 'Which blobs to recolour.'
+        }),
+        colors: new ActionPortSchema({
+            name: 'colors', type: 'text/plain', required: true,
+            description: 'One `#rrggbb` per id, in the same order.'
+        }),
     },
     outputs: {
-        recoloured: new ActionPortSchema({name: 'recoloured', type: 'application/json',
-            unary: true, required: true}),
+        recoloured: new ActionPortSchema({
+            name: 'recoloured', type: 'application/json',
+            unary: true, required: true
+        }),
     },
 });
 ```
 
-The schema exposes each input with its field description; it does not wrap them
-in an opaque `request` object.
+The schema exposes each input with its field description; it does not wrap them in an opaque `request` object.
 
 !!! warning "A TypeScript port has a MIME type, not a value type"
 
@@ -109,7 +113,9 @@ in an opaque `request` object.
     ```ts
     const PORT_SCHEMAS = {
         set_color: {ids: z.number().int(), colors: z.string()},
-        shift_position: {ids: z.number().int(), dx: z.number(), dy: z.number()},
+        shift_position: {
+            ids: z.number().int(), dx: z.number(), dy: z.number(), dz: z.number(),
+        },
     };
     ```
 
@@ -118,9 +124,8 @@ in an opaque `request` object.
 
 ## 2. Keep progress logs separate from results
 
-A tool can report user-visible activity through `action.log()`. Because no port
-declares this log, it does not become part of the model's tool result. The
-backend's [tool runner](../llm-sdk/tool-runner.md) reads it separately, associates
+A tool can report user-visible activity through `action.log()`. Because no port declares this log, it does not become
+part of the model's tool result. The backend's [tool runner](../llm-sdk/tool-runner.md) reads it separately, associates
 it with the call ID, and records it in the turn metadata for later replay.
 
 ```ts
@@ -131,8 +136,8 @@ The log channel requires no declared port or result cleanup.
 
 ## 3. The page serves its actions
 
-A handler in the page is a handler like any other: read the declared inputs,
-do the work, write the declared outputs, close them.
+A handler in the page is a handler like any other: read the declared inputs, do the work, write the declared outputs,
+close them.
 
 ```ts
 const registry = new ActionRegistry();
@@ -149,12 +154,11 @@ need(registry.register(SET_COLOR_SCHEMA.name, SET_COLOR_SCHEMA, async (action) =
 
 ### Validate, then act
 
-Validate every model-supplied argument before modifying page state. Return a
-status when the request cannot be applied:
+Validate every model-supplied argument before modifying page state. Return a status when the request cannot be applied:
 
 ```ts
-const dx = rawDx === null ? 0 : finiteNumber(rawDx, 'dx', scene.width);
-if (isStatus(dx)) return await refuse(action, dx, onLog);
+const value = finiteNumber(raw[axis], axis, 2 * span[axis]);
+if (isStatus(value)) return await refuse(action, value, onLog);
 ```
 
 Returning `invalidArgumentError('dx must be a number of pixels; got "a bit left".')`
@@ -212,13 +216,13 @@ the handler and streams the outputs to the model.
 
 ## 6. Choose what the model can observe
 
-`describe_scene` returns one `{id, x, y, radius, color}` object per blob, giving
-the model the state needed by the mutation tools. Image inputs belong in model
-message content, while tool results are JSON values. An application that needs
-visual reasoning can send a screenshot as message content and keep tool results
-for structured state and operation outcomes.
+`describe_scene` returns one `{id, x, y, z, radius, color}` object per blob in world units, giving the model the state
+needed by the mutation tools — and world units rather than screen pixels because that is what the scene itself uses, so
+the model is never reasoning about a projection that the reader can rotate out from under it. Image inputs belong in
+model message content, while tool results are JSON values. An application that needs visual reasoning can send a
+rendered frame as message content and keep tool results for structured state and operation outcomes.
 
 Use browser-hosted actions when the capability or authoritative state belongs
-in the page, such as an editor selection, canvas, or local document. For tools
+in the page, such as an editor selection, scene, or local document. For tools
 that belong on the backend, register them directly with
 [`interact_with_llm`](../llm-sdk/interact-actions.md).

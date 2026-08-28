@@ -1,6 +1,6 @@
 {
   "name": "@curiositystack/a11",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "TypeScript client for the A11 streaming action runtime",
   "homepage": "https://docs.a11.to/typescript.html",
   "bugs": {
@@ -60,8 +60,10 @@
   },
   "devDependencies": {
     "@types/node": "^24.1.0",
+    "@types/three": "^0.185.4",
     "@types/ws": "^8.18.1",
     "esbuild": "^0.25.12",
+    "three": "^0.185.1",
     "typedoc": "^0.28.0",
     "typescript": "^5.9.3"
   }

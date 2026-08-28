@@ -264,7 +264,8 @@ class WebSocketSignallingServer
                             std::shared_ptr<Http2ResponseWriter> response);
 
   static void Remove(const std::shared_ptr<State>& state,
-                     const std::string& identity);
+                     const std::string& identity, std::uint64_t only = 0,
+                     bool report = true);
 
   std::shared_ptr<State> state_;
 };

@@ -1,7 +1,8 @@
 """HTTP/2 SSE server for the browser-client echo guide.
 
-Run with ``python -m a11.demos.echo_server``. The service exposes the A11 SSE
-endpoints under ``/demos/echo`` and executes one action named ``echo``.
+Run with ``python -m a11.demos.echo_server``. The service accepts the SSE
+connect POST at ``/demos/echo`` and outbound messages at the default
+``/streams/{id}/message``, and executes one action named ``echo``.
 """
 
 from __future__ import annotations
@@ -59,8 +60,7 @@ async def serve(
     service = a11.Service(action_registry=registry)
 
     options = a11.HttpSseOptions()
-    options.connect_endpoint = "/demos/echo/connect"
-    options.message_endpoint = "/demos/echo/streams/{id}/message"
+    options.connect_endpoint = "/demos/echo"
     # Nothing to say about cross-origin access any more: it is permissive by
     # default, and A11's own response headers -- including the `x-a11-stream-id`
     # this page reads -- are exposed by default, because the SSE transport does

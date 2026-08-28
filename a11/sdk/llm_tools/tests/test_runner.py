@@ -189,3 +189,98 @@ async def test_collect_tools_adds_the_registered_actions_the_caller_allows(
     await host.wait()
 
     assert [tool["name"] for tool in collected[0]] == expected
+
+
+_QUIET_SCHEMA = ActionSchema(
+    name="quiet_tool",
+    description="Answers, narrates nothing, and leaves its log port open.",
+    outputs={
+        "listed": ActionPortSchema(
+            "listed", "application/json", typeinfo=dict, required=True
+        )
+    },
+)
+
+
+@pytest.mark.asyncio
+async def test_a_log_port_nobody_closes_is_drained_for_a_bounded_time():
+    """The read that used to never return.
+
+    `Action.log`'s contract is that nobody has to drain the log port and nobody
+    has to close it. A handler in *this* process closes it by finishing, but a
+    peer is under no such obligation -- the browser-tools guide's page left it
+    open for every tool that answered without narrating -- and the runner read
+    it against the turn's deadline alone. A turn carrying no `x-a11-deadline`
+    header has `infinite_future()` for a deadline, so the read of a log that was
+    never coming never returned: the tool ran, the page reported its result, and
+    the model was never given it. From outside, a turn that stopped after its
+    first tool call and never came back.
+
+    Staged as the node itself, because that is the whole of the condition: a log
+    port with no writer and no closer.
+    """
+    import asyncio
+    import time
+
+    node = a11.AsyncNode(a11.LocalChunkStore("a-log-nobody-closes"))
+    started = time.monotonic()
+    text = await asyncio.wait_for(
+        runner._user_facing_log(node, runner._drain_timeout(a11.infinite_future())),
+        timeout=runner.DRAIN_AFTER_COMPLETION.float_seconds() + 20,
+    )
+    elapsed = time.monotonic() - started
+    # No log, and no exception either: a port that did not end is not a failure
+    # of the tool that owned it.
+    assert text == ""
+    # It waited, and then it stopped waiting. Both halves matter: a read that
+    # returned at once would drop a log still in flight.
+    assert elapsed >= runner.DRAIN_AFTER_COMPLETION.float_seconds() * 0.5
+    assert elapsed < runner.DRAIN_AFTER_COMPLETION.float_seconds() + 10
+
+
+@pytest.mark.asyncio
+async def test_a_call_that_narrated_nothing_still_yields_a_result():
+    """The ordinary shape of a read-only tool: it answers and says nothing."""
+    import asyncio
+
+    async def quiet(action: a11.Action) -> None:
+        await action["listed"].put({"id": 0})
+        await action["listed"].close()
+
+    registry = ActionRegistry()
+    registry.register(_QUIET_SCHEMA.name, _QUIET_SCHEMA, quiet)
+
+    holder = registry.make_action(_QUIET_SCHEMA.name)
+    holder.set_header(LlmHeaders.ALLOWED_LLM_ACTIONS, _QUIET_SCHEMA.name)
+    interaction = Interaction(
+        action_calls=[a11.ActionMessage(id="c1", name=_QUIET_SCHEMA.name)]
+    )
+
+    # Bounded well above the drain window and well below "for ever": the point
+    # is that the runner returns on its own.
+    executed = await asyncio.wait_for(
+        runner.execute_actions_from_interaction(interaction, holder, registry),
+        timeout=runner.DRAIN_AFTER_COMPLETION.float_seconds() + 20,
+    )
+
+    assert executed.errors == {}
+    assert "c1" in executed.outputs
+    # Nothing narrated, so there is no log to show -- which is the case that
+    # used to hang rather than a case that should fail.
+    assert executed.logs == {}
+
+
+@pytest.mark.asyncio
+async def test_the_drain_window_is_bounded_whatever_the_turn_deadline_is():
+    """State the bound, because the failure it prevents is a hang.
+
+    A hang has no error message to assert on, so the regression test above can
+    only prove that *this* handler finishes. This says why any handler does.
+    """
+    assert runner.DRAIN_AFTER_COMPLETION < a11.infinite_future() - a11.now()
+    assert runner._drain_timeout(a11.infinite_future()) == (
+        runner.DRAIN_AFTER_COMPLETION
+    )
+    # And the turn's deadline is still the ceiling when it is the tighter one.
+    soon = a11.now() + a11.Duration.milliseconds(50)
+    assert runner._drain_timeout(soon) < runner.DRAIN_AFTER_COMPLETION

@@ -24,7 +24,7 @@ client will send no more data while allowing already-sent work to drain.
 <link rel="stylesheet" href="../assets/browser-clients.css">
 <div id="echo-demo" class="echo-demo">
   <div class="echo-toolbar">
-    <input id="echo-server" aria-label="Echo server URL" value="https://a11.services:9443/demos/echo">
+    <input id="echo-server" aria-label="Echo server URL" value="https://a11.to/sse/demoserver">
     <button id="echo-half-close" type="button">Half-close</button>
     <button id="echo-reconnect" type="button">Reconnect</button>
   </div>
@@ -114,8 +114,7 @@ async def accept(stream):
 
 
 options = a11.HttpSseOptions()
-options.connect_endpoint = "/demos/echo/connect"
-options.message_endpoint = "/demos/echo/streams/{id}/message"
+options.connect_endpoint = "/demos/echo"
 server = a11.HttpSseServer.create("127.0.0.1", 80, accept, options)
 ```
 
@@ -135,16 +134,16 @@ python -m a11.demos.echo_server \
 ## 4. Create a browser session and connect
 
 Create the client registry and session, then attach an SSE stream in `START`
-mode. The server attaches the other end in `ACCEPT` mode. Because the service
-URL includes a path, pass its endpoint paths explicitly:
+mode. The server attaches the other end in `ACCEPT` mode. The stream is created
+against an origin, with the two endpoint paths given relative to it:
 
 ```ts
 const registry = new ActionRegistry();
 need(registry.register('echo', echoSchema));
 const session = need(Session.create({actionRegistry: registry}));
-const stream = need(HttpSseClientWireStream.create(server.origin, {
-    connectEndpoint: '/demos/echo/connect',
-    messageEndpoint: '/demos/echo/streams/{id}/message',
+const stream = need(HttpSseClientWireStream.create('https://a11.to', {
+    connectEndpoint: '/sse/demoserver',
+    messageEndpoint: '/streams/{id}/message',
 }));
 need(await session.addStream(stream, StreamMode.START));
 ```

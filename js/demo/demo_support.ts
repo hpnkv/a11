@@ -54,6 +54,9 @@ export const READ_TIMEOUT_MS = 300_000;
  */
 export const DEFAULT_SERVER_URL = 'wss://a11.to/ws/demoserver';
 
+const DEADLINE_HEADER = 'x-a11-deadline';
+const TURN_DEADLINE_MS = 180_000;
+
 // --- The backend a turn is answered by --------------------------------------
 
 /** Provider settings sent as call headers. */
@@ -280,6 +283,7 @@ export async function runTurn(request: TurnRequest): Promise<Interaction[]> {
     const registry = connection.session.getActionRegistry();
 
     const call = makeCall(connection, INTERACT_WITH_LLM_SCHEMA);
+    need(call.setHeader(DEADLINE_HEADER, String(Date.now() + TURN_DEADLINE_MS)));
     for (const [header, value] of LlmHeadersFor(backend)) need(call.setHeader(header, value));
     const toolNames = (request.tools ?? []).map((schema) => schema.name);
     if (toolNames.length > 0) {

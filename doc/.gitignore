@@ -1,10 +1,12 @@
 /site/
 cpp/doxygen-awesome-css/
+docs/assets/analytics.js
 docs/assets/browser-clients.js
 docs/assets/local-models.js
 docs/assets/chat-sessions.js
 docs/assets/deep-research.js
 docs/assets/browser-tools.js
 docs/assets/generative-media.js
+docs/assets/p2p-chat.js
 
 FLOW_PROGRAMS_PLAN.md

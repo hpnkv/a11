@@ -1,0 +1,67 @@
+/* P2P Chat Room demo styles. */
+.p2p-chat { border: 1px solid var(--md-default-fg-color--lightest); border-radius: .5rem; overflow: hidden; margin: 1.5rem 0; }
+
+/* Lobby */
+.p2p-lobby { padding: 1.5rem; text-align: center; }
+.p2p-lobby h3 { margin: 0 0 1rem; }
+.p2p-lobby-actions { display: flex; gap: 1rem; justify-content: center; align-items: flex-start; flex-wrap: wrap; }
+.p2p-lobby-actions button { padding: .55rem 1.2rem; border: 1px solid var(--md-primary-fg-color); border-radius: .25rem; color: var(--md-primary-fg-color); cursor: pointer; background: transparent; font-size: .95rem; }
+.p2p-lobby-actions button:hover { background: var(--md-primary-fg-color); color: white; }
+.p2p-join-form { display: flex; gap: .5rem; }
+.p2p-join-form input { padding: .5rem .65rem; border: 1px solid var(--md-default-fg-color--lightest); border-radius: .25rem; background: var(--md-default-bg-color); color: var(--md-default-fg-color); min-width: 0; width: 10rem; }
+
+/* Room layout */
+.p2p-room { display: none; }
+.p2p-room-header { display: flex; align-items: center; gap: .75rem; padding: .6rem .75rem; background: var(--md-code-bg-color); border-bottom: 1px solid var(--md-default-fg-color--lightest); flex-wrap: wrap; }
+.p2p-room-header .p2p-room-label { font-weight: 600; }
+.p2p-room-link { color: var(--md-primary-fg-color); text-decoration: none; word-break: break-all; }
+.p2p-copy-link { padding: .3rem .6rem; border: 1px solid var(--md-primary-fg-color); border-radius: .25rem; color: var(--md-primary-fg-color); cursor: pointer; background: transparent; font-size: .82rem; }
+.p2p-status { margin-left: auto; color: var(--md-default-fg-color--light); font-size: .85em; }
+
+.p2p-workspace { display: grid; grid-template-columns: minmax(0, 3fr) minmax(12rem, 1fr); height: min(28rem, 65vh); min-height: 20rem; max-height: 28rem; overflow: hidden; }
+
+/* Chat area */
+.p2p-chat-area { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--md-default-fg-color--lightest); }
+.p2p-messages { flex: 1; padding: .75rem; overflow: auto; }
+.p2p-bubble { max-width: 80%; width: fit-content; margin: .4rem 0; padding: .45rem .7rem; border-radius: .7rem; background: var(--md-code-bg-color); }
+.p2p-bubble.own { margin-left: auto; color: white; background: var(--md-primary-fg-color); }
+.p2p-bubble-header { font-size: .78em; font-weight: 600; opacity: .7; margin-bottom: .15rem; }
+.p2p-bubble.own .p2p-bubble-header { opacity: .85; }
+.p2p-bubble-body { word-break: break-word; }
+.p2p-bubble-time { display: block; font-size: .72em; opacity: .5; text-align: right; margin-top: .15rem; }
+
+/* Compose bar */
+.p2p-compose { display: flex; gap: .5rem; padding: .6rem .75rem; background: var(--md-code-bg-color); border-top: 1px solid var(--md-default-fg-color--lightest); }
+.p2p-compose input { min-width: 0; flex: 1; padding: .45rem .6rem; border: 1px solid var(--md-default-fg-color--lightest); border-radius: .25rem; background: var(--md-default-bg-color); color: var(--md-default-fg-color); }
+.p2p-compose button { padding: .4rem .7rem; border: 1px solid var(--md-primary-fg-color); border-radius: .25rem; color: var(--md-primary-fg-color); cursor: pointer; background: transparent; }
+
+/* Sidebar */
+.p2p-sidebar { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.p2p-sidebar-section { padding: .6rem .75rem; border-bottom: 1px solid var(--md-default-fg-color--lightest); }
+.p2p-sidebar-section h4 { margin: 0 0 .4rem; font-size: .85em; text-transform: uppercase; color: var(--md-default-fg-color--light); }
+.p2p-participants { flex: 1; overflow: auto; padding: .4rem .75rem; }
+.p2p-participant { display: flex; align-items: center; gap: .4rem; padding: .3rem 0; font-size: .9em; }
+.p2p-participant-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.p2p-host-badge { font-size: .72em; padding: .1rem .35rem; border-radius: .2rem; background: var(--md-primary-fg-color); color: white; }
+
+/* Connection badges */
+.p2p-conn-badge { display: inline-block; width: 1rem; text-align: center; flex: none; font-size: .9rem; }
+.p2p-conn-badge.direct { color: #2e9d54; }
+.p2p-conn-badge.turn { color: #e67e22; }
+.p2p-conn-badge.unknown { color: var(--md-default-fg-color--light); }
+.p2p-turn-warning { font-size: .72em; padding: .1rem .35rem; border-radius: .2rem; background: #e67e22; color: white; font-weight: 600; }
+
+/* Name form */
+.p2p-name-form { display: flex; gap: .4rem; }
+.p2p-name-form input { min-width: 0; flex: 1; padding: .35rem .5rem; border: 1px solid var(--md-default-fg-color--lightest); border-radius: .25rem; background: var(--md-default-bg-color); color: var(--md-default-fg-color); font-size: .85em; }
+.p2p-name-form button { padding: .3rem .5rem; border: 1px solid var(--md-primary-fg-color); border-radius: .25rem; color: var(--md-primary-fg-color); cursor: pointer; background: transparent; font-size: .82em; }
+
+/* Errors */
+.p2p-errors { padding: .35rem .75rem; color: var(--md-typeset-color); background: color-mix(in srgb, #d32f2f 12%, transparent); }
+.p2p-errors:empty { display: none; }
+
+/* Responsive */
+@media (max-width: 700px) {
+  .p2p-workspace { grid-template-columns: 1fr; grid-template-rows: minmax(0, 2fr) minmax(0, 1fr); height: min(36rem, 80vh); max-height: 36rem; }
+  .p2p-chat-area { border-right: 0; border-bottom: 1px solid var(--md-default-fg-color--lightest); }
+}

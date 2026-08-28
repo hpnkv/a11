@@ -13,8 +13,8 @@
 
 import { type AnonymousClaimResult } from './types.js';
 
-/** Base URL for the a11x exchange. */
-const EXCHANGE_BASE = 'https://a11.to';
+/** Base URL for the a11x exchange control plane. */
+const EXCHANGE_BASE = 'https://a11.services';
 
 /**
  * Claim an anonymous identity with signalling and TURN credentials.

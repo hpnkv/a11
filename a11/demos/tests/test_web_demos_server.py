@@ -273,15 +273,7 @@ async def test_a_turn_is_recorded_and_read_back_after_a_reload(
     answer, produced = await _one_turn(connected, question)
     assert answer == "a node is a stream."
 
-    # The conversation list a page fills its picker from.
-    listing = connected.action(conversation_actions.GET_CONVERSATIONS_SCHEMA)
-    await listing.call()
-    summaries = [summary async for summary in listing["conversations"]]
-    await asyncio.wait_for(listing.wait(), timeout=_TIMEOUT)
-    assert [summary["id"] for summary in summaries] == [question.id]
-    assert summaries[0]["title"] == "what is a node?"
-
-    # And the conversation itself, which is the reload.
+    # The conversation itself, which is the reload.
     reading = connected.action(conversation_actions.GET_CONVERSATION_SCHEMA)
     await reading.call()
     await reading["id"].finalize(question.id)
@@ -381,15 +373,6 @@ async def test_deep_research_plans_investigates_and_synthesises(
     assert len(synthesis) == 1
     assert "findings for Find out what a fiber is." in synthesis[0]
     assert "findings for Find out what a node is." in synthesis[0]
-
-    # And none of those four calls is a conversation. A step of a composition is
-    # not a chat turn, which is why the flow asks `ask_model` rather than the
-    # recording `interact_with_llm`: recorded, every investigation would show up
-    # in the chat guide's conversation picker.
-    listing = connected.action(conversation_actions.GET_CONVERSATIONS_SCHEMA)
-    await listing.call()
-    assert [summary async for summary in listing["conversations"]] == []
-    await asyncio.wait_for(listing.wait(), timeout=_TIMEOUT)
 
     # The narration a page shows while it waits, from every step -- all of it on
     # the reserved log port, and none of it on an output the caller has to know
@@ -651,19 +634,20 @@ async def test_a_browser_style_websocket_client_reaches_the_demo_actions(
             session.add_stream(stream, mode="start"), timeout=_TIMEOUT
         )
         try:
-            listing = (
+            reading = (
                 a11
-                .Action(conversation_actions.GET_CONVERSATIONS_SCHEMA)
+                .Action(conversation_actions.GET_CONVERSATION_SCHEMA)
                 .bind_node_map(session.node_map)
                 .bind_session(session)
                 .bind_stream(stream)
             )
-            await listing.call()
-            summaries = [summary async for summary in listing["conversations"]]
-            await asyncio.wait_for(listing.wait(), timeout=_TIMEOUT)
-            # Nothing has been said yet; an empty list is the answer, and
-            # getting one over a WebSocket is the point.
-            assert summaries == []
+            await reading.call()
+            await reading["id"].finalize("nonexistent")
+            restored = [i async for i in reading["interactions"]]
+            await asyncio.wait_for(reading.wait(), timeout=_TIMEOUT)
+            # Nothing has been said yet; an empty conversation is the
+            # answer, and getting one over a WebSocket is the point.
+            assert restored == []
         finally:
             # Teardown: the page going away. `serving` stops the listener and
             # drains the service on the way out of the block, so this only has

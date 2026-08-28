@@ -37,7 +37,7 @@ the same interface, configured via headers.
 
 Ask something, then reload the page: the conversation is still there, and the
 next answer is given in its context. **New** starts a fresh one without dropping
-the socket; the dropdown reopens any stored conversation. The right-hand pane is
+the socket. The right-hand pane is
 the `thoughts` port — a model that thinks before it speaks shows its working
 there, on a port of its own, while `text_output` streams the answer.
 
@@ -54,7 +54,6 @@ there, on a port of its own, while `text_output` streams the answer.
     <input id="chat-model" aria-label="Model" value="glm-4.7-flash">
     <input id="chat-api-key" type="password" aria-label="API key" placeholder="API key (Claude or Gemini)">
     <input id="chat-base-url" aria-label="Base URL" value="http://127.0.0.1:11434">
-    <select id="chat-conversations" aria-label="Stored conversations"></select>
     <button id="chat-new" type="button">New</button>
   </div>
   <div id="chat-errors" class="a11-errors" role="alert" aria-live="polite"></div>
@@ -139,15 +138,16 @@ therefore does not need to return a separate session handle.
 ## 3. The backend records what it answers
 
 On the server the action is wrapped in one that stores the turn as it goes,
-`a11.gateway.conversation_actions.interact_with_llm_and_persist`, and two more
-actions read the recording back:
+`a11.gateway.conversation_actions.interact_with_llm_and_persist`, and a second
+action reads the recording back:
 
 ```python
 from a11.gateway import conversation_actions, conversations
 
 store = conversations.ConversationStore("/var/lib/a11/conversations")
 conversation_actions.install(registry, store)
-# registers: interact_with_llm (recording), get_conversation, get_conversations
+# registers: interact_with_llm (recording), get_conversation,
+#            get_conversations
 ```
 
 The store is [SQLite][a11.stores.sqlite_chunk_store.SQLiteChunkStore]: one
@@ -163,11 +163,10 @@ history every turn, and only what is new is appended, by interaction id.
     [deep-research](deep-research.md) agent's model calls would arrive in this
     guide's conversation list as a conversation of its own.
 
-## 4. Reloading is two calls
+## 4. Reloading is one call
 
-`get_conversations` fills the picker, and `get_conversation` streams one
-conversation's interactions back. The page declares both schemas by hand — they
-are the backend's, mirrored:
+`get_conversation` streams one conversation's interactions back, given its id.
+The page declares the schema by hand — it is the backend's, mirrored:
 
 ```ts
 const GET_CONVERSATION_SCHEMA = new ActionSchema({
@@ -212,4 +211,4 @@ url.searchParams.set('conversation', this.conversationId!);
 window.history.replaceState(null, '', url);
 ```
 
-On load, the page lists the conversations and reopens whatever the URL names.
+On load, the page reopens whatever conversation the URL names.

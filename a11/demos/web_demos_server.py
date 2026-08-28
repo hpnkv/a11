@@ -6,8 +6,8 @@ Run with ``python -m a11.demos.web_demos_server``. It serves, on
 * ``interact_with_llm`` — one action for every provider, routed by the
   ``x-a11-llm-*`` headers the browser sets, with each turn recorded in a SQLite
   chunk store (see [a11.gateway.conversations][a11.gateway.conversations]).
-* ``get_conversation`` / ``get_conversations`` — how a reloaded page picks a
-  conversation up where it left off.
+* ``get_conversation`` — how a reloaded page picks a conversation up where it
+  left off, given its id.
 * ``deep-research`` and the flows it is made of, compiled from
   ``deep_research.flow`` beside this file. Registered with `RESEARCH_HEADERS`,
   which is how they come with this server's own ollama already filled in: a
@@ -214,11 +214,14 @@ def make_registry(
 
     registry = a11.ActionRegistry()
 
-    # `interact_with_llm` wrapped in the handler that records the turn, plus the
-    # two actions that read the recording back. The provider is not chosen here:
-    # it arrives per call as a header, which is what lets one registration serve
-    # Gemini and Ollama alike.
+    # `interact_with_llm` wrapped in the handler that records the turn, plus
+    # `get_conversation` that reads the recording back. The provider is not
+    # chosen here: it arrives per call as a header, which is what lets one
+    # registration serve Gemini and Ollama alike.
     conversation_actions.install(registry, store)
+    # The full conversation list is not public on this server: a page
+    # resolves by id (from the URL) instead of browsing.
+    registry.unregister(conversation_actions.GET_CONVERSATIONS_SCHEMA.name)
 
     # The same action without the recording, under its own name. A composition's
     # model calls are steps, not chat turns: recorded, each one would arrive in

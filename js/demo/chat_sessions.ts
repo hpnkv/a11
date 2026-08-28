@@ -3,10 +3,9 @@
  *
  * One `interact_with_llm` call per turn, with the provider chosen by a header, and
  * the conversation held here as the provider's own `Interaction` objects. The
- * backend records those same objects as it answers, so `get_conversations` and
- * `get_conversation` are all a reloaded page needs to continue a conversation
- * rather than start a new one — there is no transcript to replay and no
- * server-assigned session handle to keep.
+ * backend records those same objects as it answers, so `get_conversation` is all
+ * a reloaded page needs to continue a conversation rather than start a new one —
+ * there is no transcript to replay and no server-assigned session handle to keep.
  */
 
 import {
@@ -25,7 +24,6 @@ import {
   interactionText,
   makeCall,
   need,
-  readPort,
   reportExampleSuccess,
   runTurn,
   showError,
@@ -34,16 +32,7 @@ import {
   type Connection,
 } from './demo_support.js';
 
-/** Mirrors `a11/gateway/conversation_actions.py`'s `get_conversations`. */
-const GET_CONVERSATIONS_SCHEMA = new ActionSchema({
-  name: 'get_conversations',
-  description: 'List the stored conversations, most recently active first.',
-  outputs: {
-    conversations: new ActionPortSchema({name: 'conversations', type: 'application/json', required: true}),
-  },
-});
-
-/** Mirrors the same file's `get_conversation`. */
+/** Mirrors `a11/gateway/conversation_actions.py`'s `get_conversation`. */
 const GET_CONVERSATION_SCHEMA = new ActionSchema({
   name: 'get_conversation',
   description: "Stream one conversation's interactions, oldest first.",
@@ -52,12 +41,6 @@ const GET_CONVERSATION_SCHEMA = new ActionSchema({
     interactions: new ActionPortSchema({name: 'interactions', type: 'application/json', required: true}),
   },
 });
-
-interface ConversationSummary {
-  id: string;
-  title: string;
-  started_at: number;
-}
 
 const SYSTEM_PROMPT =
   'You are a concise assistant embedded in a documentation page. Answer in at' +
@@ -71,7 +54,6 @@ class ChatDemo {
   private readonly errors = document.querySelector<HTMLDivElement>('#chat-errors')!;
   private readonly messages = document.querySelector<HTMLDivElement>('#chat-messages')!;
   private readonly thoughts = document.querySelector<HTMLDivElement>('#chat-thoughts')!;
-  private readonly conversations = document.querySelector<HTMLSelectElement>('#chat-conversations')!;
 
   /**
    * The conversation's id is the id of the interaction that opened it, which
@@ -118,7 +100,6 @@ class ChatDemo {
       // leaves the history as it was and the prompt can be sent again.
       this.history.push(...added);
       this.rememberInUrl();
-      await this.refreshConversations();
       reportExampleSuccess('persistent-chat');
     } catch (error) {
       this.discard();
@@ -144,36 +125,7 @@ class ChatDemo {
     this.thought = null;
     this.messages.replaceChildren();
     this.thoughts.replaceChildren();
-    this.conversations.value = '';
     this.rememberInUrl();
-  }
-
-  /** The conversation list, as the backend's index has it. */
-  async refreshConversations(): Promise<void> {
-    try {
-      const connection = await this.connected();
-      const call = makeCall(connection, GET_CONVERSATIONS_SCHEMA);
-      need(await call.call());
-      const summaries: ConversationSummary[] = [];
-      await readPort(call, 'conversations', (value) => summaries.push(value as ConversationSummary));
-      need(await call.wait(30_000));
-
-      const placeholder = document.createElement('option');
-      placeholder.value = '';
-      placeholder.textContent = summaries.length === 0 ? '(no conversations yet)' : '(pick a conversation)';
-      this.conversations.replaceChildren(
-        placeholder,
-        ...summaries.map((summary) => {
-          const option = document.createElement('option');
-          option.value = summary.id;
-          option.textContent = summary.title;
-          return option;
-        }),
-      );
-      this.conversations.value = this.conversationId ?? '';
-    } catch (error) {
-      showError(this.errors, error);
-    }
   }
 
   /**
@@ -230,9 +182,8 @@ class ChatDemo {
     window.history.replaceState(null, '', url);
   }
 
-  /** What the page does on load: list, and reopen whatever the URL names. */
+  /** What the page does on load: reopen whatever the URL names. */
   async start(): Promise<void> {
-    await this.refreshConversations();
     const wanted = new URL(window.location.href).searchParams.get('conversation');
     if (wanted) await this.open(wanted);
   }
@@ -251,9 +202,5 @@ if (root) {
     void whileBusy(form, () => demo.send(prompt));
   };
   document.querySelector<HTMLButtonElement>('#chat-new')!.onclick = () => demo.newConversation();
-  document.querySelector<HTMLSelectElement>('#chat-conversations')!.onchange = (event) => {
-    const id = (event.target as HTMLSelectElement).value;
-    if (id) void demo.open(id);
-  };
   void demo.start();
 }

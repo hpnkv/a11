@@ -305,14 +305,15 @@ export class ChatHost {
     hostClaimToken: string,
     iceServers: RTCIceServer[],
   ): Promise<void> {
-    // Send the claim token as X-A11-Claim, not Authorization.
-    // Anonymous claims have no API key; the signalling server
-    // admits them by verifying the claim alone.
+    // Pass the claim token as a query parameter: browser WebSockets
+    // cannot send custom HTTP headers. The signalling server reads
+    // the `claim` parameter as a fallback for exactly this case.
+    const urlWithClaim = hostSignallingUrl +
+      (hostSignallingUrl.includes('?') ? '&' : '?') +
+      'claim=' + encodeURIComponent(hostClaimToken);
     const signalling = await WebSocketSignallingClient.connect(
-      hostSignallingUrl,
+      urlWithClaim,
       this.myId,
-      undefined,
-      { headers: { 'X-A11-Claim': hostClaimToken } },
     );
     if (!isOk(signalling)) {
       console.error(`Signalling connect failed for peer ${peerId}:`, signalling);

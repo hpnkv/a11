@@ -178,14 +178,15 @@ export class ChatPeer {
   async connectToHost(claim: AnonymousClaimResult): Promise<void> {
     this.claimResult = claim;
 
-    // Send the claim token as X-A11-Claim, not Authorization.
-    // Anonymous claims have no API key; the signalling server
-    // admits them by verifying the claim alone.
+    // Pass the claim token as a query parameter: browser WebSockets
+    // cannot send custom HTTP headers. The signalling server reads
+    // the `claim` parameter as a fallback for exactly this case.
+    const urlWithClaim = claim.signallingUrl +
+      (claim.signallingUrl.includes('?') ? '&' : '?') +
+      'claim=' + encodeURIComponent(claim.claimToken);
     const signalling = await WebSocketSignallingClient.connect(
-      claim.signallingUrl,
+      urlWithClaim,
       this.myId,
-      undefined,
-      { headers: { 'X-A11-Claim': claim.claimToken } },
     );
     if (!isOk(signalling)) {
       throw new Error(`Signalling connect failed: ${JSON.stringify(signalling)}`);

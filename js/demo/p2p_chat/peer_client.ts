@@ -178,12 +178,14 @@ export class ChatPeer {
   async connectToHost(claim: AnonymousClaimResult): Promise<void> {
     this.claimResult = claim;
 
-    // Pass the claim token as a query parameter: browser WebSockets
-    // cannot send custom HTTP headers. The signalling server reads
-    // the `claim` parameter as a fallback for exactly this case.
-    const urlWithClaim = claim.signallingUrl +
-      (claim.signallingUrl.includes('?') ? '&' : '?') +
-      'claim=' + encodeURIComponent(claim.claimToken);
+    // Build the signalling URL with `{id}` placeholder so that
+    // WebSocketSignallingClient.connect() inserts the identity into
+    // the path before the query string.  The claim token goes as a
+    // query parameter because browser WebSockets cannot send custom
+    // HTTP headers.
+    const base = claim.signallingUrl.endsWith('/')
+      ? claim.signallingUrl.slice(0, -1) : claim.signallingUrl;
+    const urlWithClaim = `${base}/{id}?claim=${encodeURIComponent(claim.claimToken)}`;
     const signalling = await WebSocketSignallingClient.connect(
       urlWithClaim,
       this.myId,

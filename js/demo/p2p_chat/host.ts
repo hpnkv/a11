@@ -305,12 +305,14 @@ export class ChatHost {
     hostClaimToken: string,
     iceServers: RTCIceServer[],
   ): Promise<void> {
-    // Pass the claim token as a query parameter: browser WebSockets
-    // cannot send custom HTTP headers. The signalling server reads
-    // the `claim` parameter as a fallback for exactly this case.
-    const urlWithClaim = hostSignallingUrl +
-      (hostSignallingUrl.includes('?') ? '&' : '?') +
-      'claim=' + encodeURIComponent(hostClaimToken);
+    // Build the signalling URL with `{id}` placeholder so that
+    // WebSocketSignallingClient.connect() inserts the identity into
+    // the path before the query string.  The claim token goes as a
+    // query parameter because browser WebSockets cannot send custom
+    // HTTP headers.
+    const base = hostSignallingUrl.endsWith('/')
+      ? hostSignallingUrl.slice(0, -1) : hostSignallingUrl;
+    const urlWithClaim = `${base}/{id}?claim=${encodeURIComponent(hostClaimToken)}`;
     const signalling = await WebSocketSignallingClient.connect(
       urlWithClaim,
       this.myId,

@@ -14,13 +14,13 @@ import {
   ActionSchema,
   Session,
   StreamMode,
-  WebRtcWireStream,
-  WebSocketSignallingClient,
   isOk,
   type Action,
   type AsyncNode,
   type WireStream,
 } from '../../src/index.js';
+
+import { WebRtcServer } from './webrtc_server.js';
 
 import { deriveState, pruneEvents } from './room_state.js';
 import {
@@ -109,7 +109,7 @@ interface ConnectedPeer {
   session: Session;
   stream: WireStream;
   replicationNode: AsyncNode | null;
-  signalling: WebSocketSignallingClient;
+  peerConnection: RTCPeerConnection | null;
 }
 
 /** Callback for state changes the UI should reflect. */
@@ -124,6 +124,7 @@ export class ChatHost {
   private readonly onStateChange: OnStateChange;
   private readonly myId: string;
   private readonly connectionTypes = new Map<string, ConnectionType>();
+  private server: WebRtcServer | null = null;
 
   constructor(
     myId: string,
@@ -293,82 +294,79 @@ export class ChatHost {
   // ----------------------------------------------- peer connections
 
   /**
-   * Accept an incoming WebRTC peer connection.
+   * Start listening for incoming WebRTC peer connections.
    *
-   * Uses the host's own anonymous claim for signalling. a11x never
+   * Opens a single signalling WebSocket as the host identity and
+   * uses {@link WebRtcServer} to answer incoming offers. a11x never
    * learns which room this connection belongs to — it only routes
    * signalling messages between two anonymous identities.
    */
-  async acceptPeer(
-    peerId: string,
-    hostSignallingUrl: string,
-    hostClaimToken: string,
+  async startListening(
+    signallingUrl: string,
+    claimToken: string,
     iceServers: RTCIceServer[],
   ): Promise<void> {
-    // Build the signalling URL with `{id}` placeholder so that
-    // WebSocketSignallingClient.connect() inserts the identity into
-    // the path before the query string.  The claim token goes as a
-    // query parameter because browser WebSockets cannot send custom
-    // HTTP headers.
-    const base = hostSignallingUrl.endsWith('/')
-      ? hostSignallingUrl.slice(0, -1) : hostSignallingUrl;
-    const urlWithClaim = `${base}/{id}?claim=${encodeURIComponent(hostClaimToken)}`;
-    const signalling = await WebSocketSignallingClient.connect(
+    const base = signallingUrl.endsWith('/')
+      ? signallingUrl.slice(0, -1) : signallingUrl;
+    const urlWithClaim = `${base}/{id}?claim=${encodeURIComponent(claimToken)}`;
+
+    const server = await WebRtcServer.create(
       urlWithClaim,
       this.myId,
+      iceServers,
+      (peerId, wireStream, peerConnection) =>
+        this.onPeerConnected(peerId, wireStream, peerConnection),
+      (peerId, error) =>
+        console.error(`WebRTC server error for ${peerId}:`, error),
     );
-    if (!isOk(signalling)) {
-      console.error(`Signalling connect failed for peer ${peerId}:`, signalling);
+    if (!isOk(server)) {
+      console.error('Failed to start WebRTC server:', server);
       return;
     }
+    this.server = server;
+  }
 
-    // Create a WebRTC wire stream to this peer.
-    const webrtcStream = WebRtcWireStream.createClient(
-      peerId,
-      signalling,
-      { stunServers: [], rtcConfiguration: { iceServers } },
-    );
-    if (!isOk(webrtcStream)) {
-      console.error(`WebRTC stream creation failed for peer ${peerId}:`, webrtcStream);
-      signalling.close();
-      return;
-    }
-
-    // Create a session that accepts the incoming stream.
+  /**
+   * Handle a new peer whose WebRTC data channel is ready.
+   *
+   * Called by the {@link WebRtcServer} when an incoming peer's data
+   * channel opens and is wrapped as a {@link ChannelWireStream}.
+   */
+  private async onPeerConnected(
+    peerId: string,
+    wireStream: WireStream,
+    peerConnection: RTCPeerConnection,
+  ): Promise<void> {
     const session = Session.create({
       actionRegistry: this.registry,
       noStreamTimeoutMs: 30_000,
     });
     if (!isOk(session)) {
       console.error(`Session creation failed for peer ${peerId}:`, session);
-      signalling.close();
       return;
     }
 
-    const addResult = await session.addStream(webrtcStream, StreamMode.ACCEPT);
+    const addResult = await session.addStream(wireStream, StreamMode.ACCEPT);
     if (!isOk(addResult)) {
       console.error(`Stream accept failed for peer ${peerId}:`, addResult);
-      signalling.close();
       return;
     }
 
     const connectedPeer: ConnectedPeer = {
       peerId,
       session,
-      stream: webrtcStream,
+      stream: wireStream,
       replicationNode: null,
-      signalling,
+      peerConnection,
     };
     this.peers.set(peerId, connectedPeer);
 
-    // Add a join event.
     this.appendEvent({
       type: 'join',
       peerId,
       timestamp: Date.now(),
     });
 
-    // Monitor for disconnection.
     void session.done().then(() => this.removePeer(peerId));
   }
 
@@ -380,12 +378,6 @@ export class ChatHost {
     this.peers.delete(peerId);
     this.connectionTypes.delete(peerId);
 
-    try {
-      peer.signalling.close();
-    } catch {
-      // Already closed.
-    }
-
     this.appendEvent({
       type: 'leave',
       peerId,
@@ -395,10 +387,13 @@ export class ChatHost {
 
   /** Shut down all peer sessions and the host service. */
   shutdown(): void {
+    if (this.server) {
+      this.server.close();
+      this.server = null;
+    }
     for (const peer of this.peers.values()) {
       try {
         peer.session.halfClose();
-        peer.signalling.close();
       } catch {
         // Best effort cleanup.
       }
@@ -410,10 +405,6 @@ export class ChatHost {
   getPeerConnection(peerId: string): RTCPeerConnection | null {
     const peer = this.peers.get(peerId);
     if (!peer) return null;
-    const stream = peer.stream;
-    if (stream instanceof WebRtcWireStream) {
-      return stream.peerConnection;
-    }
-    return null;
+    return peer.peerConnection;
   }
 }

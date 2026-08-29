@@ -138,6 +138,13 @@ async function createRoom(): Promise<void> {
     // Become the host immediately.
     host = new ChatHost(myId, [], onStateChange);
 
+    // Start listening for incoming WebRTC connections from peers.
+    await host.startListening(
+      myClaim.signallingUrl,
+      myClaim.claimToken,
+      myClaim.iceServers,
+    );
+
     // Add ourselves as a participant.
     host.appendEvent({
       type: 'join',
@@ -211,6 +218,15 @@ function handleBecomeHost(newHost: ChatHost): void {
   const shareUrl = getShareUrl(myId);
   window.history.replaceState(null, '', shareUrl);
   ui.setStatus('You are now the host (previous host left)');
+
+  // Start listening for incoming peer connections as the new host.
+  if (myClaim) {
+    void host.startListening(
+      myClaim.signallingUrl,
+      myClaim.claimToken,
+      myClaim.iceServers,
+    );
+  }
 }
 
 function startCredentialRefresh(): void {

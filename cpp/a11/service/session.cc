@@ -127,7 +127,7 @@ struct Session::State {
         options(value_options),
         node_map(std::move(nodes)),
         action_registry(std::move(registry)),
-        // Guarded on the way in, so every invocation below runs on an A11 fibre
+        // Guarded on the way in, so every invocation below runs on an A11 fiber
         // without a try of its own. See
         // service/internal/exception_guarded_callbacks.h.
         on_message(internal::GuardOnStreamMessage(std::move(message_callback))),
@@ -583,11 +583,11 @@ a11::Future<std::uint32_t> Session::DispatchNodeFragment(
   }
 
   // An ordinary data fragment for an ordinary node -- the overwhelming majority
-  // of what a busy session dispatches -- is handled here without a fibre. So
-  // the fibre this
+  // of what a busy session dispatches -- is handled here without a fiber. So
+  // the fiber this
   const auto fast_special = ActionSpecialNode(fragment.id);
   const data::Chunk* fast_chunk = std::get_if<data::Chunk>(&fragment.data);
-  // Only two shapes genuinely need the fibre, and both await more than once
+  // Only two shapes genuinely need the fiber, and both await more than once
   // with the control flow depending on what came back: a close marker (which
   // reads the mirror's writability, then applies a close), and a status chunk.
   const bool close_marker =
@@ -642,7 +642,7 @@ a11::Future<std::uint32_t> Session::DispatchNodeFragment(
           if (!stored.ok()) {
             // A write refused because the writer was aborted is not this
             // dispatch's failure: the peer is told through the abort, and the
-            // fragment is accounted for. Same rule as the fibre path had.
+            // fragment is accounted for. Same rule as the fiber path had.
             const std::optional<absl::Status> abort =
                 owned->GetWriterAbortStatus();
             if (abort.has_value() && *abort == stored.status()) {
@@ -650,7 +650,7 @@ a11::Future<std::uint32_t> Session::DispatchNodeFragment(
             }
             return stored.status();
           }
-          // Published only after the write succeeded, exactly as the fibre path
+          // Published only after the write succeeded, exactly as the fiber path
           // did: a status the Action reports is a claim that the status node
           // carries it.
           if (action != nullptr) {
@@ -665,7 +665,7 @@ a11::Future<std::uint32_t> Session::DispatchNodeFragment(
   }
 
   // The last two shapes: a close marker, and a status chunk on an ordinary
-  // node. The second await needs no fibre either way: what follows it only maps
+  // node. The second await needs no fiber either way: what follows it only maps
   // a status to a sequence number.
   if (close_marker || (status_chunk && !fast_special.has_value())) {
     absl::StatusOr<absl::Status> carried =
@@ -680,7 +680,7 @@ a11::Future<std::uint32_t> Session::DispatchNodeFragment(
     const std::uint32_t seq = fragment.seq.value_or(0);
     // Created if absent, not looked up: a marker can arrive before whatever
     // would have materialised its node, and dropping it hangs the reader for
-    // good. The fibre path's own note explains this at length.
+    // good. The fiber path's own note explains this at length.
     absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> node =
         GetNodeMap()->Get(fragment.id);
     if (!node.ok()) {
@@ -710,7 +710,7 @@ a11::Future<std::uint32_t> Session::DispatchNodeFragment(
                          return seq;
                        });
     }
-    // Writability is not settled: fall through and let a fibre wait for it.
+    // Writability is not settled: fall through and let a fiber wait for it.
   }
 
   std::shared_ptr<Session> self = shared_from_this();

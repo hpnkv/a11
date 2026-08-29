@@ -42,19 +42,19 @@
  * is the point, since a loop that only asks between blocking calls stops when
  * the next value arrives rather than when it was asked to. The watchers exist
  * only when there is something to watch: no deadline header means no timer, and
- * no control port means no control fibre.
+ * no control port means no control fiber.
  *
  * The deadline is a `uvw::timer_handle` on A11's one libuv loop rather than a
- * fibre in a timed Select. A sleeping fibre costs a stack and a scheduler slot
+ * fiber in a timed Select. A sleeping fiber costs a stack and a scheduler slot
  * for the whole life of the action, and the loop is already running; a timer
  * costs an entry in its heap. Cancellation is a callback the framework already
  * delivers, so the control port is the only thing left that genuinely needs a
- * fibre -- it has to be parked in a read.
+ * fiber -- it has to be parked in a read.
  *
  * ### The obligation
  *
  * Join() before returning from the handler. It stops the watchers and waits for
- * them, which is what keeps a fibre from reading a port the framework is about
+ * them, which is what keeps a fiber from reading a port the framework is about
  * to take apart. Every handler in this library reaches it on every path, and
  * the destructor reaches it for the paths nobody thought of.
  */
@@ -162,7 +162,7 @@ class StopSignal {
    * @brief Sleeps up to @p duration, waking the moment a stop is asked for.
    * @return Whether it should stop. The interval a `ticker` waits and the
    *         backoff a retry waits both go through here, so neither outlives
-   *         being cancelled by more than the time it takes to wake a fibre.
+   *         being cancelled by more than the time it takes to wake a fiber.
    */
   bool WaitFor(absl::Duration duration);
   /** @brief Sleeps until @p deadline, waking early on a stop. */
@@ -187,7 +187,7 @@ class StopSignal {
    * @brief Stops the watchers and waits for them to finish.
    *
    * **Call this before returning from the handler, on every path.** A watcher
-   * fibre still reading a control port while the framework releases that port
+   * fiber still reading a control port while the framework releases that port
    * is a use-after-free waiting for a slow enough machine.
    *
    * Idempotent, and does *not* count as a stop: a handler that finished its own
@@ -209,11 +209,11 @@ class StopSignal {
 
  private:
   /**
-   * The part the watcher fibres share.
+   * The part the watcher fibers share.
    *
    * Separate from StopSignal on purpose. A watcher holding the StopSignal alive
    * would mean the last reference is dropped *by a watcher*, so the destructor
-   * would run on the watcher's own fibre and Join() would wait for the fibre it
+   * would run on the watcher's own fiber and Join() would wait for the fiber it
    * is running on. Watchers therefore capture this and never the handle.
    */
   struct Shared {
@@ -235,7 +235,7 @@ class StopSignal {
    * Arms the deadline watcher on A11's one libuv loop. Called only when there
    * is a deadline to watch.
    *
-   * A timer rather than a fibre parked in a timed Select, because a fibre
+   * A timer rather than a fiber parked in a timed Select, because a fiber
    * costs a stack and a scheduler slot for the whole life of the action while
    * doing nothing but sleeping, and the loop already exists. The callback runs
    * on the loop thread and so must not block: it is a compare-exchange and a

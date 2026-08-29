@@ -34,7 +34,7 @@ struct FiberControl {
 
 void Schedule(absl::AnyInvocable<void() &&> work,
               thread::TreeOptions tree_options) {
-  // Wrapped rather than caught here: the fibre that runs this work belongs to
+  // Wrapped rather than caught here: the fiber that runs this work belongs to
   // A11 and is compiled without exceptions, so a throw has to be stopped inside
   // the wrapper's own frame.
   thread::Detach(tree_options,

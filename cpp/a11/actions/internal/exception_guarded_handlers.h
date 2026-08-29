@@ -4,7 +4,7 @@
  * @file
  * @brief Adoption guards for the handlers an Action runs.
  *
- * An action handler is the application's, and an Action invokes it from a fibre
+ * An action handler is the application's, and an Action invokes it from a fiber
  * of A11's own -- so whatever it throws has to become a Status inside the
  * wrapper's frame. Implemented in a11/actions/boundary.cc, which is compiled
  * with exceptions for this purpose. See a11/exception_guard.h.

@@ -210,7 +210,7 @@ class HostBridge {
   /// The values a batch of chunks holds, in order, each with its own outcome.
   ///
   /// **Why a batch is its own question.** Crossing into a host is not free per
-  /// crossing: the Python bridge takes the GIL, which a flow's fibre competes
+  /// crossing: the Python bridge takes the GIL, which a flow's fiber competes
   /// for with the interpreter thread that dispatched it, and that -- not the
   /// decoding -- is what a value through a stage costs. A pipeline usually has
   /// several values in hand at once, so it asks once for all of them.

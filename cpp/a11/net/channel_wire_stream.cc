@@ -214,7 +214,7 @@ absl::Status ChannelWireStream::Send(data::WireMessage message) {
              {"a11.wire.bytes", absl::StrCat(message.ApproxBytes())}});
       }
       const std::uint64_t message_id = state_->next_outgoing_message_id++;
-      // Write it here rather than waking the Sender fibre to do it. The message
+      // Write it here rather than waking the Sender fiber to do it. The message
       // id is still allocated here, under the lock, so ids stay in send order
       // however the message travels.
       if (end == End::kNone && state_->outgoing.empty() && !state_->sending &&
@@ -276,7 +276,7 @@ a11::Task ChannelWireStream::StartEndpoint(bool accept, OnMessage on_message,
     }
     state_->started = true;
     // Guarded on the way in, so the Receiver and Finish paths below can invoke
-    // them from A11's own fibres without a try of their own. See
+    // them from A11's own fibers without a try of their own. See
     // net/internal/exception_guarded_callbacks.h.
     state_->on_message = internal::GuardOnMessage(std::move(on_message));
     state_->on_done = internal::GuardOnDone(std::move(on_done));
@@ -482,8 +482,8 @@ absl::Status ChannelWireStream::Abort(absl::Status status) {
     upgrade = state_->local_end == End::kHalfClose;
   }
   if (upgrade) {
-    // On a fibre, not here. The ordinary abort path never did that on the
-    // caller's thread: it queues a message and the *sender* fibre finishes.
+    // On a fiber, not here. The ordinary abort path never did that on the
+    // caller's thread: it queues a message and the *sender* fiber finishes.
     std::shared_ptr<State> state = state_;
     a11::Schedule([state = std::move(state), status = std::move(status)]() {
       ForceAbort(state, status, /*can_communicate=*/false);
@@ -830,7 +830,7 @@ void ChannelWireStream::WatchTiming(const std::shared_ptr<State>& state) {
 void ChannelWireStream::DeliverClaimed(const std::shared_ptr<State>& state,
                                        const data::WireMessage& message,
                                        std::uint64_t message_id) {
-  // The same encode, packetise and write the Sender fibre would have done, and
+  // The same encode, packetise and write the Sender fiber would have done, and
   // the same treatment of a failure: abort the stream.
   absl::Status failure;
   {
@@ -866,7 +866,7 @@ void ChannelWireStream::DeliverClaimed(const std::shared_ptr<State>& state,
   }
   if (!failure.ok()) {
     // Run this off-thread because Finish invokes the stream's on_done callback,
-    // which is user code, and on the fibre path it never ran on a caller of
+    // which is user code, and on the fiber path it never ran on a caller of
     // Send.
     a11::Schedule([state, failure = std::move(failure)]() mutable {
       Finish(state, std::move(failure));

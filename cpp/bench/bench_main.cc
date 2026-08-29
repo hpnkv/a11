@@ -696,7 +696,7 @@ actions::ActionSchema WideSchema(int width) {
   return schema;
 }
 
-/// A handler that spawns a fibre and finishes, mirroring a Python coroutine
+/// A handler that spawns a fiber and finishes, mirroring a Python coroutine
 /// handler: the interesting part is the spawn, not the body.
 actions::ActionHandler FiberNoopHandler() {
   return [](const std::shared_ptr<actions::Action>&) {
@@ -704,7 +704,7 @@ actions::ActionHandler FiberNoopHandler() {
   };
 }
 
-/// A handler that is already finished when it is handed back. No fibre, no
+/// A handler that is already finished when it is handed back. No fiber, no
 /// scheduling -- whatever an action costs with this is the lifecycle alone.
 actions::ActionHandler InlineNoopHandler() {
   return [](const std::shared_ptr<actions::Action>&) {
@@ -729,7 +729,7 @@ void ActionsSuite(Recorder& recorder, double scale) {
   const actions::ActionSchema portless = PortlessSchema();
   const std::int64_t iterations = Scaled(20000, scale, 200);
 
-  // The native floor: one hop onto a fibre and back, which is what every
+  // The native floor: one hop onto a fiber and back, which is what every
   // Submit in the action path costs at minimum.
   recorder.Add({.suite = "actions",
                 .name = "fiber_round_trip",
@@ -908,12 +908,12 @@ void ActionsSuite(Recorder& recorder, double scale) {
 // ---------------------------------------------------------------------------
 
 /**
- * The layers between "switch a fibre" and "Submit and Await".
+ * The layers between "switch a fiber" and "Submit and Await".
  *
  * Boost documents a context switch at tens of nanoseconds, and a Submit round
  * trip measures around 8us, so nearly all of it is somewhere other than the
  * switch. This prices each layer in between so the next optimisation aims at
- * the right one: a yield between two fibres already on this thread, a fibre
+ * the right one: a yield between two fibers already on this thread, a fiber
  * created and joined on this thread, a bare handoff to the worker pool, and the
  * full Submit.
  */
@@ -928,7 +928,7 @@ void SchedulingSuite(Recorder& recorder, double scale) {
                           iterations, iterations / 10),
        .params = {}});
 
-  // Create, run and join a fibre on this thread's own scheduler.
+  // Create, run and join a fiber on this thread's own scheduler.
   recorder.Add({.suite = "scheduling",
                 .name = "fiber_local_spawn",
                 .metrics = Latency(
@@ -1044,8 +1044,8 @@ void SchedulingSuite(Recorder& recorder, double scale) {
                     iterations, iterations / 10),
                 .params = {}});
 
-  // The same Submit, measured from inside a fibre that is already on a pool
-  // worker. The caller is then a fibre the scheduler can park and resume
+  // The same Submit, measured from inside a fiber that is already on a pool
+  // worker. The caller is then a fiber the scheduler can park and resume
   // without waking a sleeping thread.
   recorder.Add({.suite = "scheduling",
                 .name = "submit_round_trip",
@@ -1065,8 +1065,8 @@ void SchedulingSuite(Recorder& recorder, double scale) {
 
   // Genuine parallel work, and the counterweight to every other row here.
   {
-    constexpr int kFibres = 16;
-    // Enough work per fibre to be worth a core and to dwarf the handoff, but
+    constexpr int kFibers = 16;
+    // Enough work per fiber to be worth a core and to dwarf the handoff, but
     // short enough that the row is not the whole suite's runtime.
     constexpr std::int64_t kBurnIterations = 200000;
     recorder.Add({.suite = "scheduling",
@@ -1074,8 +1074,8 @@ void SchedulingSuite(Recorder& recorder, double scale) {
                   .metrics = Throughput(
                       [&](std::int64_t) {
                         std::vector<a11::Task> tasks;
-                        tasks.reserve(kFibres);
-                        for (int fibre = 0; fibre < kFibres; ++fibre) {
+                        tasks.reserve(kFibers);
+                        for (int fiber = 0; fiber < kFibers; ++fiber) {
                           tasks.push_back(a11::SubmitTask([]() -> absl::Status {
                             // volatile so the optimiser leaves the work alone.
                             volatile std::int64_t sink = 0;
@@ -1090,8 +1090,8 @@ void SchedulingSuite(Recorder& recorder, double scale) {
                           (void)task.Await(Deadline());
                         }
                       },
-                      std::max<std::int64_t>(iterations / 256, 4), 2, kFibres),
-                  .params = {{"fibres", "16"}}});
+                      std::max<std::int64_t>(iterations / 256, 4), 2, kFibers),
+                  .params = {{"fibers", "16"}}});
   }
 }
 
@@ -1156,7 +1156,7 @@ EchoSetup StartEchoPair(const std::string& transport, const std::string& what,
   setup.arrivals = std::make_shared<Arrivals>();
   setup.peer = std::make_shared<std::weak_ptr<net::WireStream>>();
   // Accounting is in fragments, not messages, and that is not a detail. Replies
-  // on the fibre the transport already delivered on.
+  // on the fiber the transport already delivered on.
   const std::shared_ptr<std::weak_ptr<net::WireStream>> peer = setup.peer;
   net::OnMessage on_server =
       [peer](std::optional<data::WireMessage> message) -> a11::Task {
@@ -1186,7 +1186,7 @@ EchoSetup StartEchoPair(const std::string& transport, const std::string& what,
     return {};
   }
 
-  // Counts on the delivery fibre, for the same reason the echo replies there.
+  // Counts on the delivery fiber, for the same reason the echo replies there.
   const std::shared_ptr<Arrivals> arrivals = setup.arrivals;
   net::OnMessage on_client =
       [arrivals](std::optional<data::WireMessage> message) -> a11::Task {
@@ -2391,7 +2391,7 @@ void ServerSuite(Recorder& recorder, double scale) {
       continue;
     }
 
-    // One fibre per client, each calling echo in a loop: concurrency is what
+    // One fiber per client, each calling echo in a loop: concurrency is what
     // makes the cores-busy column mean anything.
     const double cpu_before = ProcessCpuSeconds();
     const absl::Time started = absl::Now();
@@ -2510,7 +2510,7 @@ void ServerSuite(Recorder& recorder, double scale) {
           static_cast<long long>(
               g_echo_handler_replies.load(std::memory_order_relaxed)));
     }
-    // Printed so a fibre or scheduling census can be divided by it.
+    // Printed so a fiber or scheduling census can be divided by it.
     std::fprintf(
         stderr, "  server[%d clients]: completed=%lld\n", clients,
         static_cast<long long>(completed.load(std::memory_order_relaxed)));

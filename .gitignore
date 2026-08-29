@@ -1,4 +1,7 @@
-.claude
+# The hooks that enforce AGENTS.md prose rules and the fiber-debugging
+# instruction travel with the repo; everything else under .claude is local.
+.claude/*
+!.claude/settings.json
 .idea
 .junie
 .venv

@@ -512,7 +512,7 @@ void BindService(py::module_& module) {
              data::WireMessage message,
              std::shared_ptr<net::WireStream> origin_stream) {
             // Without the GIL: DispatchWireMessage does real work before it
-            // hands back a future -- it can park in the fibre scheduler -- and
+            // hands back a future -- it can park in the fiber scheduler -- and
             // this runs as an ordinary event-loop callback.
             return FutureToPython(WithoutGil([&] {
               return self->DispatchWireMessage(std::move(message),

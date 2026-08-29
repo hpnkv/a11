@@ -54,8 +54,8 @@ bool IsValidUtf8(std::string_view text);
  * both are exactly where something outside this process can put arbitrary
  * bytes.
  *
- * Iterative, not recursive: this runs on whatever fibre is serializing, and
- * A11's fibre stacks are fixed and small, so the depth of the document must not
+ * Iterative, not recursive: this runs on whatever fiber is serializing, and
+ * A11's fiber stacks are fixed and small, so the depth of the document must not
  * decide how much stack the check needs.
  */
 const nlohmann::json* FindUnencodableString(const nlohmann::json& value);

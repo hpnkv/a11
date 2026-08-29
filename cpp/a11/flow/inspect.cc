@@ -148,13 +148,13 @@ class Inspector {
 
   // Every type a body writes down, however deep: `Shape{..}` and `x as Shape`.
   // VisitSubtree rather than a recursive walk of its own, so a deeply nested
-  // document costs heap rather than fibre stack.
+  // document costs heap rather than fiber stack.
   /// Every type a body writes down, however deep: `Shape{..}` and `x as Shape`.
   ///
   /// Every node, whatever its kind: a cast can be anywhere an expression can,
   /// and enumerating the places would be a list to keep in step with the
   /// grammar for no gain. VisitSubtree rather than a recursive walk of its own,
-  /// so a deeply nested document costs heap rather than fibre stack.
+  /// so a deeply nested document costs heap rather than fiber stack.
   static void NamedTypes(const std::vector<syntax::NodePtr>& body,
                          absl::flat_hash_set<std::string>& named) {
     for (const syntax::NodePtr& node : body) {
@@ -682,7 +682,7 @@ class Inspector {
   /// Every pipeline written inside an expression, however deeply nested.
   ///
   /// A work list rather than recursion: the depth here is the document's
-  /// nesting, and A11 runs this on pooled fibres whose stacks are fixed and
+  /// nesting, and A11 runs this on pooled fibers whose stacks are fixed and
   /// small. Children are pushed in reverse so the visit order is the one a
   /// recursive descent would have produced.
   void Expression(const Node* expression) {

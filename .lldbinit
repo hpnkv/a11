@@ -1,0 +1,20 @@
+# LLDB setup for this repository, loaded when lldb starts in the repo root.
+#
+# LLDB does not read a directory-local .lldbinit by default, because it runs
+# arbitrary commands. Opt in once, in the .lldbinit in your home directory:
+#
+#     settings set target.load-cwd-lldbinit true
+#
+# Without that, lldb prints a warning saying this file exists and was skipped.
+# To silence the warning instead of loading this file:
+#
+#     settings set target.load-cwd-lldbinit false
+#
+# CLion reads startup commands from
+# Settings | Build, Execution, Deployment | Debugger; put the import line there
+# to get the same commands without the opt-in.
+
+# Adds `a11-fibers` and `a11-hang`. A blocked A11 fiber's stack is parked where
+# no OS thread points at it, so the Frames pane and `bt` both miss it; these
+# unwind it. See doc/docs/guides/debugging-concurrency.md.
+command script import scripts/a11_fibers.py

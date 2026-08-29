@@ -8,7 +8,7 @@
  * cpp/CMakeLists.txt) and holding nothing but the instantiations of
  * a11::exception_guard::Wrap for the callables this library adopts from a
  * caller. `Schedule` and `ScheduleCancelable` take work from anywhere,
- * including a caller built with exceptions, and run it on a fibre whose frame
+ * including a caller built with exceptions, and run it on a fiber whose frame
  * is one of A11's -- so the wrap has to be compiled here, where the catch can
  * exist. a11/exception_guard.h has the reasoning.
  *

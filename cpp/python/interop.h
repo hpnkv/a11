@@ -162,7 +162,7 @@ class DeferredPythonRefs {
   }
 
   // Uses absl::Mutex, not thread::Mutex, because this is reachable from a
-  // fibre destructor, and a fibre-aware mutex would want a scheduler that a
+  // fiber destructor, and a fiber-aware mutex would want a scheduler that a
   // teardown path may no longer have.
   static absl::Mutex& Mutex() {
     static absl::NoDestructor<absl::Mutex> mutex;
@@ -279,7 +279,7 @@ class PyStatusCode : public py::object {
  * Runs a blocking native call with the GIL released, and hands back its result.
  *
  * A *synchronous* binding that can block must let Python run while it waits.
- * A11's mutexes and events are fibre-aware (@c thread::Mutex, @c
+ * A11's mutexes and events are fiber-aware (@c thread::Mutex, @c
  * thread::Select), and whoever holds one may itself need the GIL -- a Python
  * action handler, a chunk built through the serialisation registry, a future
  * completed onto an asyncio loop. Waiting with the GIL held closes that cycle:
@@ -543,7 +543,7 @@ py::object FutureToPythonConverted(a11::Future<T> future, Converter converter) {
   py::object py_future = coordination.attr("_create_native_future")(
       loop,
       // Without the GIL: cancelling reaches into the producing operation and
-      // can park in the fibre scheduler, and this runs on the event-loop thread
+      // can park in the fiber scheduler, and this runs on the event-loop thread
       // -- a `wait_for` timeout calls it as an ordinary loop callback.
       py::cpp_function([future]() mutable {
         // Nothing to report a failed cancellation to: asyncio has already

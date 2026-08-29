@@ -34,7 +34,7 @@ cmake --build build/ctests --target a11_bench -j 10
 
 `--only` runs the rows whose name contains a substring, which is what
 attributing a process-wide counter to one operation needs: `A11_POOL_STATS=1`
-counts fibres and thread wakes for the whole process, so a per-operation figure
+counts fibers and thread wakes for the whole process, so a per-operation figure
 is two runs of *one* row at different scales and a division of the differences.
 
 All three runners emit the same record shape and use the same benchmark names,

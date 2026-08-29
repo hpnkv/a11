@@ -49,13 +49,13 @@ std::vector<absl::StatusOr<T>> AwaitAll(
   return results;
 }
 
-// Runs each callable on its own fibre and waits for all of them. `stack_size`
-// sets each fibre's stack.
-/// Runs each callable on its own fibre and waits for all of them.
+// Runs each callable on its own fiber and waits for all of them. `stack_size`
+// sets each fiber's stack.
+/// Runs each callable on its own fiber and waits for all of them.
 ///
 /// Each callable runs to completion even after another fails; the function
 /// returns the first error. Use it for independent ordered chains such as a
-/// sequence of writes followed by a close. `stack_size` sets each fibre's
+/// sequence of writes followed by a close. `stack_size` sets each fiber's
 /// stack.
 absl::Status RunAllToCompletion(
     std::vector<absl::AnyInvocable<absl::Status() &&>> work,

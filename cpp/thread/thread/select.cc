@@ -14,12 +14,15 @@
 
 #include "thread/select.h"
 
+#include <algorithm>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 
 #include <absl/log/check.h>
 
 #include "thread/boost_primitives.h"
+#include "thread/fiber_diagnostics.h"
 #include "thread/util.h"
 
 namespace thread {
@@ -85,6 +88,17 @@ int SelectUntil(absl::Time deadline, const CaseArray& cases) {
   {
     thread::MutexLock lock(&selector.mu);
     if (!ready) {
+      // Annotated here rather than in CondVar, so a report names the
+      // selectables instead of the selector's internal condition variable.
+      THREAD_WAIT_SCOPE(wait, WaitKind::kSelect, &selector,
+                        DeadlineNanos(deadline));
+      const void* selectables[kMaxRecordedSelectables];
+      const size_t recorded = std::min(cases.size(), kMaxRecordedSelectables);
+      for (size_t index = 0; index < recorded; ++index) {
+        selectables[index] = cases[index].selectable;
+      }
+      wait.RecordSelectables(selectables, recorded);
+
       const bool expirable = deadline != absl::InfiniteFuture();
       expired = !selector.WaitForPickUntil(deadline);
       DCHECK(expirable || !expired);

@@ -346,7 +346,7 @@ Six gaps, in the same order this file first listed them: **aggregation**
   winner and stays a barrier.
 * `wait first of` races **calls**, not nodes. A node is finished when whoever
   writes it says so, which is what `wait` and `drain` are for — and a race over
-  several status *reads* would need a fibre per candidate that nothing could
+  several status *reads* would need a fiber per candidate that nothing could
   wake once the race was over.
 * `fold`'s starting value is a literal, because `fold 0 as total` read as an
   expression is a cast of `0` to a type called `total`.

@@ -4,7 +4,7 @@
  * @file
  * @brief A11's one libuv loop, and how to get work onto it.
  *
- * A process-wide thread owns every uvw handle. Fibres submit work through
+ * A process-wide thread owns every uvw handle. Fibers submit work through
  * Post() or RunOnUv() and receive results through A11 Futures.
  *
  * Work sharing an @c order_key runs in posting order; use the connection as the
@@ -64,8 +64,8 @@ class UvExecutor {
   static UvExecutor& Instance() {
     // The process-wide I/O scheduler lives until process exit.
     static absl::NoDestructor<UvExecutor> executor;
-    // Wait outside the static initialization guard because the fibre-aware wait
-    // may yield and allow another fibre to enter Instance().
+    // Wait outside the static initialization guard because the fiber-aware wait
+    // may yield and allow another fiber to enter Instance().
     executor->EnsureStarted();
     return *executor;
   }
@@ -169,7 +169,7 @@ class UvExecutor {
     }
   }
 
-  /// Blocks until the loop thread starts. Safe to call from multiple fibres.
+  /// Blocks until the loop thread starts. Safe to call from multiple fibers.
   void EnsureStarted() {
     thread::MutexLock lock(&mu_);
     while (!loop_thread_id_.has_value()) {

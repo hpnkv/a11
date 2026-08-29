@@ -859,7 +859,7 @@ void VisitChildren(const Node& node,
 ///
 /// Iterative, with the work list on the heap. A pass that walked the tree by
 /// calling itself from a VisitChildren callback would put the document's
-/// nesting on the call stack, and A11's work runs on pooled fibres whose
+/// nesting on the call stack, and A11's work runs on pooled fibers whose
 /// stacks are fixed and small -- so the tree's shape must not decide how much
 /// stack a pass needs. The parser bounds nesting as well (see kMaxNesting
 /// there); this is the other half, and the one that does not depend on where

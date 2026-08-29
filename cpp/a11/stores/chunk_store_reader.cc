@@ -766,7 +766,7 @@ ChunkStoreReader::NextMany(size_t limit, absl::Duration timeout) {
     return a11::CompletedFuture<Batch>(std::move(batch));
   }
 
-  // Nothing prefetched. The fibre disappears from the common path without
+  // Nothing prefetched. The fiber disappears from the common path without
   // moving the pump anywhere it was not already driven.
   std::shared_ptr<State> state = state_;
   return a11::ThenAfterWaiting(

@@ -39,7 +39,7 @@ namespace {
 
 constexpr absl::Duration kDeadline = absl::Seconds(10);
 
-TEST(FibreReapingTest, CancellingAFinishedTaskIsSafe) {
+TEST(FiberReapingTest, CancellingAFinishedTaskIsSafe) {
   for (int attempt = 0; attempt < 500; ++attempt) {
     std::atomic<bool> ran{false};
     Task task = SubmitTask([&ran]() -> absl::Status {
@@ -54,7 +54,7 @@ TEST(FibreReapingTest, CancellingAFinishedTaskIsSafe) {
   }
 }
 
-TEST(FibreReapingTest, CancellingWithoutAwaitingIsSafe) {
+TEST(FiberReapingTest, CancellingWithoutAwaitingIsSafe) {
   // The same window from the other side: never awaited, so the cancel can land
   // before the work starts, while it runs, or after it has finished.
   for (int attempt = 0; attempt < 500; ++attempt) {
@@ -63,17 +63,17 @@ TEST(FibreReapingTest, CancellingWithoutAwaitingIsSafe) {
   }
 }
 
-TEST(FibreReapingTest, ManyTasksCancelledConcurrentlyAreAllReaped) {
+TEST(FiberReapingTest, ManyTasksCancelledConcurrentlyAreAllReaped) {
   // Concurrency, because the ordering being tested is between a worker running
   // ReapFinishedFibers() and a caller holding the owner's lock in Cancel(). One
   // fiber doing this in sequence would rarely produce that overlap.
-  constexpr size_t kFibres = 64;
+  constexpr size_t kFibers = 64;
   constexpr int kRounds = 40;
   std::atomic<int> completed{0};
 
   std::vector<Task> drivers;
-  drivers.reserve(kFibres);
-  for (size_t index = 0; index < kFibres; ++index) {
+  drivers.reserve(kFibers);
+  for (size_t index = 0; index < kFibers; ++index) {
     drivers.push_back(SubmitTask([&completed]() -> absl::Status {
       for (int round = 0; round < kRounds; ++round) {
         Task inner = SubmitTask([&completed]() -> absl::Status {
@@ -90,10 +90,10 @@ TEST(FibreReapingTest, ManyTasksCancelledConcurrentlyAreAllReaped) {
     EXPECT_TRUE(driver.Await(absl::Now() + kDeadline).ok());
   }
   EXPECT_EQ(completed.load(std::memory_order_relaxed),
-            static_cast<int>(kFibres) * kRounds);
+            static_cast<int>(kFibers) * kRounds);
 }
 
-TEST(FibreReapingTest, CancellingBeforeTheWorkRunsStillCancels) {
+TEST(FiberReapingTest, CancellingBeforeTheWorkRunsStillCancels) {
   // The reaper must not have cost the thing the pointer was kept for. A task
   // cancelled before it is scheduled must still report cancellation rather than
   // running to completion.

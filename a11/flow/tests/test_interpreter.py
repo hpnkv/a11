@@ -149,7 +149,7 @@ async def test_a_failing_python_action_fails_the_program():
     """A handler's error is the program's error, not a silent empty port.
 
     Worth its own test because the failure has to cross the boundary twice: a
-    Python exception becomes an action status on a fibre with no GIL, and that
+    Python exception becomes an action status on a fiber with no GIL, and that
     status has to come back out of `run_program` as an exception again.
     """
 

@@ -75,7 +75,7 @@ struct InProcessWireStream::State {
   std::weak_ptr<State> peer;
   mutable thread::Mutex mu;
   // One condition variable per thing that is waited for, rather than one per
-  // endpoint. Split, each change reaches only the fibre whose predicate it can
+  // endpoint. Split, each change reaches only the fiber whose predicate it can
   // make true.
   thread::CondVar outbound_cv;  // Sender, for something to send.
   thread::CondVar incoming_cv;  // Receiver, for something to deliver.
@@ -205,7 +205,7 @@ absl::Status InProcessWireStream::Send(data::WireMessage message) {
              {"a11.wire.bytes", absl::StrCat(message.ApproxBytes())}});
       }
       // Deliver on this thread when there is nothing to get in the way. The
-      // Sender fibre exists for the two things a caller of Send must not do:
+      // Sender fiber exists for the two things a caller of Send must not do:
       if (end == End::kNone && state_->outbound.empty() && !state_->sending) {
         state_->sending = true;
         claimed = true;
@@ -290,7 +290,7 @@ a11::Task InProcessWireStream::StartEndpoint(OnMessage on_message,
           absl::FailedPreconditionError("The stream has already been started"));
     }
     state_->started = true;
-    // Guarded on the way in, so the Receiver fibre can invoke them without a
+    // Guarded on the way in, so the Receiver fiber can invoke them without a
     // try of its own -- see net/internal/exception_guarded_callbacks.h.
     state_->on_message = internal::GuardOnMessage(std::move(on_message));
     state_->on_done = internal::GuardOnDone(std::move(on_done));

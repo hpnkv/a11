@@ -285,7 +285,7 @@ class Monitor {
     Condition(const Condition&) = delete;
     Condition& operator=(const Condition&) = delete;
 
-    /// Wake the fibres parked on this, and nothing else.
+    /// Wake the fibers parked on this, and nothing else.
     void Wake() {
       if (waiters_.load(std::memory_order_relaxed) > 0) {
         cv_.SignalAll();
@@ -407,7 +407,7 @@ class Monitor {
     std::atomic<int>* absl_nonnull waiters_;
   };
 
-  /// Counts one fibre in [Wait] for as long as it might park.
+  /// Counts one fiber in [Wait] for as long as it might park.
   class Parked {
    public:
     explicit Parked(Monitor* absl_nonnull monitor) : monitor_(monitor) {
@@ -445,7 +445,7 @@ class Group {
   Group& operator=(const Group&) = delete;
 
   /// Nothing is left running: a group that was abandoned rather than joined --
-  /// because the code around it failed -- cancels its fibres and waits for
+  /// because the code around it failed -- cancels its fibers and waits for
   /// them.
   ~Group() {
     if (!joined_) {
@@ -498,7 +498,7 @@ class Group {
   ///
   /// Both halves are needed. Stopping the monitor wakes everything parked on a
   /// condition -- a pump with no reader, a barrier on a node nobody will close
-  /// -- and cancelling the fibres wakes everything parked on a [a11::Future],
+  /// -- and cancelling the fibers wakes everything parked on a [a11::Future],
   /// which is every node read and every wait for an action.
   void Give() {
     absl::Status why;
@@ -517,7 +517,7 @@ class Group {
     thread::MutexLock lock(&monitor_->mu());
     ++done_;
     // A cancellation is not a reason. Everything else in the group is cancelled
-    // when one fibre fails, so the real failure has to win however the two race
+    // when one fiber fails, so the real failure has to win however the two race
     // -- otherwise a flow that timed out reports that it was cancelled.
     if (!status.ok() && (first_.ok() || (absl::IsCancelled(first_) &&
                                          !absl::IsCancelled(status)))) {
@@ -1622,14 +1622,14 @@ class Scope {
   /// has. Read through the barrier's winner ref, which waits for the step.
   absl::flat_hash_map<StepId, std::int64_t> winners_;
   // What a `fold` is carrying right now, per fold in this body. One entry per
-  // fold, and a fold runs on one fibre -- it reads its stream to the end -- so
+  // fold, and a fold runs on one fiber -- it reads its stream to the end -- so
   // the only concurrency here is a second fold elsewhere in the same body.
   /// What a `fold` is carrying right now, per fold in this body.
   ///
   /// A fold's accumulator is a name in an expression, and a name in an
   /// expression is a ref: this is where the ref's value comes from, filled in
   /// per value by the stage rather than read off a stream. One entry per fold,
-  /// and a fold runs on one fibre -- it reads its stream to the end -- so the
+  /// and a fold runs on one fiber -- it reads its stream to the end -- so the
   /// only concurrency here is a second fold elsewhere in the same body.
   absl::flat_hash_map<RefId, Value> folds_;
   /// One cursor per ref, shared by every value read of it: see [ValueCursor].
@@ -2234,16 +2234,16 @@ absl::Status Scope::Produce(RefId ref, const Sink& sink) {
   }
 }
 
-// Read several streams in step, as one stream of tuples. A fibre per source
+// Read several streams in step, as one stream of tuples. A fiber per source
 // would buy nothing and would put three more lifetimes on the run's monitor.
 /// Read several streams in step, as one stream of tuples.
 ///
-/// **No fibre of its own per source, and that is not a shortcut.** A tuple is
+/// **No fiber of its own per source, and that is not a shortcut.** A tuple is
 /// not complete until every source has answered, so asking them one after
 /// another finishes at exactly the moment asking them at once would -- and
 /// every reader here is an ordinary subscription, which already blocks, already
 /// relays a producer's failure, and already has the buffering the analysis
-/// arranged. A fibre per source would buy nothing and would put three more
+/// arranged. A fiber per source would buy nothing and would put three more
 /// lifetimes on the run's monitor.
 ///
 /// A source that ends **well** is latched: from then on it contributes a null
@@ -2303,12 +2303,12 @@ absl::Status Scope::ProduceZip(RefId ref, const Sink& sink) {
 
 /// Read several streams at once, as one stream of their values.
 ///
-/// **A fibre per source, unlike a zip, and for the opposite reason.** A tuple
+/// **A fiber per source, unlike a zip, and for the opposite reason.** A tuple
 /// is not complete until every source has answered, so asking them one after
 /// another finishes when asking them at once would. An interleaved value is
 /// complete as soon as *one* source has answered, so reading them in turn would
 /// make a fast stream wait behind a slow one -- which is the whole thing this
-/// exists to avoid. The fibres are the sources the author named, and they are
+/// exists to avoid. The fibers are the sources the author named, and they are
 /// what "in the order values arrive" costs.
 ///
 /// Publishing takes the bus lock, so concurrent values are ordered by lock
@@ -2335,7 +2335,7 @@ absl::Status Scope::ProduceMerge(RefId ref, const Sink& sink) {
       ABSL_RETURN_IF_ERROR(sink.Many(batch));
     }
   };
-  // One of them on this fibre, so `interleave(a, b)` costs one extra fibre and
+  // One of them on this fiber, so `interleave(a, b)` costs one extra fiber and
   // not two.
   for (size_t index = 1; index < readers.size(); ++index) {
     Reader* reader = readers[index].get();
@@ -3219,7 +3219,7 @@ absl::Status Scope::InParallel(
   for (int index = 1; index < stage.parallel; ++index) {
     group.Spawn([&worker]() -> absl::Status { return worker(); });
   }
-  // This fibre is one of the workers, so `parallel 2` costs one extra fibre and
+  // This fiber is one of the workers, so `parallel 2` costs one extra fiber and
   // not two.
   absl::Status mine = worker();
   absl::Status joined = group.Join();
@@ -3274,7 +3274,7 @@ absl::Status Scope::Run() {
   ABSL_RETURN_IF_ERROR(Prepare());
   Group group(monitor());
   // A node of the flow's own that nothing writes is ended here, and without a
-  // fibre each: `Finalize` hands the write and the close to the node's own
+  // fiber each: `Finalize` hands the write and the close to the node's own
   // writer pump, so the awaitables are collected and waited on together.
   std::vector<a11::Task> closing;
   closing.reserve(unwritten_.size());
@@ -3494,7 +3494,7 @@ absl::Status Scope::Execute(StepId step) {
 // wake, which is what a call handle's `finished` is for.
 /// `wait first of a, b` and `wait all of a, b`: several outcomes, one barrier.
 ///
-/// Every outcome is read on its own fibre, because reading one blocks on
+/// Every outcome is read on its own fiber, because reading one blocks on
 /// whatever its subject is doing: reading them in turn would make `first` mean
 /// "the first one written down", which is not what it says. A `first` returns
 /// as soon as one of them is in, and the others are left running -- they are
@@ -3506,9 +3506,9 @@ absl::Status Scope::Execute(StepId step) {
 /// failure.
 /// `wait first of a, b` and `wait all of a, b`: several subjects, one barrier.
 ///
-/// **No fibre per subject, and that is not a shortcut.** A `first` has to stop
-/// waiting for the losers, and the only thing that wakes a fibre parked on this
-/// runtime's conditions is giving up on the whole run -- so a fibre per
+/// **No fiber per subject, and that is not a shortcut.** A `first` has to stop
+/// waiting for the losers, and the only thing that wakes a fiber parked on this
+/// runtime's conditions is giving up on the whole run -- so a fiber per
 /// candidate would either be left parked with a pointer into a scope that is
 /// being torn down, or would end the flow it was supposed to let carry on. What
 /// a race actually needs is one wait on a condition its candidates already
@@ -3924,7 +3924,7 @@ absl::Status Scope::RunForEach(StepId step) {
       }
       continue;
     }
-    // Admission before the fibre, so a wide `parallel` does not turn a long
+    // Admission before the fiber, so a wide `parallel` does not turn a long
     // stream into a pile of pending passes.
     {
       thread::MutexLock lock(&monitor.mu());

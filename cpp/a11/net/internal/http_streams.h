@@ -16,6 +16,7 @@
 #ifndef A11_NET_INTERNAL_HTTP_STREAMS_H_
 #define A11_NET_INTERNAL_HTTP_STREAMS_H_
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -310,6 +311,10 @@ struct Http2ResponseWriter::State {
 
   mutable thread::Mutex mu;
   bool done ABSL_GUARDED_BY(mu) = false;
+  // Set by a handler that hands this writer to something which will answer
+  // later; read by the dispatch loop's fallback. See
+  // Http2ResponseWriter::DeferResponse().
+  std::atomic<bool> deferred{false};
   const std::shared_ptr<a11::Promise<a11::Unit>> done_promise;
   const a11::Task done_future;
 

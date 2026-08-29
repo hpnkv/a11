@@ -662,8 +662,8 @@ absl::Status RunSpawnProcess(const std::shared_ptr<Action>& action,
     return give_up(written);
   }
 
-  // stdin is fed by a fibre of its own: feeding it means reading a port, which
-  // blocks, and the same fibre cannot also be polling for output. The fibre
+  // stdin is fed by a fiber of its own: feeding it means reading a port, which
+  // blocks, and the same fiber cannot also be polling for output. The fiber
   // owns the pipe's write end and closes it when the content stream ends.
   absl::StatusOr<std::shared_ptr<AsyncNode>> content =
       action->GetInput("stdin");
@@ -720,12 +720,12 @@ absl::Status RunSpawnProcess(const std::shared_ptr<Action>& action,
   std::uint64_t produced = 0;
   bool termed = false;
   absl::Time term_at = absl::InfiniteFuture();
-  // On the heap: a fibre's stack is measured in kilobytes, and 64 KiB of local
+  // On the heap: a fiber's stack is measured in kilobytes, and 64 KiB of local
   // buffer would run off the end of it.
   std::string buffer(kPipeChunkBytes, '\0');
 
   while ((streams[0].open || streams[1].open) && trouble.ok()) {
-    // Give this worker's fibre scheduler a turn. That is a deadlock, and it was
+    // Give this worker's fiber scheduler a turn. That is a deadlock, and it was
     // one: `SpawnProcessTest.StopsALongRunningProcessAndSaysHow` failed about
     // 40% of the time under load without this yield and not at all with it.
     thread::SleepFor(absl::ZeroDuration());

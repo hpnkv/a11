@@ -32,13 +32,13 @@ std::function<void()> ScheduleCancelable(absl::AnyInvocable<void() &&> work,
  * @brief Continue with @p transform when @p future completes or the deadline
  * expires.
  *
- * A ready future is transformed inline; otherwise a fibre waits until
+ * A ready future is transformed inline; otherwise a fiber waits until
  * @p deadline. Use Then() when the operation has no deadline.
  *
  * @param future
  *   The operation to continue from.
  * @param deadline
- *   How long the fibre may wait when @p future is not already complete.
+ *   How long the fiber may wait when @p future is not already complete.
  * @param transform
  *   Called with @p future's result. Runs inline in the ready case and must not
  *   block.

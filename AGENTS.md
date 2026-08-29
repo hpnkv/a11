@@ -20,7 +20,7 @@
   lead-byte ladder or a `%xx` loop, and add new ones to
   `cpp/tests/header_canary.cc`. The strict UTF-8 validator has one home,
   `a11::IsValidUtf8` in `a11/json_codec.h`; `FindUnencodableString` beside it is
-  iterative on purpose, because fibre stacks are small and fixed.
+  iterative on purpose, because fiber stacks are small and fixed.
 - Public stateful Python runtime types reuse the bound native class objects;
   do not add shadow Python implementations or facade subclasses for concrete
   native types. Attach thin, asynchronous, idiomatic protocols to the bound
@@ -60,11 +60,11 @@
       `a11::flow_runtime` (`values.cc`, `runtime.cc`), which does link the node and
       action layers — and `a11_flow_test`'s link line is the proof the language does
       not.
-    - The runtime is **fibres over one monitor**: `thread::` primitives only (never
+    - The runtime is **fibers over one monitor**: `thread::` primitives only (never
       `std::mutex`), one lock and one condition variable per run, and blocking work
       done with the lock released. That is what makes giving up on a run possible at
       all — a pump waiting for a reader that will never come has to be woken. Every
-      fibre gets a stack an interpreter frame chain fits in, because any of them can
+      fiber gets a stack an interpreter frame chain fits in, because any of them can
       reach the `HostBridge`.
     - `HostBridge` is the three questions only the host can answer: coerce a value
       into a registered type, read one out of a chunk, write one into a chunk. The
@@ -159,6 +159,32 @@
 - Thread changes require cooperative-concurrency tests: cancellation and tree
   propagation, `Select`/`SelectUntil`, `SleepFor`, timed waits, FIFO behaviour,
   deadlock resistance, waiter cleanup, and joined/detached fiber lifetime.
+- **Debug a hang with `thread/introspect.h` before anything else.** A11's own
+  `.claude/settings.json` enforces this: `scripts/hook_fiber_debugging.sh` puts
+  the procedure in context at session start and on any prompt about a hang,
+  deadlock or timeout. Do not add print statements, raise a timeout, or read
+  code speculatively until a fiber report has been read.
+- Prose rules are enforced too. `scripts/hook_writing_style.sh context` states
+  the writing style at session start, with examples and counterexamples;
+  `... filter` refuses a Write or Edit carrying the phrases it names. In short:
+  describe the artefact in a present-tense factual verb; delete history,
+  counterfactual warnings, intent emphasis and value framing rather than
+  rephrasing them; lead documentation with what the reader can do; and compare
+  to a named product by granting its strengths and stating A11's own limits,
+  never with a superlative. Commits `14c8e9ba`, `bac44c5` and `76499e8` are
+  where the rules were applied wholesale.
+- A blocked fiber's stack is parked where no OS thread points at it, so `bt` and
+  a core dump miss the frames that explain a hang. `thread/introspect.h` records
+  each fiber's wait kind, wait object and frame pointer when it blocks, and
+  unwinds the parked stacks from those frame pointers on request:
+  `A11_FIBER_WATCHDOG=<seconds>`, `kill -USR2`, `thread::FormatFiberReport()`,
+  `a11.debug.fiber_report()`, or `scripts/a11_fibers.py` under LLDB or GDB for a
+  core file. The repo's `.lldbinit` and `.gdbinit` load that script; both
+  debuggers need a one-line opt-in before reading a directory-local init
+  file. A new blocking path in Thread needs a `THREAD_WAIT_SCOPE` where it
+  blocks, or it appears in reports as `running`. The walk requires the frame
+  pointers `A11_FRAME_POINTERS` keeps. See
+  `doc/docs/guides/debugging-concurrency.md`.
 
 ## C++ API and implementation rules
 

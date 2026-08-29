@@ -15,6 +15,7 @@
 #ifndef THREAD_BOOST_PRIMITIVES_H_
 #define THREAD_BOOST_PRIMITIVES_H_
 
+#include <atomic>
 #include <cstddef>
 
 #include <absl/base/nullability.h>
@@ -42,6 +43,12 @@ class ABSL_LOCKABLE ABSL_ATTRIBUTE_WARN_UNUSED Mutex {
 
   friend class CondVar;
 
+  /// The `boost::fibers::context*` holding this mutex, or null. Recorded so a
+  /// fiber blocked here names its blocker; see thread/introspect.h.
+  const void* absl_nullable HolderContext() const {
+    return holder_context_.load(std::memory_order_relaxed);
+  }
+
  private:
   struct Impl;
   static constexpr size_t kImplSize = 64;
@@ -51,6 +58,11 @@ class ABSL_LOCKABLE ABSL_ATTRIBUTE_WARN_UNUSED Mutex {
   const Impl* absl_nonnull GetImpl() const;
 
   alignas(kImplAlignment) std::byte impl_[kImplSize];
+
+  // One relaxed store per Lock and per Unlock, and a relaxed load on Lock to
+  // decide whether the caller is about to block. Boost's own mutex keeps the
+  // same value privately; A11_FIBER_OWNER_TRACKING=0 skips these.
+  std::atomic<const void* absl_nullable> holder_context_{nullptr};
 };
 
 class ABSL_SCOPED_LOCKABLE MutexLock {

@@ -1229,7 +1229,7 @@ Examples:
             // As in `run`, and before the GIL goes: a dispatched action's
             // handler may be a Python one registered outside any loop.
             PythonLoop::NoteRunningLoop();
-            // Without the GIL: this starts work and can park in the fibre
+            // Without the GIL: this starts work and can park in the fiber
             // scheduler before returning a future, and it runs on the
             // event-loop thread.
             return FutureToPython(
@@ -1258,7 +1258,7 @@ Examples:
               return FutureToPython(
                   a11::FailedFuture<absl::Status>(converted.status()));
             }
-            // Without the GIL: this starts work and can park in the fibre
+            // Without the GIL: this starts work and can park in the fiber
             // scheduler before returning a future, and it runs on the
             // event-loop thread.
             return FutureToPython(
@@ -1277,7 +1277,7 @@ Examples:
                   a11::FailedFuture<std::shared_ptr<actions::Action>>(
                       converted.status()));
             }
-            // Without the GIL: this starts work and can park in the fibre
+            // Without the GIL: this starts work and can park in the fiber
             // scheduler before returning a future, and it runs on the
             // event-loop thread.
             return FutureToPython(

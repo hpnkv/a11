@@ -873,7 +873,7 @@ absl::Status HttpSseClientWireStream::OpenOutboundStream(
 /**
  * Hands one outbound message to the transport.
  *
- * Runs on the internal bridge's sender fibre, one message at a time, and is the
+ * Runs on the internal bridge's sender fiber, one message at a time, and is the
  * only place the two delivery methods differ. Neither method awaits an ordinary
  * message because A11 WireMessages have no global order. POST requests overlap;
  * streamed writes are posted to the loop like other socket writes. Terminal and
@@ -1257,7 +1257,7 @@ void HttpSseServerWireStream::TransportDone() {
 struct HttpSseServer::State {
   State(HttpSseOptions value_options, OnHttpSseConnect connect_callback)
       : options(std::move(value_options)),
-        // Guarded on the way in: it runs on a connection fibre of A11's, so
+        // Guarded on the way in: it runs on a connection fiber of A11's, so
         // net/internal/exception_guarded_callbacks.h is where a raised
         // exception becomes the failed Task the caller below awaits.
         on_connect(

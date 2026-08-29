@@ -33,7 +33,7 @@ absl::Status RunAllToCompletion(
   if (work.empty()) {
     return absl::OkStatus();
   }
-  // One item is the common case for a narrow action, and spawning a fibre to
+  // One item is the common case for a narrow action, and spawning a fiber to
   // run it while this one waits is strictly worse than running it here: same
   // work, one extra handoff. The whole header exists to remove handoffs.
   if (work.size() == 1) {

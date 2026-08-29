@@ -660,7 +660,7 @@ Examples:
       .def(
           "drain_outgoing_messages",
           [](const std::shared_ptr<net::WireStream>& self) {
-            // Without the GIL: this takes the stream's fibre-aware mutex to
+            // Without the GIL: this takes the stream's fiber-aware mutex to
             // read the drain future out, and whoever holds that mutex may need
             // the GIL to finish.
             return FutureToPython(
@@ -680,7 +680,7 @@ Examples:
           "abort",
           [](net::WireStream& self, const PyLike<NativeStatus>& status) {
             // Convert while the GIL is held, then abort without it: aborting
-            // takes the stream's fibre-aware locks and wakes its pumps.
+            // takes the stream's fiber-aware locks and wakes its pumps.
             absl::Status requested = StatusFromPython(status);
             ThrowIfNotOk(
                 WithoutGil([&] { return self.Abort(std::move(requested)); }));
@@ -844,7 +844,7 @@ Examples:
             }
             // Without the GIL, for the same reason as
             // `drain_outgoing_messages`: starting a receive touches the
-            // stream's fibre-aware state.
+            // stream's fiber-aware state.
             return FutureToPython(
                 WithoutGil([&] { return self->Receive(*converted); }));
           },

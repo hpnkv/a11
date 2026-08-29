@@ -120,6 +120,10 @@ WebSocketWireStream::CreateAccepted(
   // for is the only thing distinguishing two streams on a prefix-served port.
   std::string request_path = request.path;
   HttpHeaders request_headers = request.headers;
+  // The stream returned here owns the response, and an application may accept
+  // it from another task; without this the dispatch fallback answers the
+  // upgrade with 204 first and the accept then fails.
+  response->DeferResponse();
   ABSL_ASSIGN_OR_RETURN(std::shared_ptr<internal::BinaryChannel> channel,
                         internal::MakeHttp2WebSocketServerChannel(
                             std::move(request), std::move(response),
@@ -173,7 +177,7 @@ WebSocketWireServer::Create(OnWebSocketStream on_stream,
   }
   ABSL_RETURN_IF_ERROR(options.Validate());
   // on_stream is the caller's, and every invocation happens on a connection
-  // fibre of A11's, so it is guarded once here. See
+  // fiber of A11's, so it is guarded once here. See
   // net/internal/exception_guarded_callbacks.h.
   auto state = std::make_shared<State>(
       internal::GuardOnWebSocketStream(std::move(on_stream)),

@@ -932,7 +932,7 @@ absl::StatusOr<std::shared_ptr<Action>> Action::RunHandlerWithoutFiber(
     }
   }
 
-  // Finishing blocks -- it drains and closes ports -- so it keeps its fibre;
+  // Finishing blocks -- it drains and closes ports -- so it keeps its fiber;
   // StartFinish() schedules it.
   a11::Then(task,
             [self](const absl::StatusOr<a11::Unit>& result)
@@ -1019,7 +1019,7 @@ a11::Future<absl::Status> Action::WaitForDispatch(absl::Duration timeout) {
   std::shared_ptr<Action> self = shared_from_this();
 
   // Inline once the dispatch has landed, as in Wait(): a peer that has already
-  // accepted the call needs no fibre to report it.
+  // accepted the call needs no fiber to report it.
   return a11::ThenAfterWaiting(
       std::move(dispatched), TimeoutDeadline(timeout),
       [self = std::move(self)](const absl::StatusOr<a11::Unit>& ready)

@@ -16,14 +16,17 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstring>
 #include <memory>
 #include <mutex>
+#include <string_view>
 #include <vector>
 
 #include <absl/base/no_destructor.h>
 #include <absl/log/check.h>
 
 #include "thread/boost_primitives.h"
+#include "thread/fiber_diagnostics.h"
 #include "thread/select.h"
 #include "thread/thread_pool.h"
 
@@ -32,6 +35,15 @@ namespace {
 
 std::atomic<size_t> live_fibers = 0;
 std::atomic<size_t> created_fibers = 0;
+
+void InitDiagnostics(FiberDiagnostics* record, const Fiber* parent,
+                     std::string_view name, void* creation_pc) {
+  record->id = internal::NextFiberId();
+  record->parent_id = parent == nullptr ? 0 : parent->Diagnostics().id;
+  record->creation_pc = creation_pc;
+  const size_t length = std::min(name.size(), kFiberNameCapacity - 1);
+  std::memcpy(record->name, name.data(), length);
+}
 
 }  // namespace
 
@@ -76,6 +88,8 @@ Fiber::Fiber(Unstarted, InvocableWork work, Fiber* parent)
       next_sibling_(this),
       prev_sibling_(this) {
   ConstructBoostState();
+  InitDiagnostics(&diagnostics_, parent, {}, __builtin_return_address(0));
+  internal::RegisterFiberDiagnostics(&diagnostics_);
   live_fibers.fetch_add(1, std::memory_order_relaxed);
   created_fibers.fetch_add(1, std::memory_order_relaxed);
   // Note: We become visible to cancellation as soon as we're added to parent.
@@ -96,6 +110,9 @@ Fiber::Fiber(Unstarted, InvocableWork work, TreeOptions&& tree_options)
       next_sibling_(this),
       prev_sibling_(this) {
   ConstructBoostState();
+  InitDiagnostics(&diagnostics_, nullptr, tree_options_.name,
+                  __builtin_return_address(0));
+  internal::RegisterFiberDiagnostics(&diagnostics_);
   live_fibers.fetch_add(1, std::memory_order_relaxed);
   created_fibers.fetch_add(1, std::memory_order_relaxed);
 }
@@ -107,6 +124,9 @@ Fiber::~Fiber() {
   DCHECK(first_child_ == nullptr);
 
   DVLOG(2) << "F " << this << " destroyed";
+  // Before DestroyBoostState, which releases the stack: a reader holding the
+  // registry lock must not find a fiber whose stack has been unmapped.
+  internal::UnregisterFiberDiagnostics(&diagnostics_);
   DestroyBoostState();
   live_fibers.fetch_sub(1, std::memory_order_release);
 }
@@ -135,6 +155,8 @@ Fiber* absl_nonnull Fiber::Current() {
   };
 
   kPerThreadNoOpFiber.f = std::make_unique<MakeUniqueEnabler>();
+  kPerThreadNoOpFiber.f->diagnostics_.wait_kind.store(
+      WaitKind::kThreadPlaceholder, std::memory_order_relaxed);
   DVLOG(2) << "Current() called (new static thread-local fiber created): "
            << kPerThreadNoOpFiber.f.get();
 
@@ -209,7 +231,10 @@ void Fiber::MarkJoined() {
 }
 
 void Fiber::InternalJoin() {
-  Select({joinable_.OnEvent()});
+  {
+    THREAD_WAIT_SCOPE(wait, WaitKind::kJoin, &diagnostics_);
+    Select({joinable_.OnEvent()});
+  }
   MarkJoined();
 }
 

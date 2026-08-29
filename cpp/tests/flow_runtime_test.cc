@@ -227,7 +227,7 @@ class LogCapture {
   LogCapture() {
     actions::SetActionLogSink([this](const actions::LogRecord& record) {
       // Locked because a flow's statements run concurrently: two logs whose
-      // `after` clauses are satisfied together reach the sink from two fibres.
+      // `after` clauses are satisfied together reach the sink from two fibers.
       thread::MutexLock lock(&mu_);
       lines_.push_back(
           Line{.level = std::string(actions::LogLevelName(record.level)),

@@ -211,7 +211,7 @@ TEST(FlowOptionsTest, ReadsTheDeadlineHeaderInBothUnits) {
 }
 
 // --- the deadline watcher ----------------------------------------------------
-// The watcher is a libuv timer on A11's one loop rather than a fibre parked in
+// The watcher is a libuv timer on A11's one loop rather than a fiber parked in
 // a timed Select, so what these check is the two things that swap.
 
 /// An action with `x-a11-deadline` set @p after from now. `read_file`'s schema

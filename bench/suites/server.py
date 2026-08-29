@@ -965,7 +965,7 @@ async def soak(scale: float) -> list[Result]:
     `_run_window` bounds and cancels its own gather, so the stall is *after*
     the measured window. Read `Fleet.aclose()` and `PeerClient.teardown()`,
     and remember that `drain_outgoing_messages` hangs forever when a peer is
-    not reading. `kill -ABRT` both processes to see it; a fibre-level stall
+    not reading. `kill -ABRT` both processes to see it; a fiber-level stall
     is invisible to `sample`. Recorded in `FINDINGS.md` under the soak table.
 
     Marked slow because it is long, not because it is fragile. Everything else

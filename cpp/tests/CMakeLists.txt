@@ -23,7 +23,7 @@ add_executable(a11_core_test
   websocket_signalling_test.cc
   chunk_store_reader_test.cc
   chunk_store_reader_wedge_test.cc
-  fibre_reaping_test.cc
+  fiber_reaping_test.cc
   remote_call_wedge_test.cc
   chunk_store_writer_test.cc
   async_node_test.cc
@@ -42,7 +42,7 @@ add_executable(a11_core_test
   obs_action_span_test.cc
   obs_session_stream_test.cc)
 # a11::allocator so the suite runs against the allocator the executables ship
-# with: swapping malloc under a fibre runtime is exactly the kind of change that
+# with: swapping malloc under a fiber runtime is exactly the kind of change that
 # should be exercised by 200-odd tests rather than only by the benchmark.
 target_link_libraries(
   a11_core_test PRIVATE a11::concurrency a11::data a11::net a11::nodes

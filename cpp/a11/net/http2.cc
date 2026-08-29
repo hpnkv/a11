@@ -785,7 +785,7 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
       : HttpTransport(std::move(tcp), server, std::move(options),
                       std::move(tls_context), std::move(tls_server_name),
                       std::move(on_closed)),
-        // The handler is the server owner's, and the fibre that runs it below
+        // The handler is the server owner's, and the fiber that runs it below
         // is A11's, so it is guarded on the way in. See
         // net/internal/exception_guarded_callbacks.h.
         handler_(internal::GuardRequestHandler(std::move(handler))),
@@ -1993,7 +1993,7 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
           handler(std::move(request), writer).Await().status();
       if (!status.ok()) {
         (void)writer->Abort(status);
-      } else if (!writer->headers_sent()) {
+      } else if (!writer->headers_sent() && !writer->response_deferred()) {
         (void)writer->SendResponse(204);
       }
     });
@@ -2107,6 +2107,14 @@ a11::Task Http2ResponseWriter::Done() const {
   return state_ != nullptr ? state_->done_future
                            : a11::FailedTask(absl::FailedPreconditionError(
                                  "HTTP/2 writer has no state"));
+}
+
+void Http2ResponseWriter::DeferResponse() {
+  state_->deferred.store(true, std::memory_order_relaxed);
+}
+
+bool Http2ResponseWriter::response_deferred() const {
+  return state_->deferred.load(std::memory_order_relaxed);
 }
 
 bool Http2ResponseWriter::headers_sent() const {

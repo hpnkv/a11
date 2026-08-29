@@ -101,7 +101,7 @@ absl::StatusOr<std::shared_ptr<StopSignal>> StopSignal::Create(
   }
   const std::shared_ptr<AsyncNode> control = signal->control_;
 
-  // Runs on a foreign thread, before the handler's fibre is cancelled, so it
+  // Runs on a foreign thread, before the handler's fiber is cancelled, so it
   // must not block: Stop() is an atomic exchange and a notify, and CancelReader
   // only unblocks the control watcher.
   ABSL_RETURN_IF_ERROR(action->SetOnCancelled(
@@ -130,7 +130,7 @@ absl::StatusOr<std::shared_ptr<StopSignal>> StopSignal::Create(
                 ReadJsonInput(control);
             if (!command.ok()) {
               // The reader was cancelled during teardown, which is how this
-              // fibre is meant to end.
+              // fiber is meant to end.
               return absl::OkStatus();
             }
             if (!command->has_value()) {
@@ -212,7 +212,7 @@ void StopSignal::DisarmDeadlineTimer() {
     return;
   }
   // Awaited, so no callback can still be in flight when this returns -- the
-  // same guarantee Await()ing the control fibre gives, and needed for the same
+  // same guarantee Await()ing the control fiber gives, and needed for the same
   // reason.
   uv::RunStatusOnUv([timer]() -> absl::Status {
     if (!timer->closing()) {
@@ -286,7 +286,7 @@ bool StopSignal::WaitUntil(absl::Time deadline) {
     return true;
   }
   // Both cases matter: the stop for the reasons this object knows about,
-  // OnCancel for the fibre itself being torn down under us.
+  // OnCancel for the fiber itself being torn down under us.
   const int ready = thread::SelectUntil(
       deadline, {thread::OnCancel(), shared_->stopped.OnEvent()});
   if (ready == 0) {

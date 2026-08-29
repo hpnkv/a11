@@ -4,7 +4,7 @@
 
 The runtime is native (`cpp/a11/flow/runtime.{h,cc}`): a flow becomes one
 action, each `call` in it becomes a nested action on the same session, and each
-pipe becomes a fibre copying one node into another as values arrive. What lives
+pipe becomes a fiber copying one node into another as values arrive. What lives
 here is the way a Python caller *starts* one and reads it back --
 [start][a11.flow.runtime.start] for the streaming path,
 [invoke][a11.flow.runtime.invoke] for the convenience of collecting the lot at

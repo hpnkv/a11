@@ -55,6 +55,8 @@
 #include "a11/uuid.h"
 #include "thread/boost_primitives.h"
 #include "thread/fiber.h"
+#include "thread/fiber_diagnostics.h"
+#include "thread/introspect.h"
 #include "thread/select.h"
 #include "thread/selectables.h"
 

@@ -231,6 +231,20 @@ add_compile_options(
         $<$<CXX_COMPILER_ID:AppleClang,Clang,GNU>:-ffile-prefix-map=${CMAKE_SOURCE_DIR}=.>)
 add_compile_definitions(A11_CPP_SOURCE_ROOT="${CMAKE_CURRENT_LIST_DIR}")
 
+# Frame pointers. thread/introspect.h unwinds a parked fiber's stack from a
+# frame pointer recorded at its blocking call, and -fomit-frame-pointer removes
+# the frame record that walk follows. Set directory-wide before any
+# FetchContent_MakeAvailable() below so Abseil and the other from-source
+# dependencies keep theirs too; a trace otherwise stops at the first frame from
+# one of them.
+option(A11_FRAME_POINTERS
+        "Keep frame pointers so fiber stacks can be unwound (see \
+thread/introspect.h)" ON)
+if (A11_FRAME_POINTERS)
+    add_compile_options(
+            $<$<CXX_COMPILER_ID:AppleClang,Clang,GNU>:-fno-omit-frame-pointer>)
+endif ()
+
 # Sanitizer wiring. Set directory-wide before any FetchContent_MakeAvailable()
 # below so fetched dependencies are instrumented too; a partially instrumented
 # process gives ASan false negatives across the boundary. Keep frame pointers so

@@ -81,7 +81,7 @@ NativeStatus StatusObject(const absl::Status& status) {
   return NativeStatus(status);
 }
 
-// A node map's readers take its mutex, which a fibre creating a node may be
+// A node map's readers take its mutex, which a fiber creating a node may be
 // holding, so these wait without the GIL like everything else here. See
 // [WithoutGil].
 const auto Contains = [](const nodes::NodeMap& self,

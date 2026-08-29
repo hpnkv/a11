@@ -475,7 +475,7 @@ absl::Status SignallingEndpoint::SetOnMessage(OnSignallingMessage on_message) {
   if (!state_->connected) {
     return state_->status;
   }
-  // Guarded on the way in; the fibre that delivers to it is A11's. See
+  // Guarded on the way in; the fiber that delivers to it is A11's. See
   // net/internal/exception_guarded_callbacks.h.
   state_->on_message =
       internal::GuardOnSignallingMessage(std::move(on_message));

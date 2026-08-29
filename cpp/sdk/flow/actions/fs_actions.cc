@@ -98,7 +98,7 @@ absl::Status ErrorCodeStatus(const std::error_code& error,
 
 // A file descriptor that closes itself.
 /// A file descriptor that closes itself. Not RAII for elegance: every early
-/// return in this file is a `return` out of a fibre, and a leaked descriptor
+/// return in this file is a `return` out of a fiber, and a leaked descriptor
 /// per failed read is a process that stops working after a few thousand of
 /// them.
 class Fd {
@@ -374,7 +374,7 @@ absl::Status RunReadFile(const std::shared_ptr<Action>& action,
   const bool wants_text = text_out.present();
   const bool wants_bytes = bytes_out.present();
 
-  // On the heap. A fibre's stack is measured in kilobytes, so a 64 KiB buffer
+  // On the heap. A fiber's stack is measured in kilobytes, so a 64 KiB buffer
   // as a local would run off the end of it and into whatever is next.
   std::string buffer(static_cast<std::size_t>(settings.chunk_bytes), '\0');
   std::string whole;  // only when `text` is wanted
@@ -982,7 +982,7 @@ absl::Status RunMakeTemp(const std::shared_ptr<Action>& action,
 using PolicyRun = absl::Status (*)(const std::shared_ptr<Action>&,
                                    const CapabilitiesPtr&);
 
-/// One shape for all nine: submit onto a fibre, run, report. The handler holds
+/// One shape for all nine: submit onto a fiber, run, report. The handler holds
 /// the policy, which is what makes it a capability rather than a setting.
 ActionHandler Handler(PolicyRun run, CapabilitiesPtr capabilities) {
   return [run, capabilities =

@@ -31,7 +31,7 @@ namespace {
 using ::a11::actions::ActionHandler;
 using ::a11::actions::ActionSchema;
 
-/// An interval below this would spend more time waking a fibre than waiting,
+/// An interval below this would spend more time waking a fiber than waiting,
 /// and a flow that wants one wants a stream rather than a clock.
 constexpr absl::Duration kMinimumInterval = absl::Milliseconds(1);
 constexpr absl::Duration kDefaultInterval = absl::Seconds(1);

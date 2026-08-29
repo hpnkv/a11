@@ -346,7 +346,7 @@ a11::Future<std::optional<data::NodeFragment>> AsyncNode::NextFragment(
 a11::Future<std::optional<data::Chunk>> AsyncNode::NextChunk(
     absl::Duration timeout) {
   // `Then`, not `Submit`: this only reshapes what NextFragment produces, and a
-  // fibre whose whole life is "await one future, unwrap it" is a fibre spent
+  // fiber whose whole life is "await one future, unwrap it" is a fiber spent
   // on nothing.
   return a11::Then(
       NextFragment(timeout),

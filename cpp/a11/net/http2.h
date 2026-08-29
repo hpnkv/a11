@@ -392,6 +392,20 @@ class Http2ResponseWriter
   /** @return An awaitable that resolves when the response is done. */
   a11::Task Done() const;
 
+  /**
+   * @brief Says this response will be sent after the handler returns.
+   *
+   * A handler that returns without responding gets a 204, which is right for
+   * one that had nothing to say and wrong for one that handed this writer to
+   * something else: answering 204 to a WebSocket upgrade ends the stream the
+   * new owner was about to accept. Deferring suppresses that fallback, leaving
+   * the response to the owner and the timeout to the client.
+   */
+  void DeferResponse();
+
+  /** @return Whether DeferResponse() was called. */
+  [[nodiscard]] bool response_deferred() const;
+
   /** @return Whether the response headers have been sent. */
   [[nodiscard]] bool headers_sent() const;
   /** @return Whether the response has been finished. */

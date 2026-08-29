@@ -300,13 +300,13 @@ class ParserImpl {
    * @brief How deep a document may nest before the parser stops descending.
    *
    * The parse is recursive descent, so the call depth follows the input's
-   * nesting -- and A11 runs its work on pooled fibres whose stacks are fixed
+   * nesting -- and A11 runs its work on pooled fibers whose stacks are fixed
    * and small (see thread/thread_pool.cc). Without a bound, `[[[[[...]]]]]` in
    * a file is a stack overflow rather than a diagnostic, and a flow can arrive
    * from anywhere: an editor buffer, a `scan` of a repository, a request.
    *
    * 128 is far past anything written by hand and far short of the smallest
-   * fibre stack. Every walker downstream -- the resolver, the JSON emitters,
+   * fiber stack. Every walker downstream -- the resolver, the JSON emitters,
    * the formatter -- inherits the bound, because what they descend is the tree
    * this built.
    */

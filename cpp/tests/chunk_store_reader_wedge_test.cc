@@ -68,7 +68,7 @@ data::NodeFragment FinalFragment(std::string payload) {
  * @brief One node, one reader, a read started before the write lands.
  *
  * The reader is asked for a fragment that does not exist yet, so the read has
- * to park; the write then arrives from another fibre. This is the ordering the
+ * to park; the write then arrives from another fiber. This is the ordering the
  * bench produces when a client asks for its reply before the server has sent
  * it, which the delay experiment showed is the ordering that matters --
  * reading *after* the fragment lands never wedged.
@@ -207,7 +207,7 @@ TEST(ChunkStoreReaderWedgeTest, ConcurrentNodesWrittenThroughTheirWriter) {
  * This is the layer the previous three do not cover, and the one named as the
  * suspension source: a write on a stream-bound node tees to the stream inside
  * the writer's inline drive, and `WireStream::Send` parks on the peer's
- * fibre-aware mutex. If the wedge needs a parked tee, it should appear here
+ * fiber-aware mutex. If the wedge needs a parked tee, it should appear here
  * and not above.
  *
  * The peer end remains undrained, matching the benchmark setup. the client's

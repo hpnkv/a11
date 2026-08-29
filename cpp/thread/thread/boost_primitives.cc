@@ -14,48 +14,29 @@
 
 #include "thread/boost_primitives.h"
 
+#include <atomic>
 #include <chrono>
-#include <cstdio>
 #include <memory>
 #include <new>
-#include <string>
 
 #include <absl/base/optimization.h>
-#include <absl/debugging/stacktrace.h>
-#include <absl/debugging/symbolize.h>
 #include <absl/log/log.h>
 #include <absl/time/clock.h>
+#include <absl/time/time.h>
 #include <boost/fiber/condition_variable.hpp>
+#include <boost/fiber/context.hpp>
 #include <boost/fiber/exceptions.hpp>
 #include <boost/fiber/mutex.hpp>
 #include <boost/fiber/operations.hpp>
 
+#include "thread/fiber_diagnostics.h"
+
 namespace thread {
 namespace {
 
-// Set to a finite duration while diagnosing a stalled wait. Production waits
-// do no stack-trace work.
-constexpr absl::Duration kDiagnosticTimeout = absl::InfiniteDuration();
-
-[[maybe_unused]] std::string GetCurrentStackTrace() {
-  void* trace[20];
-  const int trace_size = absl::GetStackTrace(trace, 20, 1);
-
-  std::string result =
-      "[] Execution path: " + std::to_string(trace_size) + " frames\n";
-  for (int index = 0; index < trace_size; ++index) {
-    char buffer[1024];
-    result += "[] ";
-    if (absl::Symbolize(trace[index], buffer, sizeof(buffer))) {
-      result += buffer;
-    } else {
-      char address[32];
-      std::snprintf(address, sizeof(address), "%p", trace[index]);
-      result += address;
-    }
-    result += '\n';
-  }
-  return result;
+// Null when this thread has no fiber scheduler yet.
+const void* absl_nullable ActiveContext() {
+  return boost::fibers::context::active();
 }
 
 }  // namespace
@@ -83,14 +64,38 @@ const Mutex::Impl* Mutex::GetImpl() const {
 }
 
 void Mutex::Lock() noexcept {
+  if (!internal::OwnerTrackingEnabled()) {
+    try {
+      GetImpl()->mutex.lock();
+    } catch (const boost::fibers::lock_error& error) {
+      LOG(FATAL) << "Fiber mutex lock failed: " << error.what();
+    }
+    return;
+  }
+
+  const void* self = ActiveContext();
+  const void* holder = holder_context_.load(std::memory_order_relaxed);
   try {
-    GetImpl()->mutex.lock();
+    if (holder == nullptr) {
+      GetImpl()->mutex.lock();
+    } else {
+      // A holder seen here may have released by the time lock() runs, which
+      // costs a wait record nobody reads.
+      THREAD_WAIT_SCOPE(scope, WaitKind::kMutex, this);
+      if (FiberDiagnostics* record = scope.record(); record != nullptr) {
+        internal::SetWaitOwnerContext(record, holder);
+      }
+      GetImpl()->mutex.lock();
+    }
   } catch (const boost::fibers::lock_error& error) {
     LOG(FATAL) << "Fiber mutex lock failed: " << error.what();
   }
+  holder_context_.store(self, std::memory_order_relaxed);
 }
 
 void Mutex::Unlock() noexcept {
+  // Cleared before the unlock, so the next holder's store is not overwritten.
+  holder_context_.store(nullptr, std::memory_order_relaxed);
   try {
     GetImpl()->mutex.unlock();
   } catch (const boost::fibers::lock_error& error) {
@@ -121,22 +126,9 @@ const CondVar::Impl* CondVar::GetImpl() const {
 }
 
 void CondVar::Wait(Mutex* mu) noexcept {
-  if constexpr (kDiagnosticTimeout < absl::InfiniteDuration()) {
-    const std::string trace = GetCurrentStackTrace();
-    try {
-      if (GetImpl()->condition.wait_for(
-              mu->GetImpl()->mutex,
-              absl::ToChronoNanoseconds(kDiagnosticTimeout)) !=
-          boost::fibers::cv_status::timeout) {
-        return;
-      }
-      LOG(ERROR) << "Fiber condition wait exceeded diagnostic timeout:\n"
-                 << trace;
-    } catch (const boost::fibers::lock_error& error) {
-      LOG(FATAL) << "Fiber condition wait failed: " << error.what();
-    }
-  }
-
+  // The scope's frame pointer is this frame's, so an unwind from it starts at
+  // the caller of Wait.
+  THREAD_WAIT_SCOPE(scope, WaitKind::kCondVar, this);
   try {
     GetImpl()->condition.wait(mu->GetImpl()->mutex);
   } catch (const boost::fibers::lock_error& error) {
@@ -150,29 +142,11 @@ bool CondVar::WaitWithDeadline(Mutex* mu, const absl::Time& deadline) noexcept {
     return false;
   }
 
-  if constexpr (kDiagnosticTimeout < absl::InfiniteDuration()) {
-    const absl::Time diagnostic_deadline = absl::Now() + kDiagnosticTimeout;
-    if (diagnostic_deadline < deadline) {
-      const std::string trace = GetCurrentStackTrace();
-      try {
-        if (GetImpl()->condition.wait_for(
-                mu->GetImpl()->mutex,
-                absl::ToChronoNanoseconds(diagnostic_deadline - absl::Now())) !=
-            boost::fibers::cv_status::timeout) {
-          return false;
-        }
-        LOG(ERROR) << "Fiber condition wait exceeded diagnostic timeout:\n"
-                   << trace;
-      } catch (const boost::fibers::lock_error& error) {
-        LOG(FATAL) << "Fiber condition wait failed: " << error.what();
-      }
-    }
-  }
-
   const absl::Duration remaining = deadline - absl::Now();
   if (remaining <= absl::ZeroDuration()) {
     return true;
   }
+  THREAD_WAIT_SCOPE(scope, WaitKind::kCondVar, this, DeadlineNanos(deadline));
   try {
     return GetImpl()->condition.wait_for(
                mu->GetImpl()->mutex, absl::ToChronoNanoseconds(remaining)) ==
@@ -205,10 +179,13 @@ void SleepFor(absl::Duration duration) {
     return;
   }
   if (duration == absl::InfiniteDuration()) {
+    THREAD_WAIT_SCOPE(scope, WaitKind::kSleep, nullptr);
     boost::fibers::context::active()->wait_until(
         std::chrono::steady_clock::time_point::max());
     return;
   }
+  THREAD_WAIT_SCOPE(scope, WaitKind::kSleep, nullptr,
+                    DeadlineNanos(absl::Now() + duration));
   boost::this_fiber::sleep_for(absl::ToChronoNanoseconds(duration));
 }
 

@@ -44,8 +44,8 @@
  *
  * ### The parts of this that are not obvious
  *
- * `stdin` is fed by a fibre of its own, because feeding it means reading a port
- * -- which blocks -- and the same fibre cannot also be polling for output. And
+ * `stdin` is fed by a fiber of its own, because feeding it means reading a port
+ * -- which blocks -- and the same fiber cannot also be polling for output. And
  * everything the child needs is built before the fork: between fork and exec a
  * process may call almost nothing safely, and allocating there is how a
  * threaded program deadlocks in a way that reproduces once a week.

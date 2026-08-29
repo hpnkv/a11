@@ -159,6 +159,7 @@ nav:
       - Checking flows from a toolchain: guides/flow-tooling.md
       - P2P Chat Room: guides/p2p-chat.md
       - Getting the faster allocator: guides/allocator.md
+      - Debugging fiber deadlocks: guides/debugging-concurrency.md
   - Python reference:
       - Nodes: api/nodes.md
       - Actions: api/actions.md

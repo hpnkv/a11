@@ -7,7 +7,7 @@
  * Compiled with exceptions (see the exception policy block in
  * cpp/CMakeLists.txt). A session's two stream callbacks belong to whoever
  * created the session -- in practice a Python agent through the bindings -- and
- * the session invokes them from its own fibres, so they are wrapped here where
+ * the session invokes them from its own fibers, so they are wrapped here where
  * a raised exception can still be caught. a11/exception_guard.h has the
  * reasoning.
  */

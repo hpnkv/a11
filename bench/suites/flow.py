@@ -269,7 +269,7 @@ async def step_overhead(scale: float) -> list[Result]:
     """A bare action, then the same action inside a flow, then a chain.
 
     The first two differ by exactly one flow: its own action, its ports, and
-    the fibre that copies one node into another. The chain says whether the
+    the fiber that copies one node into another. The chain says whether the
     second, third and tenth step cost the same as the first.
     """
     registry = _runtime_registry()
@@ -325,7 +325,7 @@ async def step_overhead(scale: float) -> list[Result]:
 async def pipe_throughput(scale: float) -> list[Result]:
     """Values per second through a `|` stage: the streaming path.
 
-    A pipe is a fibre copying one node into another as values arrive, so this
+    A pipe is a fiber copying one node into another as values arrive, so this
     is the closest thing Flow has to a per-value cost. Compare it against
     `nodes/drain`: a pipe that costs much more than a node read is spending it
     somewhere worth finding.

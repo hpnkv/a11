@@ -408,7 +408,7 @@ inline Task FailedTask(absl::Status status) {
 
 /**
  * @brief
- *   Continue with @p transform once @p future completes, without a fibre.
+ *   Continue with @p transform once @p future completes, without a fiber.
  *
  * `Submit([f]{ return g(f.Await()); })` needs a worker only because Await()
  * blocks; @p transform does not. This runs it on whichever thread completes
@@ -417,7 +417,7 @@ inline Task FailedTask(absl::Status status) {
  * dominant cost of the layers built out of it.
  *
  * Two obligations come with that. @p transform must not block: it may run on a
- * pooled fibre with a small stack or on a transport's own thread, and it runs
+ * pooled fiber with a small stack or on a transport's own thread, and it runs
  * before the completing side gets on with its work. And it must not assume a
  * thread; see a11/concurrency/inline_pump.h for why.
  *

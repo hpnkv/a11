@@ -471,8 +471,8 @@ py::object ValueToPython(const flow::Value& value) {
 
 /// The three questions only the host can answer, answered by the interpreter.
 ///
-/// Every one of these reaches into CPython from a flow's fibre, which is why
-/// the runtime gives its fibres a stack an interpreter frame chain fits in. The
+/// Every one of these reaches into CPython from a flow's fiber, which is why
+/// the runtime gives its fibers a stack an interpreter frame chain fits in. The
 /// GIL is taken here rather than held across a flow: a flow spends its time
 /// waiting on nodes, and holding the interpreter while it did would serialise
 /// every other Python thread behind it.
@@ -543,7 +543,7 @@ class PythonBridge : public flow::HostBridge {
   /// A batch of chunks decoded with one visit to the interpreter.
   ///
   /// The cost of this bridge is not the decoding, it is the crossing: taking
-  /// the GIL from a flow's fibre puts it behind the interpreter thread that
+  /// the GIL from a flow's fiber puts it behind the interpreter thread that
   /// dispatched the flow, twice per value through a stage. A pipeline usually
   /// has several values in hand, so the runtime asks for them together and this
   /// pays the crossing once.
@@ -1214,7 +1214,7 @@ merges over the embedded snapshot itself.
 
         // Without the GIL: the program runs to completion here, and everything
         // it does -- reading a file, waiting on a clock, calling an action the
-        // host registered -- happens on A11's fibres.
+        // host registered -- happens on A11's fibers.
         absl::StatusOr<a11::flow::interpreter::RunOutcome> outcome =
             WithoutGil([&] { return a11::flow::interpreter::Run(what, how); });
         if (!outcome.ok()) {

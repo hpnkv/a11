@@ -12,6 +12,8 @@ target_sources(
         thread/channel/waiter_state.cc
         thread/channel/waiter_state.h
         thread/fiber.cc
+        thread/internal/stack_walk.cc
+        thread/introspect.cc
         thread/select.cc
         thread/selectables.cc
         thread/thread_pool.cc
@@ -21,7 +23,10 @@ target_sources(
         Thread PRIVATE
         thread/cases.h
         thread/boost_primitives.h
+        thread/fiber_diagnostics.h
+        thread/internal/stack_walk.h
         thread/internal/work_queue.h
+        thread/introspect.h
         thread/channel.h
         thread/concurrency.h
         thread/executor.h
@@ -39,6 +44,10 @@ target_link_libraries(
         $<BUILD_INTERFACE:absl::log> $<INSTALL_INTERFACE:absl::log>
         $<BUILD_INTERFACE:absl::log_initialize> $<INSTALL_INTERFACE:absl::log_initialize>
         $<BUILD_INTERFACE:absl::log_internal_check_op> $<INSTALL_INTERFACE:absl::log_internal_check_op>
+        $<BUILD_INTERFACE:absl::stacktrace> $<INSTALL_INTERFACE:absl::stacktrace>
+        $<BUILD_INTERFACE:absl::str_format> $<INSTALL_INTERFACE:absl::str_format>
+        $<BUILD_INTERFACE:absl::strings> $<INSTALL_INTERFACE:absl::strings>
+        $<BUILD_INTERFACE:absl::symbolize> $<INSTALL_INTERFACE:absl::symbolize>
         $<BUILD_INTERFACE:absl::random_random> $<INSTALL_INTERFACE:absl::random_random>
         $<BUILD_INTERFACE:absl::time> $<INSTALL_INTERFACE:absl::time>
         Boost::thread
@@ -55,7 +64,7 @@ target_compile_options(
 target_compile_features(Thread PUBLIC cxx_std_20)
 
 # Boost.Fiber and Boost.Context throw -- fiber_error, and the forced_unwind that
-# tears a fibre down -- and these two translation units are the only ones that
+# tears a fiber down -- and these two translation units are the only ones that
 # include them. Everything else here, including the public headers, is
 # boost-free by design (see the pImpl in boost_primitives.h), so the exception
 # boundary stops at these two files.
@@ -75,8 +84,8 @@ a11_allow_exceptions(thread/boost_primitives.cc thread/thread_pool.cc)
 # mean every *caller* of a store write needed to know it was one, which is exactly
 # the knowledge a pump that drives on the caller's thread does not have.
 #
-# The cost is address space, not resident memory: a fibre stack is mmap'd and only
-# touched pages become resident, so a fibre that uses 2 KiB of its 512 KiB costs
+# The cost is address space, not resident memory: a fiber stack is mmap'd and only
+# touched pages become resident, so a fiber that uses 2 KiB of its 512 KiB costs
 # 2 KiB of RSS. `memory_slope` and the RSS rows in `python -m bench` are what
 # check that claim, and they are the reason to re-measure if this changes again.
 set(THREAD_DEFAULT_FIBER_STACK_SIZE "524288" CACHE STRING
@@ -94,6 +103,34 @@ if(BUILD_TESTING)
     $<$<CXX_COMPILER_ID:GNU>:-Wall;-Wextra;-Wpedantic;-Wconversion;-Wshadow>)
   add_test(NAME thread_test COMMAND thread_test)
   set_tests_properties(thread_test PROPERTIES TIMEOUT 30)
+
+  # Its own main, so absl's symbolizer and log are initialized before any
+  # report is formatted.
+  add_executable(fiber_introspect_test tests/fiber_introspect_test.cc)
+  target_link_libraries(fiber_introspect_test PRIVATE Thread GTest::gtest)
+  target_compile_options(
+    fiber_introspect_test PRIVATE
+    $<$<CXX_COMPILER_ID:AppleClang,Clang>:-Wall;-Wextra;-Wpedantic;-Wconversion;-Wshadow;-Wno-nullability-extension>
+    $<$<CXX_COMPILER_ID:GNU>:-Wall;-Wextra;-Wpedantic;-Wconversion;-Wshadow>)
+  add_test(NAME fiber_introspect_test COMMAND fiber_introspect_test)
+  set_tests_properties(fiber_introspect_test PROPERTIES TIMEOUT 60)
+
+  # Not a test: what the instrumentation costs, with owner tracking on and off.
+  add_executable(fiber_introspect_bench EXCLUDE_FROM_ALL
+                 tests/fiber_introspect_bench.cc)
+  target_link_libraries(fiber_introspect_bench PRIVATE Thread)
+
+  # Not a test: a process that hangs on purpose, for exercising the report, the
+  # watchdog, the dump signal and scripts/a11_fibers.py by hand.
+  add_executable(fiber_deadlock_demo EXCLUDE_FROM_ALL
+                 tests/fiber_deadlock_demo.cc)
+  target_link_libraries(fiber_deadlock_demo PRIVATE Thread)
+
+  # A11_FIBER_WATCHDOG on the fiber tests: a test that hangs prints the fiber
+  # report before ctest's TIMEOUT kills it with nothing to look at.
+  set_tests_properties(
+    thread_test fiber_introspect_test PROPERTIES
+    ENVIRONMENT "A11_FIBER_WATCHDOG=10")
 
   # A11_POOL_PIN. Its own executable because it has to set the variable before
   # anything touches the pool -- which reads its environment when it starts, and

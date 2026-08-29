@@ -155,7 +155,7 @@ struct PathMtuOptions {
 /**
  * @brief What the engine needs from its transport, and nothing more.
  *
- * Every callback runs on the discovery fibre and may block; none may re-enter
+ * Every callback runs on the discovery fiber and may block; none may re-enter
  * the engine.
  */
 struct PathMtuProber {
@@ -226,7 +226,7 @@ struct PathMtuProber {
 /**
  * @brief The search itself: a binary hunt for the largest size that arrives.
  *
- * Owned by the transport, driven by one fibre. `Search()` is synchronous and
+ * Owned by the transport, driven by one fiber. `Search()` is synchronous and
  * public so tests can drive it without timers; `Run()` is the continuous loop
  * around it that production uses.
  */

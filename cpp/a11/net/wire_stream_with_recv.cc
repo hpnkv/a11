@@ -80,7 +80,7 @@ a11::Task WireStreamWithRecv::StartImpl(bool accept, OnMessage on_message,
                                         OnDone on_done) {
   std::shared_ptr<WireStreamWithRecv> self = shared_from_this();
   // Guarded here rather than at the invocations in HandleMessage/HandleDone,
-  // which run on fibres of A11's own. See
+  // which run on fibers of A11's own. See
   // net/internal/exception_guarded_callbacks.h.
   OnMessage internal_message =
       [self, observer = internal::GuardOnMessage(std::move(on_message))](

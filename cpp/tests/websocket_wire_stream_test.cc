@@ -17,6 +17,7 @@
 
 #include "a11/concurrency/future.h"
 #include "a11/data/types.h"
+#include "thread/concurrency.h"
 
 namespace a11::net {
 namespace {
@@ -97,6 +98,92 @@ TEST(WebSocketWireStreamTest, ClientAndServerExchangeBinaryWireProtocol) {
   }
   EXPECT_TRUE(client_done);
   EXPECT_TRUE(server_done);
+  EXPECT_TRUE(server->Stop().ok());
+}
+
+// A reader installed after on_stream returns must still get the client's first
+// message.
+//
+// Every other test here accepts inside on_stream. a11x's relay does not: it
+// publishes the stream and a session task accepts a moment later. An accept
+// path that opens the channel before that reader exists lets the client send
+// into a socket nobody is reading, and the messages are consumed and dropped --
+// which is a call that never gets an answer.
+TEST(WebSocketWireStreamTest, ADeferredReaderStillGetsTheFirstMessage) {
+  a11::Promise<std::shared_ptr<WebSocketWireStream>> accepted_promise;
+  auto accepted_future = accepted_promise.future();
+  a11::Promise<data::WireMessage> server_message_promise;
+  auto server_message = server_message_promise.future();
+
+  WebSocketServerOptions server_options;
+  server_options.port = 0;
+  server_options.bind_address = "127.0.0.1";
+  auto server = *WebSocketWireServer::Create(
+      [&accepted_promise](const std::shared_ptr<WebSocketWireStream>& stream) {
+        const absl::Status published = accepted_promise.SetValue(stream);
+        if (!published.ok()) {
+          return a11::FailedTask(published);
+        }
+        return a11::ReadyTask();
+      },
+      server_options);
+  auto port = server->port();
+  ASSERT_TRUE(port.ok()) << port.status();
+
+  // The accept the relay does from its session task, on another thread and
+  // after on_stream has returned.
+  std::thread accepter([&accepted_future, &server_message_promise] {
+    auto accepted = accepted_future.Await(absl::Now() + absl::Seconds(5));
+    if (!accepted.ok()) {
+      return;
+    }
+    thread::SleepFor(absl::Milliseconds(100));
+    (void)(*accepted)
+        ->Accept(
+            [&server_message_promise](
+                std::optional<data::WireMessage> received) {
+              if (received.has_value()) {
+                (void)server_message_promise.SetValue(std::move(*received));
+              }
+              return a11::ReadyTask();
+            },
+            []() { return a11::ReadyTask(); })
+        .Await(absl::Now() + absl::Seconds(5));
+  });
+
+  auto client = *WebSocketWireStream::CreateClient(
+      "ws://127.0.0.1:" + std::to_string(*port) + "/a11");
+  ASSERT_TRUE(client
+                  ->Start(
+                      [](const std::optional<data::WireMessage>&) {
+                        return a11::ReadyTask();
+                      },
+                      []() { return a11::ReadyTask(); })
+                  .Await(absl::Now() + absl::Seconds(5))
+                  .ok());
+
+  // Sends at the first moment the stream will take a message, which is what a
+  // caller does. Sending earlier than the reader exists is the failure.
+  const data::WireMessage message{
+      .node_fragments = {{.id = "node",
+                          .data = data::Chunk{.data = "first-message"},
+                          .seq = 0,
+                          .continued = false}}};
+  const absl::Time send_limit = absl::Now() + absl::Seconds(5);
+  absl::Status sent = absl::UnavailableError("not attempted");
+  while (absl::Now() < send_limit) {
+    sent = client->Send(message);
+    if (sent.ok()) {
+      break;
+    }
+    thread::SleepFor(absl::Milliseconds(5));
+  }
+  auto received = server_message.Await(absl::Now() + absl::Seconds(5));
+  accepter.join();
+  ASSERT_TRUE(sent.ok()) << sent;
+  ASSERT_TRUE(received.ok()) << received.status();
+  EXPECT_EQ(*received, message);
+
   EXPECT_TRUE(server->Stop().ok());
 }
 

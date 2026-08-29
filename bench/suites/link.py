@@ -319,7 +319,7 @@ async def message_round_trip(scale: float) -> list[Result]:
 
     Read this beside `raw_socket_floor`'s `tcp_round_trip` at the same size.
     The difference is everything A11 adds -- framing, the envelope codec, two
-    fibre hops per direction on each end -- and on a link with a real RTT that
+    fiber hops per direction on each end -- and on a link with a real RTT that
     difference is a *smaller share* of the total than loopback suggests, which
     is a finding about priorities rather than about the transport.
     """

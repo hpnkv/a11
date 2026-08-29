@@ -198,6 +198,7 @@ __all__: list[str] = [
     "audio_model_cache_dir",
     "builtin_action_names",
     "create_in_process_wire_stream_pair",
+    "current_fiber_id",
     "default_audio_input_device",
     "default_redis_client",
     "deferred_python_refs_high_water",
@@ -205,10 +206,15 @@ __all__: list[str] = [
     "download",
     "emit_log",
     "fetch",
+    "fiber_report",
+    "fiber_snapshot",
     "file_sha1",
+    "find_fiber_deadlock",
     "flow",
     "get_http_header",
     "http_actions",
+    "install_fiber_dump_signal_handler",
+    "install_fiber_watchdog",
     "is_close_status_chunk",
     "is_half_close_message",
     "is_status_chunk",
@@ -230,6 +236,7 @@ __all__: list[str] = [
     "register_http_actions",
     "registry_to_json",
     "release_deferred_python_refs",
+    "request_fiber_dump",
     "reset_default_redis_client",
     "resolve_asr_model",
     "resolve_url_reference",
@@ -237,6 +244,7 @@ __all__: list[str] = [
     "schema_from_json",
     "schema_to_json",
     "set_action_log_sink",
+    "set_current_fiber_name",
     "set_default_redis_client",
     "set_log_sink",
     "set_min_log_level",
@@ -248,6 +256,7 @@ __all__: list[str] = [
     "status_code_to_websocket",
     "status_from_chunk",
     "status_to_chunk",
+    "total_completed_fiber_waits",
     "vad_model_shorthands",
     "validate_http_headers",
     "validate_name_string",
@@ -9421,6 +9430,11 @@ def create_in_process_wire_stream_pair(
     Create a connected pair of in-process wire streams (free-function form of InProcessWireStream.create_pair).
     """
 
+def current_fiber_id() -> int:
+    """
+    The calling fiber's id, or 0 when the caller is not on a fiber.
+    """
+
 def default_audio_input_device() -> AudioDeviceInfo:
     """
     Return metadata for the host's default input device.
@@ -9476,9 +9490,28 @@ def fetch(
         ```
     """
 
+def fiber_report(
+    stall_threshold_seconds: typing.SupportsFloat = 0.0,
+    max_frames: typing.SupportsInt = 24,
+    include_running: bool = False,
+) -> str:
+    """
+    A symbolized report of every live fiber: a census by wait kind, any deadlock cycles, then the stalled fibers with their parked stacks.
+    """
+
+def fiber_snapshot(max_frames: typing.SupportsInt = 24) -> list:
+    """
+    Every live fiber as a list of dicts, with parked stacks unwound to raw program counters. Pass max_frames=0 to skip the unwind.
+    """
+
 def file_sha1(path: str) -> str:
     """
     Compute the SHA-1 of a file as lowercase hex. Blocks.
+    """
+
+def find_fiber_deadlock() -> list[list[int]]:
+    """
+    Wait-for cycles among the fibers, as lists of fiber ids. A cycle here is a deadlock: only mutex ownership and joins produce an edge whose other end is known.
     """
 
 def get_http_header(headers: list[tuple[str, str]], name: str) -> str | None:
@@ -9491,6 +9524,20 @@ def http_actions() -> (
 ):
     """
     Return the HTTP Actions as (name, schema, handler) triples: make_http_request and web-fetch, in that order.
+    """
+
+def install_fiber_dump_signal_handler(
+    signal_number: typing.SupportsInt = 0,
+) -> bool:
+    """
+    Installs a handler that logs a fiber report on a signal, default SIGUSR2 or A11_FIBER_DUMP_SIGNAL. Returns whether it was installed.
+    """
+
+def install_fiber_watchdog(
+    stall_threshold_seconds: typing.SupportsFloat, abort_on_stall: bool = False
+) -> None:
+    """
+    Starts a thread that logs a fiber report once any fiber has waited longer than the threshold. Idempotent.
     """
 
 def is_close_status_chunk(chunk: Chunk) -> bool:
@@ -9621,6 +9668,11 @@ def release_deferred_python_refs() -> None:
     A native destructor may run on a worker thread, where acquiring the GIL races interpreter finalization and gets the thread killed with pthread_exit -- which then unwinds through frames compiled -fno-exceptions and aborts the process. Such references are queued instead. This drains the queue, and is safe only because the caller holds the GIL by virtue of being called from Python. Registered with atexit by a11/__init__.py; calling it by hand is harmless.
     """
 
+def request_fiber_dump() -> None:
+    """
+    Asks the watchdog thread to log a report. Requires a watchdog.
+    """
+
 def reset_default_redis_client() -> None:
     """
     Clear the global Redis client so its environment is reread.
@@ -9672,6 +9724,11 @@ def set_action_log_sink(callback: typing.Any) -> None:
     One slot rather than one consumer per language: the native default already reaches Python through set_log_sink, so a Python sink installed *beside* it would report every line twice.
     """
 
+def set_current_fiber_name(name: str) -> None:
+    """
+    Names the calling fiber for reports, truncating at 47 characters. No-op off a fiber.
+    """
+
 def set_default_redis_client(client: RedisClient) -> None:
     """
     Replace the process-global Redis client.
@@ -9709,6 +9766,11 @@ def status_from_chunk(chunk: Chunk) -> Status:
 def status_to_chunk(status: Status, closing: bool = False) -> Chunk:
     """
     Encode an absl Status as a data chunk. With closing=True the chunk is a node closure marker rather than a value: it reports that the producer drained the node and closed its write half with that status.
+    """
+
+def total_completed_fiber_waits() -> int:
+    """
+    Completed waits across all live fibers. Two equal readings a second apart mean nothing moved.
     """
 
 def vad_model_shorthands() -> list[str]:

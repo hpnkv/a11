@@ -72,6 +72,7 @@ PYBIND11_MODULE(_native, module) {
   });
 
   a11::python::BindLogging(module);
+  a11::python::BindDebug(module);
 
   // Value types must be registered before any API uses them in a signature.
   a11::python::BindCore(module);

@@ -20,6 +20,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 
@@ -27,6 +28,7 @@
 #include <absl/log/check.h>
 
 #include "thread/boost_primitives.h"
+#include "thread/fiber_diagnostics.h"
 #include "thread/selectables.h"
 
 namespace thread {
@@ -41,6 +43,10 @@ struct TreeOptions {
   // effective size.
   size_t stack_size = 0;
   StackType stack_type = StackType::kFixedSize;
+  // Shown in fiber reports; see thread/introspect.h. Copied into the fiber's
+  // own storage, truncating at kFiberNameCapacity, so a literal or a temporary
+  // both work. Not inherited by child fibers.
+  std::string_view name = {};
 };
 
 using InvocableWork = absl::AnyInvocable<void() &&>;
@@ -96,6 +102,11 @@ class Fiber {
   Case OnCancel() const { return cancellation_.OnEvent(); }
 
   Case OnJoinable() const { return joinable_.OnEvent(); }
+
+  // Wait state and identity, for thread/introspect.h.
+  const FiberDiagnostics& Diagnostics() const { return diagnostics_; }
+
+  FiberDiagnostics& Diagnostics() { return diagnostics_; }
 
  private:
   // No internal constructor starts the fiber. It is the caller's responsibility
@@ -177,6 +188,8 @@ class Fiber {
 
   PermanentEvent cancellation_;
   PermanentEvent joinable_;
+
+  FiberDiagnostics diagnostics_;
 
   friend std::unique_ptr<Fiber> internal::CreateTree(
       InvocableWork f, TreeOptions&& tree_options);

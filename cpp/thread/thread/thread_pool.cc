@@ -70,7 +70,9 @@
 #include "thread/boost_primitives.h"
 #include "thread/executor.h"
 #include "thread/fiber.h"
+#include "thread/fiber_diagnostics.h"
 #include "thread/internal/work_queue.h"
+#include "thread/introspect.h"
 
 // CPU affinity. Linux is the only platform here that has it: see the affinity
 // block below for what macOS offers instead, which is nothing.
@@ -104,7 +106,7 @@ class segmented_stack {
 
 namespace thread {
 
-// An exact census of *where* fibres are created, under A11_FIBRE_CENSUS=1.
+// An exact census of *where* fibers are created, under A11_FIBER_CENSUS=1.
 constexpr int kCensusFrames = 7;
 
 struct CensusKey {
@@ -123,15 +125,15 @@ struct CensusKey {
   }
 };
 
-bool FibreCensusRequested() {
+bool FiberCensusRequested() {
   static const bool requested = [] {
-    const char* value = std::getenv("A11_FIBRE_CENSUS");
+    const char* value = std::getenv("A11_FIBER_CENSUS");
     return value != nullptr && *value == '1';
   }();
   return requested;
 }
 
-// Uses a plain `std::mutex`, not this library's fibre-aware
+// Uses a plain `std::mutex`, not this library's fiber-aware
 // `Mutex`, which everything else here uses.
 std::mutex& CensusMutex() {
   static absl::NoDestructor<std::mutex> mu;
@@ -144,7 +146,7 @@ absl::flat_hash_map<CensusKey, std::uint64_t>& CensusCounts() {
   return *counts;
 }
 
-void RecordFibreCreation() {
+void RecordFiberCreation() {
   void* raw[kCensusFrames + 2];
   const int depth = backtrace(raw, kCensusFrames + 2);
   CensusKey key;
@@ -156,8 +158,8 @@ void RecordFibreCreation() {
   ++CensusCounts()[key];
 }
 
-void ReportFibreCensus() {
-  if (!FibreCensusRequested()) {
+void ReportFiberCensus() {
+  if (!FiberCensusRequested()) {
     return;
   }
   std::vector<std::pair<CensusKey, std::uint64_t>> ordered;
@@ -169,11 +171,11 @@ void ReportFibreCensus() {
             [](const auto& left, const auto& right) {
               return left.second > right.second;
             });
-  std::fprintf(stderr, "\n=== fibre creation census (%zu distinct sites)\n",
+  std::fprintf(stderr, "\n=== fiber creation census (%zu distinct sites)\n",
                ordered.size());
   const size_t show = std::min<size_t>(ordered.size(), 12);
   for (size_t index = 0; index < show; ++index) {
-    std::fprintf(stderr, "%8llu fibres:\n",
+    std::fprintf(stderr, "%8llu fibers:\n",
                  static_cast<unsigned long long>(ordered[index].second));
     std::array<void*, kCensusFrames> frames = ordered[index].first.frames;
     int depth = 0;
@@ -197,11 +199,11 @@ bool PoolStatsRequested() {
   return requested;
 }
 
-// How many fibres this process has created, under A11_POOL_STATS only.
-std::atomic<std::uint64_t> g_fibre_starts{0};
+// How many fibers this process has created, under A11_POOL_STATS only.
+std::atomic<std::uint64_t> g_fiber_starts{0};
 
-std::uint64_t FibreStartCount() {
-  return g_fibre_starts.load(std::memory_order_relaxed);
+std::uint64_t FiberStartCount() {
+  return g_fiber_starts.load(std::memory_order_relaxed);
 }
 
 struct Fiber::BoostState {
@@ -268,6 +270,10 @@ boost::context::segmented_stack SegmentedAllocator(size_t requested_size) {
 #endif
 
 constexpr size_t kMiB = 1024 * 1024;
+
+// Distance from a fiber's entry frame to the top of its stack. Boost sets the
+// stack pointer to the top and then builds the entry frame just below it.
+constexpr size_t kStackTopSlack = 256;
 
 constexpr bool IsPowerOfTwo(size_t value) {
   return value != 0 && (value & (value - 1)) == 0;
@@ -420,12 +426,16 @@ class PooledFixedSizeStack {
   boost::context::fixedsize_stack backing_;
 };
 
-PooledFixedSizeStack FixedSizeAllocator(size_t requested_size) {
+size_t EffectiveStackSize(size_t requested_size) {
   const size_t minimum = boost::context::stack_traits::minimum_size();
   const size_t configured =
       requested_size == 0 ? static_cast<size_t>(THREAD_DEFAULT_FIBER_STACK_SIZE)
                           : requested_size;
-  return PooledFixedSizeStack(std::max(minimum, configured));
+  return std::max(minimum, configured);
+}
+
+PooledFixedSizeStack FixedSizeAllocator(size_t requested_size) {
+  return PooledFixedSizeStack(EffectiveStackSize(requested_size));
 }
 
 using PoolWork = absl::AnyInvocable<void() &&>;
@@ -668,12 +678,12 @@ constexpr size_t kCacheLine = 128;
 // How much work a slot holds before it spills into its queue's overflow list.
 constexpr size_t kQueueCapacity = 256;
 
-// A pool worker's private work, and its park. `contexts` holds *detached* fibre
-// contexts: both fibres freshly created by Fiber::Start and fibres that became
+// A pool worker's private work, and its park. `contexts` holds *detached* fiber
+// contexts: both fibers freshly created by Fiber::Start and fibers that became
 // ready again.
 struct alignas(kCacheLine) WorkerSlot {
   // How many contexts and callbacks are queued. The two kinds are counted
-  // separately because a fibre context and a stackless callback are runnable by
+  // separately because a fiber context and a stackless callback are runnable by
   // different parts of the worker.
   std::atomic<std::uint32_t> context_depth{0};
   std::atomic<std::uint32_t> callback_depth{0};
@@ -882,7 +892,7 @@ class PoolState {
     return false;
   }
 
-  // Only fibre contexts, which is all a dispatcher can run.
+  // Only fiber contexts, which is all a dispatcher can run.
   bool AnyContexts(std::memory_order order = std::memory_order_seq_cst) const {
     for (size_t index = 0; index < num_workers_; ++index) {
       if (slots_[index].context_depth.load(order) != 0) {
@@ -903,7 +913,7 @@ class PoolState {
   }
 
   // Wakes an OS thread only if one is actually needed. Measured: this is what
-  // the deferred fibre reap exposed.
+  // the deferred fiber reap exposed.
   void WakeSomeone(size_t preferred, bool force = false) {
     // Diagnostic: A11_POOL_ALWAYS_WAKE=1 disables the economy entirely, so a
     // push always signals somebody.
@@ -1221,7 +1231,7 @@ class PoolAlgorithm final : public boost::fibers::algo::algorithm {
 
   boost::fibers::context* absl_nullable pick_next() noexcept override {
     // The main context is what runs stackless callbacks, so preferring ready
-    // fibres unconditionally would let a steady stream of fibres starve every
+    // fibers unconditionally would let a steady stream of fibers starve every
     // posted callback on this worker.
     if (!lqueue_.empty() && state_->AnyCallbacks(std::memory_order_relaxed)) {
       prefer_pinned_ = !prefer_pinned_;
@@ -1387,13 +1397,13 @@ void PoolState::Start(size_t num_threads) {
       std::fprintf(stderr,
                    "pool served %llu items across %zu/%zu workers: %s\n"
                    "pool cpus %s\n"
-                   "pool fibres started %llu\n"
+                   "pool fibers started %llu\n"
                    "pool parks %llu (%.3f/item) spins %llu hit / %llu miss, "
                    "steals %llu (%.3f/item), signals %llu (%.3f/item)\n",
                    static_cast<unsigned long long>(total), used,
                    reporting->num_workers_, line.c_str(), cpus.c_str(),
                    static_cast<unsigned long long>(
-                       g_fibre_starts.load(std::memory_order_relaxed)),
+                       g_fiber_starts.load(std::memory_order_relaxed)),
                    static_cast<unsigned long long>(parks),
                    total == 0 ? 0.0 : static_cast<double>(parks) / total,
                    static_cast<unsigned long long>(hits),
@@ -1402,7 +1412,7 @@ void PoolState::Start(size_t num_threads) {
                    total == 0 ? 0.0 : static_cast<double>(steals) / total,
                    static_cast<unsigned long long>(signals),
                    total == 0 ? 0.0 : static_cast<double>(signals) / total);
-      ReportFibreCensus();
+      ReportFiberCensus();
     });
   }
 }
@@ -1435,7 +1445,7 @@ void WorkerThreadPool::Start(size_t num_threads) {
 
 void WorkerThreadPool::RunWorker(size_t index) {
   // Before the scheduler, on purpose: this worker's dispatcher context, its
-  // remote-ready queue and the first fibre stacks it takes out of the pooled
+  // remote-ready queue and the first fiber stacks it takes out of the pooled
   // allocators are all first touched below, and a page's first touch is what.
   if (const int cpu = state_.cpu_for(index); cpu >= 0) {
     if (SetThisThreadCpu(cpu)) {
@@ -1487,8 +1497,8 @@ void WorkerThreadPool::RunWorker(size_t index) {
       }
     }
 
-    // Hand the thread to the fibre scheduler: this is where contexts pushed to
-    // (or stolen into) this worker actually run. It returns once no fibre is
+    // Hand the thread to the fiber scheduler: this is where contexts pushed to
+    // (or stolen into) this worker actually run. It returns once no fiber is
     // ready, having cost two context switches -- nanoseconds, not a wake.
     boost::this_fiber::yield();
 
@@ -1510,7 +1520,7 @@ void WorkerThreadPool::RunWorker(size_t index) {
       while (!found) {
         for (int round = 0; round < kSpinRoundsPerClockCheck; ++round) {
           // `WakePending` is not redundant with the slot scan: it is the only
-          // way a spinner learns about a fibre bound to its own scheduler that
+          // way a spinner learns about a fiber bound to its own scheduler that
           // another thread just made ready.
           if (self.WakePending() || state_.shutting_down()) {
             found = true;
@@ -1541,7 +1551,7 @@ void WorkerThreadPool::RunWorker(size_t index) {
     ReapFinishedFibers();
     passes_since_reap = 0;
 
-    // Go idle by suspending the main *fibre*, not the thread.
+    // Go idle by suspending the main *fiber*, not the thread.
     state_.MarkIdle(index);
     {
       thread::MutexLock lock(&self.idle_mu);
@@ -1586,7 +1596,7 @@ void WorkerThreadPool::Schedule(
       << "Cannot schedule work after worker-pool shutdown.";
   CHECK(context->get_scheduler() == nullptr)
       << "Cannot schedule an already scheduled context.";
-  // The fibre keeps the reference alive until it is attached and running; the
+  // The fiber keeps the reference alive until it is attached and running; the
   // pool holds a raw pointer, as Boost's own algorithms do.
   state_.PushContext(context.get(), state_.PreferredSlot(), /*wake=*/true);
 }
@@ -1630,7 +1640,10 @@ WorkerThreadPool& WorkerThreadPool::Instance() {
 absl::once_flag worker_pool_once;
 
 void EnsureWorkerThreadPool() {
-  absl::call_once(worker_pool_once, WorkerThreadPool::Instance);
+  absl::call_once(worker_pool_once, [] {
+    WorkerThreadPool::Instance();
+    internal::InstallFiberDiagnosticsFromEnvironment();
+  });
 }
 
 }  // namespace
@@ -1638,16 +1651,24 @@ void EnsureWorkerThreadPool() {
 void Fiber::Start() {
   EnsureWorkerThreadPool();
   if (PoolStatsRequested()) {
-    g_fibre_starts.fetch_add(1, std::memory_order_relaxed);
+    g_fiber_starts.fetch_add(1, std::memory_order_relaxed);
   }
-  if (FibreCensusRequested()) {
-    RecordFibreCreation();
+  if (FiberCensusRequested()) {
+    RecordFiberCreation();
   }
   // EnsureThreadHasScheduler runs only once per thread, so a pool worker keeps
   // the PoolAlgorithm it was started with.
   EnsureThreadHasScheduler<InstrumentedRoundRobin>();
 
-  auto body = [this] {
+  const size_t stack_size = EffectiveStackSize(tree_options_.stack_size);
+  auto body = [this, stack_size] {
+    // Bounds published from inside the fiber: at entry the frame address is
+    // within a few words of the stack top, and the size is known. They let a
+    // report reject a corrupt frame-pointer chain instead of following it.
+    auto* const top = static_cast<std::byte*>(__builtin_frame_address(0));
+    diagnostics_.stack_hi = top + kStackTopSlack;
+    diagnostics_.stack_lo = top + kStackTopSlack - stack_size;
+
     std::move(work_)();
     work_ = nullptr;
 
@@ -1673,8 +1694,10 @@ void Fiber::Start() {
             SegmentedAllocator(tree_options_.stack_size), std::move(body));
   }
 
+  diagnostics_.context = GetBoostState()->context.get();
+
   // From a pool worker this is a push onto that worker's own slot -- its own
-  // dispatcher runs the new fibre at the next suspension point, for the price
+  // dispatcher runs the new fiber at the next suspension point, for the price
   // of a context switch rather than a thread wake.
   WorkerThreadPool::Instance().Schedule(GetBoostState()->context);
 }
@@ -1692,6 +1715,18 @@ Fiber* absl_nullable GetScheduledFiberPtr() {
   const auto* properties =
       dynamic_cast<const FiberProperties*>(context->get_properties());
   return properties == nullptr ? nullptr : properties->GetFiber();
+}
+
+FiberDiagnostics* absl_nullable CurrentFiberDiagnostics() {
+  const boost::fibers::context* absl_nullable context =
+      boost::fibers::context::active();
+  if (context == nullptr) {
+    return nullptr;
+  }
+  const auto* properties =
+      dynamic_cast<const FiberProperties*>(context->get_properties());
+  return properties == nullptr ? nullptr
+                               : &properties->GetFiber()->Diagnostics();
 }
 
 }  // namespace internal

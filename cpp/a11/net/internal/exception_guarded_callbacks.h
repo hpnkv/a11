@@ -9,8 +9,8 @@
  * pybind11, or an ordinary C++ lambda that calls a throwing library. Every
  * WireStream implementation passes both through these on the way into its
  * state, so the transports themselves never have to think about it again: by
- * the time a Receiver fibre invokes `on_message`, whatever it throws has
- * already become the error status that fibre knows how to handle.
+ * the time a Receiver fiber invokes `on_message`, whatever it throws has
+ * already become the error status that fiber knows how to handle.
  *
  * Implemented in a11/net/boundary.cc, which is compiled with exceptions for
  * this purpose. a11/exception_guard.h explains why the wrap has to happen here
@@ -32,10 +32,10 @@ namespace a11::net::internal {
 [[nodiscard]] OnMessage GuardOnMessage(OnMessage callback);
 /// Wraps `on_done` so a raised exception becomes a failed Task.
 [[nodiscard]] OnDone GuardOnDone(OnDone callback);
-/// Wraps an HTTP request handler, whose fibre belongs to the connection.
+/// Wraps an HTTP request handler, whose fiber belongs to the connection.
 [[nodiscard]] Http2RequestHandler GuardRequestHandler(
     Http2RequestHandler handler);
-/// Wraps a WebSocket server's accept callback, invoked on a connection fibre.
+/// Wraps a WebSocket server's accept callback, invoked on a connection fiber.
 [[nodiscard]] OnWebSocketStream GuardOnWebSocketStream(
     OnWebSocketStream callback);
 /// Wraps a signalling endpoint's message callback.

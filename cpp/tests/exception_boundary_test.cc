@@ -69,7 +69,7 @@ TEST(ExceptionBoundaryTest, AThrowingOnMessageAbortsTheStreamNotTheProcess) {
   // stream's lifecycle, not through the send that happened to trigger it.
   EXPECT_TRUE(client->Send(OneFragment()).ok());
 
-  // And it reaches it on the receiving endpoint's own fibre, so poll rather
+  // And it reaches it on the receiving endpoint's own fiber, so poll rather
   // than assume the abort has already happened.
   absl::Status status;
   const absl::Time limit = absl::Now() + absl::Seconds(5);

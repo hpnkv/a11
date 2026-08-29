@@ -240,6 +240,29 @@ function startCredentialRefresh(): void {
   }, CREDENTIAL_REFRESH_MS);
 }
 
+/**
+ * Leave the room when the tab or window goes away.
+ *
+ * `pagehide` covers closing, navigating away, and the bfcache, and fires
+ * where `beforeunload` does not on mobile Safari. Both paths send a
+ * terminal marker on the connection that is still open, so the other
+ * peers see the departure instead of waiting out the idle timeout.
+ */
+function leaveRoom(): void {
+  if (host) {
+    host.shutdown();
+    host = null;
+  }
+  if (peer) {
+    peer.disconnect();
+    peer = null;
+  }
+  if (refreshTimer !== null) {
+    clearInterval(refreshTimer);
+    refreshTimer = null;
+  }
+}
+
 // -------------------------------------------------------- init
 
 function init(): void {
@@ -247,6 +270,12 @@ function init(): void {
   if (!root) return;
 
   ui = new ChatUI();
+  window.addEventListener('pagehide', leaveRoom);
+  // A page restored from the bfcache resumes with the session it aborted
+  // on the way out.
+  window.addEventListener('pageshow', (event) => {
+    if (event.persisted) ui.setStatus('Left the room — reload to rejoin');
+  });
 
   // Check URL for host parameter (the host's anonymous peer ID).
   const params = new URLSearchParams(window.location.search);

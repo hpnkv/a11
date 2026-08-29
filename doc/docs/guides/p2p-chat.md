@@ -104,10 +104,16 @@ outputs through `AsyncNode`:
 | `replicate` | — | `events` (JSON, streaming) | Stream the full log then live events |
 | `get_peers` | — | `peers` (JSON, unary) | List participants with names |
 
-Each incoming peer gets a `Session` with `StreamMode.ACCEPT` over a
-`WebRtcWireStream` negotiated through a11x signalling. The host creates the
-session, adds the stream, and the registry dispatches action calls
-automatically.
+Each incoming peer gets a `Session` with `StreamMode.ACCEPT`. The host
+creates the session, adds the stream, and the registry dispatches action
+calls automatically.
+
+The library provides the offer side of WebRTC through
+`WebRtcWireStream.createClient`. The answer side is the demo's own
+`WebRtcServer`, which wraps the peer's data channel as a `ChannelWireStream`
+with `ChannelEndpointRole.SERVER`. That adapter reads a single data channel,
+so the peer asks for one with `desiredChannels: 1`; the client default of 8
+stripes packets round-robin across every open channel.
 
 ## 3. Calling actions from peers
 
@@ -152,12 +158,44 @@ populated immediately.
 The log is capped at 300 messages. Join, leave, and name-change events for
 active participants are always retained.
 
-## 5. Host election and failover
+The `replicate` handler stays suspended for as long as the peer is
+connected. An action's output ports close when its handler returns, so a
+handler that pushes live values holds itself open — here on the peer's
+departure and on `action.signal`.
 
-When the host disconnects, all remaining peers detect the WebRTC close and
-independently compute the same new host: the peer with the lexicographically
-smallest ID. No negotiation round is needed — every peer arrives at the same
-answer from its participant list.
+## 5. Departures, liveness, and failover
+
+A peer leaves in one of three ways, and the room converges on all of them
+within ten seconds:
+
+| Departure | Signal | Detected in |
+|-----------|--------|-------------|
+| Tab or window closed | `Session.abort()` from a `pagehide` handler | One round trip |
+| Data channel closed or connection failed | `WireStream.wait()` resolves | One round trip |
+| Silent peer: no close, no traffic | `messageTimeoutMs` on the stream | `PEER_TIMEOUT_MS`, 10 s |
+
+`pagehide` fires on close, on navigation, and when the page enters the
+bfcache, including on mobile Safari where `beforeunload` does not. The
+handler calls `ChatHost.shutdown` or `ChatPeer.disconnect`, both of which
+abort their sessions with a status. The abort marker travels on the channel
+that is still open, so the other side ends the session, cancels the actions
+in flight, and broadcasts the leave event.
+
+Both ends race `Session.done()` against `WireStream.wait()`, so a channel
+that dies without a marker removes the peer as soon as the stream reports
+it, rather than on a session timeout.
+
+Peers ping their host every three seconds with the `__ping` builtin, which
+every `ActionRegistry` answers without a registration. The ping and its
+answer are activity in both directions, keeping an idle room inside the
+ten-second window; a ping that goes unanswered within that window counts as
+the host being gone. A tab hidden long enough for the browser to throttle
+its timers past ten seconds is dropped from the room, and reloading the page
+rejoins from the share URL.
+
+When the host goes, all remaining peers independently compute the same new
+host: the peer with the lexicographically smallest ID. No negotiation round
+is needed — every peer arrives at the same answer from its participant list.
 
 After a 1-second convergence delay:
 

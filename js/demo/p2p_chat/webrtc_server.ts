@@ -41,6 +41,7 @@ import {
   type StatusOr,
   type NonOkStatus,
   type WireStream,
+  type WireStreamOptions,
 } from '../../src/index.js';
 
 // -------------------------------------------- sequence framing
@@ -77,6 +78,10 @@ function decodeSequence(framed: Uint8Array): Uint8Array {
  * internal {@link MultiplexedRtcChannel}.  It adds and strips the
  * 8-byte sequence suffix that the client's multiplexed channel
  * uses, so the two sides stay wire-compatible.
+ *
+ * One channel carries the whole stream, which requires the client to
+ * open one: `WebRtcWireStream.createClient` takes `desiredChannels`,
+ * and its default of 8 stripes packets round-robin across all of them.
  */
 class SingleDataChannelAdapter implements BinaryChannel {
   private callbacks: BinaryChannelCallbacks | null = null;
@@ -280,6 +285,7 @@ export class WebRtcServer {
     private readonly iceServers: RTCIceServer[],
     private readonly onPeerConnected: OnPeerConnected,
     private readonly onError: (peerId: string, error: string) => void,
+    private readonly streamOptions: WireStreamOptions,
   ) {}
 
   /**
@@ -291,6 +297,7 @@ export class WebRtcServer {
     iceServers: RTCIceServer[],
     onPeerConnected: OnPeerConnected,
     onError?: (peerId: string, error: string) => void,
+    streamOptions: WireStreamOptions = {},
   ): Promise<StatusOr<WebRtcServer>> {
     const signalling = await WebSocketSignallingClient.connect(
       signallingUrl,
@@ -303,6 +310,7 @@ export class WebRtcServer {
       iceServers,
       onPeerConnected,
       onError ?? (() => {}),
+      streamOptions,
     );
 
     const cbStatus = signalling.setOnMessage(
@@ -413,9 +421,17 @@ export class WebRtcServer {
         }
       });
 
-      // Listen for the peer's data channel.
+      // Listen for the peer's data channel. The adapter below reads one,
+      // so a peer that opens several is reported rather than half-read.
       connection.addEventListener('datachannel', (event) => {
-        if (negotiation.dataChannelReceived) return;
+        if (negotiation.dataChannelReceived) {
+          this.onError(
+            peerId,
+            `Peer opened an extra data channel (${event.channel.label}); ` +
+            'this server reads one. Set desiredChannels: 1 on the client.',
+          );
+          return;
+        }
         negotiation.dataChannelReceived = true;
         this.handleDataChannel(peerId, connection, event.channel);
       });
@@ -504,7 +520,7 @@ export class WebRtcServer {
         adapter,
         streamId,
         ChannelEndpointRole.SERVER,
-        {},
+        this.streamOptions,
         { splitSize: 16 * 1024 },
       );
       if (!isOk(wireStream)) {

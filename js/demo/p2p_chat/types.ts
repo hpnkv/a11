@@ -54,6 +54,23 @@ export interface AnonymousClaimResult {
   iceServers: RTCIceServer[];
 }
 
+/**
+ * Idle time on a peer connection after which the peer counts as gone.
+ *
+ * Passed to the wire stream as `messageTimeoutMs`, so the stream aborts
+ * itself once this long passes with no framing activity in either
+ * direction, and to the session as `noStreamTimeoutMs`.
+ */
+export const PEER_TIMEOUT_MS = 10_000;
+
+/**
+ * Interval between liveness pings from a peer to its host.
+ *
+ * Three pings fit inside {@link PEER_TIMEOUT_MS}. The `__ping` builtin
+ * answers them, so neither side registers an action for it.
+ */
+export const PING_INTERVAL_MS = 3_000;
+
 /** Maximum characters per chat message. */
 export const MAX_MESSAGE_LENGTH = 2000;
 

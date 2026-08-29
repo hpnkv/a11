@@ -12,10 +12,12 @@ import {
   ActionPortSchema,
   ActionRegistry,
   ActionSchema,
+  PING_NAME,
   Session,
   StreamMode,
   WebRtcWireStream,
   WebSocketSignallingClient,
+  cancelledError,
   isOk,
 } from '../../src/index.js';
 
@@ -25,6 +27,8 @@ import { ChatHost, type OnStateChange } from './host.js';
 import { deriveState } from './room_state.js';
 import {
   ConnectionType,
+  PEER_TIMEOUT_MS,
+  PING_INTERVAL_MS,
   type PeerInfo,
   type RoomEvent,
   type AnonymousClaimResult,
@@ -103,6 +107,15 @@ const getPeersSchema = new ActionSchema({
 /** Delay before the new host starts accepting after failover. */
 const FAILOVER_DELAY_MS = 1_000;
 
+/**
+ * Data channels the peer opens toward the host.
+ *
+ * The host answers with {@link WebRtcServer}, whose adapter reads one
+ * channel. `WebRtcWireStream.createClient` defaults to 8 and stripes
+ * packets round-robin across every open channel.
+ */
+export const PEER_DESIRED_CHANNELS = 1;
+
 /** Callback when the peer transitions to host role. */
 export type OnBecomeHost = (host: ChatHost) => void;
 
@@ -120,6 +133,10 @@ export class ChatPeer {
   private connectionMonitor: ConnectionMonitor | null = null;
   private replicating = false;
   private hostId: string;
+  private pingTimer: ReturnType<typeof setInterval> | null = null;
+  private pingInFlight = false;
+  private hostGone = false;
+  private leaving = false;
 
   private readonly registry = new ActionRegistry();
   private readonly onStateChange: OnStateChange;
@@ -198,29 +215,33 @@ export class ChatPeer {
     const webrtcStream = WebRtcWireStream.createClient(
       this.hostId,
       signalling,
-      { stunServers: [], rtcConfiguration: { iceServers: claim.iceServers } },
+      {
+        stunServers: [],
+        rtcConfiguration: { iceServers: claim.iceServers },
+        desiredChannels: PEER_DESIRED_CHANNELS,
+      },
+      { messageTimeoutMs: PEER_TIMEOUT_MS },
     );
     if (!isOk(webrtcStream)) {
       signalling.close();
       throw new Error(`WebRTC stream creation failed: ${JSON.stringify(webrtcStream)}`);
     }
-    this.stream = webrtcStream;
-
     const session = Session.create({
       actionRegistry: this.registry,
-      noStreamTimeoutMs: 30_000,
+      noStreamTimeoutMs: PEER_TIMEOUT_MS,
     });
     if (!isOk(session)) {
       signalling.close();
       throw new Error(`Session creation failed: ${JSON.stringify(session)}`);
     }
-    this.session = session;
 
     const addResult = await session.addStream(webrtcStream, StreamMode.START);
     if (!isOk(addResult)) {
       signalling.close();
       throw new Error(`Stream start failed: ${JSON.stringify(addResult)}`);
     }
+
+    this.adoptConnection(session, webrtcStream);
 
     // Start connection monitoring.
     this.connectionMonitor = new ConnectionMonitor(
@@ -229,9 +250,66 @@ export class ChatPeer {
       this.onConnectionTypeChange,
     );
     this.connectionMonitor.start();
+  }
 
-    // Monitor for host disconnection.
-    void session.done().then(() => this.handleHostDisconnect());
+  /**
+   * Adopt a started session and stream as the connection to the host.
+   *
+   * The stream ends on the host's abort, on its channel closing, and on
+   * the idle timeout; the session completes on an orderly close.
+   */
+  private adoptConnection(session: Session, stream: WebRtcWireStream): void {
+    this.session = session;
+    this.stream = stream;
+    this.hostGone = false;
+    this.startPinging();
+    void Promise.race([session.done(), stream.wait()])
+      .then(() => this.handleHostDisconnect());
+  }
+
+  /**
+   * Ping the host on an interval so neither side goes idle.
+   *
+   * The `__ping` builtin answers, so the host registers nothing for it.
+   * A ping that fails or goes unanswered within {@link PEER_TIMEOUT_MS}
+   * counts as the host being gone.
+   */
+  private startPinging(): void {
+    this.stopPinging();
+    this.pingTimer = setInterval(() => {
+      if (this.pingInFlight) return;
+      this.pingInFlight = true;
+      void this.pingHost().finally(() => { this.pingInFlight = false; });
+    }, PING_INTERVAL_MS);
+  }
+
+  private stopPinging(): void {
+    if (this.pingTimer !== null) clearInterval(this.pingTimer);
+    this.pingTimer = null;
+    this.pingInFlight = false;
+  }
+
+  private async pingHost(): Promise<void> {
+    const session = this.session;
+    const stream = this.stream;
+    if (session === null || stream === null) return;
+
+    const action = this.registry.makeAction(PING_NAME, {
+      nodeMap: session.getNodeMap(),
+      stream,
+      session,
+    });
+    if (!isOk(action)) return;
+
+    const called = await action.call();
+    if (!isOk(called)) return this.handleHostDisconnect();
+    const input = await action.getInput('input');
+    if (!isOk(input)) return this.handleHostDisconnect();
+    await input.finalize('ping');
+    const output = await action.getOutput('output', false);
+    if (!isOk(output)) return this.handleHostDisconnect();
+    const pong = await output.consume({ timeoutMs: PEER_TIMEOUT_MS });
+    if (!isOk(pong)) return this.handleHostDisconnect();
   }
 
   /** Send a chat message to the host. */
@@ -348,6 +426,8 @@ export class ChatPeer {
 
   /** Handle host disconnection: elect new host and transition. */
   private async handleHostDisconnect(): Promise<void> {
+    if (this.leaving || this.hostGone) return;
+    this.hostGone = true;
     this.cleanup();
 
     // Compute remaining peers from the event log.
@@ -384,6 +464,7 @@ export class ChatPeer {
   /** Clean up the current connection without triggering failover. */
   private cleanup(): void {
     this.replicating = false;
+    this.stopPinging();
     if (this.connectionMonitor) {
       this.connectionMonitor.stop();
       this.connectionMonitor = null;
@@ -396,10 +477,19 @@ export class ChatPeer {
     this.stream = null;
   }
 
-  /** Fully disconnect from the room. */
+  /**
+   * Leave the room and tell the host.
+   *
+   * The abort marker travels on the open data channel, so the host ends
+   * this peer's session and broadcasts the leave event without waiting
+   * for a timeout. Safe to call from a `pagehide` handler.
+   */
   disconnect(): void {
+    this.leaving = true;
     if (this.session) {
-      try { this.session.halfClose(); } catch { /* ignore */ }
+      try {
+        this.session.abort(cancelledError('The peer left the room.'));
+      } catch { /* ignore */ }
     }
     this.cleanup();
   }

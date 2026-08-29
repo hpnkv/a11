@@ -44,7 +44,7 @@
     "build:docs": "typedoc --options typedoc.json",
     "clean": "tsc --build --clean",
     "test": "npm run build && node --test test/*.test.mjs",
-    "test:demo:p2p": "esbuild demo/p2p_chat/tests/p2p_chat.test.ts --bundle --format=esm --platform=node --packages=external --outfile=../doc/docs/assets/p2p-chat.test.mjs && node --test ../doc/docs/assets/p2p-chat.test.mjs",
+    "test:demo:p2p": "esbuild demo/p2p_chat/tests/p2p_chat.test.ts --bundle --format=esm --platform=node --packages=external --outfile=demo/p2p_chat/tests/p2p_chat.test.mjs && node --test demo/p2p_chat/tests/p2p_chat.test.mjs",
     "publish:registries": "npm run build && node scripts/publish_registries.mjs",
     "prepublishOnly": "npm run build"
   },

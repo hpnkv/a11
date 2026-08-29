@@ -14,6 +14,7 @@ import {
   ActionSchema,
   Session,
   StreamMode,
+  cancelledError,
   isOk,
   type Action,
   type AsyncNode,
@@ -27,6 +28,7 @@ import {
   ConnectionType,
   MAX_MESSAGE_HISTORY,
   MAX_MESSAGE_LENGTH,
+  PEER_TIMEOUT_MS,
   type PeerInfo,
   type RoomEvent,
 } from './types.js';
@@ -109,11 +111,25 @@ interface ConnectedPeer {
   session: Session;
   stream: WireStream;
   replicationNode: AsyncNode | null;
+  /** Serializes writes so events reach the peer in log order. */
+  replicationWrites: Promise<void>;
+  /** Resolves when the peer leaves; the `replicate` handler awaits it. */
+  replicationDone: Promise<void>;
+  /** Resolver for {@link replicationDone}. */
+  endReplication: () => void;
   peerConnection: RTCPeerConnection | null;
 }
 
 /** Callback for state changes the UI should reflect. */
 export type OnStateChange = (events: RoomEvent[]) => void;
+
+/** Resolve once {@link signal} aborts. */
+function aborted(signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    signal.addEventListener('abort', () => resolve(), { once: true });
+  });
+}
 
 // ----------------------------------------------------------- ChatHost
 
@@ -248,21 +264,21 @@ export class ChatHost {
     if (!isOk(eventsNode)) return;
 
     const peerId = this.peerIdForAction(action);
-
-    // Send the full event log as the initial batch.
-    for (const event of this.events) {
-      await eventsNode.put(event);
+    const peer = peerId === null ? undefined : this.peers.get(peerId);
+    if (peer === undefined) {
+      // A caller with no peer record receives the log as it stands.
+      for (const event of this.events) await eventsNode.put(event);
+      return;
     }
 
-    // Register this node for live broadcasts. The stream stays open
-    // until the peer disconnects.
-    if (peerId !== null) {
-      const peer = this.peers.get(peerId);
-      if (peer) peer.replicationNode = eventsNode;
-    }
+    // Registration and the snapshot are taken in the same turn, so each
+    // event is carried either by the snapshot or by a later broadcast.
+    peer.replicationNode = eventsNode;
+    this.queueReplication(peer, [...this.events]);
 
-    // Keep the action alive by never finalizing — the node stays
-    // open for live pushes. The session closing will clean it up.
+    // Returning closes the `events` output, so the handler stays on the
+    // peer's lifetime and unwinds on cancellation.
+    await Promise.race([peer.replicationDone, aborted(action.signal)]);
   }
 
   private async handleGetPeers(action: Action): Promise<void> {
@@ -283,12 +299,28 @@ export class ChatHost {
 
   private broadcastEvent(event: RoomEvent): void {
     for (const peer of this.peers.values()) {
-      if (peer.replicationNode !== null) {
-        void peer.replicationNode.put(event).catch(() => {
-          // Peer may have disconnected; ignore write failures.
-        });
-      }
+      this.queueReplication(peer, [event]);
     }
+  }
+
+  /**
+   * Append events to one peer's replication stream.
+   *
+   * Writes run on a per-peer chain because `AsyncNode.put` serializes
+   * the value before it enqueues, and overlapping calls can enqueue out
+   * of order. A disconnected peer fails its writes; its session
+   * completion removes it.
+   */
+  private queueReplication(peer: ConnectedPeer, events: RoomEvent[]): void {
+    const node = peer.replicationNode;
+    if (node === null) return;
+    peer.replicationWrites = peer.replicationWrites
+      .then(async () => {
+        for (const event of events) await node.put(event);
+      })
+      .catch(() => {
+        // Write failures end with the peer's session.
+      });
   }
 
   // ----------------------------------------------- peer connections
@@ -318,6 +350,7 @@ export class ChatHost {
         this.onPeerConnected(peerId, wireStream, peerConnection),
       (peerId, error) =>
         console.error(`WebRTC server error for ${peerId}:`, error),
+      { messageTimeoutMs: PEER_TIMEOUT_MS },
     );
     if (!isOk(server)) {
       console.error('Failed to start WebRTC server:', server);
@@ -339,7 +372,7 @@ export class ChatHost {
   ): Promise<void> {
     const session = Session.create({
       actionRegistry: this.registry,
-      noStreamTimeoutMs: 30_000,
+      noStreamTimeoutMs: PEER_TIMEOUT_MS,
     });
     if (!isOk(session)) {
       console.error(`Session creation failed for peer ${peerId}:`, session);
@@ -352,11 +385,18 @@ export class ChatHost {
       return;
     }
 
+    let endReplication = (): void => {};
+    const replicationDone = new Promise<void>((resolve) => {
+      endReplication = () => resolve();
+    });
     const connectedPeer: ConnectedPeer = {
       peerId,
       session,
       stream: wireStream,
       replicationNode: null,
+      replicationWrites: Promise.resolve(),
+      replicationDone,
+      endReplication,
       peerConnection,
     };
     this.peers.set(peerId, connectedPeer);
@@ -367,7 +407,10 @@ export class ChatHost {
       timestamp: Date.now(),
     });
 
-    void session.done().then(() => this.removePeer(peerId));
+    // The stream ends on a peer's abort, on its channel closing, and on
+    // the idle timeout; the session completes on an orderly close.
+    void Promise.race([session.done(), wireStream.wait()])
+      .then(() => this.removePeer(peerId));
   }
 
   /** Remove a peer and broadcast the leave event. */
@@ -377,6 +420,7 @@ export class ChatHost {
 
     this.peers.delete(peerId);
     this.connectionTypes.delete(peerId);
+    peer.endReplication();
 
     this.appendEvent({
       type: 'leave',
@@ -392,8 +436,11 @@ export class ChatHost {
       this.server = null;
     }
     for (const peer of this.peers.values()) {
+      peer.endReplication();
       try {
-        peer.session.halfClose();
+        // An abort carries its status to the peer, which starts electing a
+        // new host as soon as the marker arrives.
+        peer.session.abort(cancelledError('The host left the room.'));
       } catch {
         // Best effort cleanup.
       }

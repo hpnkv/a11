@@ -1,3 +1,4 @@
 dist/
 node_modules/
 *.tgz
+demo/p2p_chat/tests/*.mjs

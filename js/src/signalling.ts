@@ -546,7 +546,9 @@ export class WebSocketSignallingClient implements SignallingTransport {
       if (new TextEncoder().encode(encoded).byteLength > this.maxMessageSize) {
         return invalidArgumentError('Signalling message exceeds maxMessageSize.');
       }
-      this.socket.send(encoded);
+      // Send as binary: the A11 signalling server uses a BinaryChannel
+      // which rejects text WebSocket frames.
+      this.socket.send(new TextEncoder().encode(encoded));
       return okStatus();
     } catch (error) {
       const status = statusFromUnknown(

@@ -28,7 +28,9 @@ import {
   type Status,
 } from '../../../src/index.js';
 
-import { deriveState, pruneEvents, electHost } from '../room_state.js';
+import { deriveState, pruneEvents, electHost, eventKey } from '../room_state.js';
+import { retry, RetriesExhausted } from '../retry.js';
+import { iceExpiryMs, refreshDelayMs } from '../signalling_client.js';
 import { shouldBecomeHost } from '../election.js';
 import { ChatHost } from '../host.js';
 import { ChatPeer, PEER_DESIRED_CHANNELS } from '../peer_client.js';
@@ -89,7 +91,7 @@ describe('privacy: anonymous claim endpoint', () => {
     }
   });
 
-  test('refreshCredentials also sends no room data', async () => {
+  test('refreshIceServers also sends no room data', async () => {
     let capturedUrl = '';
     let capturedBody = '';
     const originalFetch = globalThis.fetch;
@@ -105,8 +107,8 @@ describe('privacy: anonymous claim endpoint', () => {
     };
 
     try {
-      const { refreshCredentials } = await import('../signalling_client.js');
-      await refreshCredentials();
+      const { refreshIceServers } = await import('../signalling_client.js');
+      await refreshIceServers();
 
       assert.ok(capturedUrl.includes('/v1/anonymous/claim'),
         `Refresh must use /v1/anonymous/claim: ${capturedUrl}`);
@@ -757,12 +759,12 @@ describe('departures', () => {
     assert.ok(isOk(clientStream));
     assert.ok(isOk(serverStream));
 
-    let elected: ChatHost | null = null;
+    let elected: RoomEvent[] | null = null;
     const peer = new ChatPeer({
       myId: 'peer-bbb',
       hostId: 'host-aaa',
       onStateChange: () => {},
-      onBecomeHost: (newHost) => { elected = newHost; },
+      onBecomeHost: (events) => { elected = events; },
       onConnectionTypeChange: () => {},
     });
     const session = Session.create({
@@ -785,7 +787,10 @@ describe('departures', () => {
 
     assert.ok(Date.now() - started < PEER_TIMEOUT_MS + 1_600);
     assert.notEqual(elected, null, 'the remaining peer becomes the host');
-    (elected as unknown as ChatHost).shutdown();
+    // The promoted peer starts from a log with the departed host removed.
+    const promoted = new ChatHost('peer-bbb', elected ?? [], () => {});
+    assert.ok(!deriveState(promoted.getEventLog()).participants.has('host-aaa'));
+    promoted.shutdown();
   });
 });
 
@@ -818,4 +823,272 @@ describe('liveness', () => {
 
     host.shutdown();
   });
+});
+
+// -------------------------------------------------------- retry policy
+
+describe('retry', () => {
+  test('returns the first success without delay', async () => {
+    let attempts = 0;
+    const value = await retry(async () => { attempts++; return 'ok'; },
+      { deadlineMs: 1_000 });
+    assert.equal(value, 'ok');
+    assert.equal(attempts, 1);
+  });
+
+  test('keeps trying until the operation succeeds', async () => {
+    let attempts = 0;
+    const value = await retry(async () => {
+      attempts++;
+      if (attempts < 3) throw new Error('not yet');
+      return attempts;
+    }, { deadlineMs: 5_000, minBackoffMs: 5, maxBackoffMs: 10 });
+    assert.equal(value, 3);
+  });
+
+  test('gives up at the deadline and carries the last failure', async () => {
+    const started = Date.now();
+    await assert.rejects(
+      retry(async () => { throw new Error('always down'); },
+        { deadlineMs: 200, minBackoffMs: 20, maxBackoffMs: 40 }),
+      (error: unknown) => {
+        assert.ok(error instanceof RetriesExhausted);
+        assert.match(String((error as RetriesExhausted).last), /always down/);
+        return true;
+      },
+    );
+    assert.ok(Date.now() - started >= 200);
+  });
+
+  test('stops when the caller cancels', async () => {
+    let attempts = 0;
+    let cancelled = false;
+    await assert.rejects(retry(async () => {
+      attempts++;
+      cancelled = true;
+      throw new Error('down');
+    }, { deadlineMs: 5_000, minBackoffMs: 5, cancelled: () => cancelled }));
+    assert.equal(attempts, 1);
+  });
+});
+
+// ------------------------------------------------- TURN credential expiry
+
+describe('TURN credentials', () => {
+  const servers = (username: string): RTCIceServer[] => ([
+    { urls: ['stun:stun.example:19302'] },
+    { urls: ['turn:relay.example:3478'], username, credential: 'secret' },
+  ] as unknown as RTCIceServer[]);
+
+  test('the expiry is read from the username the exchange issues', () => {
+    const at = Math.floor(Date.now() / 1_000) + 600;
+    assert.equal(iceExpiryMs(servers(`${at}:abc-123`)), at * 1_000);
+  });
+
+  test('credentials without an expiry report none', () => {
+    assert.equal(iceExpiryMs(servers('')), null);
+    assert.equal(iceExpiryMs([]), null);
+  });
+
+  test('the refresh lands before the credentials lapse', () => {
+    const at = Math.floor(Date.now() / 1_000) + 600;
+    const delay = refreshDelayMs(servers(`${at}:abc-123`));
+    assert.ok(delay > 0);
+    assert.ok(delay < 600_000 - 100_000,
+      'the refresh leaves a margin before expiry');
+  });
+
+  test('credentials already lapsed refresh straight away', () => {
+    const at = Math.floor(Date.now() / 1_000) - 60;
+    assert.equal(refreshDelayMs(servers(`${at}:abc-123`)), 5_000);
+  });
+});
+
+// -------------------------------------------------------- event identity
+
+describe('eventKey', () => {
+  test('the same event has the same key', () => {
+    const event: RoomEvent = {
+      type: 'message', peerId: 'a', text: 'hi', timestamp: 7,
+    };
+    assert.equal(eventKey(event), eventKey({ ...event }));
+  });
+
+  test('different payloads at one timestamp stay distinct', () => {
+    assert.notEqual(
+      eventKey({ type: 'message', peerId: 'a', text: 'hi', timestamp: 7 }),
+      eventKey({ type: 'message', peerId: 'a', text: 'ho', timestamp: 7 }),
+    );
+    assert.notEqual(
+      eventKey({ type: 'join', peerId: 'a', timestamp: 7 }),
+      eventKey({ type: 'leave', peerId: 'a', timestamp: 7 }),
+    );
+  });
+});
+
+// ------------------------------------------------------ failover rules
+
+describe('failover', () => {
+  /** A peer with a log, detached from any transport. */
+  function lonePeer(myId: string, hostId: string, events: RoomEvent[]) {
+    const peer = new ChatPeer({
+      myId, hostId,
+      onStateChange: () => {}, onBecomeHost: () => {},
+      onConnectionTypeChange: () => {},
+    });
+    (peer as any).appendEvents(events);
+    return peer;
+  }
+
+  test('a replayed log does not duplicate what the peer already holds', () => {
+    const log: RoomEvent[] = [
+      { type: 'join', peerId: 'host', timestamp: 1 },
+      { type: 'join', peerId: 'bee', timestamp: 2 },
+      { type: 'message', peerId: 'bee', text: 'hi', timestamp: 3 },
+    ];
+    const peer = lonePeer('bee', 'host', log);
+    // A reconnect replays the whole log, then adds what is new.
+    (peer as any).appendEvents([
+      ...log,
+      { type: 'message', peerId: 'bee', text: 'again', timestamp: 4 },
+    ]);
+    const state = deriveState(peer.getEventLog());
+    assert.deepEqual(state.messages.map((m) => m.text), ['hi', 'again']);
+  });
+
+  test('a departed host leaves the participant list', () => {
+    const peer = lonePeer('bee', 'host', [
+      { type: 'join', peerId: 'host', timestamp: 1 },
+      { type: 'join', peerId: 'bee', timestamp: 2 },
+    ]);
+    (peer as any).recordDeparture('host');
+    const state = deriveState(peer.getEventLog());
+    assert.deepEqual([...state.participants.keys()], ['bee']);
+  });
+
+  test('the elected host is the lowest id still present', async () => {
+    // 'aaa' is lowest but gone; 'bee' takes over rather than dialling it.
+    let elected: string | null = null;
+    const peer = new ChatPeer({
+      myId: 'bee', hostId: 'host',
+      onStateChange: () => {},
+      onBecomeHost: () => { elected = 'bee'; },
+      onConnectionTypeChange: () => {},
+    });
+    (peer as any).appendEvents([
+      { type: 'join', peerId: 'host', timestamp: 1 },
+      { type: 'join', peerId: 'aaa', timestamp: 2 },
+      { type: 'join', peerId: 'bee', timestamp: 3 },
+      { type: 'leave', peerId: 'aaa', timestamp: 4 },
+    ]);
+    (peer as any).recordDeparture('host');
+    await (peer as any).takeOverOrFollow();
+    assert.equal(elected, 'bee');
+  });
+
+  test('a candidate that never answers is skipped and the room converges',
+    async () => {
+      // 'aaa' is present in the log and lowest, so it is dialled first. It
+      // never answers, so this peer records it gone and takes over.
+      let elected: string | null = null;
+      const peer = new ChatPeer({
+        myId: 'bee', hostId: 'host',
+        onStateChange: () => {},
+        onBecomeHost: () => { elected = 'bee'; },
+        onConnectionTypeChange: () => {},
+      });
+      (peer as any).appendEvents([
+        { type: 'join', peerId: 'host', timestamp: 1 },
+        { type: 'join', peerId: 'aaa', timestamp: 2 },
+        { type: 'join', peerId: 'bee', timestamp: 3 },
+      ]);
+      (peer as any).recordDeparture('host');
+      // No claim, so every dial fails at once instead of waiting on a
+      // network: what matters is that failure re-runs the election.
+      (peer as any).claimResult = null;
+      await (peer as any).takeOverOrFollow();
+      assert.equal(elected, 'bee');
+      assert.ok(!deriveState(peer.getEventLog()).participants.has('aaa'));
+    });
+
+  test('a peer that is leaving does not take the room over', async () => {
+    let elected: string | null = null;
+    const peer = new ChatPeer({
+      myId: 'bee', hostId: 'host',
+      onStateChange: () => {},
+      onBecomeHost: () => { elected = 'bee'; },
+      onConnectionTypeChange: () => {},
+    });
+    (peer as any).appendEvents([
+      { type: 'join', peerId: 'host', timestamp: 1 },
+      { type: 'join', peerId: 'bee', timestamp: 2 },
+    ]);
+    peer.disconnect();
+    await (peer as any).handleHostDisconnect();
+    assert.equal(elected, null);
+  });
+});
+
+// -------------------------------------------------- identity rotation
+
+describe('claims that have lapsed', () => {
+  const claimWith = (expirySeconds: number) => ({
+    peerId: 'old-id',
+    signallingUrl: 'wss://a11.services/ice',
+    claimToken: 'tok-old',
+    iceServers: [
+      { urls: ['turn:relay.example:3478'], username: `${expirySeconds}:abc`,
+        credential: 'secret' },
+    ] as unknown as RTCIceServer[],
+  });
+
+  async function rotate(expirySeconds: number) {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response(JSON.stringify({
+      peer_id: 'new-id',
+      signalling_url: 'wss://a11.services/ice',
+      claim_token: 'tok-new',
+      ice_servers: [],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+
+    let adopted: string | null = null;
+    const peer = new ChatPeer({
+      myId: 'old-id', hostId: 'host',
+      onStateChange: () => {}, onBecomeHost: () => {},
+      onConnectionTypeChange: () => {},
+      onIdentityChanged: (id) => { adopted = id; },
+    });
+    (peer as any).appendEvents([
+      { type: 'join', peerId: 'host', timestamp: 1 },
+      { type: 'join', peerId: 'old-id', timestamp: 2 },
+    ]);
+    (peer as any).claimResult = claimWith(expirySeconds);
+    try {
+      const claim = await (peer as any).usableClaim();
+      return { peer, claim, adopted };
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }
+
+  test('a claim with life left is used as it is', async () => {
+    const fresh = Math.floor(Date.now() / 1_000) + 600;
+    const { peer, claim, adopted } = await rotate(fresh);
+    assert.equal(claim.claimToken, 'tok-old');
+    assert.equal(peer.myId, 'old-id');
+    assert.equal(adopted, null);
+  });
+
+  test('a lapsed claim is replaced and the old identity recorded gone',
+    async () => {
+      const lapsed = Math.floor(Date.now() / 1_000) - 10;
+      const { peer, claim, adopted } = await rotate(lapsed);
+      assert.equal(claim.claimToken, 'tok-new');
+      assert.equal(peer.myId, 'new-id');
+      assert.equal(adopted, 'new-id');
+      assert.ok(
+        !deriveState(peer.getEventLog()).participants.has('old-id'),
+        'nothing waits on the identity the peer left behind',
+      );
+    });
 });

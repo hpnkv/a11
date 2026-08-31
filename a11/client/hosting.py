@@ -7,11 +7,13 @@ for as long as the process runs, not just at start-up:
 
 * a **claim**, which expires and must be renewed before it does;
 * a **signalling connection**, which can drop and must be re-made;
-* the **WebRTC listener** bound to it, which has to follow the connection.
+* the **WebRTC listener** bound to it, which has to follow the connection;
+* the **registration** the exchange holds, which an open socket does not
+  guarantee -- see `HostedEndpoint._registration_holds`.
 
 A host that does the first of each and none of the rest works for an hour and
 then quietly stops being reachable, which is the failure this class exists to
-prevent. `HostedEndpoint` owns all three and reports the one thing a caller
+prevent. `HostedEndpoint` owns all four and reports the one thing a caller
 cares about: whether it is currently reachable.
 """
 
@@ -38,6 +40,9 @@ MAX_RECONNECT_BACKOFF = 30.0
 #: Renewal is scheduled from the claim's own `renew_after`; this bounds how
 #: long the loop sleeps between checks so a clock change cannot strand it.
 RENEW_POLL_SECONDS = 30.0
+#: How often the exchange is asked whether it still considers this identity
+#: hosted. One HTTP call at this interval, against a claim that lasts an hour.
+HEALTH_CHECK_SECONDS = 60.0
 #: How long before the bound relay credentials lapse to rebuild the listener.
 #: Comfortably more than one poll interval, so the rebind never races the
 #: expiry it exists to stay ahead of.
@@ -188,6 +193,8 @@ class HostedEndpoint:
         #: The credential expiry the live listener was built with, so staleness
         #: is judged against what is *bound* rather than what is merely known.
         self._bound_expiry: float | None = None
+        #: When the exchange last confirmed this identity is registered.
+        self._checked_at = 0.0
 
     @property
     def transport(self):
@@ -268,11 +275,15 @@ class HostedEndpoint:
         self._maintainer = asyncio.create_task(self._maintain())
 
     async def aclose(self) -> None:
-        """Stop hosting: release the claim and close the connection.
+        """Stop hosting: drop the listener, release the claim, disconnect.
 
         Releasing is what makes a clean shutdown different from a crash --
         the identity becomes free immediately rather than at expiry, so a
         replacement does not have to supersede anything.
+
+        The listener goes with it, through the same `_relinquish` a reconnect
+        uses. A WebRTC server left running holds the peer connections it is
+        carrying, and this process is not going to answer on them.
         """
         self._stopped.set()
         maintainer, self._maintainer = self._maintainer, None
@@ -281,10 +292,7 @@ class HostedEndpoint:
             with contextlib.suppress(asyncio.CancelledError):
                 await maintainer
 
-        transport, self._transport = self._transport, None
-        if transport is not None:
-            with contextlib.suppress(Exception):
-                transport.close()
+        await self._relinquish()
 
         if self.claim is not None:
             with contextlib.suppress(Exception):
@@ -337,6 +345,9 @@ class HostedEndpoint:
         )
         self._transport = transport
         self._connected.set()
+        # Registration is what was just confirmed, so the next health check is
+        # a full interval away rather than immediate.
+        self._checked_at = time.time()
         logging.info("hosting %s through %s", self.identity, url)
         if self.on_transport is not None:
             await self.on_transport(transport)
@@ -345,7 +356,14 @@ class HostedEndpoint:
         """Renew the claim before it lapses; reconnect when the socket goes."""
         backoff = MIN_RECONNECT_BACKOFF
         while not self._stopped.is_set():
-            await asyncio.sleep(min(RENEW_POLL_SECONDS, MAX_RECONNECT_BACKOFF))
+            # Waiting on `_stopped` rather than sleeping serves both endings:
+            # a shutdown does not have to wait out the interval, and a socket
+            # that has just failed is retried at its own backoff instead of at
+            # the renewal poll's, which is a different question asked at a
+            # different rate.
+            await self._wait(
+                backoff if not self.connected else RENEW_POLL_SECONDS
+            )
             if self._stopped.is_set():
                 return
 
@@ -374,7 +392,7 @@ class HostedEndpoint:
             except Exception:  # noqa: BLE001 - a hook may raise anything
                 logging.exception("could not rebind %s", self.identity)
 
-            if self.connected:
+            if self.connected and await self._registration_holds():
                 backoff = MIN_RECONNECT_BACKOFF
                 continue
 
@@ -390,8 +408,61 @@ class HostedEndpoint:
                 logging.warning(
                     "could not re-register %s: %s", self.identity, exc
                 )
-                await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, MAX_RECONNECT_BACKOFF)
+
+    async def _wait(self, seconds: float) -> None:
+        """Sleep, unless hosting stops first."""
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(self._stopped.wait(), timeout=seconds)
+
+    async def _registration_holds(self) -> bool:
+        """Whether the exchange still agrees that this identity is hosted.
+
+        An open socket is not a registration. The exchange withdraws presence
+        when a signalling connection departs, and a host that reconnects has
+        both events in flight at once -- so a reconnect can leave a socket that
+        is open, admitted by nobody, and refused every time it tries to
+        negotiate. Nothing on this side reports that: `connected` is true, the
+        listener is bound, and the log's last word is "hosting".
+
+        Asking the exchange is the only question whose answer distinguishes
+        that from working. A False answer is acted on by reconnecting, which
+        re-runs admission and re-announces presence.
+
+        Failures are treated as True. The exchange being unreachable says
+        nothing about whether the signalling socket is registered, and dropping
+        a working connection over a failed HTTP call would turn a blip into an
+        outage.
+        """
+        now = time.time()
+        if now - self._checked_at < HEALTH_CHECK_SECONDS:
+            return True
+        self._checked_at = now
+        try:
+            identity = await self._client.get_identity(self.identity)
+        except StatusException as exc:
+            logging.debug(
+                "could not check whether %s is still registered: %s",
+                self.identity,
+                exc.status.message,
+            )
+            return True
+        except Exception:  # noqa: BLE001 - an HTTP client may raise anything
+            logging.debug(
+                "could not check whether %s is still registered",
+                self.identity,
+                exc_info=True,
+            )
+            return True
+
+        if identity.get("online", True):
+            return True
+        logging.warning(
+            "%s holds an open signalling socket that the exchange does not"
+            " count as hosting it; re-registering",
+            self.identity,
+        )
+        return False
 
     async def _rebind_if_lapsing(self) -> None:
         """Rebuild the listener before the credentials it holds expire.
@@ -498,11 +569,10 @@ class HostedEndpoint:
             )
         self._fatal = status
         self._stopped.set()
-        self._connected.clear()
-        transport, self._transport = self._transport, None
-        if transport is not None:
-            with contextlib.suppress(Exception):
-                transport.close()
+        # The listener as well as the transport: hosting has ended, and a
+        # WebRTC server still bound would go on accepting peers this process
+        # can no longer be reached as.
+        await self._relinquish()
 
     # --- what a host that has stopped tells its caller -------------------
 
@@ -527,6 +597,7 @@ class HostedEndpoint:
 
 __all__ = [
     "CONNECT_TIMEOUT",
+    "HEALTH_CHECK_SECONDS",
     "REBIND_MARGIN_SECONDS",
     "MAX_RECONNECT_BACKOFF",
     "MIN_RECONNECT_BACKOFF",

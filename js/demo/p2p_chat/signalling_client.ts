@@ -11,7 +11,8 @@
  * host's peer ID so joiners know who to WebRTC-connect to.
  */
 
-import { type AnonymousClaimResult } from './types.js';
+import { retry } from './retry.js';
+import { ICE_REFRESH_MARGIN_MS, type AnonymousClaimResult } from './types.js';
 
 /** Base URL for the a11x exchange control plane. */
 const EXCHANGE_BASE = 'https://a11.services';
@@ -26,39 +27,69 @@ const EXCHANGE_BASE = 'https://a11.services';
  * - Does NOT receive or store any room, peer-list, or correlation data.
  * - Rejects the identity if it collides with a registered user.
  */
-export async function claimAnonymous(): Promise<AnonymousClaimResult> {
-  const url = `${EXCHANGE_BASE}/v1/anonymous/claim`;
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    // Empty body: no room ID, no peer list, no correlating data.
-    body: '{}',
-  });
-  if (!response.ok) {
-    const body = await response.text().catch(() => '');
-    throw new Error(
-      `Anonymous claim failed (${response.status}): ${body || response.statusText}`,
-    );
-  }
-  const data = await response.json();
-  return {
-    peerId: data.peer_id,
-    signallingUrl: data.signalling_url,
-    claimToken: data.claim_token,
-    iceServers: data.ice_servers ?? [],
-  };
+export async function claimAnonymous(
+  options: { deadlineMs?: number } = {},
+): Promise<AnonymousClaimResult> {
+  return retry(async () => {
+    const url = `${EXCHANGE_BASE}/v1/anonymous/claim`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      // Empty body: no room ID, no peer list, no correlating data.
+      body: '{}',
+    });
+    if (!response.ok) {
+      const body = await response.text().catch(() => '');
+      throw new Error(
+        `Anonymous claim failed (${response.status}): ${body || response.statusText}`,
+      );
+    }
+    const data = await response.json();
+    return {
+      peerId: data.peer_id,
+      signallingUrl: data.signalling_url,
+      claimToken: data.claim_token,
+      iceServers: data.ice_servers ?? [],
+    };
+  }, { deadlineMs: options.deadlineMs ?? 20_000 });
 }
 
 /**
- * Refresh credentials by claiming a new anonymous identity.
+ * Fetch replacement TURN credentials, keeping the caller's identity.
  *
- * The old identity expires; the caller gets a fresh one with new TURN
- * credentials. The caller is responsible for re-announcing their new
- * identity to the room (updating the host's participant tracking).
+ * The anonymous endpoint mints a fresh identity on every call and offers no
+ * renewal, so this claims one and keeps only its `ice_servers`. TURN
+ * credentials are bearer credentials -- the relay checks the HMAC in
+ * `credential` against the expiry in `username` and knows nothing about a11x
+ * identities -- so they serve the identity already in use, whose signalling
+ * connection and share URL stay as they are.
  */
-export async function refreshCredentials(): Promise<AnonymousClaimResult> {
-  return claimAnonymous();
+export async function refreshIceServers(): Promise<RTCIceServer[]> {
+  const claim = await claimAnonymous();
+  return claim.iceServers;
 }
 
-/** Credential refresh interval: 8 minutes (well before 10-min expiry). */
-export const CREDENTIAL_REFRESH_MS = 8 * 60 * 1000;
+/**
+ * When the TURN credentials in `iceServers` stop working, in epoch ms.
+ *
+ * The exchange issues `username` as `<expiry-epoch-seconds>:<id>`. Returns
+ * null when no server carries one.
+ */
+export function iceExpiryMs(iceServers: RTCIceServer[]): number | null {
+  let earliest: number | null = null;
+  for (const server of iceServers) {
+    const username = typeof server.username === 'string' ? server.username : '';
+    const seconds = Number.parseInt(username.split(':')[0] ?? '', 10);
+    if (!Number.isFinite(seconds) || seconds <= 0) continue;
+    const at = seconds * 1_000;
+    if (earliest === null || at < earliest) earliest = at;
+  }
+  return earliest;
+}
+
+/** How long to wait before replacing the credentials in `iceServers`. */
+export function refreshDelayMs(iceServers: RTCIceServer[]): number {
+  const expiry = iceExpiryMs(iceServers);
+  if (expiry === null) return ICE_REFRESH_MARGIN_MS;
+  return Math.max(5_000, expiry - Date.now() - ICE_REFRESH_MARGIN_MS);
+}

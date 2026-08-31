@@ -44,6 +44,12 @@ import {
   type WireStreamOptions,
 } from '../../src/index.js';
 
+import { MAX_BACKOFF_MS, MIN_BACKOFF_MS } from './retry.js';
+import { SIGNALLING_POLL_MS } from './types.js';
+
+/** Reconnect attempts before a lost registration is called permanent. */
+const HOPELESS_ATTEMPTS = 5;
+
 // -------------------------------------------- sequence framing
 
 /**
@@ -279,10 +285,18 @@ export type OnPeerConnected = (
 export class WebRtcServer {
   private readonly peers = new Map<string, PeerNegotiation>();
   private closed = false;
+  private signallingUrl = '';
+  private identity = '';
+
+  private supervisor: ReturnType<typeof setInterval> | null = null;
+  private reconnecting = false;
+  private backoffMs = MIN_BACKOFF_MS;
+  private reconnectFailures = 0;
+  private registrationLost = false;
 
   private constructor(
-    private readonly signalling: SignallingTransport,
-    private readonly iceServers: RTCIceServer[],
+    private signalling: SignallingTransport,
+    private iceServers: RTCIceServer[],
     private readonly onPeerConnected: OnPeerConnected,
     private readonly onError: (peerId: string, error: string) => void,
     private readonly streamOptions: WireStreamOptions,
@@ -312,6 +326,8 @@ export class WebRtcServer {
       onError ?? (() => {}),
       streamOptions,
     );
+    server.signallingUrl = signallingUrl;
+    server.identity = identity;
 
     const cbStatus = signalling.setOnMessage(
       (message) => server.handleSignallingMessage(message),
@@ -321,7 +337,87 @@ export class WebRtcServer {
       return cbStatus;
     }
 
+    server.startSupervisor();
     return server;
+  }
+
+  /**
+   * Watch the signalling connection and re-make it when it drops.
+   *
+   * A host with a dead signalling socket keeps every connection it already
+   * has and accepts no new one, which reads as a room nobody can join. The
+   * transport reports its own state, so this polls rather than waiting for
+   * an event, and backs off the way `a11.client.hosting` does.
+   */
+  private startSupervisor(): void {
+    this.supervisor = setInterval(() => {
+      if (this.closed || this.reconnecting) return;
+      if (this.signalling.isConnected()) {
+        this.backoffMs = MIN_BACKOFF_MS;
+        return;
+      }
+      this.reconnecting = true;
+      void this.reconnectSignalling().finally(() => {
+        this.reconnecting = false;
+      });
+    }, SIGNALLING_POLL_MS);
+  }
+
+  private async reconnectSignalling(): Promise<void> {
+    try { this.signalling.close(); } catch { /* already gone */ }
+    const delay = this.backoffMs;
+    this.backoffMs = Math.min(this.backoffMs * 2, MAX_BACKOFF_MS);
+    await new Promise((resolve) => setTimeout(resolve, delay));
+    if (this.closed) return;
+
+    const signalling = await WebSocketSignallingClient.connect(
+      this.signallingUrl,
+      this.identity,
+    );
+    if (!isOk(signalling)) {
+      // An anonymous claim cannot be renewed, and the exchange refuses a
+      // connection under a lapsed one, always with the same answer. The
+      // room reports that: the peers already connected carry on, and
+      // nobody new can arrive.
+      this.reconnectFailures++;
+      if (this.reconnectFailures >= HOPELESS_ATTEMPTS) {
+        this.registrationLost = true;
+        if (this.supervisor !== null) {
+          clearInterval(this.supervisor);
+          this.supervisor = null;
+        }
+        this.onError('', 'This room can no longer accept new peers: its '
+          + 'anonymous claim has expired. Create a new room to invite others.');
+        return;
+      }
+      console.warn('a11 p2p: signalling reconnect failed:', signalling.message);
+      return;
+    }
+    this.reconnectFailures = 0;
+    const bound = signalling.setOnMessage(
+      (message) => this.handleSignallingMessage(message),
+    );
+    if (!isOk(bound)) {
+      signalling.close();
+      return;
+    }
+    this.signalling = signalling;
+    this.backoffMs = MIN_BACKOFF_MS;
+    console.info('a11 p2p: signalling reconnected');
+  }
+
+  /** Whether new joiners can currently reach this host. */
+  isConnected(): boolean {
+    try { return !this.closed && this.signalling.isConnected(); }
+    catch { return false; }
+  }
+
+  /** Whether the exchange has stopped accepting this identity. */
+  hasLostRegistration(): boolean { return this.registrationLost; }
+
+  /** Use `iceServers` for connections negotiated from now on. */
+  setIceServers(iceServers: RTCIceServer[]): void {
+    this.iceServers = iceServers;
   }
 
   /** The signalling transport, for external use (e.g. identity). */
@@ -331,6 +427,10 @@ export class WebRtcServer {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    if (this.supervisor !== null) {
+      clearInterval(this.supervisor);
+      this.supervisor = null;
+    }
     for (const [, peer] of this.peers) {
       try { peer.connection.close(); } catch { /* best effort */ }
     }

@@ -16,16 +16,22 @@ import {
   StreamMode,
   cancelledError,
   isOk,
+  okStatus,
+  unavailableError,
   type Action,
   type AsyncNode,
+  type Status,
   type WireStream,
 } from '../../src/index.js';
 
+import { watchPeerConnection } from './connection_monitor.js';
 import { WebRtcServer } from './webrtc_server.js';
 
+import { retry } from './retry.js';
 import { deriveState, pruneEvents } from './room_state.js';
 import {
   ConnectionType,
+  LISTEN_DEADLINE_MS,
   MAX_MESSAGE_HISTORY,
   MAX_MESSAGE_LENGTH,
   PEER_TIMEOUT_MS,
@@ -118,6 +124,8 @@ interface ConnectedPeer {
   /** Resolver for {@link replicationDone}. */
   endReplication: () => void;
   peerConnection: RTCPeerConnection | null;
+  /** Grace timer for a connection reporting `disconnected`. */
+  disconnectTimer: ReturnType<typeof setTimeout> | null;
 }
 
 /** Callback for state changes the UI should reflect. */
@@ -138,6 +146,7 @@ export class ChatHost {
   private readonly peers = new Map<string, ConnectedPeer>();
   private events: RoomEvent[];
   private readonly onStateChange: OnStateChange;
+  private readonly onServerError: (message: string) => void;
   private readonly myId: string;
   private readonly connectionTypes = new Map<string, ConnectionType>();
   private server: WebRtcServer | null = null;
@@ -146,10 +155,12 @@ export class ChatHost {
     myId: string,
     initialEvents: RoomEvent[],
     onStateChange: OnStateChange,
+    onServerError: (message: string) => void = () => {},
   ) {
     this.myId = myId;
     this.events = [...initialEvents];
     this.onStateChange = onStateChange;
+    this.onServerError = onServerError;
     this.registerActions();
   }
 
@@ -337,26 +348,67 @@ export class ChatHost {
     signallingUrl: string,
     claimToken: string,
     iceServers: RTCIceServer[],
-  ): Promise<void> {
+  ): Promise<Status> {
     const base = signallingUrl.endsWith('/')
       ? signallingUrl.slice(0, -1) : signallingUrl;
     const urlWithClaim = `${base}/{id}?claim=${encodeURIComponent(claimToken)}`;
 
-    const server = await WebRtcServer.create(
-      urlWithClaim,
-      this.myId,
-      iceServers,
-      (peerId, wireStream, peerConnection) =>
-        this.onPeerConnected(peerId, wireStream, peerConnection),
-      (peerId, error) =>
-        console.error(`WebRTC server error for ${peerId}:`, error),
-      { messageTimeoutMs: PEER_TIMEOUT_MS },
-    );
-    if (!isOk(server)) {
-      console.error('Failed to start WebRTC server:', server);
+    try {
+      // Signalling is the room's front door: a joiner that arrives while
+      // it is down finds nobody, so the attempt is repeated with backoff.
+      this.server = await retry(async () => {
+        const server = await WebRtcServer.create(
+          urlWithClaim,
+          this.myId,
+          iceServers,
+          (peerId, wireStream, peerConnection) =>
+            this.onPeerConnected(peerId, wireStream, peerConnection),
+          (peerId, error) => this.reportServerError(peerId, error),
+          { messageTimeoutMs: PEER_TIMEOUT_MS },
+        );
+        if (!isOk(server)) throw new Error(server.message);
+        return server;
+      }, {
+        deadlineMs: LISTEN_DEADLINE_MS,
+        onAttemptFailed: (error, attempt) => console.warn(
+          `a11 p2p: attempt ${attempt} to start listening failed:`, error,
+        ),
+      });
+      return okStatus();
+    } catch (error) {
+      console.error('Failed to start WebRTC server:', error);
+      return unavailableError(
+        `Could not start listening: ${String(error)}`,
+      );
+    }
+  }
+
+  /**
+   * Use `iceServers` for connections negotiated from now on.
+   *
+   * Anonymous TURN credentials lapse after ten minutes; connections already
+   * established keep running, and the ones after this use the replacements.
+   */
+  setIceServers(iceServers: RTCIceServer[]): void {
+    this.server?.setIceServers(iceServers);
+  }
+
+  /** Whether the room is currently reachable by a new joiner. */
+  isListening(): boolean {
+    return this.server?.isConnected() ?? false;
+  }
+
+  /** Whether the exchange has stopped accepting this host's identity. */
+  hasLostRegistration(): boolean {
+    return this.server?.hasLostRegistration() ?? false;
+  }
+
+  private reportServerError(peerId: string, error: string): void {
+    if (peerId === '') {
+      this.onServerError(error);
       return;
     }
-    this.server = server;
+    console.error(`WebRTC server error for ${peerId}:`, error);
   }
 
   /**
@@ -398,8 +450,18 @@ export class ChatHost {
       replicationDone,
       endReplication,
       peerConnection,
+      disconnectTimer: null,
     };
     this.peers.set(peerId, connectedPeer);
+
+    if (peerConnection !== null) {
+      watchPeerConnection(
+        peerConnection,
+        () => this.removePeer(peerId),
+        (timer) => { connectedPeer.disconnectTimer = timer; },
+        () => connectedPeer.disconnectTimer,
+      );
+    }
 
     this.appendEvent({
       type: 'join',
@@ -420,6 +482,7 @@ export class ChatHost {
 
     this.peers.delete(peerId);
     this.connectionTypes.delete(peerId);
+    if (peer.disconnectTimer !== null) clearTimeout(peer.disconnectTimer);
     peer.endReplication();
 
     this.appendEvent({

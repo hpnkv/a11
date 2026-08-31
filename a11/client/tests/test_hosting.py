@@ -562,3 +562,205 @@ async def test_a_transient_renewal_failure_keeps_hosting(monkeypatch):
 
     assert calls >= 3, "it must keep trying"
     assert endpoint.fatal is None, "a blip is not a reason to stop hosting"
+
+
+class _FakeTransport:
+    """A signalling transport that says it is fine, because it is."""
+
+    def __init__(self) -> None:
+        self.closed = False
+
+    def connected(self) -> bool:
+        return not self.closed
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _HealthExchange:
+    """The one call the maintenance loop makes on an exchange."""
+
+    def __init__(self, online: bool = True, raises: Exception | None = None):
+        self.online = online
+        self.raises = raises
+        self.asked = 0
+
+    async def get_identity(self, name: str) -> dict:
+        self.asked += 1
+        if self.raises is not None:
+            raise self.raises
+        return {"name": name, "online": self.online}
+
+
+def _hosting_endpoint(client: _HealthExchange) -> "hosting.HostedEndpoint":
+    """An endpoint with a live transport and nothing else to do."""
+    endpoint = _endpoint()
+    endpoint.identity = "agent"
+    endpoint._client = client
+    endpoint._connected = asyncio.Event()
+    endpoint._connected.set()
+    endpoint._stopped = asyncio.Event()
+    endpoint._fatal = None
+    endpoint._transport = _FakeTransport()
+    endpoint.on_drop_listener = None
+    endpoint.on_transport = None
+    endpoint._bound_expiry = None
+    endpoint._checked_at = 0.0
+    endpoint.claim = None
+
+    async def nothing_to_renew() -> None:
+        return None
+
+    endpoint._renew_if_due = nothing_to_renew
+    return endpoint
+
+
+@pytest.mark.asyncio
+async def test_a_registration_the_exchange_forgot_is_made_again(monkeypatch):
+    """An open socket is not a registration.
+
+    The exchange withdraws presence when a signalling connection departs, and
+    a host that reconnects has the departure and the admission in flight at
+    once -- so a socket can be left open, admitted by nobody, and refused every
+    time it tries to negotiate. Nothing on this side reports that: the
+    transport is connected, the listener is bound, and the log's last word is
+    "hosting". Asking the exchange is the only question that tells them apart.
+    """
+    from a11.client import hosting
+
+    monkeypatch.setattr(hosting, "RENEW_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(hosting, "HEALTH_CHECK_SECONDS", 0.0)
+    client = _HealthExchange(online=False)
+    endpoint = _hosting_endpoint(client)
+    reconnects: list[int] = []
+
+    async def reconnect() -> None:
+        reconnects.append(1)
+        endpoint._transport = _FakeTransport()
+        endpoint._connected.set()
+        if len(reconnects) >= 2:
+            endpoint._stopped.set()
+
+    endpoint._connect = reconnect
+
+    await asyncio.wait_for(endpoint._maintain(), timeout=5)
+
+    assert len(reconnects) >= 2, "a forgotten registration must be re-made"
+    assert client.asked >= 2
+
+
+@pytest.mark.asyncio
+async def test_an_unreachable_exchange_does_not_drop_a_working_socket(
+    monkeypatch,
+):
+    """The exchange being down says nothing about the signalling socket.
+
+    Reconnecting on a failed HTTP call would turn a blip in one service into
+    an outage in another.
+    """
+    from a11.client import hosting
+
+    monkeypatch.setattr(hosting, "RENEW_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(hosting, "HEALTH_CHECK_SECONDS", 0.0)
+    client = _HealthExchange(
+        raises=Status(
+            code=StatusCode.UNAVAILABLE, message="no exchange"
+        ).to_exception()
+    )
+    endpoint = _hosting_endpoint(client)
+    reconnects: list[int] = []
+
+    async def reconnect() -> None:
+        reconnects.append(1)
+
+    endpoint._connect = reconnect
+
+    async def stop_soon() -> None:
+        await asyncio.sleep(0.2)
+        endpoint._stopped.set()
+
+    await asyncio.wait_for(
+        asyncio.gather(endpoint._maintain(), stop_soon()), timeout=5
+    )
+
+    assert client.asked >= 2, "it must keep asking"
+    assert reconnects == [], "and keep the connection it has"
+
+
+@pytest.mark.asyncio
+async def test_the_health_check_is_not_made_on_every_pass(monkeypatch):
+    """One HTTP call an interval, against a claim that lasts an hour."""
+    from a11.client import hosting
+
+    monkeypatch.setattr(hosting, "RENEW_POLL_SECONDS", 0.001)
+    monkeypatch.setattr(hosting, "HEALTH_CHECK_SECONDS", 30.0)
+    client = _HealthExchange(online=True)
+    endpoint = _hosting_endpoint(client)
+
+    async def stop_soon() -> None:
+        await asyncio.sleep(0.2)
+        endpoint._stopped.set()
+
+    await asyncio.wait_for(
+        asyncio.gather(endpoint._maintain(), stop_soon()), timeout=5
+    )
+
+    assert client.asked == 1
+
+
+@pytest.mark.asyncio
+async def test_closing_lets_the_listener_go():
+    """Departure destroys the WebRTC server as well as the socket.
+
+    A listener left running holds the peer connections it is carrying, and a
+    process that has released its claim is not going to answer on them.
+    """
+    endpoint = _hosting_endpoint(_HealthExchange())
+    endpoint._maintainer = None
+    dropped: list[int] = []
+
+    async def drop_listener() -> None:
+        dropped.append(1)
+
+    endpoint.on_drop_listener = drop_listener
+    transport = endpoint._transport
+
+    await endpoint.aclose()
+
+    assert dropped == [1]
+    assert transport.closed
+    assert endpoint._transport is None
+
+
+@pytest.mark.asyncio
+async def test_giving_up_lets_the_listener_go():
+    """The same, for hosting that ended because it cannot go on."""
+    endpoint = _hosting_endpoint(_HealthExchange())
+    dropped: list[int] = []
+
+    async def drop_listener() -> None:
+        dropped.append(1)
+
+    endpoint.on_drop_listener = drop_listener
+    transport = endpoint._transport
+
+    await endpoint._give_up(
+        Status(code=StatusCode.UNAUTHENTICATED, message="revoked")
+    )
+
+    assert dropped == [1]
+    assert transport.closed
+    assert endpoint.fatal is not None
+
+
+@pytest.mark.asyncio
+async def test_a_stop_ends_the_wait_rather_than_running_it_out():
+    """Shutdown does not wait out the renewal interval."""
+    from a11.client import hosting
+
+    endpoint = _hosting_endpoint(_HealthExchange())
+    waiting = asyncio.ensure_future(endpoint._wait(hosting.RENEW_POLL_SECONDS))
+    await asyncio.sleep(0)
+    endpoint._stopped.set()
+
+    await asyncio.wait_for(waiting, timeout=1)

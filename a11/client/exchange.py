@@ -164,6 +164,17 @@ class ExchangeClient:
         """The identities the caller's organization owns."""
         return await self._request("GET", "/v1/identities")
 
+    async def get_identity(self, name: str) -> dict:
+        """One identity, including whether the exchange can currently reach it.
+
+        The ``online`` field is presence, which the exchange writes when a
+        signalling connection is admitted and withdraws when it departs. A host
+        can therefore ask whether the exchange agrees that it is hosting --
+        which is not the same question as whether its own socket is open. See
+        `a11.client.hosting.HostedEndpoint._verify_registration`.
+        """
+        return await self._request("GET", f"/v1/identities/{name}")
+
     async def register_identity(
         self,
         name: str,

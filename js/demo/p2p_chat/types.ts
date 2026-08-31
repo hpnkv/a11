@@ -71,6 +71,58 @@ export const PEER_TIMEOUT_MS = 10_000;
  */
 export const PING_INTERVAL_MS = 3_000;
 
+/**
+ * Grace given to a peer connection reporting `disconnected`.
+ *
+ * ICE recovers from a brief interruption on its own; a connection still
+ * disconnected after this counts as gone.
+ */
+export const DISCONNECT_GRACE_MS = 2_000;
+
+/** How long a host keeps trying to bind its signalling listener. */
+export const LISTEN_DEADLINE_MS = 20_000;
+
+/**
+ * How much claim life a peer needs before it dials with the one it holds.
+ *
+ * The exchange refuses a signalling connection under a lapsed claim and has
+ * no anonymous renewal, so a peer with less than this left takes a fresh
+ * identity rather than spending its attempts on a rejection.
+ */
+export const CLAIM_MARGIN_MS = 30_000;
+
+/** How long a peer keeps dialling one host before electing another. */
+export const RECONNECT_DEADLINE_MS = 15_000;
+
+/**
+ * How long a liveness ping may take before its host counts as gone.
+ *
+ * Short enough that a wedged host is noticed within a couple of intervals,
+ * long enough to survive one slow relay round trip.
+ */
+export const PING_TIMEOUT_MS = 4_000;
+
+/**
+ * How long the check after a data channel closes waits for an answer.
+ *
+ * A closed channel is already strong evidence, so this only has to outlast
+ * one round trip on a channel the multiplex may have just replaced.
+ */
+export const CONFIRM_TIMEOUT_MS = 1_500;
+
+/** How often a signalling connection is checked and, if down, re-made. */
+export const SIGNALLING_POLL_MS = 3_000;
+
+/**
+ * How long before TURN credentials lapse to fetch replacements.
+ *
+ * Anonymous TURN credentials last ten minutes and carry their expiry in the
+ * username. Once it passes, the endpoint holding them gathers no relay
+ * candidates at all, so a room that outlives them loses every path that
+ * needs a relay.
+ */
+export const ICE_REFRESH_MARGIN_MS = 120_000;
+
 /** Maximum characters per chat message. */
 export const MAX_MESSAGE_LENGTH = 2000;
 

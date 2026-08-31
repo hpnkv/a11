@@ -115,3 +115,15 @@ export function electHost(peerIds: string[]): string {
   }
   return lowest;
 }
+
+/** Identity of an event, so a replayed log is idempotent. */
+export function eventKey(event: RoomEvent): string {
+  switch (event.type) {
+    case 'message':
+      return `m:${event.peerId}:${event.timestamp}:${event.text}`;
+    case 'name_change':
+      return `n:${event.peerId}:${event.timestamp}:${event.name}`;
+    default:
+      return `${event.type}:${event.peerId}:${event.timestamp}`;
+  }
+}

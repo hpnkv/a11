@@ -11,14 +11,16 @@
  * is entirely client-side: the share URL encodes the host's peer ID.
  */
 
+import { isOk } from '../../src/index.js';
+
 import { ChatHost } from './host.js';
 import { ChatPeer } from './peer_client.js';
 import { deriveState } from './room_state.js';
 import { electHost } from './election.js';
 import {
   claimAnonymous,
-  refreshCredentials,
-  CREDENTIAL_REFRESH_MS,
+  refreshDelayMs,
+  refreshIceServers,
 } from './signalling_client.js';
 import { ChatUI } from './ui.js';
 import {
@@ -36,7 +38,7 @@ let host: ChatHost | null = null;
 let peer: ChatPeer | null = null;
 let myId = '';
 let myClaim: AnonymousClaimResult | null = null;
-let refreshTimer: ReturnType<typeof setInterval> | null = null;
+let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 const connectionTypes = new Map<string, ConnectionType>();
 
 // --------------------------------------------------- UI callbacks
@@ -136,14 +138,15 @@ async function createRoom(): Promise<void> {
     window.history.replaceState(null, '', shareUrl);
 
     // Become the host immediately.
-    host = new ChatHost(myId, [], onStateChange);
+    host = new ChatHost(myId, [], onStateChange, reportHostError);
 
     // Start listening for incoming WebRTC connections from peers.
-    await host.startListening(
+    const listening = await host.startListening(
       myClaim.signallingUrl,
       myClaim.claimToken,
       myClaim.iceServers,
     );
+    if (!isOk(listening)) throw new Error(listening.message);
 
     // Add ourselves as a participant.
     host.appendEvent({
@@ -189,6 +192,8 @@ async function joinByHostId(hostPeerId: string): Promise<void> {
       onStateChange,
       onBecomeHost: handleBecomeHost,
       onConnectionTypeChange,
+      onHostChanged: handleHostChanged,
+      onIdentityChanged: handleIdentityChanged,
     });
 
     ui.bind({
@@ -200,8 +205,7 @@ async function joinByHostId(hostPeerId: string): Promise<void> {
     ui.showRoom(hostPeerId, shareUrl);
     ui.setStatus('Connecting to host…');
 
-    await peer.connectToHost(myClaim);
-    await peer.startReplication();
+    await peer.join(myClaim);
 
     ui.setStatus('Connected');
     startCredentialRefresh();
@@ -211,33 +215,85 @@ async function joinByHostId(hostPeerId: string): Promise<void> {
   }
 }
 
-function handleBecomeHost(newHost: ChatHost): void {
+/**
+ * Adopt the identity a peer took when its claim ran out.
+ *
+ * The room sees a new participant; the old identity is recorded as departed
+ * by the peer itself, so nothing waits on it.
+ */
+function handleIdentityChanged(peerId: string): void {
+  myId = peerId;
+  ui.bind({
+    onSend,
+    onSetName,
+    onCreateRoom: createRoom,
+    onJoinRoom: joinByHostId,
+  }, myId);
+}
+
+/** Surface a host-side connectivity failure the room cannot recover from. */
+function reportHostError(message: string): void {
+  ui.showError(message);
+  ui.setStatus('Room closed to new peers');
+}
+
+/** Follow the room to its new host: the old share URL points at nobody. */
+function handleHostChanged(hostPeerId: string): void {
+  const shareUrl = getShareUrl(hostPeerId);
+  window.history.replaceState(null, '', shareUrl);
+  ui.showRoom(hostPeerId, shareUrl);
+  ui.setStatus(`Connected (host is now ${hostPeerId})`);
+}
+
+async function handleBecomeHost(events: RoomEvent[]): Promise<void> {
   peer = null;
-  host = newHost;
-  // Update share URL with new host's ID.
+  host = new ChatHost(myId, events, onStateChange, reportHostError);
   const shareUrl = getShareUrl(myId);
   window.history.replaceState(null, '', shareUrl);
-  ui.setStatus('You are now the host (previous host left)');
+  ui.showRoom(myId, shareUrl);
+  ui.setStatus('Taking over as host…');
 
-  // Start listening for incoming peer connections as the new host.
+  // The other peers are already dialling, so the listener has to be up
+  // before this one calls itself the host.
   if (myClaim) {
-    void host.startListening(
+    const listening = await host.startListening(
       myClaim.signallingUrl,
       myClaim.claimToken,
       myClaim.iceServers,
     );
+    if (!isOk(listening)) {
+      ui.showError('Could not take over as host; reload to rejoin.');
+      ui.setStatus('Host takeover failed');
+      return;
+    }
   }
+  ui.setStatus('You are now the host (previous host left)');
 }
 
+/**
+ * Keep usable TURN credentials, without changing who this peer is.
+ *
+ * Anonymous TURN credentials last ten minutes, after which an endpoint
+ * holding them gathers no relay candidates and only direct paths still
+ * form. The exchange has no anonymous renewal, so replacements come from a
+ * throwaway claim; the identity, its signalling connection and the share
+ * URL are untouched. Rescheduled from each batch's own expiry.
+ */
 function startCredentialRefresh(): void {
-  if (refreshTimer !== null) clearInterval(refreshTimer);
-  refreshTimer = setInterval(async () => {
+  if (refreshTimer !== null) clearTimeout(refreshTimer);
+  if (myClaim === null) return;
+  refreshTimer = setTimeout(async () => {
     try {
-      myClaim = await refreshCredentials();
-    } catch {
-      // Refresh failures are non-fatal; the next attempt will retry.
+      const iceServers = await refreshIceServers();
+      if (myClaim !== null) myClaim = { ...myClaim, iceServers };
+      host?.setIceServers(iceServers);
+      peer?.setIceServers(iceServers);
+      console.info('a11 p2p: refreshed TURN credentials');
+    } catch (error) {
+      console.warn('a11 p2p: could not refresh TURN credentials:', error);
     }
-  }, CREDENTIAL_REFRESH_MS);
+    startCredentialRefresh();
+  }, refreshDelayMs(myClaim.iceServers));
 }
 
 /**
@@ -258,7 +314,7 @@ function leaveRoom(): void {
     peer = null;
   }
   if (refreshTimer !== null) {
-    clearInterval(refreshTimer);
+    clearTimeout(refreshTimer);
     refreshTimer = null;
   }
 }

@@ -158,18 +158,20 @@ class GatewayConnection:
         queue is final; and the abort has to come after the drain or it
         discards what was queued.
 
-        The abort is what actually closes the socket, and leaving it out was a
-        real bug rather than tidiness. A half-close says only "I have finished
-        sending" -- the connection stays up, and a peer has no way to tell that
-        from a caller still waiting for an answer. Against the exchange relay
-        that meant a session per call which nothing ever ended, each holding a
-        WebRTC leg to the agent, until the agent was swamped and answered
-        nobody.
+        The abort is what actually closes the socket. A half-close says only "I
+        have finished sending" -- the connection stays up, and a peer has no
+        way to tell that from a caller still waiting for an answer. Against the
+        exchange relay that means a session per call which nothing ever ends,
+        each holding a WebRTC leg to the agent, until the agent is swamped and
+        answers nobody.
 
-        `Status()` is OK, so this is a graceful close and not a failure
-        reported to the peer: a terminal status that is OK takes the
-        transport's ordinary close path, where a non-OK one would fail the
-        connection.
+        CANCELLED, because `abort` refuses an OK status: an abort is the
+        ungraceful ending by definition, and there is no such thing as
+        aborting successfully. What says "this went well" is the half-close
+        above, which has already gone. The code a peer reads is therefore the
+        caller withdrawing rather than a call that failed, and the relay ends
+        the session on it instead of holding one for an answer nobody will
+        read.
 
         Every step is best effort. A peer that has already disconnected needs
         no additional shutdown error.
@@ -179,7 +181,12 @@ class GatewayConnection:
         with contextlib.suppress(Exception):
             await self.stream.drain_outgoing_messages()
         with contextlib.suppress(Exception):
-            self.stream.abort(Status())
+            self.stream.abort(
+                Status(
+                    code=StatusCode.CANCELLED,
+                    message="The caller has closed this connection.",
+                )
+            )
 
     def action(self, name: str, schema: a11.ActionSchema | None = None):
         """Build a call on this connection's session and stream.

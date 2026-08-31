@@ -7,7 +7,7 @@
  * display per-peer connection badges.
  */
 
-import { ConnectionType } from './types.js';
+import { ConnectionType, DISCONNECT_GRACE_MS } from './types.js';
 
 /** How often to poll connection stats (milliseconds). */
 const POLL_INTERVAL_MS = 3_000;
@@ -105,4 +105,46 @@ async function classifyConnection(
   }
 
   return ConnectionType.UNKNOWN;
+}
+
+/**
+ * Report a peer connection that has gone away.
+ *
+ * `failed` and `closed` are terminal. `disconnected` is not: ICE recovers
+ * from a brief interruption, so it is given {@link DISCONNECT_GRACE_MS}
+ * before it counts. A closed tab or a dropped network shows here in under a
+ * second; the framing layer's idle timeout is the backstop behind it.
+ */
+export function watchPeerConnection(
+  connection: RTCPeerConnection,
+  onGone: () => void,
+  setTimer: (timer: ReturnType<typeof setTimeout> | null) => void,
+  getTimer: () => ReturnType<typeof setTimeout> | null,
+): void {
+  const clear = (): void => {
+    const timer = getTimer();
+    if (timer !== null) clearTimeout(timer);
+    setTimer(null);
+  };
+  const check = (): void => {
+    switch (connection.connectionState) {
+      case 'failed':
+      case 'closed':
+        clear();
+        onGone();
+        break;
+      case 'disconnected':
+        if (getTimer() !== null) break;
+        setTimer(setTimeout(() => {
+          setTimer(null);
+          if (connection.connectionState !== 'connected') onGone();
+        }, DISCONNECT_GRACE_MS));
+        break;
+      default:
+        clear();
+        break;
+    }
+  };
+  connection.addEventListener('connectionstatechange', check);
+  check();
 }

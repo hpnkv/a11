@@ -25,7 +25,8 @@ from a11.client.connection import (
 )
 from a11.gateway import app as gateway_app
 from a11.gateway import config, conversations
-from a11.status import StatusCode, StatusException
+from a11.service.session import Session
+from a11.status import Status, StatusCode, StatusException
 
 
 @contextlib.contextmanager
@@ -187,3 +188,48 @@ async def test_aclose_closes_the_transport_not_only_the_sending_half():
         )
     finally:
         server.stop()
+
+
+@pytest.mark.asyncio
+async def test_aclose_aborts_with_a_status_the_transport_accepts():
+    """`WireStream.abort` refuses an OK status, and `aclose` passed one.
+
+    Inside a `contextlib.suppress`, so the INVALID_ARGUMENT went nowhere: the
+    abort never happened, the socket stayed open, and the exchange relay went
+    on holding a session and a WebRTC leg for a caller that had gone -- which
+    is the leak the abort was added to prevent.
+
+    Asserted on the status handed to the transport rather than on what the
+    peer sees, because the transport is the thing that refused it.
+    """
+    first, second = net.InProcessWireStream.create_pair()
+    with pytest.raises(StatusException) as refused:
+        first.abort(Status())
+    assert refused.value.status.code == StatusCode.INVALID_ARGUMENT
+    del second
+
+    aborted: list[Status] = []
+
+    class _Recording:
+        def half_close(self):
+            return None
+
+        async def drain_outgoing_messages(self):
+            return None
+
+        def abort(self, status):
+            if status.is_ok():
+                raise Status(
+                    code=StatusCode.INVALID_ARGUMENT,
+                    message="Abort status must be non-OK",
+                ).to_exception()
+            aborted.append(status)
+
+    connection = GatewayConnection(
+        Session(action_registry=a11.ActionRegistry()), _Recording()
+    )
+
+    await connection.aclose()
+
+    assert len(aborted) == 1, "aclose must abort, and with a status that lands"
+    assert not aborted[0].is_ok()

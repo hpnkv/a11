@@ -91,6 +91,41 @@ without asking a11x.
 Anonymous TURN access is limited to 10 minutes and, where the TURN server
 supports it, to 100 KiB/s bandwidth.
 
+### Keeping credentials current
+
+The anonymous endpoint mints a new identity on every call, and the renewal
+and ICE endpoints an account holder uses (`/v1/identities/.../claim/renew`,
+`/v1/ice-servers`) need an API key. So an anonymous room has three separate
+lifetimes to respect:
+
+| What | Lives | What the demo does |
+|---|---|---|
+| Signalling connection | Past the claim, until it drops | Polls it and re-makes it with backoff |
+| TURN credentials | 10 minutes, expiry inside `username` | Replaces them before they lapse |
+| The identity itself | As long as the tab holds its socket | Keeps it; the share URL stays valid |
+
+Replacement credentials come from a throwaway claim, and only its
+`ice_servers` are kept. TURN credentials are bearer credentials -- the relay
+checks the HMAC in `credential` against the expiry in `username` and knows
+nothing about a11x identities -- so they serve the identity already in use.
+An endpoint holding lapsed credentials gathers no relay candidates at all,
+which is why the room replaces them rather than waiting to find out.
+
+A signalling connection outlives the claim that opened it for a while, and
+a *new* one under a lapsed claim is refused with HTTP 400. So an anonymous
+identity is reachable for about ten minutes. After that:
+
+- Peers already connected keep talking. A WebRTC data channel needs no
+  signalling once it is up.
+- Nobody new can join, and the host says so rather than retrying a
+  rejection for ever.
+- A peer that needs a new connection claims a fresh identity and rejoins
+  under it, recording the identity it left behind as departed.
+
+Carrying a room past that window needs the peers to agree on new identities
+before the old ones lapse -- a `rekey` event in the log, announced over the
+connections that are still up. The demo does not do this.
+
 ## 2. The host as an A11 service
 
 The room creator becomes the initial host. It runs an `ActionRegistry` with
@@ -168,10 +203,11 @@ departure and on `action.signal`.
 A peer leaves in one of three ways, and the room converges on all of them
 within ten seconds:
 
-| Departure | Signal | Detected in |
-|-----------|--------|-------------|
-| Tab or window closed | `Session.abort()` from a `pagehide` handler | One round trip |
-| Data channel closed or connection failed | `WireStream.wait()` resolves | One round trip |
+| Departure | Signal | Measured in Chromium |
+|-----------|--------|----------------------|
+| Peer closes its tab | Channel close, seen by the host's adapter | ~100 ms |
+| Host closes its tab | The channel's `close` event, confirmed by one ping | ~1.5 s to elect, ~2.5 s to a working room |
+| Renderer crash or a network that stops answering | `RTCPeerConnection` reaching `failed` | ~7 s |
 | Silent peer: no close, no traffic | `messageTimeoutMs` on the stream | `PEER_TIMEOUT_MS`, 10 s |
 
 `pagehide` fires on close, on navigation, and when the page enters the
@@ -193,16 +229,31 @@ the host being gone. A tab hidden long enough for the browser to throttle
 its timers past ten seconds is dropped from the room, and reloading the page
 rejoins from the share URL.
 
-When the host goes, all remaining peers independently compute the same new
-host: the peer with the lexicographically smallest ID. No negotiation round
-is needed — every peer arrives at the same answer from its participant list.
+When the host goes, every peer records a `leave` for it, so it drops out of
+the participant lists and out of the elections that follow. They then
+compute the same new host: the peer with the lexicographically smallest ID
+still present. No negotiation round is needed — every peer arrives at the
+same answer from its own log.
 
 After a 1-second convergence delay:
 
-- The elected peer instantiates a new `ChatHost` from its local event log
-  and starts accepting connections.
-- Other peers reconnect to the new host via signalling and call `replicate`
-  to resume receiving events.
+- The elected peer builds a new `ChatHost` from its local event log and
+  waits for its listener to bind before calling itself the host.
+- Other peers dial the elected peer, retrying with backoff for
+  `RECONNECT_DEADLINE_MS`, then call `replicate` to resume receiving events.
+  Their share URL follows the new host.
+- A candidate that never answers is recorded as departed too, and the
+  election runs again over what is left. Peers apply that rule in the same
+  order, so they converge on one host rather than several.
+
+Replicated events carry an identity — type, peer, timestamp and payload — so
+the new host's log replays into a peer that already holds part of it without
+duplicating anything.
+
+Reconnection is the same machinery everywhere: `retry` in
+[`retry.ts`](https://github.com/hpnkv/a11/blob/main/js/demo/p2p_chat/retry.ts)
+gives claiming an identity, binding a listener, and dialling a host one
+policy, the one `a11.client.hosting` applies to a hosted agent.
 
 ## 6. Connection monitoring
 

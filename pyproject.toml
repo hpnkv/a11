@@ -169,6 +169,7 @@ dev = [
     "anthropic>=0.120.0",
     "black>=26.5.1",
     "cibuildwheel>=4.1.1",
+    "claude-agent-sdk>=0.2.140",
     "google-genai>=1.55.0",
     "mcp>=2.1.1",
     "ollama>=0.6.0",
@@ -185,6 +186,9 @@ anthropic = [
 ]
 claude = [
     "anthropic>=0.120.0",
+]
+claude-code = [
+    "claude-agent-sdk>=0.2.140",
 ]
 gemini = [
     "google-genai>=1.55.0",

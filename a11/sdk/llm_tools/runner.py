@@ -2,6 +2,7 @@ import asyncio
 import dataclasses
 import json
 from collections import defaultdict
+from collections.abc import AsyncIterator, Mapping
 from typing import Any
 
 from absl import logging
@@ -60,6 +61,73 @@ def definition_from_schema(entry: dict[str, Any]) -> dict[str, Any]:
         # its `$ref` values resolve against the correct root.
         "input_schema": organise_and_deduplicate_jsonschema(input_schema),
     }
+
+
+def output_definition_from_schema(entry: dict[str, Any]) -> dict[str, Any]:
+    """The JSON Schema of what one action returns, from its entry.
+
+    The output half of
+    [definition_from_schema][a11.sdk.llm_tools.runner.definition_from_schema],
+    read the same way -- from the written document, so it holds for a peer's
+    action as well as a local one. A backend that declares what a tool returns
+    (MCP's `outputSchema`, a structured-output request) states this document.
+
+    ``output_to_json_field`` decides the shape, matching what
+    [collect_action_outputs][a11.sdk.llm_tools.runner.collect_action_outputs]
+    actually produces: no mapping describes an object of the declared outputs;
+    a field mapping renames them and drops the ports it does not name; and
+    ``{"port": "$"}`` makes that port's own schema the whole document.
+
+    Two things the input half states are left out here, because an output
+    schema is a claim the result has to satisfy and neither claim holds. A port
+    with no `json_schema` is described as unconstrained rather than as an
+    object, and no field is `required`: a port the handler closed empty carries
+    no value, and a result missing that field is an ordinary outcome rather
+    than a broken promise.
+
+    Returns:
+        The schema, or ``{}`` when the action declares no outputs.
+    """
+    properties: dict[str, Any] = {}
+    for port in entry.get("outputs", ()):
+        name = port.get("name")
+        if not name:
+            continue
+        schema = port.get("json_schema") or {}
+        if not port.get("unary", False):
+            schema = {"type": "array", "items": schema}
+        properties[name] = schema
+
+    mapping = entry.get("output_to_json_field") or {}
+    whole = whole_json_port(mapping)
+    if whole is not None:
+        return organise_and_deduplicate_jsonschema(properties.get(whole, {}))
+    if mapping:
+        properties = {
+            mapping[name]: schema
+            for name, schema in properties.items()
+            if name in mapping
+        }
+    if not properties:
+        return {}
+
+    return organise_and_deduplicate_jsonschema(
+        {"type": "object", "properties": properties}
+    )
+
+
+def whole_json_port(mapping: Mapping[str, str]) -> str | None:
+    """The port an ``output_to_json_field`` mapping makes the whole result.
+
+    ``{"port": "$"}`` means the port's payload *is* the result document rather
+    than a field of one. The sentinel is the mapped-to field, matching
+    `ActionSchema::kWholeJson` in `cpp/a11/actions/schema.cc` and
+    [WHOLE_JSON_OUTPUT][a11.sdk.llm_tools.adapter.WHOLE_JSON_OUTPUT].
+    """
+    if len(mapping) != 1:
+        return None
+    port, field = next(iter(mapping.items()))
+    return port if field == WHOLE_JSON_OUTPUT else None
 
 
 def get_tool_definitions(
@@ -212,8 +280,10 @@ def _drain_timeout(deadline: a11.Time) -> a11.Duration:
     return min(remaining, DRAIN_AFTER_COMPLETION)
 
 
-async def _user_facing_log(node: a11.AsyncNode, timeout: a11.Duration) -> str:
-    """What a call logged for the person watching, as one block of text.
+async def user_facing_log_entries(
+    node: a11.AsyncNode, timeout: a11.Duration
+) -> AsyncIterator[str]:
+    """What a call logs for the person watching, one entry at a time.
 
     Reads the call's log port and keeps the entries that are *not* marked
     internal -- "user facing" is the absence of that flag, so a handler
@@ -223,11 +293,19 @@ async def _user_facing_log(node: a11.AsyncNode, timeout: a11.Duration) -> str:
     what the ``a11.action`` logger uses, so a line reads the same wherever it is
     shown.
 
+    Yields as the entries arrive, for a caller relaying narration while the
+    action is still running -- an MCP server turning them into progress
+    notifications, say.
+    [user_facing_log][a11.sdk.llm_tools.runner.user_facing_log] is the whole
+    block, for a caller that reports once at the end.
     """
-    parts: list[str] = []
     try:
         async for chunk in node.iter_chunks(timeout=timeout):
-            if chunk is None or chunk.is_null() or _native.is_status_chunk(chunk):
+            if (
+                chunk is None
+                or chunk.is_null()
+                or _native.is_status_chunk(chunk)
+            ):
                 continue
             try:
                 record = _native.log_record_from_chunk(chunk)
@@ -236,10 +314,95 @@ async def _user_facing_log(node: a11.AsyncNode, timeout: a11.Duration) -> str:
                 continue
             if record["internal"]:
                 continue
-            parts.append(record["text"])
+            yield record["text"]
     except StatusException:
         logging.debug("a tool's log port did not end", exc_info=True)
-    return "".join(parts)
+
+
+async def user_facing_log(node: a11.AsyncNode, timeout: a11.Duration) -> str:
+    """What a call logged for the person watching, as one block of text."""
+    return "".join(
+        [text async for text in user_facing_log_entries(node, timeout)]
+    )
+
+
+async def feed_action_inputs(
+    action: a11.Action, fragments: list[NodeFragment | None]
+) -> None:
+    """Write one call's encoded arguments onto the action, then close them.
+
+    Takes what
+    [ActionCallAdapter.get_action_inputs][a11.sdk.llm.ActionCallAdapter.get_action_inputs]
+    produced. A ``None`` in that list stands for an argument whose fragments
+    carried no finality -- an empty list argument writes nothing -- and the
+    close below is what ends the port.
+
+    Autofilled inputs are written, drained and closed by the native run flow,
+    so only the inputs fed here are closed. Closed, not finalized: the
+    forwarded fragments carry whatever finality the caller's arguments had.
+    """
+    for fragment in fragments:
+        if fragment is None:
+            continue
+        await action[fragment.id].put_fragment(fragment)
+    for input_name, port in action.get_schema().inputs.items():
+        if port.autofills:
+            continue
+        await action[input_name].close()
+
+
+async def collect_action_outputs(
+    action: a11.Action, deadline: a11.Time
+) -> tuple[list[NodeFragment], Status | None]:
+    """Everything one finished action wrote, as fragments a caller can report.
+
+    Drains every declared output port, then applies the schema's
+    ``output_to_json_field``: each fragment's id becomes the field it maps to,
+    a port the mapping does not name is left out, and a whole-JSON port becomes
+    [WHOLE_JSON_FRAGMENT_ID][a11.sdk.llm.WHOLE_JSON_FRAGMENT_ID] so that
+    [decode_action_output_fragments][a11.sdk.llm.decode_action_output_fragments]
+    reads the payload as the result rather than as a field of one.
+
+    Returns:
+        The fragments, and the status that ended a port early. An aborted
+        output carries the failure that aborted it and a timed-out one the
+        deadline; whatever arrived before it is kept.
+    """
+    failure: Status | None = None
+    per_port: dict[str, list[NodeFragment]] = {}
+    for output_name in action.get_schema().outputs.keys():
+        per_port[output_name] = []
+        try:
+            node = action[output_name]
+            async for fragment in node.iter_fragments(
+                timeout=_drain_timeout(deadline)
+            ):
+                fragment.id = output_name
+                fragment.continued = True
+                per_port[output_name].append(fragment)
+        except StatusException as error:
+            if failure is None:
+                failure = error.status
+        if per_port[output_name]:
+            per_port[output_name][-1].continued = False
+
+    mapping = dict(action.get_schema().output_to_json_field)
+    fragments: list[NodeFragment] = []
+    whole = whole_json_port(mapping)
+    if whole is not None:
+        for fragment in per_port.get(whole, []):
+            fragment.id = WHOLE_JSON_FRAGMENT_ID
+            fragments.append(fragment)
+        return fragments, failure
+
+    for output_name, port_fragments in per_port.items():
+        map_to = mapping.get(output_name) if mapping else output_name
+        if map_to is None:
+            continue
+        for fragment in port_fragments:
+            fragment.id = map_to
+            fragments.append(fragment)
+    return fragments, failure
 
 
 def _status_of(error: BaseException) -> Status:
@@ -302,18 +465,9 @@ async def execute_actions_from_interaction(
             # this runner is the consumer that shows it to a person.
             log_nodes[call.id] = nested_action.get_log_node()
             nested_action.run()
-            input_fragments = interaction.action_inputs.get(call.id, [])
-            for fragment in input_fragments:
-                await nested_action[fragment.id].put_fragment(fragment)
-
-            # Autofilled inputs are written, drained, and closed by the native
-            # run flow, so the runner must only close the inputs it fed itself.
-            # Closed, not finalized: the forwarded fragments carry whatever
-            # finality the model's arguments had.
-            for input_name, port in nested_action.get_schema().inputs.items():
-                if port.autofills:
-                    continue
-                await nested_action[input_name].close()
+            await feed_action_inputs(
+                nested_action, interaction.action_inputs.get(call.id, [])
+            )
             nested_actions.append(nested_action)
         except Exception as error:
             errors[call.id] = _status_of(error)
@@ -342,24 +496,12 @@ async def execute_actions_from_interaction(
         all_outputs.setdefault(call.id, [])
 
     for nested_action in nested_actions:
-        action_outputs: dict[str, list[NodeFragment]] = dict()
-        for output_name in nested_action.get_schema().outputs.keys():
-            action_outputs[output_name] = []
-            try:
-                node = nested_action[output_name]
-                async for fragment in node.iter_fragments(
-                    timeout=_drain_timeout(deadline)
-                ):
-                    fragment.id = output_name
-                    fragment.continued = True
-                    action_outputs[output_name].append(fragment)
-            except StatusException as error:
-                # An aborted output carries the failure that aborted it, and a
-                # timed-out one the deadline. Keep whatever arrived before it
-                # and record the reason once.
-                errors.setdefault(nested_action.id, error.status)
-            if action_outputs[output_name]:
-                action_outputs[output_name][-1].continued = False
+        fragments, failure = await collect_action_outputs(
+            nested_action, deadline
+        )
+        all_outputs[nested_action.id] = fragments
+        if failure is not None:
+            errors.setdefault(nested_action.id, failure)
 
         # Read separately from the outputs above, because the log port is not
         # one of them: it is not in the schema, so the model's tool result is
@@ -370,41 +512,9 @@ async def execute_actions_from_interaction(
         node = log_nodes.get(nested_action.id)
         if node is not None:
             try:
-                if log := await _user_facing_log(node, _drain_timeout(deadline)):
+                if log := await user_facing_log(node, _drain_timeout(deadline)):
                     logs[nested_action.id] = log
             except StatusException as error:
                 errors.setdefault(nested_action.id, error.status)
-
-        schema = nested_action.get_schema()
-        mapping = dict(schema.output_to_json_field)
-        # `{"port": "$"}` means "this port *is* the whole result", so the result
-        # is that port's payload rather than an object wrapping it. The sentinel
-        # is the mapped-to *field*, matching ActionSchema's own validation
-        # (cpp/a11/actions/schema.cc), the tool-definition side
-        # ([a11.sdk.llm_tools.adapter][a11.sdk.llm_tools.adapter]) and the
-        # Kotlin port. Reading it as the key instead left the sentinel to fall
-        # through as a fragment id, where it fails name validation.
-        whole_output_port = None
-        if len(mapping) == 1:
-            port, field = next(iter(mapping.items()))
-            if field == WHOLE_JSON_OUTPUT:
-                whole_output_port = port
-        if whole_output_port is not None:
-            for fragment in action_outputs.get(whole_output_port, []):
-                fragment.id = WHOLE_JSON_FRAGMENT_ID
-                all_outputs[nested_action.id].append(fragment)
-            continue
-
-        for output_name, fragments in action_outputs.items():
-            map_to = output_name
-            if mapping:
-                map_to = mapping.get(output_name)
-
-            if map_to is None:
-                continue
-
-            for fragment in fragments:
-                fragment.id = map_to
-                all_outputs[nested_action.id].append(fragment)
 
     return ExecutedActions(outputs=dict(all_outputs), errors=errors, logs=logs)

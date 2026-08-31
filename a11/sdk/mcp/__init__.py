@@ -34,7 +34,15 @@ async with mcp.connect("https://example.com/mcp") as toolset:
     )
 ```
 
-The two halves are separable, and worth knowing apart:
+Or the other way round: [a11.sdk.mcp.server][a11.sdk.mcp.server] serves an
+`ActionRegistry` to MCP clients, so the actions an A11 process already has
+become tools a Claude Desktop or an editor can call.
+
+```python
+await mcp.serve_stdio(REGISTRY, name="my-tools")
+```
+
+Each direction is two halves, and they separate cleanly:
 
 * [a11.sdk.mcp.schemas][a11.sdk.mcp.schemas] is the **translation** -- one MCP
   tool read as an `ActionSchema`, with arguments as ports, results as ports, and
@@ -42,11 +50,18 @@ The two halves are separable, and worth knowing apart:
   SDK, so a schema can be derived and shipped to a peer anywhere A11 runs.
 * [a11.sdk.mcp.client][a11.sdk.mcp.client] is the **connection** -- discovery,
   registration and the `tools/call` each handler makes, over the MCP SDK.
+* [a11.sdk.mcp.tools][a11.sdk.mcp.tools] is the **translation back** -- one
+  registered action declared as an MCP tool, arguments from ports and a result
+  schema from outputs -- and [a11.sdk.mcp.calls][a11.sdk.mcp.calls] runs one
+  call against it. Neither imports the SDK either.
+* [a11.sdk.mcp.server][a11.sdk.mcp.server] is the **serving** -- the MCP server
+  object, over stdio or Streamable HTTP.
 
 Needs the MCP SDK (`pip install 'a11-kit[mcp]'`); everything but
 `a11.sdk.mcp.client` works without it.
 """
 
+from a11.sdk.mcp.calls import call_action, headers_from_meta
 from a11.sdk.mcp.client import (
     INSTALL_HINT,
     McpToolset,
@@ -63,11 +78,24 @@ from a11.sdk.mcp.schemas import (
     TEXT_OUTPUT,
     McpArgument,
     McpHeaders,
+    McpMeta,
     McpTool,
     action_schema_from_tool,
+    described_action,
     sanitise_name,
     tool_description,
     tool_document,
+)
+from a11.sdk.mcp.server import (
+    McpActionServer,
+    http_app,
+    serve_http,
+    serve_stdio,
+)
+from a11.sdk.mcp.tools import (
+    ActionTool,
+    tool_from_entry,
+    tools_from_registry,
 )
 
 __all__ = [
@@ -77,17 +105,28 @@ __all__ = [
     "MCP_HEADERS",
     "STRUCTURED_OUTPUT",
     "TEXT_OUTPUT",
+    "ActionTool",
+    "McpActionServer",
     "McpArgument",
     "McpCall",
     "McpHeaders",
+    "McpMeta",
     "McpTool",
     "McpToolset",
     "action_schema_from_tool",
+    "call_action",
     "connect",
+    "described_action",
+    "headers_from_meta",
+    "http_app",
     "load_mcp",
     "make_handler",
     "sanitise_name",
+    "serve_http",
+    "serve_stdio",
     "server_name",
     "tool_description",
     "tool_document",
+    "tool_from_entry",
+    "tools_from_registry",
 ]

@@ -860,8 +860,11 @@ class ActionCallAdapter:
                 ).to_exception()
 
         for expected_input_name, expected_input in schema.inputs.items():
+            # An autofilled input is omitted from the tool definition, so a caller cannot
+            # send it, and the loop below refuses it when sent anyway.
             if (
                 expected_input.required
+                and not expected_input.autofills
                 and expected_input_name not in tool_call.params
             ):
                 raise Status(

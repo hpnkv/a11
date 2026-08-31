@@ -225,7 +225,9 @@ async def test_a_log_port_nobody_closes_is_drained_for_a_bounded_time():
     node = a11.AsyncNode(a11.LocalChunkStore("a-log-nobody-closes"))
     started = time.monotonic()
     text = await asyncio.wait_for(
-        runner._user_facing_log(node, runner._drain_timeout(a11.infinite_future())),
+        runner.user_facing_log(
+            node, runner._drain_timeout(a11.infinite_future())
+        ),
         timeout=runner.DRAIN_AFTER_COMPLETION.float_seconds() + 20,
     )
     elapsed = time.monotonic() - started

@@ -19,6 +19,7 @@
 import { z } from 'zod';
 
 import {
+  INTERACT_WITH_CLAUDE_CODE_CONFIG_TAG,
   INTERACT_WITH_CLAUDE_CONFIG_TAG,
   INTERACT_WITH_GEMINI_CONFIG_TAG,
   INTERACT_WITH_OLLAMA_CONFIG_TAG,
@@ -163,6 +164,112 @@ export type ClaudeCreateMessageConfig = z.infer<
   typeof claudeCreateMessageConfigSchema
 >;
 
+/** The Claude Code tools a session may enable. */
+export const claudeCodeBuiltinToolSchema = z.enum([
+  'Bash',
+  'Edit',
+  'Glob',
+  'Grep',
+  'NotebookEdit',
+  'Read',
+  'Task',
+  'TodoWrite',
+  'WebFetch',
+  'WebSearch',
+  'Write',
+]);
+export type ClaudeCodeBuiltinTool = z.infer<typeof claudeCodeBuiltinToolSchema>;
+
+/** Parameters for one Claude Code session. */
+export const claudeCodeCreateSessionConfigSchema = z.object({
+  builtin_tools: z
+    .union([z.boolean(), z.array(claudeCodeBuiltinToolSchema)])
+    .default(false)
+    .describe(
+      "Claude Code's own tools. `false` offers the model A11 actions alone;" +
+        ' `true` offers the full Claude Code toolset, which reads and writes' +
+        ' the filesystem and runs commands; a list offers the named subset.' +
+        ' Enabling a tool also permits it — a session driven through A11' +
+        ' answers no permission prompt — so name only what the turn should be' +
+        ' able to do, and use `disallowed_tools` to carve back a command' +
+        ' shape.',
+    ),
+  permission_mode: z
+    .enum(['default', 'acceptEdits', 'plan', 'dontAsk', 'bypassPermissions'])
+    .nullish()
+    .describe(
+      "Claude Code's permission mode, such as `plan` for a read-only session" +
+        ' or `acceptEdits` for unattended file edits.',
+    ),
+  disallowed_tools: z
+    .array(z.string())
+    .default([])
+    .describe(
+      'Tool names or scoped rules the model may never use, such as' +
+        ' `Bash(rm *)`. A scoped rule is refused in every permission mode.',
+    ),
+  max_turns: z
+    .number()
+    .int()
+    .nullish()
+    .describe('Maximum agent turns before the session stops.'),
+  max_budget_usd: z
+    .number()
+    .nullish()
+    .describe('Stop the session once the estimated cost reaches this.'),
+  cwd: z.string().nullish().describe("Working directory for the session's tools."),
+  add_dirs: z
+    .array(z.string())
+    .default([])
+    .describe("Extra directories the session's tools may reach."),
+  setting_sources: z
+    .array(z.enum(['user', 'project', 'local']))
+    .nullish()
+    .describe(
+      'Which on-disk Claude Code settings to load. Omitted loads none, which' +
+        " keeps a session's behaviour independent of the host's" +
+        ' configuration; include `project` to load CLAUDE.md.',
+    ),
+  skills: z
+    .union([z.array(z.string()), z.literal('all')])
+    .nullish()
+    .describe('Skills to make available, or `all`.'),
+  thinking: z
+    .boolean()
+    .default(false)
+    .describe(
+      'Enable adaptive thinking so the model decides when and how much' +
+        ' internal reasoning to spend.',
+    ),
+  thinking_summaries: z
+    .boolean()
+    .default(false)
+    .describe("Stream summaries of the model's reasoning as it thinks."),
+  effort: z
+    .enum(['low', 'medium', 'high', 'xhigh', 'max'])
+    .nullish()
+    .describe('Overall thinking depth and token spend.'),
+  fallback_model: z
+    .string()
+    .nullish()
+    .describe('Model to fall back to when the primary is unavailable.'),
+  resume: z
+    .string()
+    .nullish()
+    .describe(
+      'Claude Code session id to continue. Also read from the newest' +
+        " assistant interaction's metadata when unset.",
+    ),
+  fork_session: z
+    .boolean()
+    .default(false)
+    .describe('Branch a resumed session instead of extending it.'),
+  cli_path: z.string().nullish().describe('Path to the `claude` executable.'),
+});
+export type ClaudeCodeCreateSessionConfig = z.infer<
+  typeof claudeCodeCreateSessionConfigSchema
+>;
+
 // --- Serialization -----------------------------------------------------------
 
 function registerConfigCodec<S extends z.ZodType>(
@@ -206,6 +313,13 @@ export const makeClaudeCreateMessageConfig = registerConfigCodec(
   INTERACT_WITH_CLAUDE_CONFIG_TAG,
   claudeCreateMessageConfigSchema,
   'ClaudeCreateMessageConfig',
+);
+
+/** Validate and tag a Claude Code session config for the `config` port. */
+export const makeClaudeCodeCreateSessionConfig = registerConfigCodec(
+  INTERACT_WITH_CLAUDE_CODE_CONFIG_TAG,
+  claudeCodeCreateSessionConfigSchema,
+  'ClaudeCodeCreateSessionConfig',
 );
 
 /** Default model ids matching the Python SDK. */

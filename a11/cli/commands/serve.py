@@ -46,6 +46,23 @@ before draining the service, so nothing new arrives while it is finishing.
 
 One endpoint per group: this is a command, not a load balancer.
 
+## Or as MCP tools
+
+``--mcp`` and ``--mcp-stdio`` publish the same registry to a host that speaks
+Model Context Protocol rather than A11 -- Claude Desktop, an editor, another
+agent runtime -- alongside whatever A11 transports are bound. Each action
+becomes one tool, and ``--mcp-allow`` narrows which:
+
+```sh
+a11 serve mypkg.actions --mcp                     # Streamable HTTP on 8013
+a11 serve mypkg.actions --mcp-stdio               # launched by an MCP host
+a11 serve mypkg.actions --ws --mcp --mcp-allow 'shell_.*'
+```
+
+``--mcp-stdio`` gives the protocol this process's stdout, so the command prints
+its summary to stderr instead and ends when the client hangs up. See
+[a11.sdk.mcp.server][a11.sdk.mcp.server].
+
 ## A file, or an import path
 
 Which one was meant is read off the target: a ``.py`` suffix, a path separator,
@@ -100,6 +117,8 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_WS_PORT = 8011
 DEFAULT_WS_PATH = "/a11"
 DEFAULT_SSE_PORT = 8012
+DEFAULT_MCP_PORT = 8013
+DEFAULT_MCP_PATH = "/mcp"
 
 #: What ``--hosted`` with no name means: let the exchange assign a scoped
 #: identity. A sentinel rather than an empty string, so "asked for any" and
@@ -469,6 +488,62 @@ def configure(
         help="Claim lifetime to ask for; the exchange decides the maximum.",
     )
 
+    mcp = parser.add_argument_group(
+        "mcp",
+        "Serve the same actions as Model Context Protocol tools, for a host"
+        " that speaks MCP rather than A11.",
+    )
+    endpoint = mcp.add_mutually_exclusive_group()
+    endpoint.add_argument(
+        "--mcp",
+        action="store_true",
+        help="Listen for MCP clients over Streamable HTTP.",
+    )
+    endpoint.add_argument(
+        "--mcp-stdio",
+        action="store_true",
+        help=(
+            "Speak MCP on stdin and stdout, for a host that launches this as a"
+            " subprocess. Everything else this command prints goes to stderr."
+        ),
+    )
+    mcp.add_argument("--mcp-host", default=DEFAULT_HOST, metavar="ADDRESS")
+    mcp.add_argument(
+        "--mcp-port",
+        type=int,
+        default=DEFAULT_MCP_PORT,
+        metavar="PORT",
+        help=f"Default {DEFAULT_MCP_PORT}.",
+    )
+    mcp.add_argument("--mcp-path", default=DEFAULT_MCP_PATH, metavar="PATH")
+    mcp.add_argument(
+        "--mcp-name",
+        default="",
+        metavar="NAME",
+        help="Server name a client sees; defaults to the module's.",
+    )
+    mcp.add_argument(
+        "--mcp-allow",
+        action="append",
+        default=None,
+        metavar="PATTERN",
+        help=(
+            "Full-match pattern for the actions to serve as tools; repeatable."
+            " Everything runnable, when not given."
+        ),
+    )
+    mcp.add_argument(
+        "--mcp-accept-header",
+        action="append",
+        default=None,
+        metavar="PATTERN",
+        help=(
+            "Full-match pattern for a header an MCP client may set through the"
+            " call's _meta; repeatable. Only the headers each action declares,"
+            " when not given."
+        ),
+    )
+
     http = parser.add_argument_group(
         "http", "Protocol and TLS for every HTTP-based endpoint above."
     )
@@ -717,6 +792,10 @@ def _endpoint_urls(
     if "sse" in live:
         scheme = _scheme(args, "https", "http")
         urls["sse"] = f"{scheme}://{args.sse_host}:{live['sse'].port}"
+    if getattr(args, "mcp", False):
+        urls["mcp"] = f"http://{args.mcp_host}:{args.mcp_port}{args.mcp_path}"
+    if getattr(args, "mcp_stdio", False):
+        urls["mcp"] = "stdio"
     if "webrtc" in live:
         if args.hosted:
             # What a caller would actually type, rather than where the
@@ -737,25 +816,88 @@ def _endpoint_urls(
 # --- Running -----------------------------------------------------------------
 
 
-async def _until_stopped_or_signalled(stop: Any, endpoint: Any) -> Any:
-    """Wait for a signal, or for hosting to fail for good; return the failure.
+def _mcp_server(args: argparse.Namespace, registry: a11.ActionRegistry) -> Any:
+    """The MCP view of the same registry, from the ``--mcp-*`` flags."""
+    from a11.sdk.mcp.server import McpActionServer
+    from a11.sdk.mcp.tools import ALL_ACTIONS
 
-    `None` when it was a signal, which is the ordinary ending.
+    return McpActionServer(
+        registry,
+        name=args.mcp_name or split_target(args.target)[0].rsplit(".", 1)[-1],
+        patterns=args.mcp_allow or ALL_ACTIONS,
+        accept_headers=args.mcp_accept_header or (),
+    )
+
+
+@contextlib.asynccontextmanager
+async def _mcp_endpoint(
+    args: argparse.Namespace, registry: a11.ActionRegistry | None
+) -> Any:
+    """Serve MCP alongside the A11 listeners, for as long as the ``with``.
+
+    Yields a task that finishes when the endpoint does, or None when no MCP
+    endpoint was asked for. A stdio client hanging up ends the command, which
+    is what the host launching it expects; an HTTP endpoint runs until the
+    command is stopped.
     """
-    if endpoint is None:
+    if not (args.mcp or args.mcp_stdio):
+        yield None
+        return
+    if registry is None:
+        raise ServeError(
+            "--mcp serves an ActionRegistry; this target names a Service."
+        )
+    try:
+        from a11.sdk.mcp import server as mcp_server
+    except ImportError as error:
+        raise ServeError(f"--mcp needs the MCP SDK: {error}") from error
+
+    served = _mcp_server(args, registry)
+    if args.mcp_stdio:
+        run = mcp_server.run_stdio(served)
+    else:
+        run = mcp_server.run_http(
+            served, host=args.mcp_host, port=args.mcp_port, path=args.mcp_path
+        )
+    task = asyncio.ensure_future(run)
+    try:
+        yield task
+    finally:
+        if not task.done():
+            task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await task
+
+
+async def _until_stopped_or_signalled(
+    stop: Any, endpoint: Any, mcp: Any = None
+) -> Any:
+    """Wait for a signal, for hosting to fail for good, or for MCP to end.
+
+    Returns the hosting failure, and `None` for every other ending -- a signal
+    or an MCP client that hung up, both of which are ordinary.
+    """
+    if endpoint is None and mcp is None:
         await stop.wait()
         return None
 
     signalled = asyncio.ensure_future(stop.wait())
-    hosting_stopped = asyncio.ensure_future(endpoint.wait_stopped())
+    waiting = {signalled}
+    hosting_stopped = None
+    if endpoint is not None:
+        hosting_stopped = asyncio.ensure_future(endpoint.wait_stopped())
+        waiting.add(hosting_stopped)
+    if mcp is not None:
+        waiting.add(mcp)
     try:
-        await asyncio.wait(
-            {signalled, hosting_stopped}, return_when=asyncio.FIRST_COMPLETED
-        )
-        return hosting_stopped.result() if hosting_stopped.done() else None
+        await asyncio.wait(waiting, return_when=asyncio.FIRST_COMPLETED)
+        if hosting_stopped is not None and hosting_stopped.done():
+            return hosting_stopped.result()
+        return None
     finally:
+        # The MCP task belongs to the context that started it, which stops it.
         for task in (signalled, hosting_stopped):
-            if not task.done():
+            if task is not None and not task.done():
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await task
@@ -770,8 +912,11 @@ async def serve(args: argparse.Namespace) -> int:
     actions = registry.list_registered_actions() if registry else []
 
     # Use WebSocket when no transport is selected so the short form starts a
-    # reachable service.
-    implied = not (args.ws or args.sse or args.webrtc)
+    # reachable service. An MCP endpoint counts as one: `--mcp-stdio` alone
+    # should speak MCP on stdio and open no port.
+    implied = not (
+        args.ws or args.sse or args.webrtc or args.mcp or args.mcp_stdio
+    )
     if implied:
         logging.info(
             "[serve] no transport given; defaulting to --ws on %s:%d%s",
@@ -812,7 +957,10 @@ async def serve(args: argparse.Namespace) -> int:
     service = served.service or a11.Service(action_registry=registry)
     out = console_module.console()
     try:
-        async with serving(service, *listeners.values()) as started:
+        async with (
+            serving(service, *listeners.values()) as started,
+            _mcp_endpoint(args, registry) as mcp,
+        ):
             live = dict(zip(listeners, started))
             if endpoint is not None:
                 _follow_the_claim(endpoint, service, live)
@@ -821,26 +969,28 @@ async def serve(args: argparse.Namespace) -> int:
             )
             for name, url in urls.items():
                 logging.info("[serve] listening on %s (%s)", url, name)
-            console_module.print_fields(
-                {
-                    "module": served.module_path,
-                    ("service" if served.service else "registry"): (
-                        served.symbol
-                    ),
-                    "actions": len(actions),
-                    **urls,
-                },
-                title="a11 serve",
-                target=out,
-            )
+            if not args.mcp_stdio:
+                # Nothing on stdout while an MCP client owns it.
+                console_module.print_fields(
+                    {
+                        "module": served.module_path,
+                        (
+                            "service" if served.service else "registry"
+                        ): served.symbol,
+                        "actions": len(actions),
+                        **urls,
+                    },
+                    title="a11 serve",
+                    target=out,
+                )
             with stop_on_signals() as stop:
-                # Two ways this ends: somebody signals, or hosting stops for
-                # good. Without the second the command outlives the thing it
-                # exists to do -- a revoked credential leaves the WebSocket
-                # listener up, the exit code zero, and the identity
-                # unreachable, which is a failure that looks like success to
-                # everything watching.
-                halted = await _until_stopped_or_signalled(stop, endpoint)
+                # Three ways this ends: somebody signals, hosting stops for
+                # good, or an MCP client on stdio hangs up. Without the second
+                # the command outlives the thing it exists to do -- a revoked
+                # credential leaves the WebSocket listener up, the exit code
+                # zero, and the identity unreachable, which is a failure that
+                # looks like success to everything watching.
+                halted = await _until_stopped_or_signalled(stop, endpoint, mcp)
             logging.info("[serve] stopping")
             if halted is not None:
                 console_module.console().print(

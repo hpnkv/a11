@@ -466,8 +466,9 @@ def test_hosted_takes_a_name_or_asks_for_one() -> None:
     SERVE_COMMAND.configure(parser)
 
     # Three distinguishable states: a name, "any name", and not hosted.
-    assert parser.parse_args(["m", "--hosted", "acme--staging"]).hosted == (
-        "acme--staging"
+    assert (
+        parser.parse_args(["m", "--hosted", "acme--staging"]).hosted
+        == "acme--staging"
     )
     assert parser.parse_args(["m", "--hosted"]).hosted == HOSTED_ANY
     assert parser.parse_args(["m"]).hosted is None
@@ -653,8 +654,7 @@ def _client_options() -> net.WebSocketClientOptions:
 
 async def _call_shout(session, stream, schema, text: str) -> str:
     call = (
-        a11
-        .Action(schema)
+        a11.Action(schema)
         .bind_node_map(session.node_map)
         .bind_session(session)
         .bind_stream(stream)
@@ -1031,3 +1031,77 @@ async def test_without_hosting_there_is_only_the_signal() -> None:
             return None
 
     assert await _until_stopped_or_signalled(Signalled(), None) is None
+
+
+# --- MCP ---------------------------------------------------------------------
+
+
+def test_an_mcp_endpoint_does_not_imply_a_websocket_one() -> None:
+    parser = argparse.ArgumentParser()
+    SERVE_COMMAND.configure(parser)
+
+    parsed = parser.parse_args(["target", "--mcp-stdio"])
+    assert parsed.mcp_stdio and not parsed.ws
+
+    # The two transports are one endpoint each, and one command serves one.
+    with pytest.raises(SystemExit):
+        parser.parse_args(["target", "--mcp", "--mcp-stdio"])
+
+
+@pytest.mark.asyncio
+async def test_a_service_target_cannot_be_served_over_mcp() -> None:
+    from a11.cli.commands.serve import _mcp_endpoint
+
+    with pytest.raises(ServeError, match="ActionRegistry"):
+        async with _mcp_endpoint(_args(mcp=True), None):
+            pass
+
+
+@pytest.mark.asyncio
+async def test_no_mcp_flag_starts_no_mcp_endpoint() -> None:
+    from a11.cli.commands.serve import _mcp_endpoint
+
+    async with _mcp_endpoint(_args(), a11.ActionRegistry()) as endpoint:
+        assert endpoint is None
+
+
+def test_the_mcp_server_takes_its_name_and_patterns_from_the_flags(
+    tmp_path: Path,
+) -> None:
+    pytest.importorskip("mcp")
+    from a11.cli.commands.serve import _mcp_server
+
+    _module(tmp_path, "serve_mcp_flags", _REGISTRY_SOURCE)
+    registry, _, _ = resolve_registry("serve_mcp_flags")
+
+    served = _mcp_server(
+        _args("serve_mcp_flags", mcp_name="", mcp_allow=["sho.*"]), registry
+    )
+    assert list(served.tools) == ["shout"]
+
+
+@pytest.mark.asyncio
+async def test_the_mcp_endpoint_answers_a_client_over_stdio(
+    tmp_path: Path,
+) -> None:
+    """The whole command, as an MCP host would launch it."""
+    pytest.importorskip("mcp")
+    import mcp
+
+    _module(tmp_path, "serve_mcp_stdio", _REGISTRY_SOURCE)
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = os.pathsep.join(
+        [str(tmp_path), environment.get("PYTHONPATH", "")]
+    )
+
+    parameters = mcp.StdioServerParameters(
+        command=sys.executable,
+        args=["-m", "a11.cli", "serve", "serve_mcp_stdio", "--mcp-stdio"],
+        env=environment,
+    )
+    async with mcp.Client(parameters) as client:
+        listed = {tool.name for tool in (await client.list_tools()).tools}
+        result = await client.call_tool("shout", {"text": "hello"})
+
+    assert listed == {"shout"}
+    assert result.structured_content == {"output": "HELLO"}

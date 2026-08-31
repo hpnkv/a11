@@ -38,6 +38,7 @@ observes:
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, Protocol
@@ -46,7 +47,7 @@ from absl import logging
 
 import a11
 from a11.actions import ActionHandler
-from a11.sdk.mcp.schemas import McpHeaders, McpTool
+from a11.sdk.mcp.schemas import McpHeaders, McpMeta, McpTool
 from a11.status import Status, StatusCode, StatusException
 
 # JSON-RPC and MCP error codes, mapped to what A11 calls the same failure. MCP
@@ -260,6 +261,90 @@ async def _write_stream(node: a11.AsyncNode, values: list[Any]) -> None:
     await node.close()
 
 
+def _block_port(block: Any) -> str | None:
+    """The output port an A11 server said a content block came from."""
+    meta = getattr(block, "meta", None)
+    if meta is None and isinstance(block, Mapping):
+        meta = block.get("_meta")
+    if isinstance(meta, Mapping):
+        port = meta.get(McpMeta.PORT.value)
+        if isinstance(port, str) and port:
+            return port
+    return None
+
+
+def _block_payload(block: Any) -> Any:
+    """A content block as the value its port carried.
+
+    A picture and a sound travel base64-encoded, so they go back on the port as
+    the bytes they were. Anything else stays the block it arrived as.
+    """
+    data = getattr(block, "data", None)
+    if data is None and isinstance(block, Mapping):
+        data = block.get("data")
+    if isinstance(data, str):
+        try:
+            return base64.b64decode(data)
+        except ValueError:
+            logging.debug("undecodable content block data", exc_info=True)
+    return _block_document(block)
+
+
+async def _write_value(action: a11.Action, port: str, value: Any) -> None:
+    """One output field onto its port, as a value or as a sequence."""
+    schema = action.get_schema().outputs[port]
+    node = action[port]
+    if schema.unary:
+        await node.finalize(value)
+        return
+    await _write_stream(
+        node, list(value) if isinstance(value, list) else [value]
+    )
+
+
+async def _write_described(
+    action: a11.Action, tool: McpTool, result: Any, texts: list[str]
+) -> None:
+    """Put an A11 server's result back on the ports the action declares.
+
+    The server derived this tool from an `ActionSchema` and said so in the
+    tool's `_meta`, so the result is that action's outputs rather than MCP's
+    three: `structuredContent` holds one field per declared output, and a
+    picture or a sound arrived as the content block MCP has for it, tagged with
+    the port it came from.
+    """
+    payload = getattr(result, "structured_content", None)
+    written: set[str] = set()
+
+    for block in getattr(result, "content", None) or []:
+        port = _block_port(block)
+        if port is None or port not in action.get_schema().outputs:
+            continue
+        await _write_value(action, port, _block_payload(block))
+        written.add(port)
+
+    if tool.whole_json_output is not None:
+        port = tool.whole_json_output
+        if port not in written:
+            # A result MCP could not carry as a structured document -- a string,
+            # a number -- came back as text.
+            value = payload if payload is not None else "".join(texts)
+            await _write_value(action, port, value)
+            written.add(port)
+    elif isinstance(payload, Mapping):
+        for field, port in tool.structured_fields:
+            if port in written or field not in payload:
+                continue
+            await _write_value(action, port, payload[field])
+            written.add(port)
+
+    for port in action.get_schema().outputs:
+        if port not in written:
+            # Nothing was written for it: closed rather than finalized, so a
+            # whole-value read gets an ended stream rather than a null.
+            await action[port].close()
+
+
 def _log_summary(tool_name: str, texts: list[Any], others: list[Any]) -> str:
     """One line about what the tool returned, for the person watching."""
     parts = []
@@ -354,20 +439,24 @@ def make_handler(tool: McpTool, call: McpCall) -> ActionHandler:
                 message=f"The MCP tool {tool_name!r} failed: {detail}",
             ).to_exception()
 
-        await _write_stream(action[tool.text_output], texts)
-        await _write_stream(
-            action[tool.content_output],
-            [_block_document(block) for block in others],
-        )
-        if tool.structured_output is not None:
-            structured = getattr(result, "structured_content", None)
-            node = action[tool.structured_output]
-            # Closed rather than finalized when the server sent nothing: a null
-            # terminator would be a value to anything reading the port whole.
-            if structured is None:
-                await node.close()
-            else:
-                await node.finalize(structured)
+        if tool.described is not None:
+            await _write_described(action, tool, result, texts)
+        else:
+            await _write_stream(action[tool.text_output], texts)
+            await _write_stream(
+                action[tool.content_output],
+                [_block_document(block) for block in others],
+            )
+            if tool.structured_output is not None:
+                structured = getattr(result, "structured_content", None)
+                node = action[tool.structured_output]
+                # Closed rather than finalized when the server sent nothing: a
+                # null terminator would be a value to anything reading the port
+                # whole.
+                if structured is None:
+                    await node.close()
+                else:
+                    await node.finalize(structured)
 
         await action.log(_log_summary(tool_name, texts, others))
 

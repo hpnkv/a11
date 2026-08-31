@@ -54,6 +54,7 @@ from typing import Any
 
 import a11
 from a11 import _native
+from a11.actions import describe
 from a11.actions.jsonschema import organise_and_deduplicate_jsonschema
 from a11.status import Status, StatusCode
 
@@ -142,6 +143,29 @@ class McpHeaders(enum.StrEnum):
     META = "x-a11-mcp-meta"
 
 
+class McpMeta(enum.StrEnum):
+    """Keys A11 reserves in MCP's `_meta`, on a tool and on a call.
+
+    MCP's `_meta` is an open map whose keys are namespaced by a reverse-DNS
+    prefix, and `io.modelcontextprotocol/*` belongs to the SDK. These two are
+    A11's, and both are optional: a client or server that ignores them sees an
+    ordinary MCP tool.
+    """
+
+    #: On a `tools/list` entry: the action's whole `a11.actions/v1` document.
+    #: An A11 client reads it and rebuilds the action's real schema instead of
+    #: deriving an approximation from the tool's JSON Schema.
+    ACTION = "to.a11/action"
+    #: On a `tools/call`: an object of header name to value, applied to the
+    #: action the server runs. See
+    #: [headers_from_meta][a11.sdk.mcp.calls.headers_from_meta].
+    HEADERS = "to.a11/headers"
+    #: On a result's content block: the output port that wrote it. An A11
+    #: server sends a picture or a sound as the content block MCP has for it,
+    #: and this is what puts the bytes back on the port they came from.
+    PORT = "to.a11/port"
+
+
 #: Header schemas an MCP-derived action always carries, before the defaults that
 #: name its own tool and server are filled in.
 MCP_HEADERS = {
@@ -193,6 +217,15 @@ class McpTool:
     #: Port carrying `structuredContent`, when the tool declares a schema for
     #: it.
     structured_output: str | None = None
+    #: The `a11.actions/v1` entry an A11 server declared this tool with, when
+    #: it declared one. Its presence is what makes the result go back onto the
+    #: action's own ports rather than onto `text` and `structured_content`.
+    described: dict[str, Any] | None = None
+    #: For a described action, one `(result field, port)` pair per output the
+    #: structured result carries.
+    structured_fields: tuple[tuple[str, str], ...] = ()
+    #: For a described action, the port whose payload is the whole result.
+    whole_json_output: str | None = None
 
     @property
     def action_name(self) -> str:
@@ -586,6 +619,86 @@ def _result_ports(
     return ports, text, content, structured
 
 
+def described_action(document: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The `a11.actions/v1` entry an A11 server put in the tool's `_meta`.
+
+    Present when the server on the other end is A11 serving its own registry
+    ([a11.sdk.mcp.tools][a11.sdk.mcp.tools]), and absent for every other
+    server, which is what makes reading it safe to try on any tool.
+    """
+    meta = _mapping(_field(document, "_meta", "meta"))
+    entry = meta.get(McpMeta.ACTION.value)
+    if isinstance(entry, Mapping) and entry.get("name"):
+        return dict(entry)
+    return None
+
+
+def _mcp_headers(
+    declared: Mapping[str, a11.ActionHeaderSchema],
+    tool_name: str,
+    server: str,
+) -> dict[str, a11.ActionHeaderSchema]:
+    """``declared`` plus the headers every MCP-derived action carries."""
+    headers = dict(declared)
+    headers.update(MCP_HEADERS)
+    headers[McpHeaders.TOOL] = a11.ActionHeaderSchema(
+        McpHeaders.TOOL,
+        "The MCP tool this action calls.",
+        tool_name.encode(),
+    )
+    headers[McpHeaders.SERVER] = a11.ActionHeaderSchema(
+        McpHeaders.SERVER,
+        "The MCP server this action's handler is bound to.",
+        server.encode() if server else None,
+    )
+    return headers
+
+
+def _described_tool(
+    entry: Mapping[str, Any],
+    *,
+    tool_name: str,
+    server: str,
+    action_name: str,
+) -> McpTool:
+    """An A11 action served over MCP, rebuilt as its own side declared it.
+
+    The tool's JSON Schema is a projection of an `ActionSchema`, and this reads
+    the original instead: the ports keep their names, a streaming port stays
+    streaming, and the result goes back onto the outputs the action declares
+    rather than onto `text` and `structured_content`. Everything MCP adds --
+    the tool, server and `_meta` headers -- is layered on top.
+    """
+    schema = describe.schema_from_json(dict(entry))
+    schema.name = action_name
+    schema.headers = _mcp_headers(schema.headers, tool_name, server)
+    schema.validate()
+
+    mapping = dict(entry.get("output_to_json_field") or {})
+    whole = None
+    if len(mapping) == 1:
+        port, field = next(iter(mapping.items()))
+        whole = port if field == a11.ActionSchema.WHOLE_JSON else None
+    fields = tuple(
+        (mapping.get(name, name), name)
+        for name in schema.outputs
+        if not mapping or name in mapping
+    )
+
+    return McpTool(
+        tool_name=tool_name,
+        server=server,
+        schema=schema,
+        arguments=tuple(
+            McpArgument(port=name, property=name, unary=port.unary)
+            for name, port in schema.inputs.items()
+        ),
+        described=dict(entry),
+        structured_fields=() if whole else fields,
+        whole_json_output=whole,
+    )
+
+
 def action_schema_from_tool(
     tool: Any,
     *,
@@ -624,6 +737,14 @@ def action_schema_from_tool(
         f"{prefix}{sanitise_name(tool_name)}"[:255], taken
     )
 
+    if described := described_action(document):
+        return _described_tool(
+            described,
+            tool_name=tool_name,
+            server=server,
+            action_name=action_name,
+        )
+
     input_schema = _mapping(_field(document, "inputSchema", "input_schema"))
     raw_output = _field(document, "outputSchema", "output_schema")
     output_schema = _mapping(raw_output) if raw_output is not None else None
@@ -631,18 +752,7 @@ def action_schema_from_tool(
     inputs, arguments, whole_arguments = _argument_ports(input_schema)
     outputs, text, content, structured = _result_ports(output_schema, inputs)
 
-    headers = dict(a11.DEFAULT_ACTION_HEADERS)
-    headers.update(MCP_HEADERS)
-    headers[McpHeaders.TOOL] = a11.ActionHeaderSchema(
-        McpHeaders.TOOL,
-        "The MCP tool this action calls.",
-        tool_name.encode(),
-    )
-    headers[McpHeaders.SERVER] = a11.ActionHeaderSchema(
-        McpHeaders.SERVER,
-        "The MCP server this action's handler is bound to.",
-        server.encode() if server else None,
-    )
+    headers = _mcp_headers(a11.DEFAULT_ACTION_HEADERS, tool_name, server)
 
     schema = a11.ActionSchema(
         name=action_name,
@@ -680,9 +790,11 @@ __all__ = [
     "TEXT_OUTPUT",
     "McpArgument",
     "McpHeaders",
+    "McpMeta",
     "McpTool",
     "action_schema_from_tool",
     "array_item_schema",
+    "described_action",
     "sanitise_name",
     "self_contained_schema",
     "tool_description",

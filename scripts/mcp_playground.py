@@ -1,6 +1,6 @@
 # Copyright 2026 The A11 Authors.
 
-"""Drive a real MCP server through A11 Actions.
+"""Drive a real MCP server through A11 Actions, or see a registry as one.
 
 Point it at a server and it prints what the tools became -- the derived
 `ActionSchema` for each, and the tool definition a model would be shown -- then
@@ -16,6 +16,13 @@ python scripts/mcp_playground.py --command 'uvx mcp-server-fetch'
 # ...and call one of its tools.
 python scripts/mcp_playground.py --command 'uvx mcp-server-fetch' \
     --tool fetch --arguments '{"url": "https://example.com"}'
+```
+
+The other direction prints the `tools/list` entry each registered action would
+be published as, without starting a server. `a11 serve --mcp` starts one.
+
+```sh
+python scripts/mcp_playground.py --declare mypkg.actions
 ```
 """
 
@@ -52,6 +59,12 @@ _DEADLINE_SECONDS = flags.DEFINE_float(
 )
 _SCHEMAS = flags.DEFINE_bool(
     "schemas", True, "Print each tool's derived schema and tool definition."
+)
+_DECLARE = flags.DEFINE_string(
+    "declare",
+    "",
+    "MODULE[:SYMBOL] holding an ActionRegistry to declare as MCP tools,"
+    " printing what a client would discover.",
 )
 
 
@@ -132,7 +145,23 @@ async def _call(toolset: mcp.McpToolset, name: str, arguments: dict) -> None:
     await action.wait()
 
 
+def _declare(target: str) -> None:
+    """Print what a registry's actions would be published as."""
+    from a11.cli.commands.serve import resolve_registry
+    from a11.sdk.mcp.tools import tools_from_registry
+
+    registry, module_path, symbol = resolve_registry(target)
+    print(f"# {module_path}:{symbol}\n")
+    for tool in tools_from_registry(registry):
+        print(json.dumps(tool.tool, indent=2))
+        print()
+
+
 async def main(_: Sequence[str]) -> None:
+    if _DECLARE.value:
+        _declare(_DECLARE.value)
+        return
+
     arguments = json.loads(_ARGUMENTS.value)
     if not isinstance(arguments, dict):
         raise app.UsageError("--arguments must be a JSON object.")

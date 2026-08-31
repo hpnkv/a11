@@ -16,6 +16,9 @@ the same registry used for application actions. Existing allow-lists,
 deadlines, logs, remote dispatch, and Flow composition apply without an MCP-only
 execution path in the application.
 
+To go the other way — publish an A11 registry to an MCP host — see
+[Serve A11 actions as MCP tools](mcp-serve.md).
+
 Install the MCP integration with `pip install 'a11-kit[mcp]'`.
 
 ## Connect
@@ -132,3 +135,9 @@ python scripts/mcp_playground.py --command 'uvx mcp-server-fetch' \
 
 It prints each tool's derived schema and the tool definition a model would be
 shown, then calls one and streams everything it writes.
+
+## Serving, rather than calling
+
+The same module serves the reverse direction: `a11.sdk.mcp.server` publishes an
+`ActionRegistry` as an MCP server, and `a11 serve --mcp` does it from the
+command line. See [Serve A11 actions as MCP tools](mcp-serve.md).

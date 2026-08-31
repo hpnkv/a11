@@ -26,11 +26,15 @@ dependencies = [
 claude = [
     { name = "anthropic" },
 ]
+claude-code = [
+    { name = "claude-agent-sdk" },
+]
 gemini = [
     { name = "google-genai" },
 ]
 llm = [
     { name = "anthropic" },
+    { name = "claude-agent-sdk" },
     { name = "google-genai" },
     { name = "ollama" },
 ]
@@ -48,10 +52,14 @@ anthropic = [
 claude = [
     { name = "anthropic" },
 ]
+claude-code = [
+    { name = "claude-agent-sdk" },
+]
 dev = [
     { name = "anthropic" },
     { name = "black" },
     { name = "cibuildwheel" },
+    { name = "claude-agent-sdk" },
     { name = "google-genai" },
     { name = "mcp" },
     { name = "ollama" },
@@ -82,6 +90,8 @@ requires-dist = [
     { name = "absl-py", specifier = ">=2.5.0" },
     { name = "anthropic", marker = "extra == 'claude'", specifier = ">=0.120.0" },
     { name = "anthropic", marker = "extra == 'llm'", specifier = ">=0.120.0" },
+    { name = "claude-agent-sdk", marker = "extra == 'claude-code'", specifier = ">=0.2.140" },
+    { name = "claude-agent-sdk", marker = "extra == 'llm'", specifier = ">=0.2.140" },
     { name = "fastapi", specifier = ">=0.139.0" },
     { name = "google-genai", marker = "extra == 'gemini'", specifier = ">=1.55.0" },
     { name = "google-genai", marker = "extra == 'llm'", specifier = ">=1.55.0" },
@@ -96,15 +106,17 @@ requires-dist = [
     { name = "rich", specifier = ">=13.0.0" },
     { name = "uvicorn", specifier = ">=0.52.1" },
 ]
-provides-extras = ["claude", "gemini", "ollama", "mcp", "llm"]
+provides-extras = ["claude", "claude-code", "gemini", "ollama", "mcp", "llm"]
 
 [package.metadata.requires-dev]
 anthropic = [{ name = "anthropic", specifier = ">=0.120.0" }]
 claude = [{ name = "anthropic", specifier = ">=0.120.0" }]
+claude-code = [{ name = "claude-agent-sdk", specifier = ">=0.2.140" }]
 dev = [
     { name = "anthropic", specifier = ">=0.120.0" },
     { name = "black", specifier = ">=26.5.1" },
     { name = "cibuildwheel", specifier = ">=4.1.1" },
+    { name = "claude-agent-sdk", specifier = ">=0.2.140" },
     { name = "google-genai", specifier = ">=1.55.0" },
     { name = "mcp", specifier = ">=2.1.1" },
     { name = "ollama", specifier = ">=0.6.0" },
@@ -482,6 +494,25 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/56/63/7c2e4e3ef8c133a2a7d167b031471b8bd8e0674edde8e5f8622f8f5965e7/cibuildwheel-4.1.1.tar.gz", hash = "sha256:30ee78f134a8273b2f128ffb8c84bce577b9352af30e8ecf412cdf71bb3844c2", size = 454766, upload-time = "2026-07-24T20:33:18.539Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/3d/21/6f157a49f86163aef5c5aa18e0e90a67a3d70428f4a66710440339a4ae0e/cibuildwheel-4.1.1-py3-none-any.whl", hash = "sha256:3d669d6fa20a3e70c33ea4d3128a7f78706dc22b6f40d2cc028b12fc80580276", size = 167204, upload-time = "2026-07-24T20:33:17.102Z" },
+]
+
+[[package]]
+name = "claude-agent-sdk"
+version = "0.2.148"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "jsonschema" },
+    { name = "mcp" },
+    { name = "sniffio" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/7e/f4/fb7f81b31e44f69af9f53b93c32e2047f3ca15cd6311cfe72bfdf420f1f5/claude_agent_sdk-0.2.148.tar.gz", hash = "sha256:45c9972fa72dc6006745239c6838cc3cea7a9b42d6927c89f7bdb6996a1983b0", size = 344717, upload-time = "2026-08-28T18:33:51.812Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b8/f5/f4affb9f882bcf61422ea48491effb6ee2de28bfbdafd0ec90d1b959dad2/claude_agent_sdk-0.2.148-py3-none-macosx_11_0_arm64.whl", hash = "sha256:026e2b54bb3f3909712ff462b8469e2b1fc5471cfde796abc23f32d30b2c8ba1", size = 83882833, upload-time = "2026-08-28T18:33:56.238Z" },
+    { url = "https://files.pythonhosted.org/packages/af/cf/e1b11dd9fac877c8b44f022cf895f54f23854b916e09b32360e71209904c/claude_agent_sdk-0.2.148-py3-none-macosx_11_0_x86_64.whl", hash = "sha256:c8cca1f4e4eb4e0c9f44ccfca6f651cf35e8f3914e483632ae8867c5619818a0", size = 88314490, upload-time = "2026-08-28T18:34:01.284Z" },
+    { url = "https://files.pythonhosted.org/packages/34/d4/53de4727576fa6b5a261414d420895f4eb5f0369e232d403f1096205709e/claude_agent_sdk-0.2.148-py3-none-manylinux_2_17_aarch64.whl", hash = "sha256:3fbbea7cc30099d14f894e12fef68b0ee42fa9982567df94e59499b6aff55959", size = 94014630, upload-time = "2026-08-28T18:34:06.238Z" },
+    { url = "https://files.pythonhosted.org/packages/d8/e9/2ea469751ed4df75a911c4bf4dcad1ff5b71ccc9aa1a4aa108583a2a66b5/claude_agent_sdk-0.2.148-py3-none-manylinux_2_17_x86_64.whl", hash = "sha256:221efbc0f583c80258189ab93e4f0d6b6a61ad61335de1fdf3e2331ad423dbeb", size = 94210928, upload-time = "2026-08-28T18:34:11.592Z" },
+    { url = "https://files.pythonhosted.org/packages/c3/ea/86ccd7a34446c37174e53f03c389b25f168c7f4fd4f00f3e130baae9c902/claude_agent_sdk-0.2.148-py3-none-win_amd64.whl", hash = "sha256:f155252940fd77f1bcc707836924ca3a9691d19bbc464914ae2b7ccf17f0410f", size = 96875177, upload-time = "2026-08-28T18:34:16.378Z" },
 ]
 
 [[package]]

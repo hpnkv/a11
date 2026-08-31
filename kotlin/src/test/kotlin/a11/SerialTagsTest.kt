@@ -68,6 +68,7 @@ class SerialTagsTest {
         SerialTags.WIRE_MESSAGE, SerialTags.STATUS, SerialTags.TIME, SerialTags.DURATION,
         SerialTags.INTERACTION, SerialTags.PEER, SerialTags.ACTION_CONFIG,
         SerialTags.USAGE_METADATA, SerialTags.INTERACT_WITH_CLAUDE_CONFIG,
+        SerialTags.INTERACT_WITH_CLAUDE_CODE_CONFIG,
         SerialTags.INTERACT_WITH_GEMINI_CONFIG, SerialTags.INTERACT_WITH_OLLAMA_CONFIG,
         SerialTags.INTERACT_WITH_GEMMA_CONFIG, SerialTags.AUDIO_BUFFER,
         SerialTags.AUDIO_INPUT_OPTIONS, SerialTags.SPEECH_RECOGNIZER_OPTIONS,

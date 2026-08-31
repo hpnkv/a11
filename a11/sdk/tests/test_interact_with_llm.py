@@ -83,6 +83,43 @@ async def test_provider_inferred_from_model_prefix(monkeypatch):
     assert len(out) == 1
 
 
+@pytest.mark.parametrize(
+    "provider", ["claude_code", "claude-code", "Claude-Code"]
+)
+@pytest.mark.asyncio
+async def test_claude_code_provider_names(monkeypatch, provider):
+    """Either separator, in either case, names the same backend."""
+    seen = {}
+
+    async def fake_handler(action):
+        seen["ran"] = True
+        await action["new_interactions"].put(Interaction(model="fake"))
+        for name in ("event_stream", "text_output", "thoughts"):
+            await action[name].finalize()
+        await action["new_interactions"].finalize()
+
+    module = types.ModuleType("a11.sdk._fake_claude_code")
+    module.fake_handler = fake_handler
+    monkeypatch.setitem(sys.modules, "a11.sdk._fake_claude_code", module)
+    monkeypatch.setitem(
+        illm._PROVIDERS,
+        "claude_code",
+        illm._Provider(
+            "a11.sdk._fake_claude_code", "fake_handler", "claude-code"
+        ),
+    )
+
+    out = await _run({LlmHeaders.PROVIDER.value: provider})
+    assert seen.get("ran") is True
+    assert len(out) == 1
+
+
+def test_claude_code_install_hint():
+    assert illm.install_hint("claude_code") == (
+        "pip install 'a11-kit[claude-code]'"
+    )
+
+
 @pytest.mark.asyncio
 async def test_import_failure_is_graceful(monkeypatch):
     monkeypatch.setitem(

@@ -1,9 +1,9 @@
 # Stream a model response
 
-`interact_with_llm` presents Claude, Gemini, and Ollama through one action
-contract. Feed it messages, generation settings, and optional tool definitions;
-read the response while the model is generating it; retain the completed
-interaction for the next turn.
+`interact_with_llm` presents Claude, Claude Code, Gemini, and Ollama through one
+action contract. Feed it messages, generation settings, and optional tool
+definitions; read the response while the model is generating it; retain the
+completed interaction for the next turn.
 
 Provider SDKs commonly expose one event stream containing text deltas,
 reasoning, tool-call arguments, usage, and completion events. A11 separates
@@ -45,6 +45,53 @@ interact = (
 Ports are async nodes, reached with `interact["<port>"]` — the same
 [`AsyncNode`][a11.nodes.async_node.AsyncNode] you met in
 [streaming](streaming.md).
+
+### Run on a Claude Code subscription
+
+The `claude_code` provider reaches Claude through the subscription the
+[Claude Code](https://code.claude.com/docs/en/agent-sdk) CLI holds, so it takes
+no API key:
+
+```python
+interact = (
+    a11.Action(INTERACT_WITH_LLM_SCHEMA)
+    .bind_handler(interact_with_llm)
+    .set_header(LlmHeaders.PROVIDER.value, "claude_code")
+    .run()
+)
+```
+
+Install the backend with `pip install 'a11-kit[claude-code]'` and sign in by
+running `claude` once. Every port behaves as it does for the other providers,
+and registry actions reach the model the same way — Claude Code executes them
+through an in-process MCP server the handler assembles.
+
+Claude Code's own tools (file reads and writes, shell commands, web search)
+stay off, so a turn offers the model only the actions the allow-list admits.
+Turn them on through the config port:
+
+```python
+from a11.sdk.anthropic.interact_with_claude_code_schema import (
+    CreateSessionConfig,
+)
+
+await interact["config"].finalize(
+    CreateSessionConfig(
+        builtin_tools=["Read", "Grep", "Bash"],
+        disallowed_tools=["Bash(rm *)"],
+    )
+)
+```
+
+Enabling a tool also permits it: a session driven through A11 answers no
+permission prompt, so there is no approval step between the model asking and
+the tool running. Name the tools the turn should be able to use rather than
+passing `True`, and use `disallowed_tools` for a scoped rule such as
+`Bash(rm *)`, which is refused in every permission mode.
+
+Set the `x-a11-claude-code-system-preset` header to `claude_code` to keep
+Claude Code's own system prompt and append the interaction's system
+instructions to it.
 
 ## Stream the reply as it arrives
 

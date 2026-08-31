@@ -1,6 +1,6 @@
 # Copyright 2026 The A11 Authors.
 
-"""``a11 chat [claude|gemini|ollama] [model]`` — an interactive LLM chat.
+"""``a11 chat [claude|claude_code|gemini|ollama] [model]`` — an LLM chat.
 
 Thin wrapper: it parses the backend/model arguments and hands off to
 [a11.cli.chat_ui.run_chat][a11.cli.chat_ui.run_chat], where the actual
@@ -12,7 +12,11 @@ from __future__ import annotations
 import argparse
 
 from a11.cli.app import Command
-from a11.cli.backends import DEFAULT_PROVIDER, PROVIDERS
+from a11.cli.backends import (
+    DEFAULT_PROVIDER,
+    PROVIDER_CHOICES,
+    normalize_provider_name,
+)
 from a11.cli.voice import DEFAULT_VOICE_MODEL, VOICE_MODELS
 
 
@@ -21,7 +25,7 @@ def _configure(parser: argparse.ArgumentParser) -> None:
         "backend",
         nargs="?",
         default=None,
-        choices=sorted(PROVIDERS),
+        choices=PROVIDER_CHOICES,
         help=f"LLM provider to chat with (default: {DEFAULT_PROVIDER}).",
     )
     parser.add_argument(
@@ -32,7 +36,7 @@ def _configure(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--provider",
-        choices=sorted(PROVIDERS),
+        choices=PROVIDER_CHOICES,
         default=None,
         help="LLM provider (overrides the positional backend).",
     )
@@ -102,7 +106,9 @@ async def _run(args: argparse.Namespace) -> int:
     from a11.cli.chat_ui import run_chat
 
     # Flags take precedence over the positionals; fall back to the default.
-    backend = args.provider or args.backend or DEFAULT_PROVIDER
+    backend = normalize_provider_name(
+        args.provider or args.backend or DEFAULT_PROVIDER
+    )
     model = args.model_flag or args.model
 
     return await run_chat(

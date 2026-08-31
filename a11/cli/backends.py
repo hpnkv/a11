@@ -44,6 +44,12 @@ PROVIDERS: dict[str, Provider] = {
         default_model="claude-sonnet-4-6",
         api_key_env=("ANTHROPIC_API_KEY",),
     ),
+    "claude_code": Provider(
+        name="claude_code",
+        default_model="claude-sonnet-4-6",
+        # The `claude` CLI holds the subscription this provider runs on.
+        api_key_env=(),
+    ),
     "gemini": Provider(
         name="gemini",
         default_model="gemini-3.5-flash",
@@ -58,6 +64,18 @@ PROVIDERS: dict[str, Provider] = {
 }
 
 DEFAULT_PROVIDER = "claude"
+
+
+def normalize_provider_name(name: str) -> str:
+    """The canonical key for a provider name written with either separator."""
+    return name.strip().casefold().replace("-", "_")
+
+
+#: Provider names accepted on the command line. `interact_with_llm` reads `-`
+#: and `_` as the same separator, so both spellings are offered here too.
+PROVIDER_CHOICES: tuple[str, ...] = tuple(
+    sorted({*PROVIDERS, *(name.replace("_", "-") for name in PROVIDERS)})
+)
 
 
 def make_user_interaction(text: str) -> Interaction:
@@ -81,4 +99,11 @@ def make_user_interaction(text: str) -> Interaction:
     )
 
 
-__all__ = ["Provider", "PROVIDERS", "DEFAULT_PROVIDER", "make_user_interaction"]
+__all__ = [
+    "DEFAULT_PROVIDER",
+    "PROVIDERS",
+    "PROVIDER_CHOICES",
+    "Provider",
+    "make_user_interaction",
+    "normalize_provider_name",
+]

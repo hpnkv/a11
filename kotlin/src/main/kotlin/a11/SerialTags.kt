@@ -57,6 +57,7 @@ object SerialTags {
     const val USAGE_METADATA = "a11.sdk.UsageMetadata"
 
     const val INTERACT_WITH_CLAUDE_CONFIG = "a11.sdk.InteractWithClaudeConfig"
+    const val INTERACT_WITH_CLAUDE_CODE_CONFIG = "a11.sdk.InteractWithClaudeCodeConfig"
     const val INTERACT_WITH_GEMINI_CONFIG = "a11.sdk.InteractWithGeminiConfig"
     const val INTERACT_WITH_OLLAMA_CONFIG = "a11.sdk.InteractWithOllamaConfig"
     const val INTERACT_WITH_GEMMA_CONFIG = "a11.sdk.InteractWithGemmaConfig"

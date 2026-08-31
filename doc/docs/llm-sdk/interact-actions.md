@@ -1,7 +1,7 @@
 # Provide tools to interact_with_*
 
-The included `interact_with_llm` action routes a conversation to Claude,
-Gemini, or Ollama. Its `tools` input is a stream of provider-neutral tool
+The included `interact_with_llm` action routes a conversation to Claude, Claude
+Code, Gemini, or Ollama. Its `tools` input is a stream of provider-neutral tool
 definitions. Bind the same registry to the action so requested names can be
 resolved and run.
 
@@ -87,7 +87,14 @@ history.extend([question, *new_interactions])
 ```
 
 The backend-specific actions (`interact_with_claude`,
-`interact_with_gemini`, and `interact_with_ollama`) expose the same `tools`
-port and registry pattern when direct provider control is preferable. The
-routing action provides one application boundary: switching providers requires
-only a header change and leaves the conversation flow unchanged.
+`interact_with_claude_code`, `interact_with_gemini`, and
+`interact_with_ollama`) expose the same `tools` port and registry pattern when
+direct provider control is preferable. The routing action provides one
+application boundary: switching providers requires only a header change and
+leaves the conversation flow unchanged.
+
+`interact_with_claude_code` reaches the same allow-list and registry through a
+different mechanism: Claude Code runs the agent loop, and the handler publishes
+each admitted action to it as an in-process MCP server tool. A call still
+arrives at `runner.execute_actions_from_interaction`, so failures, logs, and
+result encoding match the other backends.

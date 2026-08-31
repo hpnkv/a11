@@ -51,6 +51,11 @@ _PROVIDERS: dict[str, _Provider] = {
         handler="interact_with_claude",
         extra="claude",
     ),
+    "claude_code": _Provider(
+        module="a11.sdk.anthropic.interact_with_claude_code",
+        handler="interact_with_claude_code",
+        extra="claude-code",
+    ),
     "gemini": _Provider(
         module="a11.sdk.gemini.interact_with_gemini",
         handler="interact_with_gemini",
@@ -150,7 +155,9 @@ def _resolve_provider(action: a11.Action) -> str:
     """Pick the backend from the provider header, or infer it from the model."""
     provider = action.get_header(LlmHeaders.PROVIDER.value, decode=True)
     if provider:
-        provider = provider.strip().casefold()
+        # A name is written either way round on a command line, so `-` and `_`
+        # name the same provider.
+        provider = provider.strip().casefold().replace("-", "_")
         if provider not in _PROVIDERS:
             raise Status(
                 code=StatusCode.INVALID_ARGUMENT,

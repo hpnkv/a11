@@ -52,11 +52,13 @@ Discussions = "https://github.com/hpnkv/a11/discussions"
 
 [project.optional-dependencies]
 claude = ["anthropic>=0.120.0"]
+claude-code = ["claude-agent-sdk>=0.2.140"]
 gemini = ["google-genai>=1.55.0"]
 ollama = ["ollama>=0.6.0"]
 mcp = ["mcp>=2.1.1"]
 llm = [
     "anthropic>=0.120.0",
+    "claude-agent-sdk>=0.2.140",
     "google-genai>=1.55.0",
     "ollama>=0.6.0",
 ]

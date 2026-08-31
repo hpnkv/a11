@@ -63,6 +63,8 @@ inline constexpr std::string_view kActionConfigTag = "a11.sdk.ActionConfig";
 inline constexpr std::string_view kUsageMetadataTag = "a11.sdk.UsageMetadata";
 inline constexpr std::string_view kInteractWithClaudeConfigTag =
     "a11.sdk.InteractWithClaudeConfig";
+inline constexpr std::string_view kInteractWithClaudeCodeConfigTag =
+    "a11.sdk.InteractWithClaudeCodeConfig";
 inline constexpr std::string_view kInteractWithGeminiConfigTag =
     "a11.sdk.InteractWithGeminiConfig";
 inline constexpr std::string_view kInteractWithOllamaConfigTag =

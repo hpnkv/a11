@@ -37,7 +37,12 @@ from rich.console import Console
 from rich.live import Live
 
 from a11 import observability
-from a11.cli.backends import PROVIDERS, Provider, make_user_interaction
+from a11.cli.backends import (
+    PROVIDERS,
+    Provider,
+    make_user_interaction,
+    normalize_provider_name,
+)
 from a11.cli.presentation_render import render_blocks
 from a11.client.connection import GatewayConnection, open_gateway
 from a11.client.turn import TurnConfig, run_turn
@@ -51,11 +56,12 @@ if TYPE_CHECKING:
 
 _HELP = (
     "Commands:\n"
-    "  /model <claude|gemini|ollama> [model]   switch backend (and optionally"
-    " model)\n"
-    "  /clear                                  forget the conversation so far\n"
-    "  /help, /?                               show this help\n"
-    "  /exit, /quit                            leave\n"
+    "  /model <claude|claude_code|gemini|ollama> [model]   switch backend"
+    " (and optionally model)\n"
+    "  /clear                                              forget the"
+    " conversation so far\n"
+    "  /help, /?                                           show this help\n"
+    "  /exit, /quit                                        leave\n"
 )
 
 
@@ -255,7 +261,8 @@ class ChatUI:
         return True
 
     def _switch_model(self, parts: list[str]) -> None:
-        if len(parts) < 2 or parts[1] not in PROVIDERS:
+        name = normalize_provider_name(parts[1]) if len(parts) > 1 else ""
+        if name not in PROVIDERS:
             self._console.print(
                 f"usage: /model <{'|'.join(PROVIDERS)}> [model]",
                 style="red",
@@ -263,7 +270,7 @@ class ChatUI:
             )
             return
 
-        provider = PROVIDERS[parts[1]]
+        provider = PROVIDERS[name]
         self._provider = provider
         self._model = parts[2] if len(parts) > 2 else provider.default_model
         self._print_status()

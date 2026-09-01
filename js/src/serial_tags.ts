@@ -58,6 +58,7 @@ export const INTERACT_WITH_CLAUDE_CONFIG_TAG = 'a11.sdk.InteractWithClaudeConfig
 export const INTERACT_WITH_CLAUDE_CODE_CONFIG_TAG = 'a11.sdk.InteractWithClaudeCodeConfig';
 export const INTERACT_WITH_GEMINI_CONFIG_TAG = 'a11.sdk.InteractWithGeminiConfig';
 export const INTERACT_WITH_OLLAMA_CONFIG_TAG = 'a11.sdk.InteractWithOllamaConfig';
+export const INTERACT_WITH_VLLM_CONFIG_TAG = 'a11.sdk.InteractWithVllmConfig';
 export const INTERACT_WITH_GEMMA_CONFIG_TAG = 'a11.sdk.InteractWithGemmaConfig';
 
 // --- Audio SDK ---------------------------------------------------------------

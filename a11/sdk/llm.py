@@ -501,6 +501,7 @@ class Backend(enum.StrEnum):
     CLAUDE_CODE = "claude_code"
     GEMINI = "gemini"
     OLLAMA = "ollama"
+    VLLM = "vllm"
 
 
 class NormalizedContentType(enum.StrEnum):

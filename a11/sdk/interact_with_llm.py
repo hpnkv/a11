@@ -66,6 +66,11 @@ _PROVIDERS: dict[str, _Provider] = {
         handler="interact_with_ollama",
         extra="ollama",
     ),
+    "vllm": _Provider(
+        module="a11.sdk.vllm.interact_with_vllm",
+        handler="interact_with_vllm",
+        extra="vllm",
+    ),
 }
 
 # When no provider header is set, model-family prefixes select a provider.

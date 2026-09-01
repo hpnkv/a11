@@ -2,8 +2,8 @@
  * `zod` schemas for the value carried on each backend's `config` action port.
  *
  * These mirror the pydantic config models of the backends that ship no
- * TypeScript handler (`a11/sdk/{gemini,ollama,anthropic}/*_schema.py`). They are
- * provided so a TypeScript caller can validate, document, and type the
+ * TypeScript handler (`a11/sdk/{gemini,ollama,vllm,anthropic}/*_schema.py`). They
+ * are provided so a TypeScript caller can validate, document, and type the
  * `config` port when routing an interaction to those providers through a
  * remote A11 session; the browser-only {@link GemmaConfig} lives in the gemma
  * module.
@@ -23,6 +23,7 @@ import {
   INTERACT_WITH_CLAUDE_CONFIG_TAG,
   INTERACT_WITH_GEMINI_CONFIG_TAG,
   INTERACT_WITH_OLLAMA_CONFIG_TAG,
+  INTERACT_WITH_VLLM_CONFIG_TAG,
 } from '../serial_tags.js';
 import { isOk, type StatusOr } from '../status.js';
 import { registerWireValueCodec, tagValue, testTagged, type Fields } from '../wire_values.js';
@@ -120,6 +121,81 @@ export const ollamaCreateChatConfigSchema = z.object({
     .describe('Constrain the model to emit valid JSON (Ollama `format="json"`).'),
 });
 export type OllamaCreateChatConfig = z.infer<typeof ollamaCreateChatConfigSchema>;
+
+/** Parameters for a single vLLM chat completion (OpenAI-compatible route). */
+export const vllmCreateChatCompletionConfigSchema = z.object({
+  max_tokens: z
+    .number()
+    .int()
+    .default(-1)
+    .describe(
+      'Maximum number of tokens to generate. -1 lets the model run until it' +
+        " stops on its own or reaches the deployment's context limit.",
+    ),
+  temperature: z.number().nullish().describe('Sampling temperature.'),
+  top_p: z.number().nullish().describe('Nucleus-sampling probability.'),
+  presence_penalty: z
+    .number()
+    .nullish()
+    .describe('Penalty applied to tokens that already appeared.'),
+  frequency_penalty: z
+    .number()
+    .nullish()
+    .describe('Penalty scaled by how often a token already appeared.'),
+  seed: z.number().int().nullish().describe('Sampling seed for reproducible output.'),
+  stop: z
+    .array(z.string())
+    .default([])
+    .describe('Strings that end the generation when produced.'),
+  top_k: z
+    .number()
+    .int()
+    .nullish()
+    .describe('Top-k sampling cutoff (vLLM `extra_body.top_k`).'),
+  min_p: z
+    .number()
+    .nullish()
+    .describe(
+      'Minimum token probability, relative to the most likely token (vLLM' +
+        ' `extra_body.min_p`).',
+    ),
+  repetition_penalty: z
+    .number()
+    .nullish()
+    .describe(
+      'Penalty applied to tokens from the prompt and the output so far (vLLM' +
+        ' `extra_body.repetition_penalty`).',
+    ),
+  json_output: z
+    .boolean()
+    .default(false)
+    .describe('Constrain the model to emit valid JSON (`response_format`).'),
+  json_schema: z
+    .record(z.string(), z.unknown())
+    .nullish()
+    .describe(
+      "A JSON Schema the output has to satisfy, enforced by vLLM's structured" +
+        ' decoding. Takes precedence over `json_output`.',
+    ),
+  chat_template_kwargs: z
+    .record(z.string(), z.unknown())
+    .default({})
+    .describe(
+      "Values passed to the model's chat template, such as" +
+        ' `{"enable_thinking": true}` on models whose template gates reasoning' +
+        ' (vLLM `extra_body.chat_template_kwargs`).',
+    ),
+  extra_body: z
+    .record(z.string(), z.unknown())
+    .default({})
+    .describe(
+      'Additional request fields, merged into the request body last. Covers' +
+        ' deployment-specific sampling parameters this config does not name.',
+    ),
+});
+export type VllmCreateChatCompletionConfig = z.infer<
+  typeof vllmCreateChatCompletionConfigSchema
+>;
 
 /** Parameters for creating a Claude message (`messages.create`). */
 export const claudeCreateMessageConfigSchema = z.object({
@@ -308,6 +384,13 @@ export const makeOllamaCreateChatConfig = registerConfigCodec(
   'OllamaCreateChatConfig',
 );
 
+/** Validate and tag a vLLM request config for the `config` port. */
+export const makeVllmCreateChatCompletionConfig = registerConfigCodec(
+  INTERACT_WITH_VLLM_CONFIG_TAG,
+  vllmCreateChatCompletionConfigSchema,
+  'VllmCreateChatCompletionConfig',
+);
+
 /** Validate and tag a Claude request config for the `config` port. */
 export const makeClaudeCreateMessageConfig = registerConfigCodec(
   INTERACT_WITH_CLAUDE_CONFIG_TAG,
@@ -325,4 +408,7 @@ export const makeClaudeCodeCreateSessionConfig = registerConfigCodec(
 /** Default model ids matching the Python SDK. */
 export const GEMINI_DEFAULT_MODEL = 'gemini-3.5-flash';
 export const OLLAMA_DEFAULT_MODEL = 'llama3.2';
+// A vLLM deployment serves the models it was started with; the Python handler
+// asks it for the first of them when no model is named.
+export const VLLM_DEFAULT_MODEL = '';
 export const CLAUDE_DEFAULT_MODEL = 'claude-sonnet-4-6';

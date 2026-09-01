@@ -48,6 +48,7 @@
     "interact_with_claude_code_config": "a11.sdk.InteractWithClaudeCodeConfig",
     "interact_with_gemini_config": "a11.sdk.InteractWithGeminiConfig",
     "interact_with_ollama_config": "a11.sdk.InteractWithOllamaConfig",
+    "interact_with_vllm_config": "a11.sdk.InteractWithVllmConfig",
     "interact_with_gemma_config": "a11.sdk.InteractWithGemmaConfig"
   },
   "audio": {

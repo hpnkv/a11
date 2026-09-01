@@ -61,6 +61,16 @@ PROVIDERS: dict[str, Provider] = {
         api_key_env=(),
         base_url="http://localhost:11434",
     ),
+    "vllm": Provider(
+        name="vllm",
+        # A deployment serves the models it was started with, and the handler
+        # asks it for the first of them when no model is named.
+        default_model="",
+        # Only a server started with --api-key needs a credential, and the
+        # handler reads VLLM_API_KEY itself where one is set.
+        api_key_env=(),
+        base_url="http://localhost:8000/v1",
+    ),
 }
 
 DEFAULT_PROVIDER = "claude"

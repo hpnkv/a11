@@ -62,6 +62,7 @@ INTERACT_WITH_CLAUDE_CONFIG = "a11.sdk.InteractWithClaudeConfig"
 INTERACT_WITH_CLAUDE_CODE_CONFIG = "a11.sdk.InteractWithClaudeCodeConfig"
 INTERACT_WITH_GEMINI_CONFIG = "a11.sdk.InteractWithGeminiConfig"
 INTERACT_WITH_OLLAMA_CONFIG = "a11.sdk.InteractWithOllamaConfig"
+INTERACT_WITH_VLLM_CONFIG = "a11.sdk.InteractWithVllmConfig"
 INTERACT_WITH_GEMMA_CONFIG = "a11.sdk.InteractWithGemmaConfig"
 
 # --- Audio SDK ---------------------------------------------------------------
@@ -99,6 +100,7 @@ __all__ = [
     "INTERACT_WITH_CLAUDE_CODE_CONFIG",
     "INTERACT_WITH_GEMINI_CONFIG",
     "INTERACT_WITH_OLLAMA_CONFIG",
+    "INTERACT_WITH_VLLM_CONFIG",
     "INTERACT_WITH_GEMMA_CONFIG",
     "AUDIO_BUFFER",
     "AUDIO_INPUT_OPTIONS",

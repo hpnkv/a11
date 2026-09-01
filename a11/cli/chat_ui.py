@@ -56,12 +56,13 @@ if TYPE_CHECKING:
 
 _HELP = (
     "Commands:\n"
-    "  /model <claude|claude_code|gemini|ollama> [model]   switch backend"
-    " (and optionally model)\n"
-    "  /clear                                              forget the"
+    "  /model <claude|claude_code|gemini|ollama|vllm> [model]  switch"
+    " backend (and optionally model)\n"
+    "  /clear                                                  forget the"
     " conversation so far\n"
-    "  /help, /?                                           show this help\n"
-    "  /exit, /quit                                        leave\n"
+    "  /help, /?                                               show this"
+    " help\n"
+    "  /exit, /quit                                            leave\n"
 )
 
 

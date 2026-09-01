@@ -55,12 +55,14 @@ claude = ["anthropic>=0.120.0"]
 claude-code = ["claude-agent-sdk>=0.2.140"]
 gemini = ["google-genai>=1.55.0"]
 ollama = ["ollama>=0.6.0"]
+vllm = ["openai>=2.0.0"]
 mcp = ["mcp>=2.1.1"]
 llm = [
     "anthropic>=0.120.0",
     "claude-agent-sdk>=0.2.140",
     "google-genai>=1.55.0",
     "ollama>=0.6.0",
+    "openai>=2.0.0",
 ]
 
 [tool.scikit-build]
@@ -173,6 +175,7 @@ dev = [
     "google-genai>=1.55.0",
     "mcp>=2.1.1",
     "ollama>=0.6.0",
+    "openai>=2.0.0",
     "pybind11-stubgen>=2.5.5",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
@@ -195,6 +198,9 @@ gemini = [
 ]
 ollama = [
     "ollama>=0.6.0",
+]
+vllm = [
+    "openai>=2.0.0",
 ]
 mcp = [
     "mcp>=2.1.1",

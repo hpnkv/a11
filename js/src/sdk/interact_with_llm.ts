@@ -50,6 +50,10 @@ const PROVIDERS: Readonly<Record<string, Provider>> = {
     handler: null,
     note: 'The ollama backend is only available in the Python package (a11-kit[ollama]).',
   },
+  vllm: {
+    handler: null,
+    note: 'The vllm backend is only available in the Python package (a11-kit[vllm]).',
+  },
 };
 
 // Fallbacks used when no explicit provider header is set: the model id's prefix

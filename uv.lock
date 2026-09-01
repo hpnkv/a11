@@ -37,12 +37,16 @@ llm = [
     { name = "claude-agent-sdk" },
     { name = "google-genai" },
     { name = "ollama" },
+    { name = "openai" },
 ]
 mcp = [
     { name = "mcp" },
 ]
 ollama = [
     { name = "ollama" },
+]
+vllm = [
+    { name = "openai" },
 ]
 
 [package.dev-dependencies]
@@ -63,6 +67,7 @@ dev = [
     { name = "google-genai" },
     { name = "mcp" },
     { name = "ollama" },
+    { name = "openai" },
     { name = "pybind11-stubgen" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -84,6 +89,9 @@ mcp = [
 ollama = [
     { name = "ollama" },
 ]
+vllm = [
+    { name = "openai" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -100,13 +108,15 @@ requires-dist = [
     { name = "msgpack", specifier = ">=1.2.1" },
     { name = "ollama", marker = "extra == 'llm'", specifier = ">=0.6.0" },
     { name = "ollama", marker = "extra == 'ollama'", specifier = ">=0.6.0" },
+    { name = "openai", marker = "extra == 'llm'", specifier = ">=2.0.0" },
+    { name = "openai", marker = "extra == 'vllm'", specifier = ">=2.0.0" },
     { name = "ormsgpack", specifier = ">=1.12.2" },
     { name = "prompt-toolkit", specifier = ">=3.0.0" },
     { name = "pydantic", specifier = ">=2.13.4" },
     { name = "rich", specifier = ">=13.0.0" },
     { name = "uvicorn", specifier = ">=0.52.1" },
 ]
-provides-extras = ["claude", "claude-code", "gemini", "ollama", "mcp", "llm"]
+provides-extras = ["claude", "claude-code", "gemini", "ollama", "vllm", "mcp", "llm"]
 
 [package.metadata.requires-dev]
 anthropic = [{ name = "anthropic", specifier = ">=0.120.0" }]
@@ -120,6 +130,7 @@ dev = [
     { name = "google-genai", specifier = ">=1.55.0" },
     { name = "mcp", specifier = ">=2.1.1" },
     { name = "ollama", specifier = ">=0.6.0" },
+    { name = "openai", specifier = ">=2.0.0" },
     { name = "pybind11-stubgen", specifier = ">=2.5.5" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "pytest-asyncio", specifier = ">=1.4.0" },
@@ -135,6 +146,7 @@ docs = [
 gemini = [{ name = "google-genai", specifier = ">=1.55.0" }]
 mcp = [{ name = "mcp", specifier = ">=2.1.1" }]
 ollama = [{ name = "ollama", specifier = ">=0.6.0" }]
+vllm = [{ name = "openai", specifier = ">=2.0.0" }]
 
 [[package]]
 name = "absl-py"
@@ -1327,6 +1339,23 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/fc/72/5f12423b6b39ca8430fbe56f77fcf4ef60f63067c7c4a2e30e200ed9ec16/ollama-0.6.2.tar.gz", hash = "sha256:936d55daa684f474364c098611c933626f8d6c7d67065c5b7ae0c477b508b07f", size = 53145, upload-time = "2026-04-29T21:21:15.018Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c4/ab/d6722beeb2d10f7a3b9ff49375708904fde18f82b5609a0bc4aeb5996a4d/ollama-0.6.2-py3-none-any.whl", hash = "sha256:3ad7daab28e5a973445c36a73882a3ef698c2ebb00e21e308652741577509f7d", size = 15115, upload-time = "2026-04-29T21:21:13.794Z" },
+]
+
+[[package]]
+name = "openai"
+version = "3.6.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "httpx2" },
+    { name = "jiter" },
+    { name = "pydantic" },
+    { name = "sniffio" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ac/76/913b755a1a6b54e2d9140eb8d488aa0d47c7359b1d7eac5e864cb7913bbf/openai-3.6.0.tar.gz", hash = "sha256:18fe3f6e96390ef41ee27b152fc9effefca321c33673bd9b956a572493d3ab9b", size = 1455376, upload-time = "2026-08-28T22:29:18.268Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a1/94/805b87ecc951c49ec8f247f5e8eb324ab064bd2ad73b6a0e704dd49aa073/openai-3.6.0-py3-none-any.whl", hash = "sha256:508e2158bf971687f953b62e44b02f207792c815aac306816386d7ba34d37f5f", size = 1699841, upload-time = "2026-08-28T22:29:16.436Z" },
 ]
 
 [[package]]

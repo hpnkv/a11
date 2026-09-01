@@ -661,8 +661,14 @@ def environment() -> dict[str, Any]:
     """What a number means only in the context of."""
     import a11
 
+    import a11.allocator
+
     return {
         "event_loop": event_loop_name,
+        # Which C allocator the process is running on. The `a11` command and
+        # `python -m bench` both preload the bundled one; a row taken without
+        # it is a few percent below the shipped configuration.
+        "allocator": "mimalloc" if a11.allocator.is_active() else "system",
         "python": sys.version.split()[0],
         "platform": platform.platform(),
         "machine": platform.machine(),

@@ -56,6 +56,15 @@ claude-code = ["claude-agent-sdk>=0.2.140"]
 gemini = ["google-genai>=1.55.0"]
 ollama = ["ollama>=0.6.0"]
 vllm = ["openai>=2.0.0"]
+# What `a11.demos.text_to_image` needs: a diffusion pipeline and the text
+# encoder it loads through transformers. `dtype=` on `from_pretrained`
+# wants diffusers 0.35 or later.
+diffusion = [
+    "accelerate>=0.30.0",
+    "diffusers>=0.35.0",
+    "torch>=2.2.0",
+    "transformers>=4.40.0",
+]
 mcp = ["mcp>=2.1.1"]
 llm = [
     "anthropic>=0.120.0",

@@ -13,12 +13,16 @@ consumer subscribes to the result it understands.
 
 !!! note "Before you start"
 
-    This guide's action needs `diffusers`, `torch` and a Stable Diffusion
-    checkpoint on the machine running the backend — the first run downloads
-    several gigabytes, and a CPU-only machine takes minutes per image:
+    The demo below draws against the hosted backend, which runs Stable
+    Diffusion 1.5 on a GPU. Nothing to install to try it.
+
+    To run the action yourself, the backend machine needs `diffusers`,
+    `transformers`, `torch` and a checkpoint — the first run downloads several
+    gigabytes, and a CPU-only machine takes minutes per image where a GPU takes
+    seconds:
 
     ```sh
-    pip install diffusers torch
+    pip install 'a11-kit[diffusion]'
     python -m a11.demos.web_demos_server   # ws://127.0.0.1:9010/a11-demos
     ```
 
@@ -28,15 +32,14 @@ consumer subscribes to the result it understands.
     [mkcert](https://github.com/FiloSottile/mkcert) makes one — if the
     browser blocks it.
 
-    Without them the action fails with `FAILED_PRECONDITION` and says what is
-    missing, which is what the demo below shows in its error region. The other
-    three guides' demos work against the hosted backend this page's field
-    defaults to; this one wants a backend with a checkpoint.
+    A backend without the diffusion stack fails the action with
+    `FAILED_PRECONDITION` and says what is missing, which is what the demo
+    below shows in its error region.
 
 ## Try it
 
-Point it at a backend that has a checkpoint. The bar moves once per denoising
-step, from the `progress` port; the image appears when `image` closes.
+The bar moves once per denoising step, from the `progress` port; the image
+appears when `image` closes.
 
 <link rel="stylesheet" href="../assets/web-demos.css">
 <div id="media-demo" class="a11-demo">
@@ -113,8 +116,11 @@ step is on that thread, not the loop:
 loop = asyncio.get_running_loop()
 
 def on_step(_pipeline, step, _timestep, kwargs):
+    # A scheduler's timestep list can run one longer than the step count asked
+    # for, and a bar told `step 9 of 8` reads as a fault in the page.
+    done = min(step + 1, request.num_inference_steps)
     asyncio.run_coroutine_threadsafe(
-        progress.put({"step": step + 1, "steps": request.num_inference_steps},
+        progress.put({"step": done, "steps": request.num_inference_steps},
                      mimetype="application/json"),
         loop,
     )
@@ -150,19 +156,29 @@ Close every output port so readers can observe the end of the stream.
 ## 3. The image is bytes
 
 The handler encodes the image in its chosen format and labels the chunk with
-the corresponding media type.
+the corresponding media type. The chunk is built and written directly:
 
 ```python
+def _png_chunk(png: bytes) -> a11.Chunk:
+    return a11.Chunk(
+        data=png, metadata=a11.ChunkMetadata(mimetype="image/png")
+    )
+
 png = await asyncio.to_thread(_png_bytes, result.images[0])
-await image_out.put(png, mimetype="image/png", final=True)
+await image_out.put_chunk(_png_chunk(png), final=True)
 ```
+
+`put` encodes a value through the serialization registry, which holds a codec
+per (type, media type) pair and has none for bytes as `image/png` — so `put`
+answers `NOT_FOUND`. A payload that is already bytes in its final format goes on
+the port as a chunk, the same way `a11.sdk.http.client` writes a request body.
 
 The browser reads the PNG as a *chunk* because it has no registered application
 type:
 
 ```ts
 const node = need(await call.getOutput('image', false));
-const chunk = need(await node.nextChunk(900_000));
+const chunk = need(await node.nextChunk(MAX_IMAGE_BYTES));
 image.src = URL.createObjectURL(new Blob([chunk.data], {type: chunk.mimetype}));
 ```
 
@@ -172,9 +188,13 @@ image.src = URL.createObjectURL(new Blob([chunk.data], {type: chunk.mimetype}));
 const progress = readPort(call, 'progress', (value) => {
     bar.value = (value as Progress).step;
 });
-const chunk = need(await node.nextChunk(900_000));
+const chunk = need(await node.nextChunk(MAX_IMAGE_BYTES));
 await progress;
 ```
+
+`nextChunk` takes the largest payload the reader will accept. A 512×512 PNG
+from this action is around 400 KB and the schema allows 1024×1024, so the page
+sets the ceiling above both.
 
 An undrained output port stalls its producer. Read `progress` while waiting for
 the image.

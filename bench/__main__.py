@@ -255,6 +255,9 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     runner = _install_loop(options.loop) if options.in_process else None
+    # The isolated runner selects the loop in each suite subprocess, so the
+    # parent records the requested name itself.
+    harness.event_loop_name = options.loop
     print(f"a11 bench: {len(selected)} benchmark(s), scale={options.scale}")
     environment = harness.environment()
     for key, value in environment.items():
@@ -296,5 +299,25 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def _relaunch_argv() -> list[str]:
+    """Arguments that re-run this command under a fresh interpreter.
+
+    `python -m bench` has to be reconstructed as `-m`, or the relaunched
+    process gets a different `sys.path[0]` than the one it was started with.
+    """
+    if __package__ and sys.argv and sys.argv[0].endswith("__main__.py"):
+        return ["-m", __package__, *sys.argv[1:]]
+    return list(sys.argv)
+
+
 if __name__ == "__main__":
+    # The allocator can only be swapped by launching the process with the
+    # library preloaded, which is what the `a11` command does at
+    # a11/cli/__main__.py. A run that skips it measures a configuration nobody
+    # ships. `A11_NO_ALLOCATOR_PRELOAD=1` opts out, and the per-suite
+    # subprocesses inherit the preload through the environment rather than
+    # re-executing.
+    from a11 import allocator
+
+    allocator.reexec_with_preload(_relaunch_argv())
     raise SystemExit(main())

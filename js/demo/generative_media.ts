@@ -6,9 +6,9 @@
  * PNG arrives on `image` at the end. The
  * page renders a progress bar from one port and the final image from another.
  *
- * Needs a backend with a Stable Diffusion checkpoint (see the guide). Without
- * one the action fails with `FAILED_PRECONDITION` and this page shows what it
- * said.
+ * The hosted demo backend draws these on a GPU. A backend without the
+ * diffusion stack fails the action with `FAILED_PRECONDITION`, and this page
+ * shows what it said.
  */
 
 import {ActionPortSchema, ActionSchema} from '../src/index.js';
@@ -43,6 +43,9 @@ interface Progress {
   step: number;
   steps: number;
 }
+
+/** The largest PNG this page will accept from the `image` port. */
+const MAX_IMAGE_BYTES = 4_000_000;
 
 class GenerativeMediaDemo {
   private readonly server = document.querySelector<HTMLInputElement>('#media-server')!;
@@ -87,8 +90,12 @@ class GenerativeMediaDemo {
 
       // The image is bytes, so it is read as a chunk rather than as a value:
       // what arrives is a PNG, and there is nothing to deserialize it into.
+      //
+      // The ceiling covers the largest image the action will draw: a 512x512
+      // PNG from the demo server is around 400 KB, and the schema allows
+      // 1024x1024.
       const node = need(await call.getOutput('image', false));
-      const chunk = need(await node.nextChunk(900_000));
+      const chunk = need(await node.nextChunk(MAX_IMAGE_BYTES));
       await progress;
       need(await call.wait(60_000));
 

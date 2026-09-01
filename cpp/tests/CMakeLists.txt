@@ -3,6 +3,7 @@ add_executable(a11_core_test
   data_json_test.cc
   data_types_test.cc
   json_codec_test.cc
+  msgpack_decode_test.cc
   msgpack_writer_encoding_test.cc
   string_codec_test.cc
   uuid_test.cc

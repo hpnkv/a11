@@ -458,6 +458,9 @@ async def test_rebinding_stream_moves_existing_action_node_tees():
 
     action.bind_stream(second)
     await _confirm(await request.put("payload", final=True))
+    # The tee runs off the writer's state machine, so a confirmed sequence does
+    # not mean the mirror has been handed over yet. Draining is the barrier.
+    await request.wait_for_buffer_to_drain()
 
     assert first.sent == []
     assert len(second.sent) == 1

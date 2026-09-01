@@ -52,6 +52,11 @@ namespace {
 /** How many times a generated id is retried against a session's live ones. */
 constexpr int kActionIdAttempts = 4;
 
+// How long a released node's writer is given to mirror what it still holds
+// before its stream is detached anyway. Long enough for a slow peer, short
+// enough that an unreachable one does not hold a stream reference for good.
+constexpr absl::Duration kDetachDrainWait = absl::Seconds(30);
+
 std::string NewActionId() {
   return a11::NewShortId();
 }
@@ -1874,11 +1879,19 @@ absl::Status Action::DetachBoundStreamNodes() {
   if (stream == nullptr) {
     return absl::OkStatus();
   }
-  absl::Status first;
-  for (const auto& node : nodes) {
-    KeepFirstError(node->DetachStream(stream), &first);
+  // A handler returns once its writes are *admitted*, and a node's writer
+  // mirrors in batches after that: detaching here drops every batch the writer
+  // has not formed yet, which is what FINDINGS.md measured as a source action
+  // of more than eight fragments delivering only the first eight. Each node is
+  // released once its buffer drains, on a fiber of its own so a handler's
+  // return still costs nothing.
+  for (const std::shared_ptr<nodes::AsyncNode>& node : nodes) {
+    a11::Schedule([node, stream]() {
+      (void)node->WaitForBufferToDrain().Await(absl::Now() + kDetachDrainWait);
+      node->DetachStream(stream).IgnoreError();
+    });
   }
-  return first;
+  return absl::OkStatus();
 }
 
 absl::Status Action::SendRemoteCancel() {

@@ -228,7 +228,11 @@ class ChunkStoreWriter {
   /** @brief
    *    Wait until the in-flight write buffer empties.
    *
-   *  A backpressure checkpoint before enqueuing more chunks.
+   *  A backpressure checkpoint before enqueuing more chunks. Covers both halves
+   *  of a write: the store confirmation and the mirror handed to any attached
+   *  WireStream. A chunk's own confirmation resolves on the store alone, so
+   *  this is the barrier for a caller that needs the mirror to have been
+   *  handed over.
    *
    *  @return
    *    An awaitable that resolves once the buffer has drained.

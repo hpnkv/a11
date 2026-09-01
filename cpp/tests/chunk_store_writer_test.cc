@@ -5,10 +5,12 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <variant>
 #include <vector>
 
 #include <absl/status/status.h>
 #include <absl/status/statusor.h>
+#include <absl/strings/str_cat.h>
 #include <absl/time/time.h>
 #include <gtest/gtest.h>
 
@@ -18,6 +20,7 @@
 #include "a11/net/wire_stream_with_recv.h"
 #include "a11/stores/chunk_store.h"
 #include "a11/stores/local_chunk_store.h"
+#include "thread/boost_primitives.h"
 #include "thread/fiber.h"
 
 namespace a11::stores {
@@ -88,6 +91,75 @@ class FailFirstCloseStore final : public ChunkStore {
   const std::shared_ptr<ChunkStore> store_;
   const absl::Status failure_;
   std::vector<absl::Status> close_statuses_;
+};
+
+/**
+ * A stream whose Send blocks until the test releases it.
+ *
+ * Stands in for a transport applying backpressure: ChannelWireStream writes a
+ * claimed message inline, and HttpTransport::PostWrite waits rather than posts
+ * once its queued bytes reach the bound.
+ */
+class GatedSendStream final : public net::WireStream {
+ public:
+  absl::Status Send(data::WireMessage message) override {
+    {
+      thread::MutexLock lock(&mu_);
+      ++entered_;
+      messages_.push_back(std::move(message));
+    }
+    return gate_.future().Await(absl::Now() + absl::Seconds(30)).status();
+  }
+
+  void Release() { gate_.SetValue(a11::Unit{}).IgnoreError(); }
+
+  [[nodiscard]] size_t entered() const {
+    thread::MutexLock lock(&mu_);
+    return entered_;
+  }
+
+  [[nodiscard]] std::vector<data::WireMessage> messages() const {
+    thread::MutexLock lock(&mu_);
+    return messages_;
+  }
+
+  a11::Task Start(net::OnMessage, net::OnDone) override {
+    return a11::ReadyTask();
+  }
+
+  a11::Task Accept(net::OnMessage, net::OnDone) override {
+    return a11::ReadyTask();
+  }
+
+  absl::Status HalfClose(data::ByteMap) override { return absl::OkStatus(); }
+
+  a11::Task DrainOutgoingMessages() override { return a11::ReadyTask(); }
+
+  absl::Status Abort(absl::Status) override { return absl::OkStatus(); }
+
+  absl::Status SetDeadline(absl::Time) override { return absl::OkStatus(); }
+
+  [[nodiscard]] absl::Time deadline() const override {
+    return absl::InfiniteFuture();
+  }
+
+  [[nodiscard]] absl::Status GetStatus() const override {
+    return absl::OkStatus();
+  }
+
+  [[nodiscard]] std::optional<data::ByteMap> GetTrailers() const override {
+    return std::nullopt;
+  }
+
+  [[nodiscard]] std::string GetId() const override { return "gated-stream"; }
+
+  [[nodiscard]] void* absl_nullable GetImpl() const override { return nullptr; }
+
+ private:
+  mutable thread::Mutex mu_;
+  size_t entered_ ABSL_GUARDED_BY(mu_) = 0;
+  std::vector<data::WireMessage> messages_ ABSL_GUARDED_BY(mu_);
+  a11::Promise<a11::Unit> gate_;
 };
 
 /// A stream whose every Send fails, standing in for an unreachable peer.
@@ -332,6 +404,65 @@ TEST(ChunkStoreWriterTest, DrainTeesAClosureMarkerAfterTheData) {
   const absl::Time shutdown_deadline = absl::Now() + absl::Seconds(5);
   ASSERT_TRUE(pair.first->Done().Await(shutdown_deadline).ok());
   ASSERT_TRUE(pair.second->Done().Await(shutdown_deadline).ok());
+}
+
+TEST(ChunkStoreWriterTest, ABlockedTeeDoesNotHoldUpTheNextBatch) {
+  // Sixteen chunks against the default eight-per-batch limit: two batches, so
+  // the second has to be written while the first batch's tee is still out.
+  auto store = *LocalChunkStore::Create("writer-tee-head-of-line");
+  auto writer = *ChunkStoreWriter::Create(store);
+  auto gated = std::make_shared<GatedSendStream>();
+  ASSERT_TRUE(writer->AttachStream(gated).ok());
+
+  std::vector<a11::Future<std::uint32_t>> confirmations;
+  confirmations.reserve(16);
+  for (int index = 0; index < 16; ++index) {
+    ChunkStoreWrite write = writer->EnqueueChunk(
+        data::Chunk{.data = absl::StrCat("chunk-", index)}, std::nullopt,
+        /*final=*/index == 15, /*ensure_started=*/false);
+    ASSERT_TRUE(write.admitted.Await().ok());
+    confirmations.push_back(std::move(write.confirmation));
+  }
+  writer->Flush();
+
+  const absl::Time deadline = absl::Now() + absl::Seconds(10);
+  // The last chunk of the second batch has its sequence while the first
+  // batch's tee is blocked. This is the stall FINDINGS.md measured: the writer
+  // used to hold its operation across the tee, so nothing after the first
+  // eight could be written at all.
+  const absl::StatusOr<std::uint32_t> last = confirmations.back().Await(deadline);
+  ASSERT_TRUE(last.ok()) << last.status();
+  EXPECT_EQ(*last, 15);
+  EXPECT_GE(gated->entered(), 1U);
+  for (size_t index = 0; index < confirmations.size(); ++index) {
+    const absl::StatusOr<std::uint32_t> confirmed =
+        confirmations[index].Await(deadline);
+    ASSERT_TRUE(confirmed.ok()) << index << ": " << confirmed.status();
+    EXPECT_EQ(*confirmed, index);
+  }
+  EXPECT_EQ(*store->Size().Await(deadline), 16);
+
+  gated->Release();
+  // Both batches reach the stream, and every fragment with it.
+  const absl::Status closed = writer->DrainAndClose().Await(deadline).status();
+  ASSERT_TRUE(closed.ok()) << closed;
+  size_t fragments = 0;
+  bool marker_last = false;
+  const std::vector<data::WireMessage> sent = gated->messages();
+  for (size_t index = 0; index < sent.size(); ++index) {
+    for (const data::NodeFragment& fragment : sent[index].node_fragments) {
+      const data::Chunk* chunk = std::get_if<data::Chunk>(&fragment.data);
+      ASSERT_NE(chunk, nullptr);
+      const bool is_marker = data::IsCloseStatusChunk(*chunk);
+      marker_last = is_marker;
+      if (!is_marker) {
+        ++fragments;
+      }
+    }
+  }
+  EXPECT_EQ(fragments, 16);
+  // The closure marker still follows the data it closes.
+  EXPECT_TRUE(marker_last);
 }
 
 TEST(ChunkStoreWriterTest, ClosureMarkerFailureStillClosesTheStore) {

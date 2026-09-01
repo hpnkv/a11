@@ -19,6 +19,7 @@
 #include <absl/status/statusor.h>
 
 #include "a11/concurrency/callback_scheduler.h"
+#include "a11/concurrency/executor.h"
 #include "a11/concurrency/future.h"
 #include "a11/concurrency/inline_pump.h"
 #include "a11/data/types.h"
@@ -191,7 +192,8 @@ struct ChunkStoreWriter::State
         closing = false;
       }
 
-      if (outstanding == 0 && !drain_waiters.empty()) {
+      if (outstanding == 0 && tees_in_flight == 0 && !closing &&
+          !drain_waiters.empty()) {
         completed_waiters = std::move(drain_waiters);
         drain_waiters.clear();
       }
@@ -202,13 +204,15 @@ struct ChunkStoreWriter::State
         lifecycle_completed = true;
         closing = false;
       } else if (!lifecycle_completed && lifecycle == Lifecycle::kAbort &&
-                 stop_status.has_value() && outstanding == 0) {
+                 stop_status.has_value() && outstanding == 0 &&
+                 tees_in_flight == 0) {
         operation = Operation::kClose;
         generation = ++operation_generation;
         requested_close_status = *stop_status;
         start_close = true;
       } else if (!lifecycle_completed && lifecycle == Lifecycle::kClose &&
-                 !status.has_value() && outstanding == 0) {
+                 !status.has_value() && outstanding == 0 &&
+                 tees_in_flight == 0) {
         operation = Operation::kClose;
         generation = ++operation_generation;
         requested_close_status = absl::OkStatus();
@@ -349,9 +353,14 @@ struct ChunkStoreWriter::State
       }
     }
 
-    absl::Status tee_status;
+    // The message is assembled here, where the batch is still owned by this
+    // operation, and handed to the streams after the operation is released
+    // below. A WireStream::Send may block -- on a transport's backpressure, and
+    // in ChannelWireStream on the write itself.
+    data::WireMessage message;
+    std::vector<std::shared_ptr<net::WireStream>> tee_streams;
     if (operation_status.ok() && !active_batch.streams.empty()) {
-      data::WireMessage message;
+      tee_streams = active_batch.streams;
       message.node_fragments.reserve(active_batch.elements.size());
       for (size_t index = 0; index < active_batch.elements.size(); ++index) {
         message.node_fragments.push_back(data::NodeFragment{
@@ -360,13 +369,6 @@ struct ChunkStoreWriter::State
             .seq = (*result)[index],
             .continued = active_batch.elements[index].continued,
         });
-      }
-      for (const std::shared_ptr<net::WireStream>& stream :
-           active_batch.streams) {
-        tee_status = stream->Send(message);
-        if (!tee_status.ok()) {
-          break;
-        }
       }
     }
 
@@ -377,13 +379,19 @@ struct ChunkStoreWriter::State
     std::vector<std::shared_ptr<a11::Promise<a11::Unit>>> completed_waiters;
     std::shared_ptr<a11::Promise<a11::Unit>> failed_lifecycle;
     std::optional<absl::Status> stop;
-    absl::Status later_status =
-        operation_status.ok() ? tee_status : operation_status;
+    bool teeing = false;
     {
       thread::MutexLock lock(&mu);
       if (operation != Operation::kWrite ||
           operation_generation != generation) {
         return;
+      }
+      // Counted while the operation is still held, so a close cannot slip
+      // between releasing the operation and the tee below and put its marker
+      // ahead of this batch. DriveOnce's close branches wait for zero.
+      teeing = !tee_streams.empty();
+      if (teeing) {
+        ++tees_in_flight;
       }
       stop = stop_status;
       completed = std::move(in_flight_batch->elements);
@@ -394,10 +402,10 @@ struct ChunkStoreWriter::State
 
       if (stop.has_value()) {
         status = *stop;
-      } else if (!later_status.ok()) {
-        status = later_status;
+      } else if (!operation_status.ok()) {
+        status = operation_status;
       }
-      if (stop.has_value() || !later_status.ok()) {
+      if (stop.has_value() || !operation_status.ok()) {
         const size_t rejected_admitted = queue.size();
         while (!queue.empty()) {
           rejected.push_back(std::move(queue.front()));
@@ -412,11 +420,12 @@ struct ChunkStoreWriter::State
         AdmitPendingLocked(&admitted);
       }
 
-      if (outstanding == 0 && !drain_waiters.empty()) {
+      if (outstanding == 0 && tees_in_flight == 0 && !closing &&
+          !drain_waiters.empty()) {
         completed_waiters = std::move(drain_waiters);
         drain_waiters.clear();
       }
-      if (!stop.has_value() && !later_status.ok() &&
+      if (!stop.has_value() && !operation_status.ok() &&
           lifecycle == Lifecycle::kClose && !lifecycle_completed) {
         failed_lifecycle = lifecycle_promise;
         lifecycle_completed = true;
@@ -424,10 +433,8 @@ struct ChunkStoreWriter::State
       }
     }
 
-    // A tee error occurs after durable store confirmation. It fails later
-    // writes, while the current batch still receives its sequence values.
     const absl::Status completion_status = stop.value_or(operation_status);
-    const absl::Status remaining_status = stop.value_or(later_status);
+    const absl::Status remaining_status = stop.value_or(operation_status);
     std::vector<std::uint32_t> sequences;
     if (result.ok()) {
       sequences = *result;
@@ -443,7 +450,29 @@ struct ChunkStoreWriter::State
       CompleteTask(waiter, remaining_status);
     }
     CompleteTask(failed_lifecycle, remaining_status);
+    // The tee runs on its own fiber. WriteDone often runs inside a pump turn --
+    // LocalChunkStore::PutMany completes inline -- and a Send on that turn's
+    // stack blocks the turn whatever order the two are written in. A node with
+    // no stream attached does not reach this at all.
+    if (teeing) {
+      a11::Schedule([self = shared_from_this(), message = std::move(message),
+                     streams = std::move(tee_streams)]() mutable {
+        absl::Status tee_status;
+        for (const std::shared_ptr<net::WireStream>& stream : streams) {
+          tee_status = stream->Send(message);
+          if (!tee_status.ok()) {
+            break;
+          }
+        }
+        self->FinishTee(std::move(tee_status));
+      });
+    }
     // Another pass, for anything queued behind this batch.
+    RedrivePump();
+  }
+
+  /// Hand the pump another pass, from inside a turn or from outside one.
+  void RedrivePump() {
     bool running = false;
     {
       thread::MutexLock lock(&mu);
@@ -455,6 +484,60 @@ struct ChunkStoreWriter::State
     if (!running) {
       Wake();
     }
+  }
+
+  /**
+   * Retire one in-flight data tee.
+   *
+   * A tee error arrives after the batch has its sequence values and cannot
+   * revoke them, so it fails later writes instead: the recorded status, the
+   * queued elements and a pending graceful close.
+   */
+  void FinishTee(absl::Status tee_status) {
+    std::vector<Element> rejected;
+    std::vector<Element> pending_rejected;
+    std::vector<std::shared_ptr<a11::Promise<a11::Unit>>> completed_waiters;
+    std::shared_ptr<a11::Promise<a11::Unit>> failed_lifecycle;
+    absl::Status failure = tee_status;
+    {
+      thread::MutexLock lock(&mu);
+      --tees_in_flight;
+      if (!tee_status.ok()) {
+        if (status.has_value()) {
+          failure = *status;
+        } else {
+          status = tee_status;
+        }
+        const size_t rejected_admitted = queue.size();
+        while (!queue.empty()) {
+          rejected.push_back(std::move(queue.front()));
+          queue.pop_front();
+        }
+        outstanding -= rejected_admitted;
+        while (!pending_queue.empty()) {
+          pending_rejected.push_back(std::move(pending_queue.front()));
+          pending_queue.pop_front();
+        }
+        if (lifecycle == Lifecycle::kClose && !lifecycle_completed) {
+          failed_lifecycle = lifecycle_promise;
+          lifecycle_completed = true;
+          closing = false;
+        }
+      }
+      if (outstanding == 0 && tees_in_flight == 0 && !closing &&
+          !drain_waiters.empty()) {
+        completed_waiters = std::move(drain_waiters);
+        drain_waiters.clear();
+      }
+    }
+    CompleteElements(std::move(rejected), {}, failure);
+    CompleteElements(std::move(pending_rejected), {}, failure);
+    for (const auto& waiter : completed_waiters) {
+      CompleteTask(waiter, failure);
+    }
+    CompleteTask(failed_lifecycle, failure);
+    // A close deferred while this tee was outstanding runs now.
+    RedrivePump();
   }
 
   // Closing a writer is a lifecycle fact bound peers cannot otherwise observe:
@@ -618,6 +701,10 @@ struct ChunkStoreWriter::State
       ABSL_GUARDED_BY(mu);
   std::vector<std::shared_ptr<net::WireStream>> attached_streams
       ABSL_GUARDED_BY(mu);
+  // Tees handed to a stream and not yet returned. A data tee runs outside the
+  // state machine's operation, so this is what a close waits on to keep its
+  // marker behind the data. See WriteDone.
+  size_t tees_in_flight ABSL_GUARDED_BY(mu) = 0;
   bool queued ABSL_GUARDED_BY(mu) = false;
   // Re-entry bookkeeping for Drive(); read and written only under mu.
   InlinePumpState pump;
@@ -876,7 +963,11 @@ a11::Task ChunkStoreWriter::WaitForBufferToDrain() {
     thread::MutexLock lock(&state_->mu);
     if (state_->status.has_value() && !state_->status->ok()) {
       immediate = *state_->status;
-    } else if (state_->outstanding == 0) {
+    } else if (state_->outstanding == 0 && state_->tees_in_flight == 0 &&
+               !state_->closing) {
+      // A batch handed to a tee is still in flight for a caller pacing itself
+      // against this, and its failure does not exist yet. A requested close
+      // counts too: its marker is the last thing this writer hands over.
       immediate = absl::OkStatus();
     } else {
       state_->drain_waiters.push_back(promise);

@@ -2,6 +2,7 @@
 
 #include "a11/actions/action.h"
 
+#include <atomic>
 #include <memory>
 #include <optional>
 #include <string>
@@ -20,6 +21,7 @@
 #include "a11/net/in_process_wire_stream.h"
 #include "a11/nodes/async_node.h"
 #include "a11/service/session.h"
+#include "thread/fiber.h"
 
 namespace a11::actions {
 namespace {
@@ -64,6 +66,137 @@ ActionHandler EchoHandler() {
           .status();
     });
   };
+}
+
+ActionSchema EmptySchema(std::string name) {
+  return ActionSchema{.name = std::move(name)};
+}
+
+std::shared_ptr<service::Session> SessionWithOneActionSlot() {
+  service::SessionOptions options;
+  options.max_concurrent_root_actions = 1;
+  options.no_stream_timeout = absl::InfiniteDuration();
+  return *service::Session::Create("limited", {}, {}, {}, options);
+}
+
+TEST(ActionLimiterTest, TryAcquireReportsImmediateCapacity) {
+  auto limiter = *ActionLimiter::Create(1);
+  EXPECT_TRUE(limiter->TryAcquire());
+  EXPECT_FALSE(limiter->TryAcquire());
+  limiter->Release();
+  EXPECT_TRUE(limiter->TryAcquire());
+  limiter->Release();
+}
+
+TEST(ActionTest, UncontendedSessionHandlerStartsWithoutAFiber) {
+  (void)thread::Fiber::Current();
+  auto session = SessionWithOneActionSlot();
+  auto completion = std::make_shared<a11::Promise<a11::Unit>>();
+  std::atomic<int> starts{0};
+  auto action = *Action::Create(
+      EmptySchema("hold"), "uncontended",
+      [completion, &starts](std::shared_ptr<Action>) {
+        ++starts;
+        return completion->future();
+      },
+      nullptr, nullptr, session);
+
+  const size_t created = thread::internal::CreatedFiberCountForTesting();
+  ASSERT_TRUE(action->Run().ok());
+  EXPECT_EQ(starts, 1);
+  EXPECT_EQ(thread::internal::CreatedFiberCountForTesting(), created);
+
+  ASSERT_TRUE(completion->SetValue(a11::Unit{}).ok());
+  EXPECT_TRUE(action->Wait(absl::Seconds(5)).Await().ok());
+}
+
+TEST(ActionTest, SaturatedSessionLimiterRetainsTheFiberPath) {
+  (void)thread::Fiber::Current();
+  auto session = SessionWithOneActionSlot();
+  auto first_completion = std::make_shared<a11::Promise<a11::Unit>>();
+  auto second_completion = std::make_shared<a11::Promise<a11::Unit>>();
+  std::atomic<int> starts{0};
+  auto first = *Action::Create(
+      EmptySchema("hold"), "first",
+      [first_completion, &starts](std::shared_ptr<Action>) {
+        ++starts;
+        return first_completion->future();
+      },
+      nullptr, nullptr, session);
+  auto second = *Action::Create(
+      EmptySchema("hold"), "second",
+      [second_completion, &starts](std::shared_ptr<Action>) {
+        ++starts;
+        return second_completion->future();
+      },
+      nullptr, nullptr, session);
+
+  ASSERT_TRUE(first->Run().ok());
+  const size_t created = thread::internal::CreatedFiberCountForTesting();
+  ASSERT_TRUE(second->Run().ok());
+  EXPECT_EQ(starts, 1);
+  EXPECT_GT(thread::internal::CreatedFiberCountForTesting(), created);
+
+  ASSERT_TRUE(first_completion->SetValue(a11::Unit{}).ok());
+  for (int attempt = 0; attempt < 100 && starts != 2; ++attempt) {
+    absl::SleepFor(absl::Milliseconds(1));
+  }
+  ASSERT_EQ(starts, 2);
+  ASSERT_TRUE(second_completion->SetValue(a11::Unit{}).ok());
+  EXPECT_TRUE(first->Wait(absl::Seconds(5)).Await().ok());
+  EXPECT_TRUE(second->Wait(absl::Seconds(5)).Await().ok());
+}
+
+TEST(ActionTest, CancellationReleasesFastPathLimiterCapacity) {
+  auto session = SessionWithOneActionSlot();
+  auto first_completion = std::make_shared<a11::Promise<a11::Unit>>();
+  auto second_completion = std::make_shared<a11::Promise<a11::Unit>>();
+  ASSERT_TRUE(first_completion->SetCancellationCallback([] {}).ok());
+  std::atomic<int> starts{0};
+  auto first = *Action::Create(
+      EmptySchema("hold"), "cancelled",
+      [first_completion, &starts](std::shared_ptr<Action>) {
+        ++starts;
+        return first_completion->future();
+      },
+      nullptr, nullptr, session);
+  auto second = *Action::Create(
+      EmptySchema("hold"), "after-cancel",
+      [second_completion, &starts](std::shared_ptr<Action>) {
+        ++starts;
+        return second_completion->future();
+      },
+      nullptr, nullptr, session);
+
+  ASSERT_TRUE(first->Run().ok());
+  ASSERT_TRUE(first->Cancel().ok());
+  ASSERT_TRUE(second->Run().ok());
+  EXPECT_EQ(starts, 2);
+
+  ASSERT_TRUE(first_completion->SetValue(a11::Unit{}).ok());
+  ASSERT_TRUE(second_completion->SetValue(a11::Unit{}).ok());
+  EXPECT_EQ(first->Wait(absl::Seconds(5)).Await().status().code(),
+            absl::StatusCode::kCancelled);
+  EXPECT_TRUE(second->Wait(absl::Seconds(5)).Await().ok());
+}
+
+TEST(ActionTest, InputAutofillRetainsTheFiberPath) {
+  (void)thread::Fiber::Current();
+  auto completion = std::make_shared<a11::Promise<a11::Unit>>();
+  ActionSchema schema = EmptySchema("autofill");
+  schema.inputs.emplace("input",
+                        ActionPortSchema{.name = "input",
+                                         .type = "application/octet-stream",
+                                         .autofills = {std::nullopt}});
+  auto action = *Action::Create(
+      std::move(schema), "autofill",
+      [completion](std::shared_ptr<Action>) { return completion->future(); });
+
+  const size_t created = thread::internal::CreatedFiberCountForTesting();
+  ASSERT_TRUE(action->Run().ok());
+  EXPECT_GT(thread::internal::CreatedFiberCountForTesting(), created);
+  ASSERT_TRUE(completion->SetValue(a11::Unit{}).ok());
+  EXPECT_TRUE(action->Wait(absl::Seconds(5)).Await().ok());
 }
 
 TEST(ActionTest, LocalRunStreamsDataAndPublishesStatus) {

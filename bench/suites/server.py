@@ -68,6 +68,7 @@ from bench import harness
 from bench.harness import Result, Skip, benchmark, percentiles
 from bench.peer import (
     COMPUTE,
+    CONSTANT,
     ECHO,
     SINK,
     SOURCE,
@@ -164,6 +165,19 @@ class Client:
         call = self._call(ECHO)
         await call.call()
         await call["text"].finalize(payload)
+        await call["out"].consume(str)
+        await call.wait(_WAIT)
+
+    async def echo_prefilled(self, payload: str = "payload") -> None:
+        call = self._call(ECHO)
+        await call["text"].finalize(payload)
+        await call.call()
+        await call["out"].consume(str)
+        await call.wait(_WAIT)
+
+    async def constant(self) -> None:
+        call = self._call(CONSTANT)
+        await call.call()
         await call["out"].consume(str)
         await call.wait(_WAIT)
 
@@ -1108,6 +1122,13 @@ async def action_ceiling_attribution(scale: float) -> list[Result]:
                 64,
                 {"sessions": sessions, "outstanding": 64},
             )
+        await action_row(
+            "action_ceiling_prefilled_input",
+            64,
+            64,
+            {"sessions": 64, "outstanding": 64},
+            operation_name="echo_prefilled",
+        )
         for clients in (1, 64):
             for enabled in (False, True):
                 await action_row(
@@ -1165,6 +1186,46 @@ async def action_ceiling_attribution(scale: float) -> list[Result]:
                 note="one warm-up and five measured windows",
             )
         )
+    finally:
+        await peer.aclose()
+    return results
+
+
+@benchmark(SUITE, "action_ceiling_store_control", slow=True)
+async def action_ceiling_store_control(scale: float) -> list[Result]:
+    """Compare unary echo with an action that has no application input node."""
+    peer = await _peer()
+    link = _link(peer)
+    seconds = max(2.0 * scale, 1.0)
+    results: list[Result] = []
+    try:
+        async with _fleet(peer, "websocket") as fleet:
+            clients = [await fleet.connect() for _index in range(64)]
+            for operation_name in ("echo", "constant"):
+                metrics = await _measure_action_configuration(
+                    peer,
+                    clients,
+                    clients,
+                    seconds,
+                    operation_name=operation_name,
+                    instrument=operation_name == "echo",
+                )
+                results.append(
+                    Result(
+                        SUITE,
+                        "action_ceiling_store_control",
+                        metrics,
+                        {
+                            "link": link,
+                            "loop": peer.environment.get(
+                                "event_loop", "unknown"
+                            ),
+                            "operation": operation_name,
+                            "sessions": 64,
+                        },
+                        note="one warm-up and five measured windows",
+                    )
+                )
     finally:
         await peer.aclose()
     return results

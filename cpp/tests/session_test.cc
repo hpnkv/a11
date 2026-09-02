@@ -10,9 +10,15 @@
 #include <absl/time/time.h>
 #include <gtest/gtest.h>
 
+#include "a11/actions/action.h"
+#include "a11/actions/registry.h"
+#include "a11/actions/schema.h"
+#include "a11/concurrency/executor.h"
+#include "a11/concurrency/future.h"
 #include "a11/data/types.h"
 #include "a11/net/in_process_wire_stream.h"
 #include "a11/nodes/async_node.h"
+#include "thread/fiber.h"
 
 namespace a11::service {
 namespace {
@@ -37,6 +43,64 @@ TEST(SessionTest, DispatchesFragmentsIntoItsNodeMap) {
   ASSERT_TRUE(read.ok()) << read.status();
   ASSERT_TRUE(read->has_value());
   EXPECT_EQ(read->value().data, "payload");
+}
+
+TEST(SessionTest, FiberDispatchesOneFragmentWithoutNestedFibers) {
+  (void)thread::Fiber::Current();
+  auto session = *Session::Create("session", {}, {}, {}, TestOptions());
+  data::WireMessage message{.node_fragments = {{
+                                .id = "node",
+                                .data = data::Chunk{.data = "payload"},
+                                .seq = 0,
+                                .continued = false,
+                            }}};
+
+  const size_t created = thread::internal::CreatedFiberCountForTesting();
+  a11::Task dispatched = a11::SubmitTask(
+      [session, message = std::move(message)]() mutable -> absl::Status {
+        return session->DispatchWireMessage(std::move(message), nullptr)
+            .Await()
+            .status();
+      });
+  ASSERT_TRUE(dispatched.Await(absl::Now() + absl::Seconds(5)).ok());
+  EXPECT_EQ(thread::internal::CreatedFiberCountForTesting(), created + 1);
+
+  auto node = *session->GetNodeMap()->Get("node");
+  auto read = node->NextChunk().Await(absl::Now() + absl::Seconds(5));
+  ASSERT_TRUE(read.ok()) << read.status();
+  ASSERT_TRUE(read->has_value());
+  EXPECT_EQ(read->value().data, "payload");
+}
+
+TEST(SessionTest, FiberDispatchesActionMessageWithoutNestedFibers) {
+  (void)thread::Fiber::Current();
+  auto completion = std::make_shared<a11::Promise<a11::Unit>>();
+  auto registry = std::make_shared<actions::ActionRegistry>();
+  actions::ActionSchema schema{.name = "hold"};
+  ASSERT_TRUE(registry
+                  ->Register("hold", schema,
+                             [completion](std::shared_ptr<actions::Action>) {
+                               return completion->future();
+                             })
+                  .ok());
+  auto session =
+      *Session::Create("session", {}, {}, {}, TestOptions(), nullptr, registry);
+  data::WireMessage message{.actions = {{.id = "action", .name = "hold"}}};
+
+  const size_t created = thread::internal::CreatedFiberCountForTesting();
+  a11::Task dispatched = a11::SubmitTask(
+      [session, message = std::move(message)]() mutable -> absl::Status {
+        return session->DispatchWireMessage(std::move(message), nullptr)
+            .Await()
+            .status();
+      });
+  ASSERT_TRUE(dispatched.Await(absl::Now() + absl::Seconds(5)).ok());
+  EXPECT_EQ(thread::internal::CreatedFiberCountForTesting(), created + 1);
+
+  auto action = session->GetAction("action");
+  ASSERT_TRUE(action.ok()) << action.status();
+  ASSERT_TRUE(completion->SetValue(a11::Unit{}).ok());
+  EXPECT_TRUE((*action)->Wait(absl::Seconds(5)).Await().ok());
 }
 
 TEST(SessionTest, ReceiveAdapterReturnsStreamIdAndSessionHalfClose) {

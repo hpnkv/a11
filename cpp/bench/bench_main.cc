@@ -488,6 +488,42 @@ void NodesSuite(Recorder& recorder, double scale) {
          .note = "the native Await is the store confirmation, not admission"});
   }
 
+  for (const bool preserve_object : {false, true}) {
+    auto store = *stores::LocalChunkStore::Create(absl::StrCat(
+        "bench-object-round-trip-", preserve_object ? "preserved" : "encoded"));
+    auto node = *nodes::AsyncNode::Create(store);
+    const data::ChunkMetadata value{
+        .mimetype = "application/octet-stream",
+        .attributes = {{"source", "native-object-control"}}};
+    const std::int64_t iterations = Scaled(50000, scale, 1000);
+    bool failed = false;
+    auto metrics = Latency(
+        [&](std::int64_t) {
+          absl::StatusOr<std::uint32_t> put =
+              preserve_object ? node->PutObject(value, "application/x-msgpack")
+                                    .Await(Deadline())
+                              : node->Put(value, std::nullopt, false,
+                                          "application/x-msgpack")
+                                    .Await(Deadline());
+          if (!put.ok()) {
+            failed = true;
+            return;
+          }
+          absl::StatusOr<std::optional<data::ChunkMetadata>> read =
+              node->NextObject<data::ChunkMetadata>().Await(Deadline());
+          if (!read.ok() || !read->has_value() || **read != value) {
+            failed = true;
+          }
+        },
+        iterations, iterations / 10);
+    metrics["failures"] = failed ? 1.0 : 0.0;
+    recorder.Add(
+        {.suite = "nodes",
+         .name = "local_object_round_trip",
+         .metrics = metrics,
+         .params = {{"path", preserve_object ? "preserved" : "encoded"}}});
+  }
+
   {
     const std::int64_t count = Scaled(100000, scale, 1000);
     auto store = *stores::LocalChunkStore::Create("bench-read");

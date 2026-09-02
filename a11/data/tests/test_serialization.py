@@ -221,6 +221,47 @@ def test_custom_registration_mro_wildcards_and_match_order():
     assert type(registry.from_chunk(chunk, obj_type=Mapping)) is Mapping
 
 
+def test_deserializer_registration_invalidates_cached_selection():
+    class Base:
+        def __init__(self, source):
+            self.source = source
+
+    class Child(Base):
+        pass
+
+    registry = SerializationRegistry()
+    registry.register_deserializer(
+        Base,
+        "application/x-cache-invalidation",
+        lambda _data, obj_type: obj_type("base"),
+    )
+    chunk = types.Chunk(
+        metadata=types.ChunkMetadata(
+            mimetype="application/x-cache-invalidation"
+        ),
+        data=b"value",
+    )
+
+    assert registry.from_chunk(chunk, obj_type=Child).source == "base"
+    registry.register_deserializer(
+        Child,
+        "application/x-cache-invalidation",
+        lambda _data, obj_type: obj_type("child"),
+    )
+    assert registry.from_chunk(chunk, obj_type=Child).source == "child"
+
+
+def test_cached_chunk_metadata_is_copied_into_each_result():
+    registry = SerializationRegistry(register_defaults=True)
+
+    first = registry.to_chunk("first")
+    second = registry.to_chunk("second")
+    first.metadata.mimetype = "text/x-mutated"
+
+    assert first.get_mimetype() == "text/x-mutated"
+    assert second.get_mimetype() == "text/plain"
+
+
 def test_deserializer_can_receive_the_complete_chunk():
     registry = SerializationRegistry()
 

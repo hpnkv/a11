@@ -87,6 +87,15 @@ void KeepFirstError(absl::Status candidate, absl::Status* first) {
   }
 }
 
+a11::Task RunOnCurrentFiberOrSubmit(
+    absl::AnyInvocable<absl::Status() &&> work) {
+  if (thread::GetPerThreadFiberPtr() == nullptr) {
+    return a11::SubmitTask(std::move(work));
+  }
+  absl::Status status = std::move(work)();
+  return status.ok() ? a11::ReadyTask() : a11::FailedTask(std::move(status));
+}
+
 }  // namespace
 
 struct Session::StreamState {
@@ -808,7 +817,7 @@ a11::Task Session::DispatchActionMessage(
     return a11::FailedTask(validation);
   }
   std::shared_ptr<Session> self = shared_from_this();
-  return a11::SubmitTask(
+  return RunOnCurrentFiberOrSubmit(
       [self = std::move(self), message = std::move(message),
        origin_stream = std::move(origin_stream)]() mutable -> absl::Status {
         if (message.name == actions::kCancelActionName) {
@@ -917,8 +926,7 @@ a11::Task Session::DispatchActionMessage(
           return absl::OkStatus();
         }
         return dispatch_status;
-      },
-      {});
+      });
 }
 
 a11::Task Session::DispatchAction(
@@ -950,120 +958,121 @@ a11::Task Session::DispatchWireMessage(
   }
 
   std::shared_ptr<Session> self = shared_from_this();
-  return a11::SubmitTask(
-      [self = std::move(self), message = std::move(message),
-       origin_stream = std::move(origin_stream)]() mutable -> absl::Status {
-        struct DispatchFailure {
-          std::string element_type;
-          size_t element_index;
-          absl::Status status;
-        };
-        std::vector<DispatchFailure> failures;
-        // Actions are dispatched before node fragments so a receiver applies
-        // its own input autofills (and closes those inputs) ahead of any
-        // fragments in the same WireMessage that target them.
-        for (size_t index = 0; index < message.actions.size(); ++index) {
-          data::ActionMessage& action = message.actions[index];
-          absl::Status status =
-              self->DispatchActionMessage(std::move(action), origin_stream)
-                  .Await()
-                  .status();
-          if (!status.ok()) {
-            failures.push_back(DispatchFailure{
-                .element_type = "action_message",
-                .element_index = index,
-                .status = std::move(status),
-            });
-          }
-        }
-        // Fragments for *different* nodes are independent, and one WireMessage
-        // routinely carries many of them:
-        std::vector<std::string> group_order;
-        absl::flat_hash_map<std::string, std::vector<size_t>> groups;
-        for (size_t index = 0; index < message.node_fragments.size(); ++index) {
-          const std::string& id = message.node_fragments[index].id;
-          auto [entry, fresh] = groups.try_emplace(id);
-          if (fresh) {
-            group_order.push_back(id);
-          }
-          entry->second.push_back(index);
-        }
+  return RunOnCurrentFiberOrSubmit([self = std::move(self),
+                                    message = std::move(message),
+                                    origin_stream =
+                                        std::move(origin_stream)]() mutable
+                                       -> absl::Status {
+    struct DispatchFailure {
+      std::string element_type;
+      size_t element_index;
+      absl::Status status;
+    };
+    std::vector<DispatchFailure> failures;
+    // Actions are dispatched before node fragments so a receiver applies
+    // its own input autofills (and closes those inputs) ahead of any
+    // fragments in the same WireMessage that target them.
+    for (size_t index = 0; index < message.actions.size(); ++index) {
+      data::ActionMessage& action = message.actions[index];
+      absl::Status status =
+          self->DispatchActionMessage(std::move(action), origin_stream)
+              .Await()
+              .status();
+      if (!status.ok()) {
+        failures.push_back(DispatchFailure{
+            .element_type = "action_message",
+            .element_index = index,
+            .status = std::move(status),
+        });
+      }
+    }
+    // Fragments for *different* nodes are independent, and one WireMessage
+    // routinely carries many of them:
+    std::vector<std::string> group_order;
+    absl::flat_hash_map<std::string, std::vector<size_t>> groups;
+    for (size_t index = 0; index < message.node_fragments.size(); ++index) {
+      const std::string& id = message.node_fragments[index].id;
+      auto [entry, fresh] = groups.try_emplace(id);
+      if (fresh) {
+        group_order.push_back(id);
+      }
+      entry->second.push_back(index);
+    }
 
-        // Fragment failures are collected separately and merged after the
-        // action ones, because the aggregate's detail order is part of the
-        // contract: actions first, then fragments, each in element order.
-        std::vector<DispatchFailure> fragment_failures;
-        thread::Mutex failure_mu;
-        std::vector<absl::AnyInvocable<absl::Status() &&>> dispatches;
-        dispatches.reserve(group_order.size());
-        for (const std::string& id : group_order) {
-          dispatches.emplace_back([self = self.get(), &message,
-                                   &fragment_failures, &failure_mu,
-                                   indices = &groups.at(id)]() -> absl::Status {
-            for (const size_t index : *indices) {
-              data::NodeFragment& fragment = message.node_fragments[index];
-              const std::string fragment_id = fragment.id;
-              absl::Status status =
-                  self->DispatchNodeFragment(std::move(fragment))
-                      .Await()
-                      .status();
-              if (status.ok()) {
-                continue;
-              }
-              // A rejected write to an Action input (e.g. a caller trying to
-              // populate a receiver-autofilled, now-closed input) cancels the
-              // owning Action so the failure propagates back to the caller.
-              const size_t separator = fragment_id.find('#');
-              if (separator != std::string::npos) {
-                self->CancelAction(fragment_id.substr(0, separator))
-                    .IgnoreError();
-              }
-              thread::MutexLock lock(&failure_mu);
-              fragment_failures.push_back(DispatchFailure{
-                  .element_type = "node_fragment",
-                  .element_index = index,
-                  .status = std::move(status),
-              });
-              // Continue through this node's remaining fragments, matching the
-              // serial path.
-            }
-            return absl::OkStatus();
-          });
-        }
-        a11::RunAllToCompletion(std::move(dispatches)).IgnoreError();
-        // In element order regardless of which group finished first, so the
-        // same message always produces the same error whichever way it was
-        // scheduled.
-        std::sort(
-            fragment_failures.begin(), fragment_failures.end(),
-            [](const DispatchFailure& left, const DispatchFailure& right) {
-              return left.element_index < right.element_index;
-            });
-        for (DispatchFailure& failure : fragment_failures) {
-          failures.push_back(std::move(failure));
-        }
-        if (failures.empty()) {
-          return absl::OkStatus();
-        }
-        absl::StatusCode code = failures.front().status.code();
-        nlohmann::json details = nlohmann::json::array();
-        for (const DispatchFailure& failure : failures) {
-          if (failure.status.code() != code) {
-            code = absl::StatusCode::kUnknown;
+    // Fragment failures are collected separately and merged after the
+    // action ones, because the aggregate's detail order is part of the
+    // contract: actions first, then fragments, each in element order.
+    std::vector<DispatchFailure> fragment_failures;
+    thread::Mutex failure_mu;
+    std::vector<absl::AnyInvocable<absl::Status() &&>> dispatches;
+    dispatches.reserve(group_order.size());
+    for (const std::string& id : group_order) {
+      dispatches.emplace_back([self = self.get(), &message, &fragment_failures,
+                               &failure_mu,
+                               indices = &groups.at(id)]() -> absl::Status {
+        for (const size_t index : *indices) {
+          data::NodeFragment& fragment = message.node_fragments[index];
+          const std::string fragment_id = fragment.id;
+          absl::Status status =
+              self->DispatchNodeFragment(std::move(fragment)).Await().status();
+          if (status.ok()) {
+            continue;
           }
-          details.push_back(
-              {{"element_type", failure.element_type},
-               {"element_index", failure.element_index},
-               {"status", StatusToJsonOrEmptyDetails(failure.status)}});
+          // A rejected write to an Action input (e.g. a caller trying to
+          // populate a receiver-autofilled, now-closed input) cancels the
+          // owning Action so the failure propagates back to the caller.
+          const size_t separator = fragment_id.find('#');
+          if (separator != std::string::npos) {
+            self->CancelAction(fragment_id.substr(0, separator)).IgnoreError();
+          }
+          thread::MutexLock lock(&failure_mu);
+          fragment_failures.push_back(DispatchFailure{
+              .element_type = "node_fragment",
+              .element_index = index,
+              .status = std::move(status),
+          });
+          // Continue through this node's remaining fragments, matching the
+          // serial path.
         }
-        return MakeStatus(
-            code,
-            absl::StrCat("Failed to dispatch ", failures.size(), " of ",
-                         message.node_fragments.size() + message.actions.size(),
-                         " WireMessage elements"),
-            details);
-      },
-      {});
+        return absl::OkStatus();
+      });
+    }
+    if (dispatches.size() == 1) {
+      (void)std::move(dispatches.front())();
+    } else {
+      a11::RunAllToCompletion(std::move(dispatches)).IgnoreError();
+    }
+    // In element order regardless of which group finished first, so the
+    // same message always produces the same error whichever way it was
+    // scheduled.
+    std::sort(fragment_failures.begin(), fragment_failures.end(),
+              [](const DispatchFailure& left, const DispatchFailure& right) {
+                return left.element_index < right.element_index;
+              });
+    for (DispatchFailure& failure : fragment_failures) {
+      failures.push_back(std::move(failure));
+    }
+    if (failures.empty()) {
+      return absl::OkStatus();
+    }
+    absl::StatusCode code = failures.front().status.code();
+    nlohmann::json details = nlohmann::json::array();
+    for (const DispatchFailure& failure : failures) {
+      if (failure.status.code() != code) {
+        code = absl::StatusCode::kUnknown;
+      }
+      details.push_back(
+          {{"element_type", failure.element_type},
+           {"element_index", failure.element_index},
+           {"status", StatusToJsonOrEmptyDetails(failure.status)}});
+    }
+    return MakeStatus(
+        code,
+        absl::StrCat("Failed to dispatch ", failures.size(), " of ",
+                     message.node_fragments.size() + message.actions.size(),
+                     " WireMessage elements"),
+        details);
+  });
 }
 
 bool Session::IsClosed() const {

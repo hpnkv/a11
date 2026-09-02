@@ -476,7 +476,7 @@ struct ChunkStoreWriter::State
       }
     }
     if (!running) {
-      Wake();
+      Drive();
     }
   }
 
@@ -896,7 +896,7 @@ a11::Task ChunkStoreWriter::DrainAndClose() {
     state_->lifecycle_future = state_->lifecycle_promise->future();
     lifecycle = state_->lifecycle_future;
   }
-  state_->Wake();
+  state_->Drive();
   return lifecycle;
 }
 

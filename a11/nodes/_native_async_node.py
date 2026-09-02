@@ -139,11 +139,11 @@ def _reader_is_ordered(node: AsyncNode) -> bool:
 
 def _ensure_python_state(node: AsyncNode) -> None:
     state = node.__dict__
-    state.setdefault(
-        "_serialization_registry", get_global_serialization_registry()
-    )
-    state.setdefault("_expected_mimetype_patterns", "")
-    state.setdefault("_expected_obj_type", None)
+    if "_serialization_registry" in state:
+        return
+    state["_serialization_registry"] = get_global_serialization_registry()
+    state["_expected_mimetype_patterns"] = ""
+    state["_expected_obj_type"] = None
 
 
 def _get_serialization_registry(node: AsyncNode) -> SerializationRegistry:
@@ -234,7 +234,7 @@ async def _deserialize_fragment(
     mimetype_patterns: str | Sequence[str],
     obj_type: type[T] | None,
 ) -> T | Any:
-    return await _get_serialization_registry(node).from_chunk_async(
+    return await node.__dict__["_serialization_registry"].from_chunk_async(
         fragment.get_chunk(), mimetype_patterns, obj_type
     )
 

@@ -115,6 +115,12 @@ ECHO = a11.ActionSchema(
     outputs={"out": a11.ActionPortSchema(name="out", type="text/plain")},
 )
 
+CONSTANT = a11.ActionSchema(
+    name="bench-constant",
+    description="Produce one value without an application input node.",
+    outputs={"out": a11.ActionPortSchema(name="out", type="text/plain")},
+)
+
 SINK = a11.ActionSchema(
     name="bench-sink",
     description="Consume a stream of chunks and report what arrived.",
@@ -277,6 +283,11 @@ async def _handle_echo(action: a11.Action) -> None:
     _counters.actions += 1
 
 
+async def _handle_constant(action: a11.Action) -> None:
+    await action["out"].finalize("payload")
+    _counters.actions += 1
+
+
 async def _handle_sink(action: a11.Action) -> None:
     """Drain the input port, counting fragments and bytes.
 
@@ -428,6 +439,7 @@ def registry() -> a11.ActionRegistry:
     """The workload registry, identical on both sides of the connection."""
     entries = a11.ActionRegistry()
     entries.register(ECHO.name, ECHO, _handle_echo)
+    entries.register(CONSTANT.name, CONSTANT, _handle_constant)
     entries.register(SINK.name, SINK, _handle_sink)
     entries.register(SOURCE.name, SOURCE, _handle_source)
     entries.register(STORE.name, STORE, _handle_store)

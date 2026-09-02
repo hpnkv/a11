@@ -220,7 +220,6 @@ struct ChunkStoreReader::State
       // wake would only re-enter an idle pump.
       return future;
     }
-    Wake();
     return future;
   }
 
@@ -420,7 +419,7 @@ struct ChunkStoreReader::State
     if (inline_drive) {
       return true;
     }
-    Wake();
+    Drive();
     return false;
   }
 
@@ -468,7 +467,7 @@ struct ChunkStoreReader::State
     }
     Complete(std::move(completions));
     MaybeCompleteDone();
-    Wake();
+    Drive();
   }
 
   void MaybeCompleteDone() {

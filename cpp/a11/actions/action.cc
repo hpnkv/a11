@@ -136,6 +136,15 @@ absl::StatusOr<std::shared_ptr<ActionLimiter>> ActionLimiter::Create(
   return std::make_shared<MakeSharedEnabler>(maximum);
 }
 
+bool ActionLimiter::TryAcquire() {
+  thread::MutexLock lock(&mu_);
+  if (active_ >= maximum_) {
+    return false;
+  }
+  ++active_;
+  return true;
+}
+
 absl::Status ActionLimiter::Acquire() {
   while (true) {
     std::shared_ptr<thread::PermanentEvent> changed;
@@ -876,8 +885,8 @@ absl::StatusOr<std::shared_ptr<Action>> Action::Run() {
   }
   std::shared_ptr<Action> self = shared_from_this();
 
-  if (limiter == nullptr && !HasInputAutofills()) {
-    return RunHandlerWithoutFiber(self);
+  if (!HasInputAutofills() && (limiter == nullptr || limiter->TryAcquire())) {
+    return RunHandlerWithoutFiber(self, std::move(limiter));
   }
 
   {
@@ -907,19 +916,23 @@ bool Action::HasInputAutofills() const {
 }
 
 absl::StatusOr<std::shared_ptr<Action>> Action::RunHandlerWithoutFiber(
-    const std::shared_ptr<Action>& self) {
+    const std::shared_ptr<Action>& self,
+    std::shared_ptr<ActionLimiter> acquired_limiter) {
   ActionHandler handler;
   bool cancelled = false;
   {
     thread::MutexLock lock(&mu_);
     handler = handler_;
     cancelled = cancel_requested_;
+    acquired_limiter_ = std::move(acquired_limiter);
   }
   if (cancelled) {
+    ReleaseAcquiredLimiter();
     StartFinish(CancelledStatus());
     return self;
   }
   if (!handler) {
+    ReleaseAcquiredLimiter();
     StartFinish(
         absl::FailedPreconditionError("Action handler has not been set"));
     return self;
@@ -940,6 +953,7 @@ absl::StatusOr<std::shared_ptr<Action>> Action::RunHandlerWithoutFiber(
   a11::Then(task,
             [self](const absl::StatusOr<a11::Unit>& result)
                 -> absl::StatusOr<a11::Unit> {
+              self->ReleaseAcquiredLimiter();
               absl::Status status = result.status();
               if (status.code() == absl::StatusCode::kCancelled) {
                 status = CancelledStatus();
@@ -948,6 +962,17 @@ absl::StatusOr<std::shared_ptr<Action>> Action::RunHandlerWithoutFiber(
               return a11::Unit{};
             });
   return self;
+}
+
+void Action::ReleaseAcquiredLimiter() {
+  std::shared_ptr<ActionLimiter> limiter;
+  {
+    thread::MutexLock lock(&mu_);
+    limiter = std::exchange(acquired_limiter_, nullptr);
+  }
+  if (limiter != nullptr) {
+    limiter->Release();
+  }
 }
 
 a11::Future<std::shared_ptr<Action>> Action::Call(data::ByteMap wire_headers) {
@@ -1078,6 +1103,7 @@ absl::Status Action::Cancel() {
   std::vector<std::shared_ptr<Action>> children;
   Mode mode;
   a11::Task task;
+  std::shared_ptr<ActionLimiter> acquired_limiter;
   {
     thread::MutexLock lock(&mu_);
     if (completion_status_.has_value() || finishing_ || cancel_requested_) {
@@ -1088,6 +1114,10 @@ absl::Status Action::Cancel() {
     children.assign(children_.begin(), children_.end());
     mode = mode_;
     task = task_;
+    acquired_limiter = std::exchange(acquired_limiter_, nullptr);
+  }
+  if (acquired_limiter != nullptr) {
+    acquired_limiter->Release();
   }
   absl::Status first;
   for (auto& callback : callbacks) {

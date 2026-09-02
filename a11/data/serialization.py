@@ -509,10 +509,15 @@ class SerializationRegistry:
         self._resolution_cache: dict[
             tuple[type, str], tuple[_SerializerRegistration, str]
         ] = {}
+        self._deserializer_resolution_cache: dict[
+            tuple[_Mimetype | None, str | tuple[str, ...], type | None],
+            tuple[_DeserializerRegistration, type | None],
+        ] = {}
         # Cache deserializers by selector until a registration changes them.
         self._format_cache: dict[
             _Mimetype, list[_DeserializerRegistration]
         ] = {}
+        self._chunk_metadata_cache: dict[str, types.ChunkMetadata] = {}
         #: Set only while register_defaults() runs, so the registrations it
         #: makes can be told apart from a caller's.
         self._registering_defaults = False
@@ -525,6 +530,7 @@ class SerializationRegistry:
         Call from anything that changes what a lookup would answer.
         """
         self._resolution_cache.clear()
+        self._deserializer_resolution_cache.clear()
         self._format_cache.clear()
 
     @_status_boundary
@@ -653,6 +659,7 @@ class SerializationRegistry:
             )
         )
         self._remember_type(obj_type)
+        self._invalidate_resolution_cache()
 
     @_status_boundary
     def register(
@@ -888,10 +895,11 @@ class SerializationRegistry:
                 ),
             ).to_exception()
 
-        return types.Chunk(
-            metadata=types.ChunkMetadata(mimetype=exact_mimetype),
-            data=data,
-        )
+        metadata = self._chunk_metadata_cache.get(exact_mimetype)
+        if metadata is None:
+            metadata = types.ChunkMetadata(mimetype=exact_mimetype)
+            self._chunk_metadata_cache[exact_mimetype] = metadata
+        return types.Chunk(metadata=metadata, data=data)
 
     @overload
     def from_chunk(
@@ -977,6 +985,27 @@ class SerializationRegistry:
         if target_type is None and encoded_name:
             target_type = self._resolve_type(encoded_name)
 
+        patterns_key: str | tuple[str, ...] | None = None
+        if isinstance(mimetype_patterns, str):
+            patterns_key = mimetype_patterns
+        elif isinstance(mimetype_patterns, Sequence) and all(
+            isinstance(pattern, str) for pattern in mimetype_patterns
+        ):
+            patterns_key = tuple(mimetype_patterns)
+        cache_key = (
+            (actual, patterns_key, obj_type)
+            if patterns_key is not None
+            and (obj_type is not None or not encoded_name)
+            else None
+        )
+        if cache_key is not None:
+            cached = self._deserializer_resolution_cache.get(cache_key)
+            if cached is not None:
+                registration, selected = cached
+                return self._invoke_and_check_deserializer(
+                    registration, chunk, selected
+                )
+
         selectors = self._prepare_selectors(mimetype_patterns, actual)
         had_matching_format = False
 
@@ -1012,7 +1041,14 @@ class SerializationRegistry:
                     format_registrations,
                     key=lambda registration: registration.order,
                 )
-                return self._invoke_deserializer(registration, chunk, None)
+                if cache_key is not None:
+                    self._deserializer_resolution_cache[cache_key] = (
+                        registration,
+                        None,
+                    )
+                return self._invoke_and_check_deserializer(
+                    registration, chunk, None
+                )
 
             candidates = [
                 registration
@@ -1031,17 +1067,14 @@ class SerializationRegistry:
                 continue
 
             registration = candidates[0]
-            result = self._invoke_deserializer(registration, chunk, selected)
-            if not isinstance(result, selected):
-                raise Status(
-                    code=StatusCode.INVALID_ARGUMENT,
-                    message=(
-                        "Deserializer returned"
-                        f" {type(result).__name__}; expected"
-                        f" {selected.__name__}."
-                    ),
-                ).to_exception()
-            return result
+            if cache_key is not None:
+                self._deserializer_resolution_cache[cache_key] = (
+                    registration,
+                    selected,
+                )
+            return self._invoke_and_check_deserializer(
+                registration, chunk, selected
+            )
 
         if obj_type is not None and had_matching_format:
             raise Status(
@@ -1244,6 +1277,24 @@ class SerializationRegistry:
                 first_argument, obj_type=target_type
             )
         return registration.deserializer(first_argument)
+
+    def _invoke_and_check_deserializer(
+        self,
+        registration: _DeserializerRegistration,
+        chunk: types.Chunk,
+        target_type: type | None,
+    ) -> Any:
+        result = self._invoke_deserializer(registration, chunk, target_type)
+        if target_type is not None and not isinstance(result, target_type):
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT,
+                message=(
+                    "Deserializer returned"
+                    f" {type(result).__name__}; expected"
+                    f" {target_type.__name__}."
+                ),
+            ).to_exception()
+        return result
 
 
 _MSGPACK_MIN_INT = -(2**63)

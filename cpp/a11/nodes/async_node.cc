@@ -272,7 +272,8 @@ a11::Task AsyncNode::Finalize(data::Chunk chunk, FinalizeOptions options) {
   // its close once nothing is outstanding, and admits whatever its bounded.
   stores::ChunkStoreWrite write =
       (*output)->EnqueueChunk(std::move(chunk), options.seq, /*final=*/true,
-                              /*ensure_started=*/!options.wait);
+                              /*ensure_started=*/false);
+  (*output)->Flush();
   a11::Task closed =
       options.close ? (*output)->DrainAndClose() : a11::ReadyTask();
 
@@ -284,9 +285,6 @@ a11::Task AsyncNode::Finalize(data::Chunk chunk, FinalizeOptions options) {
     return a11::ReadyTask();
   }
 
-  // Flushing here rather than on the pump is what lets a store that answers
-  // inline confirm in this frame; see ChunkStoreWriter::PutChunk.
-  (*output)->Flush();
   if (options.close) {
     // A close cannot complete before the final chunk is confirmed, and fails
     // if that write fails, so it is the only awaitable this needs.

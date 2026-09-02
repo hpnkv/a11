@@ -92,6 +92,8 @@ class ActionLimiter {
  public:
   /** @brief Creates a limiter admitting at most @p maximum holders. */
   static absl::StatusOr<std::shared_ptr<ActionLimiter>> Create(size_t maximum);
+  /** @brief Acquires a slot if one is immediately available. */
+  bool TryAcquire();
   /** @brief Acquires a slot, blocking until one is free or cancelled. */
   absl::Status Acquire();
   /** @brief Releases a previously acquired slot. */
@@ -467,7 +469,9 @@ class Action : public std::enable_shared_from_this<Action> {
   // Starts the handler on the calling thread and continues from its task
   // without a fiber. Only valid when nothing before the handler can block.
   absl::StatusOr<std::shared_ptr<Action>> RunHandlerWithoutFiber(
-      const std::shared_ptr<Action>& self);
+      const std::shared_ptr<Action>& self,
+      std::shared_ptr<ActionLimiter> acquired_limiter = nullptr);
+  void ReleaseAcquiredLimiter();
   absl::Status FinishOutputNodes(const absl::Status& status);
   // Applies an already-finished Action's terminal state to an output node that
   // is only being materialised now, so a late reader sees the end of the
@@ -523,6 +527,7 @@ class Action : public std::enable_shared_from_this<Action> {
   Mode mode_ ABSL_GUARDED_BY(mu_) = Mode::kNone;
   bool input_autofills_applied_ ABSL_GUARDED_BY(mu_) = false;
   a11::Task task_ ABSL_GUARDED_BY(mu_);
+  std::shared_ptr<ActionLimiter> acquired_limiter_ ABSL_GUARDED_BY(mu_);
   obs::Span span_ ABSL_GUARDED_BY(mu_);
   bool span_status_set_by_user_ ABSL_GUARDED_BY(mu_) = false;
   bool cancel_requested_ ABSL_GUARDED_BY(mu_) = false;

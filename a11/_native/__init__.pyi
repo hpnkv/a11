@@ -9384,6 +9384,7 @@ class _StringSchemaMapView:
         Return a view of the map's values.
         """
 
+def _callback_scheduler_defaults() -> dict: ...
 def asr_model_shorthands() -> list[str]:
     """
     The accepted transcription-model shorthands, in a stable order.

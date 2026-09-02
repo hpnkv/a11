@@ -11,6 +11,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11_abseil/status_casters.h>
 
+#include "a11/concurrency/callback_scheduler.h"
 #include "a11/data/types.h"
 #include "a11/status.h"
 #include "absl/log/globals.h"
@@ -76,6 +77,14 @@ PYBIND11_MODULE(_native, module) {
   module.doc() = "Native C++ backend for A11";
   module.attr("__version__") = A11_VERSION;
   module.attr("EMPTY_WIRE_MESSAGE_SIZE") = a11::data::EmptyWireMessageSize();
+  module.def("_callback_scheduler_defaults", [] {
+    py::dict defaults;
+    defaults["max_callbacks_per_turn"] =
+        a11::internal::CallbackScheduler::kDefaultMaxCallbacksPerTurn;
+    defaults["max_concurrent_turns"] =
+        a11::internal::CallbackScheduler::kDefaultMaxConcurrentTurns;
+    return defaults;
+  });
 
   module.def("status_code_from_http", [](int code) {
     return static_cast<int>(a11::StatusCodeFromHttp(code));

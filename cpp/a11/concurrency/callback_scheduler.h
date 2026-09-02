@@ -17,6 +17,9 @@ namespace a11::internal {
 // owns the state it operates on.
 class CallbackScheduler {
  public:
+  static constexpr size_t kDefaultMaxCallbacksPerTurn = 64;
+  static constexpr size_t kDefaultMaxConcurrentTurns = 2;
+
   /**
    * @param max_callbacks_per_turn
    *   How many callbacks one turn drains before handing the next turn back to
@@ -25,8 +28,9 @@ class CallbackScheduler {
    *   How many turns may be in flight at once. This must be greater than one:
    *   see Run() for why a single turn is not enough to keep the queue draining.
    */
-  explicit CallbackScheduler(size_t max_callbacks_per_turn = 64,
-                             size_t max_concurrent_turns = 64)
+  explicit CallbackScheduler(
+      size_t max_callbacks_per_turn = kDefaultMaxCallbacksPerTurn,
+      size_t max_concurrent_turns = kDefaultMaxConcurrentTurns)
       : max_callbacks_per_turn_(max_callbacks_per_turn),
         max_concurrent_turns_(max_concurrent_turns < 2 ? 2
                                                        : max_concurrent_turns) {

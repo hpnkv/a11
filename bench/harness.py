@@ -596,6 +596,10 @@ def _source_revision() -> str:
     """
     import subprocess
 
+    recorded = os.environ.get("A11_BENCH_REVISION")
+    if recorded:
+        return recorded
+
     try:
         revision = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],

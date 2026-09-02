@@ -150,28 +150,53 @@ def _schedule_awaitable_threadsafe(
 ) -> Callable[[], None]:
     """Schedule an awaitable from an A11 fiber or native worker thread.
 
-    Always through ``call_soon_threadsafe``, including when the caller happens
-    to be on the loop's own thread. Starting the task directly would schedule
-    its first step ahead of a cancellation posted afterwards, so `run()`
-    immediately followed by `cancel()` would run the handler it was meant to
-    stop; and applying that cancellation directly in turn re-enters native code
-    that is already holding the lock it was cancelled from. The post is what
-    orders the two and breaks that cycle.
+    A completed Future is consumed on the calling thread. Other awaitables go
+    through ``call_soon_threadsafe``, including when the caller happens to be on
+    the loop's own thread. Starting a task directly would schedule its first
+    step ahead of a cancellation posted afterwards, so `run()` immediately
+    followed by `cancel()` would run the handler it was meant to stop; and
+    applying that cancellation directly in turn re-enters native code that is
+    already holding the lock it was cancelled from. The post is what orders the
+    two and breaks that cycle.
     """
 
     task: asyncio.Future[Any] | None = None
     cancellation_requested = False
 
+    def complete(completed: asyncio.Future[Any]) -> None:
+        try:
+            completion(completed)
+        except BaseException as exc:
+            loop.call_soon_threadsafe(
+                loop.call_exception_handler,
+                {
+                    "message": "A11 awaitable completion callback failed",
+                    "exception": exc,
+                    "future": completed,
+                },
+            )
+
+    if isinstance(awaitable, asyncio.Future) and awaitable.done():
+        complete(awaitable)
+        return lambda: None
+
+    async def run() -> None:
+        outcome = loop.create_future()
+        try:
+            outcome.set_result(await awaitable)
+        except BaseException as exc:
+            outcome.set_exception(exc)
+        complete(outcome)
+
     def start() -> None:
         nonlocal task
         try:
-            task = asyncio.ensure_future(awaitable, loop=loop)
+            task = asyncio.ensure_future(run(), loop=loop)
         except BaseException as exc:
             failed = loop.create_future()
             failed.set_exception(exc)
-            completion(failed)
+            complete(failed)
             return
-        task.add_done_callback(completion)
         if cancellation_requested:
             task.cancel()
 

@@ -306,6 +306,7 @@ async def test_python_chunk_store_is_consumed_through_cpp_virtual_interface():
             continued=False,
         )
     ]
+    await writer.wait_for_buffer_to_drain()
     assert wire.sent == [WireMessage(node_fragments=[store.fragments[0]])]
 
     await writer.drain_and_close()

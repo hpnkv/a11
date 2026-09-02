@@ -50,16 +50,31 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import math
+import os
+import resource
 import statistics
+import subprocess
+import sys
 import time
 from typing import Any
 
 import a11
 from a11 import net, timing
 from a11.data import types
+from a11.net.wire_stream import WireStreamWithRecv
+from bench import harness
 from bench.harness import Result, Skip, benchmark, percentiles
-from bench.peer import ECHO, SINK, SOURCE, STORE, PeerClient, ServerCost
+from bench.peer import (
+    COMPUTE,
+    ECHO,
+    SINK,
+    SOURCE,
+    STORE,
+    PeerClient,
+    ServerCost,
+)
 
 SUITE = "server"
 
@@ -139,8 +154,7 @@ class Client:
 
     def _call(self, schema: a11.ActionSchema):
         return (
-            a11
-            .Action(schema)
+            a11.Action(schema)
             .bind_node_map(self.session.node_map)
             .bind_session(self.session)
             .bind_stream(self.stream)
@@ -192,14 +206,24 @@ class Client:
         """Server-side write-and-read-back; no payload crosses the wire."""
         call = self._call(STORE)
         await call.call()
-        await call["request"].finalize({
-            "count": count,
-            "size": size,
-            "batch": batch,
-        })
+        await call["request"].finalize(
+            {
+                "count": count,
+                "size": size,
+                "batch": batch,
+            }
+        )
         report = await call["report"].consume(dict)
         await call.wait(_WAIT)
         return int(report.get("read", 0))
+
+    async def compute(self, rounds: int = 64, size: int = 4096) -> int:
+        call = self._call(COMPUTE)
+        await call.call()
+        await call["request"].finalize({"rounds": rounds, "size": size})
+        report = await call["report"].consume(dict)
+        await call.wait(_WAIT)
+        return int(report.get("rounds", 0))
 
 
 class Fleet:
@@ -477,9 +501,673 @@ def _steady_driver(
     return factory
 
 
+def _process_cpu_seconds() -> float:
+    usage = resource.getrusage(resource.RUSAGE_SELF)
+    return usage.ru_utime + usage.ru_stime
+
+
+class _LoopLag:
+    """Sample the delay between scheduling and running a loop callback."""
+
+    def __init__(self) -> None:
+        self.samples: list[int] = []
+        self._task: asyncio.Task | None = None
+
+    def start(self) -> None:
+        self._task = asyncio.create_task(self._run())
+
+    async def stop(self) -> None:
+        if self._task is None:
+            return
+        self._task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await self._task
+        self._task = None
+
+    async def _run(self) -> None:
+        loop = asyncio.get_running_loop()
+        while True:
+            completed = loop.create_future()
+            scheduled = time.perf_counter_ns()
+
+            def observe() -> None:
+                self.samples.append(time.perf_counter_ns() - scheduled)
+                if not completed.done():
+                    completed.set_result(None)
+
+            loop.call_soon(observe)
+            await completed
+            await asyncio.sleep(0.001)
+
+    def metrics(self, elapsed: float) -> dict[str, float]:
+        found = percentiles(self.samples)
+        return {
+            "client_loop_lag_p50_us": found.get("p50_us", 0.0),
+            "client_loop_lag_p99_us": found.get("p99_us", 0.0),
+            "client_loop_lag_max_us": found.get("max_us", 0.0),
+            "client_loop_lag_samples_per_s": (
+                len(self.samples) / elapsed if elapsed else 0.0
+            ),
+        }
+
+
+async def _measure_action_configuration(
+    peer: PeerClient,
+    clients: list[Client],
+    workers: list[Client],
+    seconds: float,
+    *,
+    operation_name: str = "echo",
+    operation_kwargs: dict[str, Any] | None = None,
+    instrument: bool = True,
+) -> dict[str, float]:
+    """Return five-window medians and aggregate action latency samples."""
+    kwargs = operation_kwargs or {}
+    await asyncio.gather(
+        *(getattr(client, operation_name)(**kwargs) for client in clients)
+    )
+    window_rates: list[float] = []
+    server_cores: list[float] = []
+    client_cores: list[float] = []
+    latencies: list[float] = []
+    client_lag_samples: list[int] = []
+    handler_windows: list[dict[str, float]] = []
+    client_completed = 0
+    server_completed = 0
+    failures = 0
+    rounds = 0
+
+    for window in range(6):
+        measured = window > 0
+        if instrument and measured:
+            await peer.call("attribution_begin")
+        lag = _LoopLag()
+        if measured:
+            lag.start()
+        before_client_cpu = _process_cpu_seconds()
+        tally = Tally("attribution")
+        elapsed, cost, _ = await _run_window(
+            peer,
+            [(tally, _steady_driver(workers, operation_name, **kwargs))],
+            seconds,
+        )
+        client_cpu = max(_process_cpu_seconds() - before_client_cpu, 0.0)
+        if measured:
+            await lag.stop()
+        attribution = {}
+        if instrument and measured:
+            attribution = (await peer.call("attribution_end")).get(
+                "metrics", {}
+            )
+        if not measured:
+            continue
+        completed = len(tally.samples)
+        peer_completed = cost.server_operations("actions")
+        window_rates.append(completed / elapsed if elapsed else 0.0)
+        server_cores.append(
+            cost.metrics(max(completed, 1))["server_cores_busy"]
+        )
+        client_cores.append(client_cpu / elapsed if elapsed else 0.0)
+        latencies.extend(tally.samples)
+        client_lag_samples.extend(lag.samples)
+        handler_windows.append(attribution)
+        client_completed += completed
+        server_completed += peer_completed
+        failures += tally.failures
+        if operation_name == "compute":
+            rounds += completed * int(kwargs.get("rounds", 64))
+
+    elapsed_total = seconds * 5
+    found = _tail(latencies)
+    found.update(
+        {
+            "ops_per_s": statistics.median(window_rates),
+            "server_cores_busy": statistics.median(server_cores),
+            "client_cores_busy": statistics.median(client_cores),
+            "completed": float(client_completed),
+            "server_completed": float(server_completed),
+            "failures": float(failures),
+            "count_mismatch": float(abs(client_completed - server_completed)),
+            "valid": float(
+                client_completed == server_completed and failures == 0
+            ),
+        }
+    )
+    client_lag = _LoopLag()
+    client_lag.samples = client_lag_samples
+    found.update(client_lag.metrics(elapsed_total))
+    if rounds:
+        found["completed_rounds"] = float(rounds)
+        found["rounds_per_s"] = rounds / elapsed_total
+    for key in {key for window in handler_windows for key in window}:
+        values = [window[key] for window in handler_windows if key in window]
+        if values:
+            metric = key if key.startswith("server_") else f"server_{key}"
+            found[metric] = statistics.median(values)
+    return found
+
+
 # --------------------------------------------------------------------------
 # Rows
 # --------------------------------------------------------------------------
+
+
+async def _wire_control(
+    peer: PeerClient, streams: int, seconds: float
+) -> dict[str, float]:
+    opened: list[WireStreamWithRecv] = []
+    options = net.WebSocketClientOptions()
+    options.http2_options.enable_h2 = False
+    options.http2_options.enable_h2c = False
+    port = (await peer.call("wire_echo", transport="websocket", port=0))["port"]
+    message = types.WireMessage(
+        node_fragments=[
+            types.NodeFragment(id="bench", data=types.Chunk(data=b"payload"))
+        ]
+    )
+    try:
+        for _index in range(streams):
+            endpoint = WireStreamWithRecv(
+                net.WebSocketWireStream.connect(
+                    f"ws://{peer.host}:{port}/bench",
+                    websocket_options=options,
+                )
+            )
+            await endpoint.start()
+            opened.append(endpoint)
+
+        async def round_trip(endpoint: WireStreamWithRecv) -> None:
+            endpoint.send(message)
+            await endpoint.receive()
+
+        await asyncio.gather(*(round_trip(endpoint) for endpoint in opened))
+        rates: list[float] = []
+        server_cores: list[float] = []
+        client_cores: list[float] = []
+        samples: list[float] = []
+        client_lag_samples: list[int] = []
+        failures = 0
+        server_completed = 0
+        for window in range(6):
+            lag = _LoopLag()
+            if window:
+                lag.start()
+            before_client = _process_cpu_seconds()
+            tally = Tally("wire")
+
+            async def drive_wire(
+                measured: Tally, deadline: float, stop: asyncio.Event
+            ) -> None:
+                async def one(endpoint: WireStreamWithRecv) -> None:
+                    await _drive(
+                        lambda: round_trip(endpoint), measured, deadline, stop
+                    )
+
+                await asyncio.gather(*(one(endpoint) for endpoint in opened))
+
+            elapsed, cost, _ = await _run_window(
+                peer, [(tally, drive_wire)], seconds
+            )
+            client_cpu = max(_process_cpu_seconds() - before_client, 0.0)
+            if window:
+                await lag.stop()
+            if not window:
+                continue
+            completed = len(tally.samples)
+            fragment_delta = cost.server_operations("fragments_out")
+            rates.append(completed / elapsed if elapsed else 0.0)
+            server_cores.append(
+                cost.metrics(max(completed, 1))["server_cores_busy"]
+            )
+            client_cores.append(client_cpu / elapsed if elapsed else 0.0)
+            samples.extend(tally.samples)
+            client_lag_samples.extend(lag.samples)
+            failures += tally.failures
+            server_completed += fragment_delta
+        found = _tail(samples)
+        found.update(
+            {
+                "ops_per_s": statistics.median(rates),
+                "server_cores_busy": statistics.median(server_cores),
+                "client_cores_busy": statistics.median(client_cores),
+                "completed": float(len(samples)),
+                "server_completed": float(server_completed),
+                "failures": float(failures),
+                "count_mismatch": float(abs(len(samples) - server_completed)),
+                "valid": float(
+                    len(samples) == server_completed and failures == 0
+                ),
+            }
+        )
+        lag = _LoopLag()
+        lag.samples = client_lag_samples
+        found.update(lag.metrics(seconds * 5))
+        return found
+    finally:
+        for endpoint in opened:
+            with contextlib.suppress(Exception):
+                endpoint.half_close()
+                await asyncio.wait_for(
+                    endpoint.drain_outgoing_messages(), timeout=5.0
+                )
+            with contextlib.suppress(Exception):
+                endpoint.abort(
+                    a11.Status(
+                        code=a11.StatusCode.CANCELLED,
+                        message="attribution control closed",
+                    )
+                )
+        with contextlib.suppress(Exception):
+            await peer.teardown()
+
+
+def _worker_record_directory() -> str:
+    configured = os.environ.get("A11_ACTION_CEILING_DIR")
+    if configured:
+        return os.path.join(configured, "workers")
+    host = "macos" if sys.platform == "darwin" else "linux"
+    return f"/tmp/a11-action-ceiling/{host}/controls/workers"
+
+
+async def _client_shards(
+    peer: PeerClient, processes: int, seconds: float
+) -> dict[str, float]:
+    port = (await peer.call("service", transport="websocket", port=0))["port"]
+    base, extra = divmod(64, processes)
+    workers: list[subprocess.Popen] = []
+    record_dir = _worker_record_directory()
+    try:
+        for index in range(processes):
+            sessions = base + (1 if index < extra else 0)
+            record = os.path.join(
+                record_dir, f"client-shards-{processes}-{index}.json"
+            )
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "bench.action_ceiling_worker",
+                    "--host",
+                    peer.host,
+                    "--port",
+                    str(port),
+                    "--sessions",
+                    str(sessions),
+                    "--record",
+                    record,
+                    "--loop",
+                    harness.event_loop_name,
+                ],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            ready_line = await asyncio.wait_for(
+                asyncio.to_thread(process.stdout.readline), timeout=60.0
+            )
+            ready = json.loads(ready_line)
+            if not ready.get("ready"):
+                raise RuntimeError(
+                    f"client shard did not become ready: {ready}"
+                )
+            workers.append(process)
+
+        rates: list[float] = []
+        aggregate_cores: list[float] = []
+        per_process_cores: list[list[float]] = [
+            [] for _index in range(processes)
+        ]
+        server_cores: list[float] = []
+        latencies: list[float] = []
+        failures = 0
+        client_completed = 0
+        server_completed = 0
+        lag_p99: list[float] = []
+        handler_windows: list[dict[str, float]] = []
+        for window in range(6):
+            if window:
+                await peer.call("attribution_begin")
+            before = await peer.stats()
+            start_at = time.time() + 0.25
+            command = json.dumps(
+                {
+                    "op": "run",
+                    "start_at": start_at,
+                    "seconds": seconds,
+                }
+            )
+            for process in workers:
+                process.stdin.write(command + "\n")
+                process.stdin.flush()
+            records = await asyncio.gather(
+                *(
+                    asyncio.wait_for(
+                        asyncio.to_thread(process.stdout.readline),
+                        timeout=seconds + _CALL_TIMEOUT,
+                    )
+                    for process in workers
+                )
+            )
+            after = await peer.stats()
+            attribution = {}
+            if window:
+                attribution = (await peer.call("attribution_end")).get(
+                    "metrics", {}
+                )
+            decoded = [json.loads(record) for record in records]
+            if not window:
+                continue
+            elapsed = max(
+                (float(record["elapsed_s"]) for record in decoded),
+                default=seconds,
+            )
+            completed = sum(int(record["completed"]) for record in decoded)
+            server_count = ServerCost(before, after).server_operations()
+            cpu = sum(float(record["cpu_s"]) for record in decoded)
+            rates.append(completed / elapsed if elapsed else 0.0)
+            aggregate_cores.append(cpu / elapsed if elapsed else 0.0)
+            server_cores.append(
+                ServerCost(before, after).metrics(max(completed, 1))[
+                    "server_cores_busy"
+                ]
+            )
+            for index, record in enumerate(decoded):
+                per_process_cores[index].append(
+                    float(record["cpu_s"]) / float(record["elapsed_s"])
+                )
+                latencies.extend(record["latencies_ns"])
+                lag_p99.append(float(record["client_loop_lag_p99_us"]))
+                failures += int(record["failures"])
+            client_completed += completed
+            server_completed += server_count
+            handler_windows.append(attribution)
+
+        found = _tail(latencies)
+        found.update(
+            {
+                "ops_per_s": statistics.median(rates),
+                "client_cores_busy": statistics.median(aggregate_cores),
+                "server_cores_busy": statistics.median(server_cores),
+                "client_loop_lag_p99_us": statistics.median(lag_p99),
+                "completed": float(client_completed),
+                "server_completed": float(server_completed),
+                "failures": float(failures),
+                "count_mismatch": float(
+                    abs(client_completed - server_completed)
+                ),
+                "valid": float(
+                    client_completed == server_completed and failures == 0
+                ),
+            }
+        )
+        for index, samples in enumerate(per_process_cores):
+            found[f"client_process_{index}_cores_busy"] = statistics.median(
+                samples
+            )
+        for key in {key for window in handler_windows for key in window}:
+            values = [
+                window[key] for window in handler_windows if key in window
+            ]
+            if values:
+                found[key] = statistics.median(values)
+        return found
+    finally:
+        for process in workers:
+            if process.stdin is not None and process.poll() is None:
+                with contextlib.suppress(Exception):
+                    process.stdin.write('{"op":"stop"}\n')
+                    process.stdin.flush()
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                await asyncio.to_thread(process.wait, 30.0)
+            if process.poll() is None:
+                process.terminate()
+            if process.stderr is not None:
+                errors = process.stderr.read()
+                if errors:
+                    print(f"client shard stderr:\n{errors}", flush=True)
+        with contextlib.suppress(Exception):
+            await peer.teardown()
+
+
+async def _peer_shards(
+    parent: PeerClient, processes: int, seconds: float
+) -> dict[str, float]:
+    controls = (await parent.call("peer_shards", count=processes))["controls"]
+    peers: list[PeerClient] = []
+    fleets: list[Fleet] = []
+    all_clients: list[Client] = []
+    try:
+        for control in controls:
+            peer = PeerClient(parent.host, int(control["port"]))
+            await peer.connect()
+            port = (await peer.call("service", transport="websocket", port=0))[
+                "port"
+            ]
+            fleet = Fleet(peer, "websocket", port)
+            clients = [await fleet.connect() for _index in range(64)]
+            peers.append(peer)
+            fleets.append(fleet)
+            all_clients.extend(clients)
+        await asyncio.gather(*(client.echo() for client in all_clients))
+
+        rates: list[float] = []
+        client_cores: list[float] = []
+        aggregate_server_cores: list[float] = []
+        per_peer_cores: list[list[float]] = [[] for _index in peers]
+        latencies: list[float] = []
+        lag_samples: list[int] = []
+        failures = 0
+        client_completed = 0
+        server_completed = 0
+        for window in range(6):
+            if window:
+                await asyncio.gather(
+                    *(peer.call("attribution_begin") for peer in peers)
+                )
+            before = await asyncio.gather(*(peer.stats() for peer in peers))
+            lag = _LoopLag()
+            if window:
+                lag.start()
+            before_cpu = _process_cpu_seconds()
+            tally = Tally("peer-shards")
+            started = time.perf_counter()
+            deadline = started + seconds
+            stop = asyncio.Event()
+            await asyncio.gather(
+                *(
+                    _drive(client.echo, tally, deadline, stop)
+                    for client in all_clients
+                )
+            )
+            elapsed = time.perf_counter() - started
+            client_cpu = max(_process_cpu_seconds() - before_cpu, 0.0)
+            if window:
+                await lag.stop()
+            after = await asyncio.gather(*(peer.stats() for peer in peers))
+            if window:
+                await asyncio.gather(
+                    *(peer.call("attribution_end") for peer in peers)
+                )
+            if not window:
+                continue
+            completed = len(tally.samples)
+            costs = [
+                ServerCost(start, finish)
+                for start, finish in zip(before, after)
+            ]
+            peer_counts = [cost.server_operations() for cost in costs]
+            cores = [
+                cost.metrics(max(count, 1))["server_cores_busy"]
+                for cost, count in zip(costs, peer_counts)
+            ]
+            rates.append(completed / elapsed if elapsed else 0.0)
+            client_cores.append(client_cpu / elapsed if elapsed else 0.0)
+            aggregate_server_cores.append(sum(cores))
+            for index, value in enumerate(cores):
+                per_peer_cores[index].append(value)
+            latencies.extend(tally.samples)
+            lag_samples.extend(lag.samples)
+            failures += tally.failures
+            client_completed += completed
+            server_completed += sum(peer_counts)
+
+        found = _tail(latencies)
+        found.update(
+            {
+                "ops_per_s": statistics.median(rates),
+                "client_cores_busy": statistics.median(client_cores),
+                "server_cores_busy": statistics.median(aggregate_server_cores),
+                "completed": float(client_completed),
+                "server_completed": float(server_completed),
+                "failures": float(failures),
+                "count_mismatch": float(
+                    abs(client_completed - server_completed)
+                ),
+                "valid": float(
+                    client_completed == server_completed and failures == 0
+                ),
+            }
+        )
+        lag = _LoopLag()
+        lag.samples = lag_samples
+        found.update(lag.metrics(seconds * 5))
+        for index, values in enumerate(per_peer_cores):
+            found[f"peer_{index}_cores_busy"] = statistics.median(values)
+        return found
+    finally:
+        for fleet in fleets:
+            with contextlib.suppress(Exception):
+                await fleet.aclose()
+        for peer in peers:
+            with contextlib.suppress(Exception):
+                await peer.teardown()
+            await peer.aclose()
+        with contextlib.suppress(Exception):
+            await parent.teardown()
+
+
+@benchmark(SUITE, "action_ceiling_attribution", slow=True)
+async def action_ceiling_attribution(scale: float) -> list[Result]:
+    """Attribute the 64-client action ceiling with topology controls."""
+    peer = await _peer()
+    link = _link(peer)
+    seconds = max(2.0 * scale, 1.0)
+    results: list[Result] = []
+
+    async def action_row(
+        name: str,
+        sessions: int,
+        outstanding: int,
+        params: dict[str, Any],
+        *,
+        operation_name: str = "echo",
+        operation_kwargs: dict[str, Any] | None = None,
+        instrument: bool = True,
+    ) -> None:
+        async with _fleet(peer, "websocket") as fleet:
+            clients = [await fleet.connect() for _index in range(sessions)]
+            workers = [
+                clients[index % sessions] for index in range(outstanding)
+            ]
+            metrics = await _measure_action_configuration(
+                peer,
+                clients,
+                workers,
+                seconds,
+                operation_name=operation_name,
+                operation_kwargs=operation_kwargs,
+                instrument=instrument,
+            )
+            results.append(
+                Result(
+                    SUITE,
+                    name,
+                    metrics,
+                    {
+                        "link": link,
+                        "loop": peer.environment.get("event_loop", "unknown"),
+                        **params,
+                    },
+                    note="one warm-up and five measured windows",
+                )
+            )
+
+    try:
+        for in_flight in (1, 4, 16, 64):
+            await action_row(
+                "action_ceiling_one_session",
+                1,
+                in_flight,
+                {"in_flight": in_flight},
+            )
+        for sessions in (1, 4, 16, 64):
+            await action_row(
+                "action_ceiling_many_sessions",
+                sessions,
+                64,
+                {"sessions": sessions, "outstanding": 64},
+            )
+        for clients in (1, 64):
+            for enabled in (False, True):
+                await action_row(
+                    "action_ceiling_instrumentation",
+                    clients,
+                    clients,
+                    {"clients": clients, "enabled": enabled},
+                    instrument=enabled,
+                )
+        for processes in (1, 2, 4):
+            metrics = await _client_shards(peer, processes, seconds)
+            results.append(
+                Result(
+                    SUITE,
+                    "action_ceiling_client_shards",
+                    metrics,
+                    {
+                        "link": link,
+                        "processes": processes,
+                        "sessions": 64,
+                    },
+                    note="64 sessions behind one common window barrier",
+                )
+            )
+        for processes in (1, 2, 4):
+            metrics = await _peer_shards(peer, processes, seconds)
+            results.append(
+                Result(
+                    SUITE,
+                    "action_ceiling_peer_shards",
+                    metrics,
+                    {
+                        "link": link,
+                        "processes": processes,
+                        "sessions_per_peer": 64,
+                    },
+                    note="one client loop drives independent peer processes",
+                )
+            )
+        await action_row(
+            "action_ceiling_compute",
+            64,
+            64,
+            {"sessions": 64, "rounds": 64, "size": 4096},
+            operation_name="compute",
+            operation_kwargs={"rounds": 64, "size": 4096},
+        )
+        metrics = await _wire_control(peer, 64, seconds)
+        results.append(
+            Result(
+                SUITE,
+                "action_ceiling_wire_control",
+                metrics,
+                {"link": link, "streams": 64},
+                note="one warm-up and five measured windows",
+            )
+        )
+    finally:
+        await peer.aclose()
+    return results
 
 
 @benchmark(SUITE, "join_rate")

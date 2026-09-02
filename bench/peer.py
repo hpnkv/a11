@@ -96,6 +96,8 @@ _WAIT = a11.timing.Duration.seconds(60)
 #: `text/plain has no deserializer` rule in the project notes.
 _OCTET = "application/octet-stream"
 
+_LOOP_NAME = "asyncio"
+
 
 # --------------------------------------------------------------------------
 # The workload registry
@@ -181,6 +183,77 @@ class _Counters:
 
 _counters = _Counters()
 
+
+def _latency_summary(samples: list[int], prefix: str) -> dict[str, float]:
+    if not samples:
+        return {
+            f"{prefix}_count": 0.0,
+            f"{prefix}_total_s": 0.0,
+        }
+    ordered = sorted(samples)
+    p50 = ordered[(len(ordered) - 1) // 2]
+    p99 = ordered[min(len(ordered) - 1, int(len(ordered) * 0.99))]
+    return {
+        f"{prefix}_count": float(len(samples)),
+        f"{prefix}_total_s": sum(samples) / 1e9,
+        f"{prefix}_p50_us": p50 / 1000.0,
+        f"{prefix}_p99_us": p99 / 1000.0,
+    }
+
+
+class _AttributionCounters:
+    """Handler waits and event-loop lag for an attribution window."""
+
+    def __init__(self) -> None:
+        self.enabled = False
+        self.handler: list[int] = []
+        self.consume: list[int] = []
+        self.finalize: list[int] = []
+        self.loop_lag: list[int] = []
+        self._heartbeat: asyncio.Task | None = None
+
+    async def begin(self) -> None:
+        self.handler.clear()
+        self.consume.clear()
+        self.finalize.clear()
+        self.loop_lag.clear()
+        self.enabled = True
+        self._heartbeat = asyncio.create_task(self._sample_loop())
+
+    async def end(self) -> dict[str, float]:
+        self.enabled = False
+        if self._heartbeat is not None:
+            self._heartbeat.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._heartbeat
+            self._heartbeat = None
+        found: dict[str, float] = {}
+        found.update(_latency_summary(self.handler, "handler"))
+        found.update(_latency_summary(self.consume, "consume"))
+        found.update(_latency_summary(self.finalize, "finalize"))
+        found.update(_latency_summary(self.loop_lag, "server_loop_lag"))
+        if self.loop_lag:
+            found["server_loop_lag_max_us"] = max(self.loop_lag) / 1000.0
+        return found
+
+    async def _sample_loop(self) -> None:
+        loop = asyncio.get_running_loop()
+        while True:
+            completed = loop.create_future()
+            scheduled = time.perf_counter_ns()
+
+            def observe() -> None:
+                self.loop_lag.append(time.perf_counter_ns() - scheduled)
+                if not completed.done():
+                    completed.set_result(None)
+
+            loop.call_soon(observe)
+            await completed
+            await asyncio.sleep(0.001)
+
+
+_attribution = _AttributionCounters()
+
 #: Node ids must be unique per store; `id(action)` is not, because CPython
 #: reuses addresses the moment an action is collected, and two live nodes with
 #: one id is a silent data mix.
@@ -188,8 +261,19 @@ _STORE_IDS = iter(range(1 << 40))
 
 
 async def _handle_echo(action: a11.Action) -> None:
+    if not _attribution.enabled:
+        text = await action["text"].consume(str)
+        await action["out"].finalize(text)
+        _counters.actions += 1
+        return
+    entered = time.perf_counter_ns()
+    started = time.perf_counter_ns()
     text = await action["text"].consume(str)
+    _attribution.consume.append(time.perf_counter_ns() - started)
+    started = time.perf_counter_ns()
     await action["out"].finalize(text)
+    _attribution.finalize.append(time.perf_counter_ns() - started)
+    _attribution.handler.append(time.perf_counter_ns() - entered)
     _counters.actions += 1
 
 
@@ -214,10 +298,12 @@ async def _handle_sink(action: a11.Action) -> None:
             if fragment is None:
                 _counters.bytes_in += total
                 _counters.fragments_in += fragments
-                await action["report"].finalize({
-                    "bytes": total,
-                    "fragments": fragments,
-                })
+                await action["report"].finalize(
+                    {
+                        "bytes": total,
+                        "fragments": fragments,
+                    }
+                )
                 _counters.actions += 1
                 return
             total += len(fragment.data.data) if fragment.data else 0
@@ -284,11 +370,13 @@ async def _handle_store(action: a11.Action) -> None:
             read_bytes += len(fragment.data.data) if fragment.data else 0
         if done:
             break
-    await action["report"].finalize({
-        "written": written,
-        "read": read,
-        "bytes": read_bytes,
-    })
+    await action["report"].finalize(
+        {
+            "written": written,
+            "read": read,
+            "bytes": read_bytes,
+        }
+    )
     _counters.actions += 1
 
 
@@ -328,10 +416,12 @@ async def _handle_compute(action: a11.Action) -> None:
         digest = hashlib.sha256(buffer + digest).digest()
     _counters.compute_rounds += rounds
     _counters.actions += 1
-    await action["report"].finalize({
-        "rounds": rounds,
-        "digest": digest[:8].hex(),
-    })
+    await action["report"].finalize(
+        {
+            "rounds": rounds,
+            "digest": digest[:8].hex(),
+        }
+    )
 
 
 def registry() -> a11.ActionRegistry:
@@ -437,6 +527,7 @@ def _environment() -> dict[str, Any]:
     except Exception:  # noqa: BLE001 - metadata must never fail a run
         version = "unknown"
     native: dict[str, Any] = {"path": "unknown"}
+    scheduler_defaults: dict[str, Any] = {"unavailable": True}
     try:
         from a11 import _native
 
@@ -450,8 +541,15 @@ def _environment() -> dict[str, Any]:
                     "%Y-%m-%dT%H:%M:%S", time.localtime(stat.st_mtime)
                 ),
             }
+            scheduler_defaults = dict(_native._callback_scheduler_defaults())
     except Exception:  # noqa: BLE001
-        pass
+        scheduler_defaults = {"unavailable": True}
+    try:
+        import a11.allocator
+
+        allocator = "mimalloc" if a11.allocator.is_active() else "system"
+    except Exception:  # noqa: BLE001
+        allocator = "unknown"
     return {
         "hostname": socket.gethostname(),
         "platform": platform.platform(),
@@ -459,7 +557,11 @@ def _environment() -> dict[str, Any]:
         "python": sys.version.split()[0],
         "cpu_count": os.cpu_count(),
         "a11": version,
+        "revision": os.environ.get("A11_BENCH_REVISION", "unknown"),
         "native": native,
+        "allocator": allocator,
+        "event_loop": _LOOP_NAME,
+        "callback_scheduler": scheduler_defaults,
         "pid": os.getpid(),
     }
 
@@ -478,6 +580,7 @@ class Agent:
         self._wire_servers: list[Any] = []
         self._raw_servers: list[asyncio.AbstractServer] = []
         self._wire_tasks: set[asyncio.Task] = set()
+        self._peer_processes: list[tuple[asyncio.subprocess.Process, int]] = []
         self._sink_bytes = 0
         self._held: list[Any] = []
 
@@ -661,6 +764,59 @@ class Agent:
         self._sink_bytes = 0
         return {"ok": True}
 
+    async def attribution_begin(self) -> dict[str, Any]:
+        await _attribution.begin()
+        return {"ok": True}
+
+    async def attribution_end(self) -> dict[str, Any]:
+        return {"ok": True, "metrics": await _attribution.end()}
+
+    async def peer_shards(self, count: int) -> dict[str, Any]:
+        await self._stop_peer_shards()
+        controls: list[dict[str, int]] = []
+        for _index in range(count):
+            process = await asyncio.create_subprocess_exec(
+                sys.executable,
+                "-m",
+                "bench.peer",
+                "--bind",
+                "0.0.0.0",
+                "--port",
+                "0",
+                "--loop",
+                _LOOP_NAME,
+                "--ready-json",
+                stdout=asyncio.subprocess.PIPE,
+            )
+            line = await asyncio.wait_for(
+                process.stdout.readline(), timeout=30.0
+            )
+            ready = json.loads(line)
+            port = int(ready["port"])
+            self._peer_processes.append((process, port))
+            controls.append({"port": port, "pid": process.pid})
+        return {"controls": controls}
+
+    async def _stop_peer_shards(self) -> None:
+        for process, port in self._peer_processes:
+            if process.returncode is None:
+                try:
+                    reader, writer = await asyncio.open_connection(
+                        "127.0.0.1", port
+                    )
+                    writer.write(b'{"op":"shutdown"}\n')
+                    await writer.drain()
+                    await asyncio.wait_for(reader.readline(), timeout=5.0)
+                    writer.close()
+                except Exception:  # noqa: BLE001
+                    process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=10.0)
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+        self._peer_processes.clear()
+
     async def teardown(self) -> dict[str, Any]:
         """Drop every server and session, so the next row starts clean.
 
@@ -683,6 +839,7 @@ class Agent:
             await asyncio.gather(*self._wire_tasks, return_exceptions=True)
         self._wire_tasks.clear()
         self._held.clear()
+        await self._stop_peer_shards()
         if self.service is not None:
             with contextlib.suppress(Exception):
                 self.service.abort(
@@ -703,6 +860,12 @@ async def _dispatch(agent: Agent, request: dict[str, Any]) -> dict[str, Any]:
         return agent.stats()
     if op == "reset":
         return agent.reset_counters()
+    if op == "attribution_begin":
+        return await agent.attribution_begin()
+    if op == "attribution_end":
+        return await agent.attribution_end()
+    if op == "peer_shards":
+        return await agent.peer_shards(int(request.get("count", 1)))
     if op == "tcp_echo":
         return await agent.tcp_echo(int(request.get("port", 0)))
     if op == "tcp_sink":
@@ -762,7 +925,7 @@ async def _serve_control(agent: Agent, reader, writer) -> bool:
     return stop
 
 
-async def _main(bind: str, port: int) -> int:
+async def _main(bind: str, port: int, ready_json: bool = False) -> int:
     agent = Agent()
     finished = asyncio.get_running_loop().create_future()
 
@@ -772,11 +935,17 @@ async def _main(bind: str, port: int) -> int:
 
     server = await asyncio.start_server(handle, bind, port)
     address = server.sockets[0].getsockname()
-    print(
-        f"peer: listening on {address[0]}:{address[1]} --"
-        f" {json.dumps(_environment())}",
-        flush=True,
-    )
+    if ready_json:
+        print(
+            json.dumps({"ready": True, "port": address[1], "pid": os.getpid()}),
+            flush=True,
+        )
+    else:
+        print(
+            f"peer: listening on {address[0]}:{address[1]} --"
+            f" {json.dumps(_environment())}",
+            flush=True,
+        )
     async with server:
         with contextlib.suppress(asyncio.CancelledError):
             await finished
@@ -923,6 +1092,7 @@ class ServerCost:
 
 
 def main(argv: list[str] | None = None) -> int:
+    global _LOOP_NAME
     parser = argparse.ArgumentParser(prog="python -m bench.peer")
     parser.add_argument("--bind", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8899)
@@ -932,13 +1102,17 @@ def main(argv: list[str] | None = None) -> int:
         default="asyncio",
         help="the loop the *server* runs on, recorded with every result",
     )
+    parser.add_argument(
+        "--ready-json", action="store_true", help=argparse.SUPPRESS
+    )
     options = parser.parse_args(argv)
+    _LOOP_NAME = options.loop
     runner = asyncio.run
     if options.loop == "uvloop":
         import uvloop
 
         runner = uvloop.run
-    return runner(_main(options.bind, options.port))
+    return runner(_main(options.bind, options.port, options.ready_json))
 
 
 if __name__ == "__main__":

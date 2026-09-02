@@ -242,13 +242,16 @@ void SetWaitOwnerContext(FiberDiagnostics* absl_nonnull record,
 WaitScope::WaitScope(WaitKind kind, const void* absl_nullable object,
                      void* absl_nullable frame_pointer,
                      std::int64_t deadline_nanos)
-    : record_(CurrentFiberDiagnostics()) {
+    : record_(CurrentWaitDiagnostics()) {
   if (record_ == nullptr) {
     return;
   }
-  // Outermost wins; see the header.
-  if (record_->wait_kind.load(std::memory_order_relaxed) !=
-      WaitKind::kRunning) {
+  // Outermost wins; see the header. A placeholder records an OS thread as idle
+  // between A11 calls.
+  const WaitKind entered =
+      record_->wait_kind.load(std::memory_order_relaxed);
+  placeholder_ = entered == WaitKind::kThreadPlaceholder;
+  if (entered != WaitKind::kRunning && !placeholder_) {
     record_ = nullptr;
     return;
   }
@@ -272,7 +275,9 @@ WaitScope::~WaitScope() {
   if (record_ == nullptr) {
     return;
   }
-  record_->wait_kind.store(WaitKind::kRunning, std::memory_order_relaxed);
+  record_->wait_kind.store(
+      placeholder_ ? WaitKind::kThreadPlaceholder : WaitKind::kRunning,
+      std::memory_order_relaxed);
   record_->waits_completed.fetch_add(1, std::memory_order_relaxed);
   record_->epoch.fetch_add(1, std::memory_order_release);
 }

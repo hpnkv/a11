@@ -80,13 +80,10 @@ struct FinalizeOptions {
  * A node has two halves. The writer end admits values into the backing
  * `stores::ChunkStore` in sequence; the reader end yields them back,
  * optionally deserializing typed objects on the way out. Every `Put*`
- * resolves once the backing store accepts the chunk. The batch is enqueued on
- * attached `net::WireStream`s from a fiber of its own, so a resolved `Put*`
- * says nothing about the mirror: it is not a remote-delivery
- * acknowledgement, it is not a handover acknowledgement either, and a tee
- * failure cannot revoke the store confirmation the batch already has.
- * WaitForBufferToDrain() covers both halves and is where a tee failure
- * surfaces.
+ * resolves once the backing store accepts the chunk. A stackless pump turn
+ * enqueues each batch on attached `net::WireStream`s. The store confirmation
+ * carries no mirror handover or remote-delivery acknowledgement.
+ * WaitForBufferToDrain() covers both stages and reports tee failures.
  *
  * A producer ends a node with Finalize(): it marks the logical end of the data
  * and, by default, closes the writer. Finality and closure remain two distinct

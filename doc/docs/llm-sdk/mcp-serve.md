@@ -38,8 +38,8 @@ a subprocess. `serve_http` listens for Streamable HTTP clients:
 await mcp.serve_http(REGISTRY, host="127.0.0.1", port=8013, path="/mcp")
 ```
 
-For an application that owns its own web server,
-[`http_app`][a11.sdk.mcp.server.http_app] returns the Starlette app to mount.
+For an application that owns its own web server, `mcp.http_app` returns the
+Starlette app to mount.
 Its lifespan runs the MCP session manager, so the mounting application has to
 run that lifespan.
 
@@ -82,8 +82,7 @@ A result comes back three ways at once, which is what MCP asks of a server that
 declares an output schema:
 
 * `structuredContent` — the object the outputs decode to, the same value
-  [`decode_action_output_fragments`][a11.sdk.llm.decode_action_output_fragments]
-  gives a model for the same run.
+  `decode_action_output_fragments` gives a model for the same run.
 * `content` — that object serialised into a text block, for a client that reads
   only content blocks.
 * a content block per picture or sound. A port whose media type is `image/*` or
@@ -110,7 +109,7 @@ The server owns the deadline: every call gets `x-a11-deadline`, which bounds the
 handler, everything it calls, and the drain of what it wrote.
 
 MCP has no header on a call; it has `_meta`, and
-[`headers_from_meta`][a11.sdk.mcp.calls.headers_from_meta] reads the headers a
+`mcp.headers_from_meta` reads the headers a
 client asks for out of it, three ways:
 
 | In `_meta` | Becomes |

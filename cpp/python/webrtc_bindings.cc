@@ -445,7 +445,8 @@ void BindWebRtc(py::module_& module) {
       .def(
           "deliver",
           [](net::SignallingService& self, net::SignallingMessage message) {
-            ThrowIfNotOk(self.Deliver(std::move(message)));
+            // Endpoint callbacks may enter the fiber scheduler.
+            CallWithoutGil([&] { return self.Deliver(std::move(message)); });
           },
           "Deliver a message to a locally connected recipient, as though it "
           "had been routed from an endpoint of this service. This is the "
@@ -775,9 +776,11 @@ void BindWebRtc(py::module_& module) {
                   PythonSignallingCallback::Create(on_message, "on_message"));
               callback = MakeSignallingCallback(owner);
             }
-            return FutureToPython(net::WebSocketSignallingClient::Connect(
-                std::move(url), std::move(identity), std::move(callback),
-                std::move(options)));
+            return FutureToPython(WithoutGil([&] {
+              return net::WebSocketSignallingClient::Connect(
+                  std::move(url), std::move(identity), std::move(callback),
+                  std::move(options));
+            }));
           },
           "Asynchronously connect to a WebSocket signalling server, resolving "
           "to a client once registered under the given identity.",

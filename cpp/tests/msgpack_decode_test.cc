@@ -1,22 +1,8 @@
 // Copyright 2026 The A11 Authors.
 
-/**
- * @file
- * @brief UnpackMsgpack decodes what nlohmann::json::from_msgpack decodes.
- *
- * `UnpackMsgpack` has its own marker table so a string or binary payload is
- * copied once rather than a byte at a time. The format is pinned across four
- * language implementations and A11 speaks it to peers it did not build, so the
- * value it produces has to be the value nlohmann produces -- down to which
- * nlohmann number storage an integer lands in, and to the subtype on an
- * extension.
- *
- * So each test here decodes the same bytes both ways and compares, using
- * `nlohmann::json::to_msgpack` to produce the bytes wherever it can and a
- * hand-written encoding where a size class has to be forced. The interesting
- * cases are the boundaries between MessagePack size classes and the shapes
- * with no JSON counterpart: bin against str, ext, fixext, and a map key that
- * is not a string.
+/** @file
+ * @brief Compares UnpackMsgpack with nlohmann::json::from_msgpack across
+ * MessagePack size classes and representations.
  */
 
 #include <cstdint>
@@ -48,9 +34,8 @@ Json FromNlohmann(std::string_view bytes) {
                             /*allow_exceptions=*/false);
 }
 
-// Both decoders on the same bytes, compared on value and on the storage the
-// value landed in. Equality alone would let an unsigned 1 match a signed 1 and
-// a binary match a string of the same bytes.
+// Compare value and storage type because JSON equality merges some numeric
+// types and same-byte strings and binaries.
 void ExpectSameAsNlohmann(std::string_view bytes, std::string_view label) {
   const Json expected = FromNlohmann(bytes);
   ASSERT_FALSE(expected.is_discarded()) << label << ": nlohmann rejected these";
@@ -154,8 +139,7 @@ TEST(MsgpackDecodeTest, FloatsMatchBothWidths) {
                              1e-300, 1e300}) {
     ExpectEncodedMatch(Json(value), "double " + std::to_string(value));
   }
-  // float32, which to_msgpack never emits: nlohmann writes every double as
-  // float64. Encoded here to reach the 0xca branch.
+  // nlohmann encodes doubles as float64. This manual value covers float32.
   const std::string float32 =
       std::string("\xca", 1) + std::string("\x3f\xc0\x00\x00", 4);
   ExpectSameAsNlohmann(float32, "float32 1.5");

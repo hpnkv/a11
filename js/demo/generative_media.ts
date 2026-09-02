@@ -8,7 +8,7 @@
  *
  * The hosted demo backend draws these on a GPU. A backend without the
  * diffusion stack fails the action with `FAILED_PRECONDITION`, and this page
- * shows what it said.
+ * shows the failure message.
  */
 
 import {ActionPortSchema, ActionSchema} from '../src/index.js';
@@ -88,12 +88,7 @@ class GenerativeMediaDemo {
         this.status.textContent = `step ${step.step} of ${step.steps}`;
       });
 
-      // The image is bytes, so it is read as a chunk rather than as a value:
-      // what arrives is a PNG, and there is nothing to deserialize it into.
-      //
-      // The ceiling covers the largest image the action will draw: a 512x512
-      // PNG from the demo server is around 400 KB, and the schema allows
-      // 1024x1024.
+      // The PNG is already encoded, so the page reads a size-bounded chunk.
       const node = need(await call.getOutput('image', false));
       const chunk = need(await node.nextChunk(MAX_IMAGE_BYTES));
       await progress;

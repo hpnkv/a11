@@ -194,6 +194,43 @@ auto pump = thread::NewTree({.name = "wire-pump"}, [&] { ... });
 thread::SetCurrentFiberName("store-writer");  // or from inside
 ```
 
+## Prevent GIL deadlocks in the fiber scheduler
+
+A11's fiber primitives block the *thread* that reaches them when it is not a
+fiber: a contended `thread::Mutex`, a `Submit` whose fiber is dispatched inline,
+a `Future::OnReady` racing the fiber that completes it. A thread that has run a
+fiber carries a fiber scheduler, and a scheduler with nothing to run parks the
+thread.
+
+**Release the GIL before a Python thread enters a blocking native call.** A
+scheduler park holding the GIL prevents the fiber that supplies the wake from
+running. The report shows the parked thread at `PyEval_AcquireThread` with no
+other thread running Python:
+
+```
+thread #2  take_gil <- PyEval_AcquireThread <- _native
+thread #1  __psynch_cvwait  (main thread, in the fiber scheduler)
+```
+
+Neither end names the binding: the parked thread's Python frames sit on the
+stack its registers no longer point at, so no unwinder bridges the switch.
+`py-spy dump --pid` reads them from outside the process, or a `sys.setprofile`
+hook logging `c_call` events for `a11._native` names the last binding entered.
+
+Bindings release the GIL for the native call with `WithoutGil`,
+`CallWithoutGil` or `ValueWithoutGil` from `cpp/python/interop.h`, and
+`scripts/check_binding_gil.py` reports calls that retain it. The checker
+resolves receiver types and one call hop. Shared helpers and C++ destructors
+invoked by Python deallocation remain outside its reachability model.
+
+The park itself drops the lock. `thread::SetSchedulerParkGuard`
+(`cpp/thread/thread/executor.h`) takes a release/acquire pair, and both fiber
+schedulers call it around the wait; `cpp/python/module.cc` installs
+`PyEval_SaveThread` / `PyEval_RestoreThread` at import, guarded by
+`PyGILState_Check()` and the interpreter's finalising flag. That covers the
+paths outside the binding audit. The callback interface keeps `thread`
+independent of the host runtime.
+
 ## Programmatic access
 
 `thread::SnapshotFibers()` returns a `FiberSnapshot` per live fiber — id,

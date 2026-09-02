@@ -1,19 +1,14 @@
 /**
  * `zod` schemas for the value carried on each backend's `config` action port.
  *
- * These mirror the pydantic config models of the backends that ship no
- * TypeScript handler (`a11/sdk/{gemini,ollama,vllm,anthropic}/*_schema.py`). They
- * are provided so a TypeScript caller can validate, document, and type the
- * `config` port when routing an interaction to those providers through a
- * remote A11 session; the browser-only {@link GemmaConfig} lives in the gemma
- * module.
+ * These mirror the pydantic config models for backends with no TypeScript
+ * handler (`a11/sdk/{gemini,ollama,vllm,anthropic}/*_schema.py`). A TypeScript
+ * caller can validate, document, and type their `config` ports through a remote
+ * A11 session. The browser-only {@link GemmaConfig} lives in the gemma module.
  *
- * Validate a value into one of these types with the matching `make*` function
- * below rather than with {@link zodParse} directly: the result is branded with
- * the provider's canonical serialization tag, and the strict, unary `config`
- * port on the Python side accepts nothing else — an untagged object is a plain
- * `object` on the wire, and the backend rejects it rather than guessing which
- * provider's config it was meant to be.
+ * Validate a value with its matching `make*` function. The result carries the
+ * provider's canonical serialization tag required by the strict, unary Python
+ * `config` port. An untagged value remains a plain wire object.
  */
 
 import { z } from 'zod';

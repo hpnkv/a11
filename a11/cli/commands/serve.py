@@ -60,8 +60,8 @@ a11 serve mypkg.actions --ws --mcp --mcp-allow 'shell_.*'
 ```
 
 ``--mcp-stdio`` gives the protocol this process's stdout, so the command prints
-its summary to stderr instead and ends when the client hangs up. See
-[a11.sdk.mcp.server][a11.sdk.mcp.server].
+its summary to stderr instead and ends when the client hangs up. The MCP serving
+guide documents the server API.
 
 ## A file, or an import path
 

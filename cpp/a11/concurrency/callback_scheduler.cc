@@ -31,9 +31,8 @@ void CallbackScheduler::Schedule(absl::AnyInvocable<void() &&> callback) {
   }
 }
 
-// Callbacks queued here are state-machine continuations -- a store reader or
-// writer pump drive -- and **a pump drive can suspend**: InlinePumpState
-// documents that a store write tees to an attached stream and.
+// Callbacks queued here are stackless state-machine continuations. Concurrent
+// turns keep unrelated continuations moving while one turn remains active.
 void CallbackScheduler::Run() {
   size_t completed = 0;
   while (completed < max_callbacks_per_turn_) {

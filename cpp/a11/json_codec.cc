@@ -27,20 +27,8 @@ using Json = nlohmann::json;
 /// Nesting depth a document may reach, matching data/msgpack.h's scanner.
 constexpr int kMaxMsgpackNesting = 256;
 
-/**
- * MessagePack bytes to a JSON value, marker by marker.
- *
- * The representation matches nlohmann::json::from_msgpack: positive fixint and
- * uint8..uint64 land unsigned, negative fixint and int8..int64 signed, float32
- * widens to double, str is a string, bin is a binary, ext is a binary carrying
- * its subtype byte, and a map key that is not a MessagePack string is an error.
- * MsgpackDecodeTest compares the two decoders over every size class.
- *
- * String and binary payloads are appended in one call each. nlohmann's
- * binary_reader::get_string and get_binary copy a payload with one push_back
- * per byte, which prices a decode per payload byte rather than per field; see
- * `data/chunk_codec` in bench/.
- */
+// Decodes MessagePack markers into the same JSON representations as
+// nlohmann::json::from_msgpack.
 class MsgpackDecoder {
  public:
   explicit MsgpackDecoder(std::string_view bytes) : bytes_(bytes) {}
@@ -205,8 +193,7 @@ absl::StatusOr<Json> MsgpackDecoder::DecodeObject(std::uint64_t count,
     const auto marker = static_cast<std::uint8_t>(bytes_[position_++]);
     ABSL_ASSIGN_OR_RETURN(const std::string key, DecodeString(marker));
     ABSL_ASSIGN_OR_RETURN(Json element, Decode(depth + 1));
-    // Assignment rather than emplace, so a repeated key keeps the last value
-    // the way from_msgpack's SAX consumer does.
+    // Assignment preserves from_msgpack's last-value rule for repeated keys.
     value[key] = std::move(element);
   }
   return value;
@@ -421,8 +408,7 @@ absl::StatusOr<std::string> PackMsgpack(const Json& value,
   // to_msgpack has no allow_exceptions overload, and it does raise: a string
   // field holding invalid UTF-8 is type_error.316.
   try {
-    // The string-backed output adapter, so the writer appends into the buffer
-    // this function returns. The vector-returning overload is one copy wider.
+    // The string-backed adapter writes directly into the returned buffer.
     std::string encoded;
     Json::to_msgpack(value, nlohmann::detail::output_adapter<char>(encoded));
     return encoded;
@@ -446,7 +432,7 @@ absl::StatusOr<Json> UnpackMsgpack(std::string_view encoded,
         absl::StrCat("Invalid ", what, " MessagePack data: ",
                      value.status().message()));
   }
-  // Strict, as from_msgpack's `strict` argument was: one record is one value.
+  // One record contains exactly one value.
   if (decoder.position() != encoded.size()) {
     return absl::InvalidArgumentError(absl::StrCat(
         "Invalid ", what, " MessagePack data: ",

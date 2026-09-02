@@ -1,13 +1,11 @@
 # Copyright 2026 The A11 Authors.
 
-"""Offline tests for the text-to-image action's ports.
+"""Verify the text-to-image action's port contract without model weights.
 
 The action's subject is the port contract the generative-media guide describes:
 a step counter on `progress` while the model runs, one PNG on `image` at the
-end, and both ports closed however the call goes. That contract is testable
-without weights, a GPU, or `diffusers` -- a stub pipeline that calls the step
-callback the way `diffusers` does exercises all of it, and runs in
-milliseconds.
+end, and both ports closed however the call goes. A stub pipeline invokes the
+step callback with the `diffusers` signature.
 """
 
 import asyncio
@@ -22,7 +20,7 @@ from a11.status import StatusCode, StatusException
 
 
 class _FakeImage:
-    """Something with `save`, which is all `_png_bytes` asks of an image."""
+    """An image stub exposing the `save` method used by `_png_bytes`."""
 
     def save(self, buffer, format: str) -> None:
         assert format == "PNG"
@@ -37,9 +35,8 @@ class _FakeResult:
 class _FakePipeline:
     """A pipeline shaped like `StableDiffusionPipeline.__call__`.
 
-    Calls `callback_on_step_end` once per step with the positional arguments
-    `diffusers` passes and the kwargs dict it expects back, so the handler's
-    thread-to-loop hand-off is the real one.
+    Calls `callback_on_step_end` once per step with the `diffusers` arguments.
+    The callback exercises the handler's thread-to-loop handoff.
     """
 
     device = "cpu"
@@ -72,9 +69,8 @@ class _FakePipeline:
 def stub_torch(monkeypatch):
     """A `torch` module with the one attribute the handler reaches for.
 
-    The handler builds a `torch.Generator` to carry the seed. Installing a stub
-    keeps this test independent of a multi-gigabyte dependency that has nothing
-    to do with the ports under test.
+    The handler builds a `torch.Generator` to carry the seed. This stub keeps
+    the port tests independent of `torch`.
     """
 
     class _Generator:
@@ -132,7 +128,7 @@ async def _run(request: dict, *, read_image: bool = True):
 async def test_progress_arrives_per_step_and_the_image_at_the_end(
     stub_torch, pipeline
 ):
-    """The two results have different lifecycles, which is the whole design."""
+    """Progress precedes the final image on its separate port."""
     progress, image = await _run({
         "prompt": "a lighthouse",
         "num_inference_steps": 4,
@@ -166,7 +162,7 @@ async def test_the_request_defaults_leave_only_the_prompt_required(
 
 @pytest.mark.asyncio
 async def test_a_seed_reaches_the_generator(stub_torch, pipeline, monkeypatch):
-    """A fixed seed is what makes the same prompt draw the same image."""
+    """The request seed reaches `torch.Generator`."""
     seen: list = []
 
     class _Recording(_FakePipeline):
@@ -184,7 +180,7 @@ async def test_a_seed_reaches_the_generator(stub_torch, pipeline, monkeypatch):
 async def test_a_request_the_model_would_refuse_is_refused_here(
     stub_torch, pipeline
 ):
-    """Validation happens on arrival, so the pipeline is never started."""
+    """Invalid input is rejected before pipeline invocation."""
     with pytest.raises(StatusException) as refused:
         await _run({"prompt": "too many steps", "num_inference_steps": 1000})
 
@@ -196,7 +192,7 @@ async def test_a_request_the_model_would_refuse_is_refused_here(
 async def test_both_ports_close_when_the_pipeline_fails(
     stub_torch, monkeypatch
 ):
-    """A reader of either port sees it end, rather than waiting for ever."""
+    """Both output readers finish after a pipeline failure."""
 
     class _Failing:
         device = "cpu"
@@ -214,9 +210,8 @@ async def test_both_ports_close_when_the_pipeline_fails(
     )
     await action["request"].finalize({"prompt": "anything"})
 
-    # Both reads end rather than hanging, and neither carries the failure: the
-    # `finally` closes them before the exception reaches the runtime, so the
-    # status arrives on the action.
+    # The ports close before the exception reaches the runtime. The action
+    # carries the failure status.
     for port in ("progress", "image"):
         values = [
             chunk

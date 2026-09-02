@@ -1203,7 +1203,7 @@ Examples:
           "run",
           [](actions::Action& self) {
             PythonLoop::NoteRunningLoop();
-            return ValueOrThrow(self.Run());
+            return ValueOrThrow(WithoutGil([&] { return self.Run(); }));
           },
           R"doc(Run the action's handler and return the running action. The Python layer also exposes the native entry point as `run_in_background`.
 
@@ -1286,7 +1286,11 @@ Examples:
           "Return a future that resolves when the action completes.",
           py::arg("timeout") = py::none())
       .def(
-          "cancel", [](actions::Action& self) { ThrowIfNotOk(self.Cancel()); },
+          "cancel",
+          [](actions::Action& self) {
+            // A dispatched cancellation may reach a backpressured transport.
+            CallWithoutGil([&] { return self.Cancel(); });
+          },
           "Cancel the action.")
       .def(
           "set_on_cancelled",

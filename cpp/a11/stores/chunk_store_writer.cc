@@ -19,7 +19,6 @@
 #include <absl/status/statusor.h>
 
 #include "a11/concurrency/callback_scheduler.h"
-#include "a11/concurrency/executor.h"
 #include "a11/concurrency/future.h"
 #include "a11/concurrency/inline_pump.h"
 #include "a11/data/types.h"
@@ -353,10 +352,8 @@ struct ChunkStoreWriter::State
       }
     }
 
-    // The message is assembled here, where the batch is still owned by this
-    // operation, and handed to the streams after the operation is released
-    // below. A WireStream::Send may block -- on a transport's backpressure, and
-    // in ChannelWireStream on the write itself.
+    // Assemble the message while this operation owns the batch. Stream handover
+    // follows operation release because WireStream::Send may block.
     data::WireMessage message;
     std::vector<std::shared_ptr<net::WireStream>> tee_streams;
     if (operation_status.ok() && !active_batch.streams.empty()) {
@@ -386,9 +383,8 @@ struct ChunkStoreWriter::State
           operation_generation != generation) {
         return;
       }
-      // Counted while the operation is still held, so a close cannot slip
-      // between releasing the operation and the tee below and put its marker
-      // ahead of this batch. DriveOnce's close branches wait for zero.
+      // Count the tee before releasing the operation. Close branches wait for
+      // zero before handing over their marker.
       teeing = !tee_streams.empty();
       if (teeing) {
         ++tees_in_flight;
@@ -450,13 +446,11 @@ struct ChunkStoreWriter::State
       CompleteTask(waiter, remaining_status);
     }
     CompleteTask(failed_lifecycle, remaining_status);
-    // The tee runs on its own fiber. WriteDone often runs inside a pump turn --
-    // LocalChunkStore::PutMany completes inline -- and a Send on that turn's
-    // stack blocks the turn whatever order the two are written in. A node with
-    // no stream attached does not reach this at all.
+    // The shared scheduler runs each tee as a bounded stackless pump turn.
     if (teeing) {
-      a11::Schedule([self = shared_from_this(), message = std::move(message),
-                     streams = std::move(tee_streams)]() mutable {
+      Scheduler().Schedule([self = shared_from_this(),
+                            message = std::move(message),
+                            streams = std::move(tee_streams)]() mutable {
         absl::Status tee_status;
         for (const std::shared_ptr<net::WireStream>& stream : streams) {
           tee_status = stream->Send(message);
@@ -486,13 +480,8 @@ struct ChunkStoreWriter::State
     }
   }
 
-  /**
-   * Retire one in-flight data tee.
-   *
-   * A tee error arrives after the batch has its sequence values and cannot
-   * revoke them, so it fails later writes instead: the recorded status, the
-   * queued elements and a pending graceful close.
-   */
+  // Retires one in-flight data tee. A failure records the writer status and
+  // rejects queued elements and a pending graceful close.
   void FinishTee(absl::Status tee_status) {
     std::vector<Element> rejected;
     std::vector<Element> pending_rejected;
@@ -701,9 +690,8 @@ struct ChunkStoreWriter::State
       ABSL_GUARDED_BY(mu);
   std::vector<std::shared_ptr<net::WireStream>> attached_streams
       ABSL_GUARDED_BY(mu);
-  // Tees handed to a stream and not yet returned. A data tee runs outside the
-  // state machine's operation, so this is what a close waits on to keep its
-  // marker behind the data. See WriteDone.
+  // Tees handed to a stream and not yet returned. Close waits for zero before
+  // handing over its marker.
   size_t tees_in_flight ABSL_GUARDED_BY(mu) = 0;
   bool queued ABSL_GUARDED_BY(mu) = false;
   // Re-entry bookkeeping for Drive(); read and written only under mu.
@@ -965,9 +953,8 @@ a11::Task ChunkStoreWriter::WaitForBufferToDrain() {
       immediate = *state_->status;
     } else if (state_->outstanding == 0 && state_->tees_in_flight == 0 &&
                !state_->closing) {
-      // A batch handed to a tee is still in flight for a caller pacing itself
-      // against this, and its failure does not exist yet. A requested close
-      // counts too: its marker is the last thing this writer hands over.
+      // A handed-over tee and a requested close remain in flight until their
+      // stream operations finish.
       immediate = absl::OkStatus();
     } else {
       state_->drain_waiters.push_back(promise);

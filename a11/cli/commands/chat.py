@@ -1,6 +1,6 @@
 # Copyright 2026 The A11 Authors.
 
-"""``a11 chat [claude|claude_code|gemini|ollama|vllm] [model]`` — a chat.
+"""Start a chat with a selected LLM backend and model.
 
 Thin wrapper: it parses the backend/model arguments and hands off to
 [a11.cli.chat_ui.run_chat][a11.cli.chat_ui.run_chat], where the actual

@@ -1,10 +1,9 @@
 # Copyright 2026 The A11 Authors.
 
-"""Offline tests for the vLLM chat handler.
+"""Verify the vLLM chat handler without a server, GPU, or model.
 
-These drive `interact_with_vllm` against a fake OpenAI-compatible client that
-replays a scripted sequence of `ChatCompletionChunk`s, so no server, no GPU and
-no model are needed.
+The fake OpenAI-compatible client replays scripted
+`ChatCompletionChunk` sequences.
 """
 
 import asyncio
@@ -224,12 +223,7 @@ async def _run(rounds, monkeypatch, *, read="text_output", model=b"fake"):
 
 @pytest.mark.asyncio
 async def test_multi_round_tool_calls_get_unique_ids(monkeypatch):
-    """Two tool-calling rounds must not reuse the same nested-action id.
-
-    The accumulator continues its id counter across rounds. A reused id
-    resolves to the earlier round's already-closed nested action, and feeding
-    its input then fails with "ChunkStoreWriter is closed".
-    """
+    """Tool-calling rounds use distinct nested-action ids."""
     rounds = [
         [
             _chunk(reasoning="thinking about it "),
@@ -276,11 +270,7 @@ async def test_multi_round_tool_calls_get_unique_ids(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_tool_call_ids_differ_between_turns(monkeypatch):
-    """A second turn must not reuse the first turn's minted call ids.
-
-    A caller keeps one session -- and so one node map -- for a whole
-    conversation, and the runner gives a call's nested action its id verbatim.
-    """
+    """Tool-call ids remain distinct across turns in one session."""
 
     def rounds():
         return [
@@ -348,7 +338,7 @@ async def test_a_tool_result_answers_the_call_it_names(monkeypatch):
 async def test_thoughts_stream_separately_from_text(
     monkeypatch, reasoning_field
 ):
-    """Reasoning deltas land on ``thoughts``, not on ``text_output``."""
+    """Reasoning deltas use ``thoughts``; text uses ``text_output``."""
     rounds = [
         [
             _chunk(reasoning="pondering ", reasoning_field=reasoning_field),

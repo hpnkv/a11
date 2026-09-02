@@ -11,6 +11,7 @@
 #include <gtest/gtest.h>
 
 #include "thread/concurrency.h"
+#include "thread/executor.h"
 #include "thread/internal/work_queue.h"
 
 namespace thread {
@@ -487,6 +488,58 @@ TEST(ThreadExecutorTest, TimersRegisteredInDecreasingOrderRunOnTime) {
     }
     EXPECT_LT(lateness, absl::Milliseconds(25)) << "delay " << delay;
   }
+}
+
+TEST(ThreadExecutorTest, ASchedulerParkDropsAndRestoresTheHostLock) {
+  // CPython uses this guard to release the GIL around a scheduler park. The
+  // shared state outlives calls already inside the installed guard.
+  struct Counts {
+    std::atomic<int> released{0};
+    std::atomic<int> acquired{0};
+    std::atomic<void*> handed{nullptr};
+  };
+  const auto counts = std::make_shared<Counts>();
+  SetSchedulerParkGuard(SchedulerParkGuard{
+      .release =
+          [counts]() -> void* {
+            counts->released.fetch_add(1, std::memory_order_relaxed);
+            return reinterpret_cast<void*>(0x5eed);
+          },
+      .acquire =
+          [counts](void* held) {
+            counts->handed.store(held, std::memory_order_relaxed);
+            counts->acquired.fetch_add(1, std::memory_order_relaxed);
+          },
+  });
+
+  PermanentEvent finish;
+  auto blocked = NewTree({.name = "parks-its-thread"}, [&] {
+    Select({finish.OnEvent()});
+  });
+
+  const absl::Time deadline = absl::Now() + absl::Seconds(5);
+  while (counts->released.load(std::memory_order_relaxed) == 0 &&
+         absl::Now() < deadline) {
+    thread::SleepFor(absl::Milliseconds(5));
+  }
+  finish.Notify();
+  blocked->Join();
+  SetSchedulerParkGuard(SchedulerParkGuard{});
+
+  EXPECT_GT(counts->released.load(std::memory_order_relaxed), 0);
+  // Active parks may leave more releases than acquires at this instant.
+  EXPECT_GT(counts->acquired.load(std::memory_order_relaxed), 0);
+  EXPECT_EQ(counts->handed.load(std::memory_order_relaxed),
+            reinterpret_cast<void*>(0x5eed));
+}
+
+TEST(ThreadExecutorTest, ParksRunWithNoGuardInstalled) {
+  SetSchedulerParkGuard(SchedulerParkGuard{});
+  PermanentEvent finish;
+  auto blocked = NewTree({}, [&] { Select({finish.OnEvent()}); });
+  thread::SleepFor(absl::Milliseconds(80));
+  finish.Notify();
+  blocked->Join();
 }
 
 TEST(ThreadChannelTest, PreservesFifoAndCloseWakesReader) {

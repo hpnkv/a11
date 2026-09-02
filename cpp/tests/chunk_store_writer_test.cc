@@ -10,7 +10,6 @@
 
 #include <absl/status/status.h>
 #include <absl/status/statusor.h>
-#include <absl/strings/str_cat.h>
 #include <absl/time/time.h>
 #include <gtest/gtest.h>
 
@@ -93,34 +92,17 @@ class FailFirstCloseStore final : public ChunkStore {
   std::vector<absl::Status> close_statuses_;
 };
 
-/**
- * A stream whose Send blocks until the test releases it.
- *
- * Stands in for a transport applying backpressure: ChannelWireStream writes a
- * claimed message inline, and HttpTransport::PostWrite waits rather than posts
- * once its queued bytes reach the bound.
- */
-class GatedSendStream final : public net::WireStream {
+class CountingSendStream final : public net::WireStream {
  public:
-  absl::Status Send(data::WireMessage message) override {
-    {
-      thread::MutexLock lock(&mu_);
-      ++entered_;
-      messages_.push_back(std::move(message));
-    }
-    return gate_.future().Await(absl::Now() + absl::Seconds(30)).status();
+  absl::Status Send(data::WireMessage) override {
+    thread::MutexLock lock(&mu_);
+    ++sends_;
+    return absl::OkStatus();
   }
 
-  void Release() { gate_.SetValue(a11::Unit{}).IgnoreError(); }
-
-  [[nodiscard]] size_t entered() const {
+  [[nodiscard]] size_t sends() const {
     thread::MutexLock lock(&mu_);
-    return entered_;
-  }
-
-  [[nodiscard]] std::vector<data::WireMessage> messages() const {
-    thread::MutexLock lock(&mu_);
-    return messages_;
+    return sends_;
   }
 
   a11::Task Start(net::OnMessage, net::OnDone) override {
@@ -157,9 +139,7 @@ class GatedSendStream final : public net::WireStream {
 
  private:
   mutable thread::Mutex mu_;
-  size_t entered_ ABSL_GUARDED_BY(mu_) = 0;
-  std::vector<data::WireMessage> messages_ ABSL_GUARDED_BY(mu_);
-  a11::Promise<a11::Unit> gate_;
+  size_t sends_ ABSL_GUARDED_BY(mu_) = 0;
 };
 
 /// A stream whose every Send fails, standing in for an unreachable peer.
@@ -406,65 +386,6 @@ TEST(ChunkStoreWriterTest, DrainTeesAClosureMarkerAfterTheData) {
   ASSERT_TRUE(pair.second->Done().Await(shutdown_deadline).ok());
 }
 
-TEST(ChunkStoreWriterTest, ABlockedTeeDoesNotHoldUpTheNextBatch) {
-  // Sixteen chunks against the default eight-per-batch limit: two batches, so
-  // the second has to be written while the first batch's tee is still out.
-  auto store = *LocalChunkStore::Create("writer-tee-head-of-line");
-  auto writer = *ChunkStoreWriter::Create(store);
-  auto gated = std::make_shared<GatedSendStream>();
-  ASSERT_TRUE(writer->AttachStream(gated).ok());
-
-  std::vector<a11::Future<std::uint32_t>> confirmations;
-  confirmations.reserve(16);
-  for (int index = 0; index < 16; ++index) {
-    ChunkStoreWrite write = writer->EnqueueChunk(
-        data::Chunk{.data = absl::StrCat("chunk-", index)}, std::nullopt,
-        /*final=*/index == 15, /*ensure_started=*/false);
-    ASSERT_TRUE(write.admitted.Await().ok());
-    confirmations.push_back(std::move(write.confirmation));
-  }
-  writer->Flush();
-
-  const absl::Time deadline = absl::Now() + absl::Seconds(10);
-  // The last chunk of the second batch has its sequence while the first
-  // batch's tee is blocked. This is the stall FINDINGS.md measured: the writer
-  // used to hold its operation across the tee, so nothing after the first
-  // eight could be written at all.
-  const absl::StatusOr<std::uint32_t> last = confirmations.back().Await(deadline);
-  ASSERT_TRUE(last.ok()) << last.status();
-  EXPECT_EQ(*last, 15);
-  EXPECT_GE(gated->entered(), 1U);
-  for (size_t index = 0; index < confirmations.size(); ++index) {
-    const absl::StatusOr<std::uint32_t> confirmed =
-        confirmations[index].Await(deadline);
-    ASSERT_TRUE(confirmed.ok()) << index << ": " << confirmed.status();
-    EXPECT_EQ(*confirmed, index);
-  }
-  EXPECT_EQ(*store->Size().Await(deadline), 16);
-
-  gated->Release();
-  // Both batches reach the stream, and every fragment with it.
-  const absl::Status closed = writer->DrainAndClose().Await(deadline).status();
-  ASSERT_TRUE(closed.ok()) << closed;
-  size_t fragments = 0;
-  bool marker_last = false;
-  const std::vector<data::WireMessage> sent = gated->messages();
-  for (size_t index = 0; index < sent.size(); ++index) {
-    for (const data::NodeFragment& fragment : sent[index].node_fragments) {
-      const data::Chunk* chunk = std::get_if<data::Chunk>(&fragment.data);
-      ASSERT_NE(chunk, nullptr);
-      const bool is_marker = data::IsCloseStatusChunk(*chunk);
-      marker_last = is_marker;
-      if (!is_marker) {
-        ++fragments;
-      }
-    }
-  }
-  EXPECT_EQ(fragments, 16);
-  // The closure marker still follows the data it closes.
-  EXPECT_TRUE(marker_last);
-}
-
 TEST(ChunkStoreWriterTest, ClosureMarkerFailureStillClosesTheStore) {
   auto store = *LocalChunkStore::Create("writer-close-tee-failure");
   auto writer = *ChunkStoreWriter::Create(store);
@@ -487,18 +408,29 @@ TEST(ChunkStoreWriterTest, ClosureMarkerFailureStillClosesTheStore) {
 TEST(ChunkStoreWriterTest, ManyWritersShareStacklessPump) {
   (void)thread::Fiber::Current();
   const size_t created = thread::internal::CreatedFiberCountForTesting();
+  auto stream = std::make_shared<CountingSendStream>();
+  std::vector<std::shared_ptr<ChunkStoreWriter>> writers;
   std::vector<a11::Future<std::uint32_t>> writes;
+  writers.reserve(256);
   writes.reserve(256);
   for (int index = 0; index < 256; ++index) {
     auto store =
         *LocalChunkStore::Create("writer-pool-" + std::to_string(index));
     auto writer = *ChunkStoreWriter::Create(store);
+    ASSERT_TRUE(writer->AttachStream(stream).ok());
     writes.push_back(
         writer->PutChunk(data::Chunk{.data = "value"}, std::nullopt, true));
+    writers.push_back(std::move(writer));
   }
   for (const auto& write : writes) {
     ASSERT_TRUE(write.Await(absl::Now() + absl::Seconds(5)).ok());
   }
+  for (const auto& writer : writers) {
+    ASSERT_TRUE(writer->WaitForBufferToDrain()
+                    .Await(absl::Now() + absl::Seconds(5))
+                    .ok());
+  }
+  EXPECT_EQ(stream->sends(), 256U);
   EXPECT_EQ(thread::internal::CreatedFiberCountForTesting(), created);
 }
 

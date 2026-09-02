@@ -112,12 +112,12 @@ thing at a time cannot beat that no matter how fast the thing is. Benchmarks
 that can report both do, and the gap between them is how much a caller wins by
 having work in flight. Read `runtime/await_floor` before reading anything else.
 
-**The run records the allocator it used.** `python -m bench` relaunches itself
+**Allocator selection.** `python -m bench` relaunches itself
 with A11's bundled mimalloc preloaded, the way the `a11` command does, so the
 figures describe the configuration that ships; `environment.allocator` in the
 record says `mimalloc` or `system`. `A11_NO_ALLOCATOR_PRELOAD=1` selects the
-system allocator, and a `--baseline` diff across the two is measuring the
-allocator as much as the code.
+system allocator. A `--baseline` comparison between the configurations includes
+the allocator difference.
 
 **Memory is a slope, not a delta.** One before/after RSS reading is dominated
 by pages the allocator had already reserved and by fixed process costs charged

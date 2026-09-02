@@ -1,4 +1,4 @@
-"""Text to image, as an action with a port per thing the caller cares about.
+"""Draw an image while streaming progress on a separate action port.
 
 The image is one final payload, while progress is a stream on a separate port.
 A client can render step updates before the image is ready and receive the
@@ -128,10 +128,9 @@ def _load_pipeline() -> Any:
             pipeline = StableDiffusionPipeline.from_pretrained(
                 candidate,
                 dtype=dtype,
-                # Neither is used here, and both cost a download and a load:
-                # the safety checker is a second model, and the feature
-                # extractor it feeds needs `torchvision` for its default
-                # backend.
+                # This action omits the safety checker and its feature
+                # extractor.
+                # The default extractor also depends on `torchvision`.
                 safety_checker=None,
                 feature_extractor=None,
                 requires_safety_checker=False,
@@ -165,11 +164,9 @@ def _png_bytes(image: Any) -> bytes:
 def _png_chunk(png: bytes) -> a11.Chunk:
     """The image as a chunk labelled `image/png`.
 
-    Built here rather than passed to `put`, which encodes a value through the
-    serialization registry: that registry has a codec per (type, media type)
-    pair and none for bytes as `image/png`, so `put` answers NOT_FOUND. A PNG is
-    bytes on the wire and bytes on the port, the same shape
-    `a11.sdk.http.client` writes a request body in.
+    `put` encodes values through the serialization registry, which has no codec
+    for bytes with the `image/png` media type. `put_chunk` carries the encoded
+    PNG bytes directly.
     """
     return a11.Chunk(data=png, metadata=a11.ChunkMetadata(mimetype="image/png"))
 
@@ -199,9 +196,8 @@ async def text_to_image(action: a11.Action) -> None:
         loop = asyncio.get_running_loop()
 
         def on_step(_pipeline, step: int, _timestep: int, kwargs: dict) -> dict:
-            # Clamped: a scheduler's timestep list can run one longer than the
-            # step count asked for, and a bar told `step 9 of 8` reads as a
-            # fault in the page rather than in the schedule.
+            # Some schedulers emit one callback beyond the requested step count.
+            # The progress value remains within the declared total.
             done = min(step + 1, request.num_inference_steps)
             asyncio.run_coroutine_threadsafe(
                 progress.put(

@@ -1,6 +1,8 @@
 // Copyright 2026 The A11 Authors.
 
 #include <atomic>
+#include <chrono>
+#include <thread>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -16,6 +18,7 @@
 #include <gtest/gtest.h>
 
 #include "thread/concurrency.h"
+#include "thread/fiber.h"
 #include "thread/internal/stack_walk.h"
 #include "thread/introspect.h"
 
@@ -358,6 +361,56 @@ TEST(FiberIntrospectTest, ProgressCounterAdvancesWithCompletedWaits) {
   });
   worker->Join();
   EXPECT_GT(TotalCompletedWaits(), before);
+}
+
+TEST(FiberIntrospectTest, AnOsThreadsWaitIsReportedAndThenPlaceholderAgain) {
+  // An OS thread outside a fiber carries a `kThreadPlaceholder` record. Its
+  // scheduler park appears as a wait in the report.
+  std::atomic<std::uint64_t> outsider_id{0};
+  std::atomic<bool> slept{false};
+  std::atomic<bool> stop{false};
+  std::thread outsider([&] {
+    // Give this thread its placeholder record.
+    outsider_id.store(Fiber::Current()->Diagnostics().id,
+                      std::memory_order_release);
+    thread::SleepFor(absl::Milliseconds(600));
+    slept.store(true, std::memory_order_release);
+    while (!stop.load(std::memory_order_acquire)) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+  });
+
+  const absl::Time appeared = absl::Now() + absl::Seconds(5);
+  while (outsider_id.load(std::memory_order_acquire) == 0 &&
+         absl::Now() < appeared) {
+    thread::SleepFor(absl::Milliseconds(2));
+  }
+  const std::uint64_t id = outsider_id.load(std::memory_order_acquire);
+  ASSERT_NE(id, 0u);
+
+  const std::vector<FiberSnapshot> waiting =
+      SnapshotUntil([id](const std::vector<FiberSnapshot>& fibers) {
+        const FiberSnapshot* one = FindById(fibers, id);
+        return one != nullptr && one->kind == WaitKind::kSleep;
+      });
+  const FiberSnapshot* sleeping = FindById(waiting, id);
+  ASSERT_NE(sleeping, nullptr);
+  EXPECT_EQ(sleeping->kind, WaitKind::kSleep);
+  EXPECT_LT(sleeping->deadline, absl::InfiniteFuture());
+
+  // Leaving the wait restores the idle thread marker.
+  const std::vector<FiberSnapshot> idle =
+      SnapshotUntil([id, &slept](const std::vector<FiberSnapshot>& fibers) {
+        const FiberSnapshot* one = FindById(fibers, id);
+        return slept.load(std::memory_order_acquire) && one != nullptr &&
+               one->kind == WaitKind::kThreadPlaceholder;
+      });
+  const FiberSnapshot* placeholder = FindById(idle, id);
+  ASSERT_NE(placeholder, nullptr);
+  EXPECT_EQ(placeholder->kind, WaitKind::kThreadPlaceholder);
+
+  stop.store(true, std::memory_order_release);
+  outsider.join();
 }
 
 }  // namespace

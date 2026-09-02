@@ -431,7 +431,8 @@ void BindService(py::module_& module) {
       .def(
           "cancel_action",
           [](service::Session& self, const std::string& action_id) {
-            ThrowIfNotOk(self.CancelAction(action_id));
+            // A dispatched cancellation may reach a backpressured transport.
+            CallWithoutGil([&] { return self.CancelAction(action_id); });
           },
           "Request cancellation of the running action with the given id, "
           "raising if it is unknown. Cancellation is cooperative and completes "
@@ -439,7 +440,9 @@ void BindService(py::module_& module) {
           py::arg("action_id"))
       .def(
           "cancel_all_actions",
-          [](service::Session& self) { ThrowIfNotOk(self.CancelAllActions()); },
+          [](service::Session& self) {
+            CallWithoutGil([&] { return self.CancelAllActions(); });
+          },
           "Request cancellation of every action currently running in the "
           "session. Each action unwinds asynchronously; await "
           "await_all_actions "
@@ -558,8 +561,9 @@ void BindService(py::module_& module) {
              std::shared_ptr<net::WireStream> stream, const py::object& mode) {
             service::StreamMode converted =
                 ValueOrThrow(StreamModeFromPython(mode));
-            a11::Task task =
-                ValueOrThrow(self->AddStream(std::move(stream), converted));
+            // AddStream starts pump fibers and may enter the fiber scheduler.
+            a11::Task task = ValueOrThrow(WithoutGil(
+                [&] { return self->AddStream(std::move(stream), converted); }));
             return FutureToPython(std::move(task));
           },
           R"doc(Attach a wire stream and begin pumping its messages, returning an awaitable for the stream's lifetime. `mode` selects whether this side starts (`"start"`) or accepts (`"accept"`) the stream.

@@ -623,13 +623,13 @@ Examples:
       .def(
           "initialize",
           [](const std::shared_ptr<stores::RedisChunkStore>& self) {
-            return StoreFuture(self->Initialize());
+            return StoreFuture(WithoutGil([&] { return self->Initialize(); }));
           },
           "Ensure node metadata exists without writing chunk data.")
       .def(
           "get_metadata",
           [](const std::shared_ptr<stores::RedisChunkStore>& self) {
-            return StoreFuture(self->GetMetadata());
+            return StoreFuture(WithoutGil([&] { return self->GetMetadata(); }));
           },
           "Read node-level state without iterating over chunks.")
       .def_property_readonly("client", &stores::RedisChunkStore::client,
@@ -832,16 +832,17 @@ Examples:
       .def(
           "get_metadata",
           [](const std::shared_ptr<stores::SQLiteChunkStore>& self) {
-            return StoreFuture(self->GetMetadata());
+            return StoreFuture(WithoutGil([&] { return self->GetMetadata(); }));
           },
           "Read node-level state without listing fragments.")
       .def(
           "find_referrers",
           [](const std::shared_ptr<stores::SQLiteChunkStore>& self,
              const py::typing::Optional<py::int_>& limit) {
+            const auto bound = static_cast<size_t>(UnsignedOption(
+                limit, std::numeric_limits<size_t>::max(), "limit"));
             return StoreFuture(
-                self->FindReferrers(static_cast<size_t>(UnsignedOption(
-                    limit, std::numeric_limits<size_t>::max(), "limit"))));
+                WithoutGil([&] { return self->FindReferrers(bound); }));
           },
           "Find fragments elsewhere in the database whose NodeRef points at "
           "this node, using the node-reference index rather than a scan.",
@@ -849,7 +850,8 @@ Examples:
       .def(
           "sweep_orphan_blobs",
           [](const std::shared_ptr<stores::SQLiteChunkStore>& self) {
-            return StoreFuture(self->SweepOrphanBlobs());
+            return StoreFuture(
+                WithoutGil([&] { return self->SweepOrphanBlobs(); }));
           },
           "Delete unreferenced blob files older than the grace period.")
       .def_property_readonly(
@@ -903,7 +905,8 @@ Examples:
       .def(
           "sweep_orphan_blobs",
           [](const std::shared_ptr<stores::SQLiteChunkStoreFactory>& self) {
-            return StoreFuture(self->SweepOrphanBlobs());
+            return StoreFuture(
+                WithoutGil([&] { return self->SweepOrphanBlobs(); }));
           },
           "Delete unreferenced blob files older than the grace period.")
       .def_property_readonly("root", &stores::SQLiteChunkStoreFactory::root,

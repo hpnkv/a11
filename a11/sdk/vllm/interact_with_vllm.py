@@ -381,7 +381,7 @@ class Conversation:
                 llm.normalize_interaction(interaction)
             )
         else:
-            # Tagged as ours, or untagged (optimistically treated as native).
+            # Tagged and untagged interactions use the native message shape.
             messages = self._native_messages(interaction)
 
         if self._interactions and not interaction.previous_interaction_id:
@@ -431,8 +431,7 @@ class Conversation:
         return [_clean_native_message(message)]
 
 
-#: What a reasoning parser calls the thinking it splits out of the content.
-#: vLLM has used both spellings, and a deployment sends one of them.
+#: Field names a vLLM reasoning parser may use for separated thinking.
 _REASONING_FIELDS = ("reasoning_content", "reasoning")
 
 
@@ -749,8 +748,8 @@ async def interact_with_vllm(action: a11.Action):
     client = get_vllm_client(base_url, api_key)
     model = await _resolve_model(client, model)
 
-    # Record the LLM span's model and input for tracing backends (e.g.
-    # Langfuse). Guarded: tracing must never affect the interaction.
+    # Record the model and input for tracing backends such as Langfuse.
+    # Tracing failures do not fail the interaction.
     if action.trace_id:
         try:
             action.set_span_name("vLLM interaction")
@@ -764,10 +763,8 @@ async def interact_with_vllm(action: a11.Action):
     options = _build_request_options(config)
     extra_body = _build_extra_body(config)
 
-    # Tool-call ids are unique across the whole session, not just within one
-    # round or turn (see `_StreamAccumulator`). The counter advances by the
-    # number of tool calls each round produces, and a per-turn prefix keeps the
-    # next user message clear of this turn's calls.
+    # Tool-call ids span every round and turn in a session. The per-turn prefix
+    # and per-round counter form the unique id.
     call_id_prefix = f"call_{uuid.uuid4().hex[:12]}"
     next_tool_call_id = 0
     try:
@@ -862,9 +859,8 @@ async def interact_with_vllm(action: a11.Action):
                 action_outputs=executed.outputs,
                 backend_specific_metadata={
                     llm.BACKEND_METADATA_KEY: str(llm.Backend.VLLM).encode(),
-                    # What the tools said to the user, kept beside their
-                    # results rather than in them: metadata is the one part of
-                    # an interaction no backend turns into provider content.
+                    # Tool narration remains in metadata. Provider content
+                    # contains the declared results.
                     **executed.log_metadata(),
                 },
                 content=[

@@ -522,8 +522,9 @@ py::object FutureToPythonConverted(a11::Future<T> future, Converter converter) {
   py::module_ coordination = py::module_::import("a11._asyncio");
 
   // Hand back a future that is *already* resolved when the native one is.
-  if (future.IsReady()) {
-    absl::StatusOr<T> result = future.Await();
+  // Both calls release the GIL while taking the future's fiber-aware lock.
+  if (WithoutGil([&] { return future.IsReady(); })) {
+    absl::StatusOr<T> result = WithoutGil([&] { return future.Await(); });
     py::object resolved = coordination.attr("_create_native_future")(
         loop, py::cpp_function([]() {}));
     try {
@@ -555,8 +556,10 @@ py::object FutureToPythonConverted(a11::Future<T> future, Converter converter) {
   auto references =
       std::make_shared<PythonReferences>(loop, py_future, completion);
 
-  future.OnReady([references, converter = std::move(converter)](
-                     const absl::StatusOr<T>& result) mutable {
+  // Registration may park on the future's fiber-aware lock. Release the GIL
+  // only for that handover; constructing the callable retains Python objects.
+  auto on_ready = [references, converter = std::move(converter)](
+                      const absl::StatusOr<T>& result) mutable {
     py::gil_scoped_acquire acquire;
     try {
       py::object value = py::none();
@@ -583,7 +586,8 @@ py::object FutureToPythonConverted(a11::Future<T> future, Converter converter) {
       PyErr_Clear();
     }
     references->ClearWithGilHeld();
-  });
+  };
+  WithoutGil([&] { future.OnReady(std::move(on_ready)); });
   return py_future;
 }
 

@@ -440,6 +440,41 @@ PooledFixedSizeStack FixedSizeAllocator(size_t requested_size) {
 
 using PoolWork = absl::AnyInvocable<void() &&>;
 
+// Maximum scheduler park before another work check. Both algorithms use it.
+constexpr absl::Duration kMaxPark = absl::Milliseconds(50);
+
+// Each park reads the installed guard. Installed guards have process lifetime
+// because an active park retains its loaded pointer.
+std::atomic<const SchedulerParkGuard* absl_nullable>& ParkGuard() {
+  static absl::NoDestructor<std::atomic<const SchedulerParkGuard*>> guard{
+      nullptr};
+  return *guard;
+}
+
+/// Drops the host runtime's lock for the duration of a park. See
+/// thread/executor.h's SchedulerParkGuard.
+class ParkWithoutHostLock {
+ public:
+  ParkWithoutHostLock() : guard_(ParkGuard().load(std::memory_order_acquire)) {
+    if (guard_ != nullptr) {
+      held_ = guard_->release();
+    }
+  }
+
+  ~ParkWithoutHostLock() {
+    if (guard_ != nullptr) {
+      guard_->acquire(held_);
+    }
+  }
+
+  ParkWithoutHostLock(const ParkWithoutHostLock&) = delete;
+  ParkWithoutHostLock& operator=(const ParkWithoutHostLock&) = delete;
+
+ private:
+  const SchedulerParkGuard* absl_nullable const guard_;
+  void* held_ = nullptr;
+};
+
 class FiberProperties final : public boost::fibers::fiber_properties {
  public:
   explicit FiberProperties(Fiber* absl_nonnull fiber)
@@ -486,14 +521,17 @@ class InstrumentedRoundRobin final : public boost::fibers::algo::algorithm {
   void suspend_until(
       const std::chrono::steady_clock::time_point& time_point) noexcept override
       ABSL_NO_THREAD_SAFETY_ANALYSIS {
+    // Publish this park on the calling fiber or its OS-thread placeholder.
+    THREAD_WAIT_SCOPE(wait, WaitKind::kCondVar, this);
+    // Recheck for work after the shared maximum park interval.
+    const auto cap =
+        std::chrono::steady_clock::now() +
+        std::chrono::nanoseconds(absl::ToInt64Nanoseconds(kMaxPark));
+    // Release a host runtime lock for the park. See thread/executor.h.
+    const ParkWithoutHostLock without_host_lock;
     std::unique_lock lock(mu_);
-    if (time_point == std::chrono::steady_clock::time_point::max()) {
-      cv_.wait(lock, [this] { return WakePending(); });
-      consumed_wake_seq_ = wake_seq_;
-      return;
-    }
-
-    if (cv_.wait_until(lock, time_point, [this] { return WakePending(); })) {
+    if (cv_.wait_until(lock, std::min(time_point, cap),
+                       [this] { return WakePending(); })) {
       consumed_wake_seq_ = wake_seq_;
     }
   }
@@ -755,11 +793,6 @@ constexpr int kSpinRoundsPerClockCheck = 32;
 // How many spin rounds run between sweeps of the slot depths. See the spin loop
 // in RunWorker for why a spinner should not read them on every round.
 constexpr int kSpinRoundsPerScan = 8;
-
-// A worker's *first* park with nothing to do. Nothing depends on it: it is a
-// safety net that turns any residual lost wakeup into a latency blip instead of
-// a hang.
-constexpr absl::Duration kMaxPark = absl::Milliseconds(50);
 
 // How far that park is allowed to stretch when a worker keeps waking to find
 // nothing, and the factor it stretches by.
@@ -1261,6 +1294,9 @@ class PoolAlgorithm final : public boost::fibers::algo::algorithm {
   void suspend_until(const std::chrono::steady_clock::time_point&
                          time_point) noexcept override {
     WorkerSlot& self = state_->slot(index_);
+    // Construction precedes the slot lock, making destruction restore the host
+    // lock after the slot lock is released.
+    const ParkWithoutHostLock without_host_lock;
     std::unique_lock<std::mutex> lock(self.park_mu);
     // Contexts, not all work: a pending stackless callback is not something a
     // dispatcher can run, and treating it as a reason to stay awake spins this
@@ -1729,7 +1765,26 @@ FiberDiagnostics* absl_nullable CurrentFiberDiagnostics() {
                                : &properties->GetFiber()->Diagnostics();
 }
 
+FiberDiagnostics* absl_nullable CurrentWaitDiagnostics() {
+  if (FiberDiagnostics* absl_nullable record = CurrentFiberDiagnostics();
+      record != nullptr) {
+    return record;
+  }
+  // An OS thread that reached A11 carries the `kThreadPlaceholder` record from
+  // Fiber::Current(). The pointer lookup allocates no state.
+  Fiber* absl_nullable placeholder = GetPerThreadFiberPtr();
+  return placeholder == nullptr ? nullptr : &placeholder->Diagnostics();
+}
+
 }  // namespace internal
+
+void SetSchedulerParkGuard(SchedulerParkGuard guard) {
+  const SchedulerParkGuard* absl_nullable installed = nullptr;
+  if (guard.release != nullptr && guard.acquire != nullptr) {
+    installed = new SchedulerParkGuard(std::move(guard));
+  }
+  ParkGuard().store(installed, std::memory_order_release);
+}
 
 void Post(absl::AnyInvocable<void() &&> work) {
   EnsureWorkerThreadPool();

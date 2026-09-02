@@ -17,6 +17,8 @@
 #include "absl/log/initialize.h"
 #include "python/bindings.h"
 #include "python/casters.h"
+#include "python/interop.h"
+#include "thread/executor.h"
 
 namespace py = pybind11;
 
@@ -38,10 +40,32 @@ void InstallFailureSignalHandler() {
   absl::InstallFailureSignalHandler(absl::FailureSignalHandlerOptions{});
 }
 
+// Installs CPython's release and acquire operations around scheduler parks.
+// See thread/executor.h's SchedulerParkGuard.
+void InstallSchedulerParkGuard() {
+  thread::SetSchedulerParkGuard(thread::SchedulerParkGuard{
+      .release =
+          []() -> void* {
+            // Save only an active interpreter thread state.
+            if (PyGILState_Check() == 0 || a11::python::InterpreterIsGoingAway()) {
+              return nullptr;
+            }
+            return PyEval_SaveThread();
+          },
+      .acquire =
+          [](void* held) {
+            if (held != nullptr && !a11::python::InterpreterIsGoingAway()) {
+              PyEval_RestoreThread(static_cast<PyThreadState*>(held));
+            }
+          },
+  });
+}
+
 }  // namespace
 
 PYBIND11_MODULE(_native, module) {
   InstallFailureSignalHandler();
+  InstallSchedulerParkGuard();
   absl::InitializeLog();
   // Nothing is emitted until a11.logging resolves a level from the importing
   // process's logging configuration. FATAL still reaches stderr, since it

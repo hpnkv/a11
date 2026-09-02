@@ -136,6 +136,10 @@ namespace internal {
 /// only.
 FiberDiagnostics* absl_nullable CurrentFiberDiagnostics();
 
+/// Returns CurrentFiberDiagnostics or the calling OS thread's
+/// `kThreadPlaceholder` record. Blocking paths use this record for reports.
+FiberDiagnostics* absl_nullable CurrentWaitDiagnostics();
+
 /// Whether `Mutex` records its holder. Cached from `A11_FIBER_OWNER_TRACKING`,
 /// default on.
 bool OwnerTrackingEnabled();
@@ -159,6 +163,9 @@ void SetWaitOwnerContext(FiberDiagnostics* absl_nonnull record,
  * the annotation from `SelectUntil` survives the `CondVar::WaitWithDeadline`
  * nested inside it.
  *
+ * A `kThreadPlaceholder` record represents an idle OS thread between waits.
+ * The scope restores that marker when the wait ends.
+ *
  * Only for paths that are about to block. On a fast path its stores are not
  * amortised against a context switch.
  */
@@ -180,6 +187,8 @@ class WaitScope {
 
  private:
   FiberDiagnostics* absl_nullable record_;
+  /// Whether the record this scope published to is an OS thread's placeholder.
+  bool placeholder_ = false;
 };
 
 }  // namespace internal

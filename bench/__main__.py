@@ -311,12 +311,8 @@ def _relaunch_argv() -> list[str]:
 
 
 if __name__ == "__main__":
-    # The allocator can only be swapped by launching the process with the
-    # library preloaded, which is what the `a11` command does at
-    # a11/cli/__main__.py. A run that skips it measures a configuration nobody
-    # ships. `A11_NO_ALLOCATOR_PRELOAD=1` opts out, and the per-suite
-    # subprocesses inherit the preload through the environment rather than
-    # re-executing.
+    # The allocator is selected by launching the process with its library
+    # preloaded. Per-suite subprocesses inherit the preload setting.
     from a11 import allocator
 
     allocator.reexec_with_preload(_relaunch_argv())

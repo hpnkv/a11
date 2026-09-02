@@ -5,25 +5,24 @@ the model runs and one image when it finishes. Giving each result its own output
 port lets a caller drain them concurrently, apply different size limits, and
 display either one without decoding a mixed event stream.
 
-This is a general generative-model API pattern, not an agent-specific one. A
-video service can separate preview frames, logs, and the completed asset; a
+The pattern applies across generative-model APIs. A video service can separate
+preview frames, logs, and the completed asset; a
 speech synthesizer can separate audio frames from alignment records; an image
 editor can return masks and rendered output under distinct media types. Each
 consumer subscribes to the result it understands.
 
 !!! note "Before you start"
 
-    The demo below draws against the hosted backend, which runs Stable
-    Diffusion 1.5 on a GPU. Nothing to install to try it.
+    The demo below draws against a hosted Stable Diffusion 1.5 backend. The
+    hosted demo needs no local packages.
 
     To run the action yourself, the backend machine needs `diffusers`,
-    `transformers`, `torch` and a checkpoint — the first run downloads several
-    gigabytes, and a CPU-only machine takes minutes per image where a GPU takes
-    seconds:
+    `transformers`, `torch` and a checkpoint. The first run downloads the
+    checkpoint:
 
     ```sh
     pip install 'a11-kit[diffusion]'
-    python -m a11.demos.web_demos_server   # ws://127.0.0.1:9010/a11-demos
+    python -m a11.demos.web_demos_server
     ```
 
     A page loaded over HTTPS may refuse a plaintext `ws://` socket even to
@@ -33,8 +32,7 @@ consumer subscribes to the result it understands.
     browser blocks it.
 
     A backend without the diffusion stack fails the action with
-    `FAILED_PRECONDITION` and says what is missing, which is what the demo
-    below shows in its error region.
+    `FAILED_PRECONDITION`; the demo shows its message in the error region.
 
 ## Try it
 
@@ -75,7 +73,7 @@ and the page is
 [HTTP as separate streams](../api/http-actions.md) applies the same design to
 HTTP protocol fields.
 
-## 1. The contract
+## 1. Define the contract
 
 ```python
 TEXT_TO_IMAGE_SCHEMA = a11.ActionSchema(
@@ -98,26 +96,25 @@ TEXT_TO_IMAGE_SCHEMA = a11.ActionSchema(
 )
 ```
 
-`unary=True` declares a port that carries one complete value. Without it,
-`progress` is a stream. The browser sends the request as plain JSON, which needs
-no shared type registry. The handler validates it into a Pydantic model on
-arrival:
+`unary=True` declares a port that carries one complete value. The `progress`
+port omits it and carries a stream. The browser sends the request as plain JSON,
+which needs no shared type registry. The handler validates it into a Pydantic
+model on arrival:
 
 ```python
 request = DiffusionRequest.model_validate(await action["request"].consume(dict))
 ```
 
-## 2. Reporting from a worker thread
+## 2. Report from a worker thread
 
-The pipeline is blocking, so it runs on a thread — and the callback that fires per
-step is on that thread, not the loop:
+The pipeline is blocking, so it runs on a thread. Some schedulers invoke the
+callback once beyond the requested step count, so the progress value is capped
+at the declared total:
 
 ```python
 loop = asyncio.get_running_loop()
 
 def on_step(_pipeline, step, _timestep, kwargs):
-    # A scheduler's timestep list can run one longer than the step count asked
-    # for, and a bar told `step 9 of 8` reads as a fault in the page.
     done = min(step + 1, request.num_inference_steps)
     asyncio.run_coroutine_threadsafe(
         progress.put({"step": done, "steps": request.num_inference_steps},
@@ -153,7 +150,7 @@ finally:
 
 Close every output port so readers can observe the end of the stream.
 
-## 3. The image is bytes
+## 3. Write the encoded image
 
 The handler encodes the image in its chosen format and labels the chunk with
 the corresponding media type. The chunk is built and written directly:
@@ -192,9 +189,8 @@ const chunk = need(await node.nextChunk(MAX_IMAGE_BYTES));
 await progress;
 ```
 
-`nextChunk` takes the largest payload the reader will accept. A 512×512 PNG
-from this action is around 400 KB and the schema allows 1024×1024, so the page
-sets the ceiling above both.
+`nextChunk` takes the largest payload the reader will accept. The page sets a
+4 MB ceiling for this action's PNG output.
 
 An undrained output port stalls its producer. Read `progress` while waiting for
 the image.

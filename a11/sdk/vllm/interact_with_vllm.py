@@ -42,6 +42,11 @@ def _image_part(data: str, mime_type: str | None) -> dict[str, Any]:
     }
 
 
+#: What a text-only tool message says about the frames the user message beside
+#: it carries.
+_IMAGE_RESULT_NOTE = "The images this tool returned follow in the next message."
+
+
 def _split_data_url(url: str) -> tuple[str, str | None]:
     """The base64 payload and media type of a ``data:`` URL.
 
@@ -137,6 +142,46 @@ def _encode_arguments(params: dict[str, Any]) -> str:
     return pydantic_core.to_json(params or {}).decode()
 
 
+def _normalized_content_parts(content: Any) -> list[llm.NormalizedPart]:
+    """Normalize the text and images in one chat message's content."""
+    if isinstance(content, str):
+        return (
+            [
+                llm.NormalizedPart(
+                    type=llm.NormalizedContentType.TEXT, text=content
+                )
+            ]
+            if content
+            else []
+        )
+    if not isinstance(content, list):
+        return []
+
+    parts: list[llm.NormalizedPart] = []
+    for part in content:
+        if not isinstance(part, dict):
+            continue
+        if part.get("type") == "text" and part.get("text"):
+            parts.append(
+                llm.NormalizedPart(
+                    type=llm.NormalizedContentType.TEXT,
+                    text=part.get("text"),
+                )
+            )
+        elif part.get("type") == "image_url":
+            url = (part.get("image_url") or {}).get("url") or ""
+            data, mime_type = _split_data_url(url)
+            if data:
+                parts.append(
+                    llm.NormalizedPart(
+                        type=llm.NormalizedContentType.IMAGE,
+                        data=data,
+                        mime_type=mime_type,
+                    )
+                )
+    return parts
+
+
 def _vllm_to_normalized(
     interaction: llm.Interaction,
 ) -> llm.NormalizedMessage:
@@ -163,19 +208,23 @@ def _vllm_to_normalized(
             message="Unrecognized vLLM interaction content.",
         ).to_exception()
 
-    # A persisted tool-result batch: one normalized message of tool results.
+    # A persisted tool-result batch includes user messages carrying any images
+    # that its text-only tool messages describe.
     if "messages" in content:
         parts: list[llm.NormalizedPart] = []
         for message in content.get("messages") or []:
             if not isinstance(message, dict):
                 continue
-            parts.append(
-                llm.NormalizedPart(
-                    type=llm.NormalizedContentType.TOOL_RESULT,
-                    call_id=message.get("tool_call_id"),
-                    content=llm.stringify_content(message.get("content")),
+            if message.get("role") == "tool":
+                parts.append(
+                    llm.NormalizedPart(
+                        type=llm.NormalizedContentType.TOOL_RESULT,
+                        call_id=message.get("tool_call_id"),
+                        content=llm.stringify_content(message.get("content")),
+                    )
                 )
-            )
+            else:
+                parts.extend(_normalized_content_parts(message.get("content")))
         return llm.NormalizedMessage(role=llm.Role.USER, parts=parts)
 
     role = (
@@ -183,34 +232,7 @@ def _vllm_to_normalized(
         if content.get("role") == "assistant"
         else llm.Role.USER
     )
-    parts = []
-    inner = content.get("content")
-    if isinstance(inner, str) and inner:
-        parts.append(
-            llm.NormalizedPart(type=llm.NormalizedContentType.TEXT, text=inner)
-        )
-    elif isinstance(inner, list):
-        for part in inner:
-            if not isinstance(part, dict):
-                continue
-            if part.get("type") == "text" and part.get("text"):
-                parts.append(
-                    llm.NormalizedPart(
-                        type=llm.NormalizedContentType.TEXT,
-                        text=part.get("text"),
-                    )
-                )
-            elif part.get("type") == "image_url":
-                url = (part.get("image_url") or {}).get("url") or ""
-                data, mime_type = _split_data_url(url)
-                if data:
-                    parts.append(
-                        llm.NormalizedPart(
-                            type=llm.NormalizedContentType.IMAGE,
-                            data=data,
-                            mime_type=mime_type,
-                        )
-                    )
+    parts = _normalized_content_parts(content.get("content"))
     for tool_call in content.get("tool_calls") or []:
         if not isinstance(tool_call, dict):
             continue
@@ -367,14 +389,15 @@ class Conversation:
                 message="Interaction content is required.",
             ).to_exception()
 
-        if len(interaction.content) > 1:
-            raise Status(
-                code=StatusCode.INVALID_ARGUMENT,
-                message="Only one content chunk is allowed.",
-            ).to_exception()
-
         backend = llm.interaction_backend(interaction)
-        if backend is not None and backend != llm.Backend.VLLM:
+        chunk_content = len(interaction.content) != 1 or llm.has_image_chunks(
+            interaction
+        )
+        if chunk_content:
+            messages = _vllm_from_normalized(
+                llm.normalize_by_shape(interaction)
+            )
+        elif backend is not None and backend != llm.Backend.VLLM:
             # Produced by another backend: bridge it through the normalized
             # representation and leave the interaction's own content untouched.
             messages = _vllm_from_normalized(
@@ -582,16 +605,39 @@ class _StreamAccumulator:
 async def _build_tool_results_from_outputs(
     executed: runner.ExecutedActions,
 ) -> list[dict[str, Any]]:
-    """Turn each nested-action output or failure into a tool message."""
+    """Turn each nested-action output or failure into a tool message.
+
+    A ``role: "tool"`` message on this route carries text alone, so a call that
+    wrote an `image/*` output is followed by a user message holding the frames
+    as ``image_url`` parts.
+    """
 
     def as_tool_message(
-        call_id: str, content: str, failure: str | None
-    ) -> dict[str, Any]:
-        return {
-            "role": "tool",
-            "tool_call_id": call_id,
-            "content": content if failure is None else f"Error: {failure}",
-        }
+        call_id: str,
+        content: str,
+        failure: str | None,
+        images: list[llm.NormalizedPart],
+    ) -> list[dict[str, Any]]:
+        text = content if failure is None else f"Error: {failure}"
+        messages: list[dict[str, Any]] = [
+            {
+                "role": "tool",
+                "tool_call_id": call_id,
+                "content": text or _IMAGE_RESULT_NOTE,
+            }
+        ]
+        if images:
+            messages.append({
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": _IMAGE_RESULT_NOTE},
+                    *(
+                        _image_part(image.data or "", image.mime_type)
+                        for image in images
+                    ),
+                ],
+            })
+        return messages
 
     return await llm.build_tool_results(executed, as_tool_message)
 

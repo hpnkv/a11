@@ -16,8 +16,10 @@ from a11.sdk import presentation
 from a11.sdk.llm import (
     TOOL_LOGS_METADATA_KEY,
     Interaction,
+    NormalizedContentType,
     Role,
     UsageMetadata,
+    normalize_by_shape,
 )
 from a11.sdk.presentation import (
     BlockKind,
@@ -70,6 +72,32 @@ def test_an_untagged_client_interaction_still_presents():
 
 def test_plain_text_reads_content_without_a_backend_tag():
     assert presentation.plain_text(_text_interaction("a title")) == "a title"
+
+
+def test_raw_image_chunks_become_normalized_and_renderable_parts():
+    interaction = Interaction(
+        role=Role.USER,
+        content=[
+            a11.to_chunk("inspect this"),
+            a11.to_chunk(b"jpeg data", "image/jpeg"),
+        ],
+    )
+
+    message = normalize_by_shape(interaction)
+    assert [part.type for part in message.parts] == [
+        NormalizedContentType.TEXT,
+        NormalizedContentType.IMAGE,
+    ]
+    assert message.parts[1].data == "anBlZyBkYXRh"
+    assert message.parts[1].mime_type == "image/jpeg"
+
+    turn = present_interaction(interaction)
+    assert [block.kind for block in turn.blocks] == [
+        BlockKind.TEXT,
+        BlockKind.IMAGE,
+    ]
+    assert turn.blocks[1].data == b"jpeg data"
+    assert turn.blocks[1].mime_type == "image/jpeg"
 
 
 def test_a_tool_call_is_paired_with_a_log_from_a_later_interaction():

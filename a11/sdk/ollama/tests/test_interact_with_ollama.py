@@ -264,6 +264,40 @@ async def test_thoughts_stream_separately_from_text(monkeypatch):
     assert "".join(text) == "Hello."
 
 
+def test_raw_image_chunks_reach_ollama_images():
+    conversation = mod.Conversation()
+    conversation.feed_next_interaction(
+        Interaction(
+            role=Role.USER,
+            content=[
+                a11.to_chunk("what is this?"),
+                a11.to_chunk(b"ABC", "image/png"),
+            ],
+        )
+    )
+
+    assert conversation.messages == [
+        {
+            "role": "user",
+            "content": "what is this?",
+            "images": ["QUJD"],
+        }
+    ]
+
+
+def test_output_images_are_preserved_in_the_assistant_interaction():
+    accumulator = mod._StreamAccumulator("call")
+    accumulator.add(
+        ollama.Message(
+            role="assistant",
+            content="drawn",
+            images=[ollama.Image(value=b"PNG")],
+        )
+    )
+
+    assert accumulator.message_dict()["images"] == ["UE5H"]
+
+
 def test_a_claude_tool_result_is_named_for_ollama():
     """Continuing a Claude conversation on Ollama names its tool results.
 
@@ -274,7 +308,8 @@ def test_a_claude_tool_result_is_named_for_ollama():
     tool call in the same conversation.
     """
     pytest.importorskip("anthropic")
-    from a11.sdk.anthropic import interact_with_claude  # registers the normalizer
+    # Importing the handler registers the Claude interaction normalizer.
+    from a11.sdk.anthropic import interact_with_claude
 
     del interact_with_claude
 
@@ -370,9 +405,9 @@ async def test_a_raw_tool_schema_serializes_without_warnings():
     """The passthrough tool must not narrate itself into the log every turn.
 
     Pydantic warns when it serializes a value that is not of the declared type,
-    which is exactly what `_PassthroughTool` is; the stack varies enough that the
-    "once per location" rule does not collapse the copies, so each turn logged
-    another one. This drives the real `chat` call — which builds and serializes
+    `_PassthroughTool` does exactly this. Stack locations vary, so the "once per
+    location" rule does not collapse the copies and each turn logs another one.
+    This drives the real `chat` call — which builds and serializes
     the request, and for a streaming call does no I/O — and asserts nothing is
     warned and nothing is lost.
     """

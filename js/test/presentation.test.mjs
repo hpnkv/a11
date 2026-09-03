@@ -22,7 +22,10 @@ import {
   Chunk,
   ChunkMetadata,
   PresentationReducer,
+  makeInteraction,
+  normalizeByShape,
   parseInteraction,
+  presentInteraction,
   presentConversation,
   valueOrThrow,
 } from '../dist/index.js';
@@ -32,6 +35,47 @@ const GOLDEN = fileURLToPath(
 );
 
 const golden = JSON.parse(readFileSync(GOLDEN, 'utf8'));
+
+test('raw image chunks normalize and render with their bytes', async () => {
+  const interaction = valueOrThrow(makeInteraction({
+    role: 'user',
+    content: [new Chunk({
+      metadata: new ChunkMetadata({ mimetype: 'image/png' }),
+      data: new Uint8Array([1, 2, 3]),
+    })],
+  }));
+
+  const normalized = normalizeByShape(interaction);
+  assert.equal(normalized.parts[0].type, 'image');
+  assert.equal(normalized.parts[0].data, 'AQID');
+  assert.equal(normalized.parts[0].mime_type, 'image/png');
+
+  const turn = await presentInteraction(interaction);
+  assert.equal(turn.blocks[0].kind, BlockKind.IMAGE);
+  assert.equal(turn.blocks[0].mimeType, 'image/png');
+  assert.deepEqual(turn.blocks[0].data, new Uint8Array([1, 2, 3]));
+});
+
+test('shape normalization finds images in provider step envelopes', () => {
+  const interaction = valueOrThrow(makeInteraction({
+    role: 'model',
+    content: [new Chunk({
+      metadata: new ChunkMetadata({ mimetype: 'application/json' }),
+      data: new TextEncoder().encode(JSON.stringify({
+        steps: [{
+          type: 'model_output',
+          content: [{ type: 'image', data: 'AQID', mime_type: 'image/jpeg' }],
+        }],
+      })),
+    })],
+  }));
+
+  assert.deepEqual(normalizeByShape(interaction).parts, [{
+    type: 'image',
+    data: 'AQID',
+    mime_type: 'image/jpeg',
+  }]);
+});
 
 /** One interaction from its tagged JSON, as another language would receive it. */
 function decode(payload) {

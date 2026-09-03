@@ -1,6 +1,7 @@
 # Copyright 2026 The A11 Authors.
 
 import asyncio
+import base64
 import contextlib
 import traceback
 import uuid
@@ -89,19 +90,37 @@ def _ollama_to_normalized(
             message="Unrecognized Ollama interaction content.",
         ).to_exception()
 
-    # A persisted tool-result batch: one normalized message of tool results.
+    # A persisted tool-result batch includes user messages carrying any images
+    # that its text-only tool messages describe.
     if "messages" in content:
         parts: list[llm.NormalizedPart] = []
         for message in content.get("messages") or []:
             if not isinstance(message, dict):
                 continue
-            parts.append(
-                llm.NormalizedPart(
-                    type=llm.NormalizedContentType.TOOL_RESULT,
-                    call_id=message.get("tool_name"),
-                    content=llm.stringify_content(message.get("content")),
+            if message.get("role") == "tool":
+                parts.append(
+                    llm.NormalizedPart(
+                        type=llm.NormalizedContentType.TOOL_RESULT,
+                        call_id=message.get("tool_name"),
+                        content=llm.stringify_content(message.get("content")),
+                    )
                 )
-            )
+            else:
+                text = message.get("content")
+                if isinstance(text, str) and text:
+                    parts.append(
+                        llm.NormalizedPart(
+                            type=llm.NormalizedContentType.TEXT, text=text
+                        )
+                    )
+                for image in message.get("images") or []:
+                    if isinstance(image, str):
+                        parts.append(
+                            llm.NormalizedPart(
+                                type=llm.NormalizedContentType.IMAGE,
+                                data=image,
+                            )
+                        )
         return llm.NormalizedMessage(role=llm.Role.USER, parts=parts)
 
     role = (
@@ -131,6 +150,11 @@ def _ollama_to_normalized(
             )
         )
     return llm.NormalizedMessage(role=role, parts=parts)
+
+
+#: What a text-only tool message says about the frames the user message beside
+#: it carries.
+_IMAGE_RESULT_NOTE = "The images this tool returned follow in the next message."
 
 
 def _ollama_from_normalized(
@@ -287,14 +311,14 @@ class Conversation:
                 message="Interaction content is required.",
             ).to_exception()
 
-        if len(interaction.content) > 1:
-            raise Status(
-                code=StatusCode.INVALID_ARGUMENT,
-                message="Only one content chunk is allowed.",
-            ).to_exception()
-
         backend = llm.interaction_backend(interaction)
-        if backend is not None and backend != llm.Backend.OLLAMA:
+        chunk_content = len(interaction.content) != 1 or llm.has_image_chunks(
+            interaction
+        )
+        if chunk_content:
+            normalized = llm.normalize_by_shape(interaction)
+            messages = _ollama_from_normalized(normalized, self._call_names.get)
+        elif backend is not None and backend != llm.Backend.OLLAMA:
             # Produced by another backend: bridge it through the normalized
             # representation and leave the interaction's own content untouched.
             normalized = llm.normalize_interaction(interaction)
@@ -385,6 +409,7 @@ class _StreamAccumulator:
         self._base_id = base_id
         self._content = ""
         self._thinking = ""
+        self._images: list[str] = []
         self._tool_calls: list[llm.ToolCall] = []
         self._raw_tool_calls: list[dict[str, Any]] = []
 
@@ -395,6 +420,12 @@ class _StreamAccumulator:
         thinking = getattr(message, "thinking", None)
         if thinking:
             self._thinking += thinking
+        for image in getattr(message, "images", None) or []:
+            value = getattr(image, "value", image)
+            if isinstance(value, bytes):
+                self._images.append(base64.b64encode(value).decode("ascii"))
+            elif isinstance(value, str):
+                self._images.append(value)
         for tool_call in getattr(message, "tool_calls", None) or []:
             function = tool_call.function
             index = self._base_id + len(self._tool_calls)
@@ -428,6 +459,8 @@ class _StreamAccumulator:
         }
         if self._thinking:
             message["thinking"] = self._thinking
+        if self._images:
+            message["images"] = self._images
         if self._raw_tool_calls:
             message["tool_calls"] = self._raw_tool_calls
         return message
@@ -437,18 +470,34 @@ async def _build_tool_results_from_outputs(
     executed: runner.ExecutedActions,
     call_names: dict[str, str],
 ) -> list[dict[str, Any]]:
-    """Turn each nested-action output or failure into a tool message."""
+    """Turn each nested-action output or failure into a tool message.
+
+    A ``role: "tool"`` message carries text alone, so a call that wrote an
+    `image/*` output is followed by a user message holding the frames in
+    ``images``, where a vision model reads them.
+    """
 
     def as_tool_message(
-        call_id: str, content: str, failure: str | None
-    ) -> dict[str, Any]:
+        call_id: str,
+        content: str,
+        failure: str | None,
+        images: list[llm.NormalizedPart],
+    ) -> list[dict[str, Any]]:
+        text = content if failure is None else f"Error: {failure}"
         message: dict[str, Any] = {
             "role": "tool",
-            "content": content if failure is None else f"Error: {failure}",
+            "content": text or _IMAGE_RESULT_NOTE,
         }
         if call_names.get(call_id):
             message["tool_name"] = call_names[call_id]
-        return message
+        messages = [message]
+        if images:
+            messages.append({
+                "role": "user",
+                "content": _IMAGE_RESULT_NOTE,
+                "images": [image.data or "" for image in images],
+            })
+        return messages
 
     return await llm.build_tool_results(executed, as_tool_message)
 

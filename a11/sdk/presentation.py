@@ -32,6 +32,8 @@ future gateway ever want to stream blocks directly.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import enum
 import json
 from collections.abc import Iterable, Mapping, Sequence
@@ -202,11 +204,18 @@ def present_interaction(
 
     for part in message.parts:
         if part.type == NormalizedContentType.IMAGE:
+            data = None
+            if part.data:
+                try:
+                    data = base64.b64decode(part.data, validate=True)
+                except (binascii.Error, ValueError):
+                    pass
             blocks.append(
                 block(
                     BlockKind.IMAGE,
                     mime_type=part.mime_type or "",
                     text=part.text or "",
+                    data=data,
                 )
             )
 

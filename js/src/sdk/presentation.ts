@@ -26,10 +26,16 @@
  */
 
 import type { Chunk } from '../data.js';
+import { base64Decode } from '../bytes.js';
 import { fromChunk } from '../serialization.js';
 import { isOk } from '../status.js';
 import type { Status } from '../status.js';
-import type { Interaction, UsageMetadata } from './llm.js';
+import {
+  NormalizedContentType,
+  normalizeInteraction,
+  type Interaction,
+  type UsageMetadata,
+} from './llm.js';
 
 /**
  * Where a turn's user-facing tool logs ride: JSON bytes of
@@ -69,6 +75,7 @@ export interface PresentationBlock {
   toolName: string;
   status?: Status;
   mimeType: string;
+  data?: Uint8Array;
   usage?: UsageMetadata;
   /** Still being appended to; only ever true on the live path. */
   partial: boolean;
@@ -192,6 +199,19 @@ export async function presentInteraction(
 
   const text = await plainText(interaction);
   if (text) blocks.push({ ...make(BlockKind.TEXT), text });
+
+  const normalized = normalizeInteraction(interaction);
+  if (isOk(normalized)) {
+    for (const part of normalized.parts) {
+      if (part.type !== NormalizedContentType.IMAGE) continue;
+      const data = part.data ? base64Decode(part.data) : null;
+      blocks.push({
+        ...make(BlockKind.IMAGE),
+        mimeType: part.mime_type ?? '',
+        ...(data !== null && isOk(data) ? { data } : {}),
+      });
+    }
+  }
 
   // Tool calls come from `action_calls` rather than from content: it is the
   // backend-independent record of what ran, and it carries the call ids the

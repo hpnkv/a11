@@ -31,11 +31,9 @@ export const TEXT_MIMETYPE = 'text/plain';
  * Media types that describe their content completely on their own.
  *
  * A chunk using one carries no `type` parameter and no framing inside the
- * payload: `text/plain` is UTF-8 text and `application/octet-stream` is bytes,
- * and there is nothing a `;type=` could add. These are the default
- * representations for strings and `Uint8Array`, which is what makes a string
- * chunk the string itself rather than a JSON-quoted copy, and a bytes chunk the
- * bytes rather than base64 inside a JSON string.
+ * payload: `text/plain` is UTF-8 text, `application/octet-stream` is bytes,
+ * and `image/*` is encoded image data. There is nothing a `;type=` could add.
+ * Text and octet-stream remain the defaults for strings and `Uint8Array`.
  *
  * The consequence to know: `ArrayBuffer` and `Blob` share the bytes media type,
  * so a value round-tripped without naming a type comes back as the canonical
@@ -45,6 +43,10 @@ export const TEXT_MIMETYPE = 'text/plain';
 const SELF_DESCRIBING_MEDIA_TYPES = new Set<string>([
   TEXT_MIMETYPE, OCTET_STREAM_MIMETYPE,
 ]);
+
+function isSelfDescribingMediaType(mediaType: string): boolean {
+  return SELF_DESCRIBING_MEDIA_TYPES.has(mediaType) || mediaType.startsWith('image/');
+}
 
 const MIME_TOKEN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 
@@ -95,7 +97,7 @@ const GENERIC_TAGS = new Set([
 
 function formatMimetype(mimetype: ParsedMimetype, tag: string): string {
   const parameters = [...mimetype.parameters].filter(([name]) => name !== 'type');
-  if (!GENERIC_TAGS.has(tag) && !SELF_DESCRIBING_MEDIA_TYPES.has(mimetype.mediaType)) {
+  if (!GENERIC_TAGS.has(tag) && !isSelfDescribingMediaType(mimetype.mediaType)) {
     parameters.push(['type', encodeURIComponent(tag)]);
   }
   return `${mimetype.mediaType}${parameters.map(([name, value]) => `;${name}=${value}`).join('')}`;
@@ -130,11 +132,13 @@ function registrationMatches(
   registered: ParsedMimetype,
   selection: ParsedMimetype,
 ): boolean {
-  if (!wildcardMatches(registered.mediaType, selection.mediaType)) return false;
+  if (!wildcardMatches(registered.mediaType, selection.mediaType)
+      && !wildcardMatches(selection.mediaType, registered.mediaType)) return false;
   for (const [name, expected] of selection.parameters) {
     if (name === 'type') continue;
     const value = registered.parameters.get(name);
-    if (value !== undefined && !wildcardMatches(value, expected)) return false;
+    if (value !== undefined && !wildcardMatches(value, expected)
+        && !wildcardMatches(expected, value)) return false;
   }
   return true;
 }
@@ -401,12 +405,16 @@ export class SerializationRegistry {
 
   /** Add one codec; duplicate tag/media-type pairs are rejected. */
   register<T>(codec: SerializationCodec<T>): Status {
+    return this.addCodec(codec, false);
+  }
+
+  private addCodec<T>(codec: SerializationCodec<T>, patterns: boolean): Status {
     try {
       if (typeof codec.tag !== 'string' || codec.tag === '') return invalidArgumentError('Serialization codec tag must be non-empty.');
       if (typeof codec.test !== 'function' || typeof codec.serialize !== 'function' || typeof codec.deserialize !== 'function') {
         return invalidArgumentError('Serialization codec callbacks must be functions.');
       }
-      const parsed = parseMimetype(codec.mimetype);
+      const parsed = parseMimetype(codec.mimetype, patterns);
       if (!isOk(parsed)) return parsed;
       if (this.codecs.some((registered) => registered.tag === codec.tag && registered.parsed.mediaType === parsed.mediaType)) {
         return alreadyExistsError(`A codec for ${codec.tag} and ${parsed.mediaType} is already registered.`);
@@ -469,15 +477,35 @@ export class SerializationRegistry {
     });
     if (!isOk(status)) return status;
     if (typeof Blob !== 'undefined') {
-      status = this.register<Blob>({
+      const blobCodec = (mimetype: string): SerializationCodec<Blob> => ({
         tag: 'blob',
-        mimetype: 'application/octet-stream',
+        mimetype,
         test: (value): value is Blob => value instanceof Blob,
         serialize: (value) => value,
         deserialize: (data, chunk) => new Blob([new Uint8Array(data).buffer], { type: mediaTypeOf(chunk.mimetype) }),
       });
+      status = this.register<Blob>(blobCodec(OCTET_STREAM_MIMETYPE));
+      if (!isOk(status)) return status;
+      for (const mimetype of ['image/png', 'image/jpeg']) {
+        status = this.register<Blob>(blobCodec(mimetype));
+        if (!isOk(status)) return status;
+      }
+      status = this.addCodec<Blob>(blobCodec('image/*'), true);
       if (!isOk(status)) return status;
     }
+    const imageBytesCodec = (mimetype: string): SerializationCodec<Uint8Array> => ({
+      tag: 'bytes',
+      mimetype,
+      test: (value): value is Uint8Array => value instanceof Uint8Array,
+      serialize: (value) => value,
+      deserialize: (data) => new Uint8Array(data),
+    });
+    for (const mimetype of ['image/png', 'image/jpeg']) {
+      status = this.register<Uint8Array>(imageBytesCodec(mimetype));
+      if (!isOk(status)) return status;
+    }
+    status = this.addCodec<Uint8Array>(imageBytesCodec('image/*'), true);
+    if (!isOk(status)) return status;
     for (const mimetype of [JSON_MIMETYPE, MSGPACK_MIMETYPE]) {
       status = this.register<Uint8Array>({
         tag: 'bytes',
@@ -588,7 +616,9 @@ export class SerializationRegistry {
       }
       if (!isOk(serializedResult)) return serializedResult;
       const serialized = serializedResult;
-      const exactMimetype = formatMimetype(codec.parsed, codec.tag);
+      const outputType = selection !== null && codec.parsed.mediaType.includes('*')
+        && !selection.mediaType.includes('*') ? selection : codec.parsed;
+      const exactMimetype = formatMimetype(outputType, codec.tag);
       if (serialized instanceof Chunk) {
         return Chunk.create({
           metadata: new ChunkMetadata({

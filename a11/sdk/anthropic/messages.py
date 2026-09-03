@@ -27,6 +27,53 @@ def _as_message_dict(content: Any) -> Any:
     return content
 
 
+def _normalized_image(block: dict[str, Any]) -> llm.NormalizedPart | None:
+    """An Anthropic or MCP image block as one normalized image."""
+    source = block.get("source") or {}
+    data = source.get("data") or block.get("data")
+    if not isinstance(data, str):
+        return None
+    return llm.NormalizedPart(
+        type=llm.NormalizedContentType.IMAGE,
+        data=data,
+        mime_type=(
+            source.get("media_type")
+            or block.get("mime_type")
+            or block.get("mimeType")
+        ),
+    )
+
+
+def _normalized_tool_result(block: dict[str, Any]) -> list[llm.NormalizedPart]:
+    """A tool result followed by the images carried inside its content."""
+    content = block.get("content")
+    images: list[llm.NormalizedPart] = []
+    if isinstance(content, list):
+        images = [
+            image
+            for item in content
+            if isinstance(item, dict) and item.get("type") == "image"
+            if (image := _normalized_image(item)) is not None
+        ]
+    text = (
+        "".join(
+            item.get("text", "")
+            for item in content
+            if isinstance(item, dict) and item.get("type") == "text"
+        )
+        if images and isinstance(content, list)
+        else llm.stringify_content(content)
+    )
+    return [
+        llm.NormalizedPart(
+            type=llm.NormalizedContentType.TOOL_RESULT,
+            call_id=block.get("tool_use_id"),
+            content=text,
+        ),
+        *images,
+    ]
+
+
 def to_normalized(interaction: llm.Interaction) -> llm.NormalizedMessage:
     """Produce the normalized view of an Anthropic-shaped interaction."""
     content = _as_message_dict(a11.from_chunk(interaction.content[0]))
@@ -87,22 +134,11 @@ def to_normalized(interaction: llm.Interaction) -> llm.NormalizedMessage:
                 )
             )
         elif block_type == "tool_result":
-            parts.append(
-                llm.NormalizedPart(
-                    type=llm.NormalizedContentType.TOOL_RESULT,
-                    call_id=block.get("tool_use_id"),
-                    content=llm.stringify_content(block.get("content")),
-                )
-            )
+            parts.extend(_normalized_tool_result(block))
         elif block_type == "image":
-            source = block.get("source") or {}
-            parts.append(
-                llm.NormalizedPart(
-                    type=llm.NormalizedContentType.IMAGE,
-                    data=source.get("data"),
-                    mime_type=source.get("media_type"),
-                )
-            )
+            image = _normalized_image(block)
+            if image is not None:
+                parts.append(image)
         # `thinking`, `redacted_thinking`, and server tool blocks carry no
         # portable content and are intentionally dropped.
 
@@ -117,35 +153,29 @@ def from_normalized(message: llm.NormalizedMessage) -> dict[str, Any]:
         if part.type == llm.NormalizedContentType.TEXT:
             blocks.append({"type": "text", "text": part.text or ""})
         elif part.type == llm.NormalizedContentType.IMAGE:
-            blocks.append(
-                {
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": (
-                            part.mime_type or "application/octet-stream"
-                        ),
-                        "data": part.data or "",
-                    },
-                }
-            )
+            blocks.append({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": (
+                        part.mime_type or "application/octet-stream"
+                    ),
+                    "data": part.data or "",
+                },
+            })
         elif part.type == llm.NormalizedContentType.TOOL_CALL:
-            blocks.append(
-                {
-                    "type": "tool_use",
-                    "id": part.id or "",
-                    "name": part.name or "",
-                    "input": part.arguments or {},
-                }
-            )
+            blocks.append({
+                "type": "tool_use",
+                "id": part.id or "",
+                "name": part.name or "",
+                "input": part.arguments or {},
+            })
         elif part.type == llm.NormalizedContentType.TOOL_RESULT:
-            blocks.append(
-                {
-                    "type": "tool_result",
-                    "tool_use_id": part.call_id or "",
-                    "content": part.content or "",
-                }
-            )
+            blocks.append({
+                "type": "tool_result",
+                "tool_use_id": part.call_id or "",
+                "content": part.content or "",
+            })
     return {"role": role, "content": blocks}
 
 
@@ -242,14 +272,13 @@ class Conversation:
                 message="Interaction content is required.",
             ).to_exception()
 
-        if len(interaction.content) > 1:
-            raise Status(
-                code=StatusCode.INVALID_ARGUMENT,
-                message="Only one content chunk is allowed.",
-            ).to_exception()
-
         backend = llm.interaction_backend(interaction)
-        if backend is not None and backend not in self._native_backends:
+        chunk_content = len(interaction.content) != 1 or llm.has_image_chunks(
+            interaction
+        )
+        if chunk_content:
+            message = from_normalized(llm.normalize_by_shape(interaction))
+        elif backend is not None and backend not in self._native_backends:
             # Produced by another backend: bridge it through the normalised
             # representation and leave the interaction's own content untouched.
             message = from_normalized(llm.normalize_interaction(interaction))
@@ -278,7 +307,7 @@ class Conversation:
                 ).to_exception()
             message = {"role": role, "content": content_content}
         elif isinstance(content, str):
-            message = {"role": llm.Role.USER, "content": content}
+            message = {"role": llm.Role.USER.value, "content": content}
         else:
             raise Status(
                 code=StatusCode.INVALID_ARGUMENT,

@@ -61,6 +61,39 @@ encode provider content. For example, `interact_with_claude` builds Anthropic
 `action_outputs`, emits that interaction, and only then asks Claude to
 continue.
 
+## Image outputs
+
+An output port declaring an `image/*` media type carries the encoding itself,
+which has no JSON form. `build_tool_results` splits those fragments out and
+hands them to the backend as `NormalizedContentType.IMAGE` parts, so the
+result document holds the action's other ports and the frames travel as
+pictures.
+
+```python
+from a11.sdk.llm import decoded_output_content
+
+text, images = await decoded_output_content(outputs["call-1"])
+text      # '{"legend": {"floor_index": 0, ...}}'
+images    # [NormalizedPart(type=IMAGE, mime_type="image/png", data="iVBOR...")]
+```
+
+Where each provider puts them:
+
+| backend | the frames ride on |
+|---|---|
+| `interact_with_claude` | an `image` block inside the `tool_result` |
+| `interact_with_claude_code` | MCP `ImageContent` in the tool result |
+| `interact_with_gemini` | a `user_input` step after the `function_result` |
+| `interact_with_ollama` | a user message's `images`, after the tool message |
+| `interact_with_vllm` | a user message's `image_url` part, after the tool message |
+
+`format_result` may answer with a list: the three routes whose tool message
+is text-only send two messages for one call.
+
+A port carrying bytes under any other media type stays in the result
+document, base64url-encoded. A msgpack payload and a packed grid are data a
+model reads about.
+
 ## Narrate a run without telling the model
 
 A handler reports user-visible activity through

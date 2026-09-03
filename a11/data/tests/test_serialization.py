@@ -15,7 +15,6 @@ from a11.data.serialization import (
 )
 from a11.status import Status, StatusCode, StatusException
 
-
 #: Values a JSON or MessagePack payload already describes. They travel under a
 #: bare media type, and a reader that only has the bytes still gets them right.
 _GENERIC_VALUES = [
@@ -306,8 +305,19 @@ def test_registry_reports_specified_status_codes():
     # Use a representation with no registered decoder. `text/plain` is the
     # standard `str` representation and therefore cannot exercise this case.
     with pytest.raises(StatusException) as raised:
-        registry.from_chunk(chunk, "image/*")
+        registry.from_chunk(chunk, "audio/*")
     assert raised.value.status.code == StatusCode.NOT_FOUND
+
+
+@pytest.mark.parametrize("mimetype", ["image/png", "image/jpeg", "image/webp"])
+def test_image_bytes_use_self_describing_media_types(mimetype):
+    registry = SerializationRegistry(register_defaults=True)
+
+    chunk = registry.to_chunk(b"image data", mimetype)
+
+    assert chunk.get_mimetype() == mimetype
+    assert registry.from_chunk(chunk) == b"image data"
+    assert registry.from_chunk(chunk, "image/*") == b"image data"
 
 
 def test_explicit_mimetype_can_override_stale_metadata():

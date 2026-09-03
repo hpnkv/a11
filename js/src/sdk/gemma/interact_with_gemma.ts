@@ -43,12 +43,12 @@ import {
   NormalizedContentType,
   Role,
   makeInteraction,
+  normalizeByShape,
   parseInteraction,
   registerInteractionNormalizer,
   zodParse,
   type Interaction,
   type NormalizedMessage,
-  type NormalizedPart,
 } from '../llm.js';
 
 /** Default model label recorded on produced interactions. */
@@ -101,6 +101,12 @@ export const gemmaConfigSchema = z.object({
         ' occurrence so turn markers do not leak and the model does not' +
         " continue past its own turn.",
     ),
+  max_num_images: z
+    .number()
+    .int()
+    .min(0)
+    .default(0)
+    .describe('Maximum images enabled in the MediaPipe runtime.'),
   runtime_url: z
     .string()
     .default('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-genai')
@@ -112,6 +118,9 @@ export const gemmaConfigSchema = z.object({
 });
 export type GemmaConfig = z.infer<typeof gemmaConfigSchema>;
 
+/** One text or image input accepted by MediaPipe LLM Inference. */
+export type GemmaPromptPart = string | { imageSource: string };
+
 /** A loaded, streaming Gemma runtime. */
 export interface GemmaEngine {
   /**
@@ -119,7 +128,7 @@ export interface GemmaEngine {
    * text through `onToken`. Resolves with the full generated text or a Status.
    */
   generate(
-    prompt: string,
+    prompt: string | GemmaPromptPart[],
     onToken: (delta: string) => void,
     signal?: AbortSignal,
   ): Promise<StatusOr<string>>;
@@ -245,6 +254,7 @@ async function defaultGemmaEngineFactory(
     if (config.random_seed !== undefined && config.random_seed !== null) {
       options.randomSeed = config.random_seed;
     }
+    if (config.max_num_images > 0) options.maxNumImages = config.max_num_images;
     llm = await mediapipe.LlmInference.createFromOptions(fileset, options);
   } catch (error) {
     return statusFromUnknown(
@@ -260,7 +270,7 @@ async function defaultGemmaEngineFactory(
         try {
           let full = '';
           const generateResponse = llm.generateResponse as (
-            input: string,
+            input: string | GemmaPromptPart[],
             progress: (partial: string, done: boolean) => void,
           ) => void;
           generateResponse(prompt, (partial: string, done: boolean) => {
@@ -440,38 +450,6 @@ function entryValue(item: unknown): unknown {
   }
 }
 
-/** Extract the plain text of one interaction's `{role, content:[…]}` envelope. */
-function extractInteractionText(interaction: Interaction): string {
-  const pieces: string[] = [];
-  for (const entry of interaction.content ?? []) {
-    const item = entryValue(entry);
-    if (typeof item === 'string') {
-      pieces.push(item);
-      continue;
-    }
-    if (typeof item !== 'object' || item === null) continue;
-    const envelope = item as Record<string, unknown>;
-    const inner = envelope.content;
-    if (typeof inner === 'string') {
-      pieces.push(inner);
-    } else if (Array.isArray(inner)) {
-      for (const part of inner) {
-        if (typeof part === 'object' && part !== null) {
-          const partObject = part as Record<string, unknown>;
-          if (partObject.type === 'text' && typeof partObject.text === 'string') {
-            pieces.push(partObject.text);
-          }
-        } else if (typeof part === 'string') {
-          pieces.push(part);
-        }
-      }
-    } else if (typeof envelope.text === 'string') {
-      pieces.push(envelope.text);
-    }
-  }
-  return pieces.join('');
-}
-
 function systemInstructionsText(interactions: readonly Interaction[]): string {
   const lines: string[] = [];
   for (const interaction of interactions) {
@@ -490,31 +468,53 @@ function systemInstructionsText(interactions: readonly Interaction[]): string {
   return lines.join('\n\n');
 }
 
+function appendPromptText(parts: GemmaPromptPart[], text: string): void {
+  const previous = parts.at(-1);
+  if (typeof previous === 'string') parts[parts.length - 1] = previous + text;
+  else parts.push(text);
+}
+
 /** Assemble the Gemma chat-template prompt from the conversation so far. */
-function buildGemmaPrompt(interactions: readonly Interaction[]): string {
+function buildGemmaPrompt(
+  interactions: readonly Interaction[],
+): string | GemmaPromptPart[] {
   const system = systemInstructionsText(interactions);
-  const turns: string[] = [];
+  const prompt: GemmaPromptPart[] = [];
+  let hasImages = false;
   let first = true;
   for (const interaction of interactions) {
-    const text = extractInteractionText(interaction);
-    if (!text) continue;
+    const content = normalizeByShape(interaction).parts.filter(
+      (part) =>
+        part.type === NormalizedContentType.TEXT ||
+        part.type === NormalizedContentType.IMAGE,
+    );
+    if (content.length === 0) continue;
     const role = interaction.role === Role.ASSISTANT ? 'model' : 'user';
-    let body = text;
+    appendPromptText(prompt, `<start_of_turn>${role}\n`);
     if (first && role === 'user' && system) {
-      body = `${system}\n\n${text}`;
+      appendPromptText(prompt, `${system}\n\n`);
       first = false;
     }
-    turns.push(`<start_of_turn>${role}\n${body}<end_of_turn>\n`);
+    for (const part of content) {
+      if (part.type === NormalizedContentType.TEXT && part.text) {
+        appendPromptText(prompt, part.text);
+      } else if (part.type === NormalizedContentType.IMAGE && part.data) {
+        hasImages = true;
+        prompt.push({
+          imageSource: `data:${part.mime_type ?? 'image/png'};base64,${part.data}`,
+        });
+      }
+    }
+    appendPromptText(prompt, '<end_of_turn>\n');
   }
-  return `${turns.join('')}<start_of_turn>model\n`;
+  appendPromptText(prompt, '<start_of_turn>model\n');
+  return hasImages ? prompt : prompt.join('');
 }
 
 // --- Normalizer --------------------------------------------------------------
 
 function gemmaToNormalized(interaction: Interaction): StatusOr<NormalizedMessage> {
-  const text = extractInteractionText(interaction);
-  const parts: NormalizedPart[] = [];
-  if (text) parts.push({ type: NormalizedContentType.TEXT, text });
+  const parts = normalizeByShape(interaction).parts;
   const role = interaction.role === Role.ASSISTANT ? Role.ASSISTANT : Role.USER;
   return { role, parts };
 }
@@ -583,11 +583,18 @@ export async function interactWithGemma(action: Action): Promise<Status> {
       return invalidArgumentError('At least one interaction is required.');
     }
 
+    const prompt = buildGemmaPrompt(interactions);
+    const imageCount = Array.isArray(prompt)
+      ? prompt.filter((part) => typeof part !== 'string').length
+      : 0;
+    const runtimeConfig = imageCount > config.max_num_images
+      ? { ...config, max_num_images: imageCount }
+      : config;
+
     // Load the runtime and stream a reply.
-    const engine = await gemmaEngineFactory(config, action.signal);
+    const engine = await gemmaEngineFactory(runtimeConfig, action.signal);
     if (!isOk(engine)) return engine;
 
-    const prompt = buildGemmaPrompt(interactions);
     let writeChain: Promise<StatusOr<number>> = Promise.resolve(0);
     let writeError: Status | null = null;
     const chain = (work: () => Promise<StatusOr<number>>): void => {

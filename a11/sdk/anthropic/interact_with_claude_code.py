@@ -68,10 +68,26 @@ def _action_name(tool_name: str) -> str:
 
 
 def _as_mcp_result(
-    call_id: str, content: str, failure: str | None
+    call_id: str,
+    content: str,
+    failure: str | None,
+    images: list[llm.NormalizedPart],
 ) -> dict[str, Any]:
-    """One action's outputs, or why it failed, as an MCP tool result."""
-    result: dict[str, Any] = {"content": [{"type": "text", "text": content}]}
+    """One action's outputs, or why it failed, as an MCP tool result.
+
+    An `image/*` output rides as MCP's own image content block, which names its
+    media type in ``mimeType`` and carries base64 in ``data``.
+    """
+    blocks: list[dict[str, Any]] = []
+    if content or not images:
+        blocks.append({"type": "text", "text": content})
+    for image in images:
+        blocks.append({
+            "type": "image",
+            "data": image.data or "",
+            "mimeType": image.mime_type or "application/octet-stream",
+        })
+    result: dict[str, Any] = {"content": blocks}
     if failure is not None:
         result["is_error"] = True
     return result
@@ -104,7 +120,7 @@ def _sdk_tool(
             # the model is owed a result it can read rather than a dead turn.
             await llm.add_tool_calls_to_interaction([call], holder, registry)
         except StatusException as error:
-            return _as_mcp_result(call.id, str(error.status), str(error))
+            return _as_mcp_result(call.id, str(error.status), str(error), [])
         executed = await runner.execute_actions_from_interaction(
             holder, action, registry
         )
@@ -284,17 +300,22 @@ def _resume_point(
     return None, list(conversation.messages)
 
 
-def _prompt_text(messages: list[dict[str, Any]]) -> str:
+def _prompt_content(
+    messages: list[dict[str, Any]],
+) -> str | list[dict[str, Any]]:
     """The pending turns as one user prompt.
 
     A single user message is sent as written. Anything longer is rendered as a
-    labelled transcript so a history from another backend still reaches the
-    model in order.
+    labelled transcript. Image blocks remain inline for a single turn and
+    follow the transcript text when several pending turns are combined.
     """
     if not messages:
         return ""
     if len(messages) == 1 and messages[0].get("role") == "user":
-        return _message_text(messages[0])
+        content = messages[0].get("content")
+        return (
+            content if isinstance(content, list) else _message_text(messages[0])
+        )
 
     lines = ["<conversation>"]
     for message in messages[:-1]:
@@ -302,15 +323,30 @@ def _prompt_text(messages: list[dict[str, Any]]) -> str:
         lines.append(f"{role}: {_message_text(message)}")
     lines.append("</conversation>")
     lines.append(_message_text(messages[-1]))
-    return "\n".join(lines)
+    text = "\n".join(lines)
+    images = [
+        block
+        for message in messages
+        for block in (
+            message.get("content")
+            if isinstance(message.get("content"), list)
+            else []
+        )
+        if isinstance(block, dict) and block.get("type") == "image"
+    ]
+    if not images:
+        return text
+    return [{"type": "text", "text": text}, *images]
 
 
-async def _prompt_stream(text: str) -> AsyncIterator[dict[str, Any]]:
+async def _prompt_stream(
+    content: str | list[dict[str, Any]],
+) -> AsyncIterator[dict[str, Any]]:
     """The turn's prompt, in the CLI's `stream-json` input shape."""
     yield {
         "type": "user",
         "session_id": "",
-        "message": {"role": "user", "content": text},
+        "message": {"role": "user", "content": content},
         "parent_tool_use_id": None,
     }
 
@@ -536,7 +572,7 @@ async def interact_with_claude_code(action: a11.Action):
         ]
 
     resume, pending = _resume_point(conversation, config)
-    prompt = _prompt_text(pending)
+    prompt = _prompt_content(pending)
     if not prompt:
         raise Status(
             code=StatusCode.INVALID_ARGUMENT,

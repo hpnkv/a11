@@ -169,6 +169,11 @@ def _gemini_to_normalized(
     return llm.NormalizedMessage(role=role, parts=parts)
 
 
+#: What a text-only function result says about the frames the step beside it
+#: carries.
+_IMAGE_RESULT_NOTE = "The images this tool returned follow in the next step."
+
+
 def _gemini_from_normalized(
     message: llm.NormalizedMessage,
 ) -> list[dict[str, Any]]:
@@ -326,12 +331,6 @@ class Conversation:
                 message="Interaction content is required.",
             ).to_exception()
 
-        if len(interaction.content) > 1:
-            raise Status(
-                code=StatusCode.INVALID_ARGUMENT,
-                message="Only one content chunk is allowed.",
-            ).to_exception()
-
         role, steps, server_id = self._interpret(interaction)
 
         if role == llm.Role.ASSISTANT:
@@ -368,6 +367,9 @@ class Conversation:
         next turn to replay the full transcript rather than resume by id.
         """
         backend = llm.interaction_backend(interaction)
+        if len(interaction.content) != 1 or llm.has_image_chunks(interaction):
+            normalized = llm.normalize_by_shape(interaction)
+            return normalized.role, _gemini_from_normalized(normalized), None
         if backend is not None and backend != llm.Backend.GEMINI:
             normalized = llm.normalize_interaction(interaction)
             return normalized.role, _gemini_from_normalized(normalized), None
@@ -494,21 +496,44 @@ async def _build_tool_results_from_outputs(
     executed: runner.ExecutedActions,
     call_names: dict[str, str],
 ) -> list[dict[str, Any]]:
-    """Turn each nested-action output or failure into a function result."""
+    """Turn each nested-action output or failure into a function result.
+
+    A ``function_result`` step carries text alone, so a call that wrote an
+    `image/*` output is followed by a ``user_input`` step holding the frames.
+    """
 
     def as_function_result(
-        call_id: str, content: str, failure: str | None
-    ) -> dict[str, Any]:
+        call_id: str,
+        content: str,
+        failure: str | None,
+        images: list[llm.NormalizedPart],
+    ) -> list[dict[str, Any]]:
         step: dict[str, Any] = {
             "type": "function_result",
             "call_id": call_id,
-            "result": [{"type": "text", "text": content}],
+            "result": [{"type": "text", "text": content or _IMAGE_RESULT_NOTE}],
         }
         if failure is not None:
             step["is_error"] = True
         if call_names.get(call_id):
             step["name"] = call_names[call_id]
-        return step
+        steps = [step]
+        if images:
+            steps.append({
+                "type": "user_input",
+                "content": [
+                    {"type": "text", "text": _IMAGE_RESULT_NOTE},
+                    *(
+                        {
+                            "type": "image",
+                            "data": image.data,
+                            "mime_type": image.mime_type,
+                        }
+                        for image in images
+                    ),
+                ],
+            })
+        return steps
 
     return await llm.build_tool_results(executed, as_function_result)
 

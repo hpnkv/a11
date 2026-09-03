@@ -84,6 +84,25 @@ class _FakeClient:
         self.disconnected = True
 
 
+@pytest.mark.asyncio
+async def test_prompt_stream_preserves_image_blocks():
+    content = [
+        {"type": "text", "text": "inspect this"},
+        {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": "image/png",
+                "data": "QUJD",
+            },
+        },
+    ]
+
+    prompt = [message async for message in mod._prompt_stream(content)]
+
+    assert prompt[0]["message"]["content"] == content
+
+
 def _result(session_id="sess-1"):
     return cc.ResultMessage(
         subtype="success",

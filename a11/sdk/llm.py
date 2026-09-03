@@ -5,6 +5,7 @@ import asyncio
 import base64
 import dataclasses
 import enum
+import functools
 import logging
 import re
 import uuid
@@ -583,6 +584,90 @@ def _shape_text(value: Any) -> str:
     return text if isinstance(text, str) else ""
 
 
+def _shape_parts(value: Any) -> list[NormalizedPart]:
+    """Portable text and image parts found in one decoded content value."""
+    if isinstance(value, str):
+        return [NormalizedPart(type=NormalizedContentType.TEXT, text=value)]
+    if isinstance(value, list):
+        blocks = value
+    elif isinstance(value, dict):
+        steps = value.get("steps")
+        if isinstance(steps, list):
+            return [
+                part
+                for step in steps
+                if isinstance(step, dict)
+                for part in _shape_parts(step)
+            ]
+        blocks = value.get("content")
+        if not isinstance(blocks, list):
+            text = _shape_text(value)
+            parts = (
+                [NormalizedPart(type=NormalizedContentType.TEXT, text=text)]
+                if text
+                else []
+            )
+            for image in value.get("images") or []:
+                if isinstance(image, str):
+                    parts.append(
+                        NormalizedPart(
+                            type=NormalizedContentType.IMAGE, data=image
+                        )
+                    )
+            return parts
+    else:
+        return []
+
+    parts: list[NormalizedPart] = []
+    for block in blocks:
+        if isinstance(block, str):
+            parts.append(
+                NormalizedPart(type=NormalizedContentType.TEXT, text=block)
+            )
+            continue
+        if not isinstance(block, dict):
+            continue
+        block_type = block.get("type")
+        if block_type == "text" and isinstance(block.get("text"), str):
+            parts.append(
+                NormalizedPart(
+                    type=NormalizedContentType.TEXT, text=block["text"]
+                )
+            )
+        elif block_type == "image" and isinstance(block.get("data"), str):
+            parts.append(
+                NormalizedPart(
+                    type=NormalizedContentType.IMAGE,
+                    data=block["data"],
+                    mime_type=block.get("mime_type"),
+                )
+            )
+        elif block_type == "image":
+            source = block.get("source")
+            if isinstance(source, dict) and isinstance(source.get("data"), str):
+                parts.append(
+                    NormalizedPart(
+                        type=NormalizedContentType.IMAGE,
+                        data=source["data"],
+                        mime_type=source.get("media_type"),
+                    )
+                )
+        elif block_type == "image_url":
+            image_url = block.get("image_url")
+            url = image_url.get("url") if isinstance(image_url, dict) else None
+            if isinstance(url, str) and url.startswith("data:"):
+                header, separator, data = url.partition(",")
+                if separator and ";base64" in header:
+                    parts.append(
+                        NormalizedPart(
+                            type=NormalizedContentType.IMAGE,
+                            data=data,
+                            mime_type=header[5:].split(";", 1)[0] or None,
+                        )
+                    )
+    return parts
+
+
 def normalize_by_shape(interaction: Interaction) -> NormalizedMessage:
     """Normalize an interaction whose producer is unknown, by reading shapes.
 
@@ -596,19 +681,30 @@ def normalize_by_shape(interaction: Interaction) -> NormalizedMessage:
     `Interaction.action_calls` and the results in `Interaction.action_outputs`.
     """
     parts: list[NormalizedPart] = []
-    text: list[str] = []
+    current_mimetype = ""
     for chunk in interaction.content:
+        mimetype = chunk.get_mimetype() or current_mimetype
+        if chunk.get_mimetype():
+            current_mimetype = chunk.get_mimetype()
+        media_type = mimetype.split(";", 1)[0].strip().lower()
+        if media_type.startswith("image/"):
+            parts.append(
+                NormalizedPart(
+                    type=NormalizedContentType.IMAGE,
+                    data=base64.b64encode(chunk.data).decode("ascii"),
+                    mime_type=media_type,
+                )
+            )
+            continue
         try:
-            decoded = get_global_serialization_registry().from_chunk(chunk)
+            selector = "" if chunk.get_mimetype() else mimetype
+            decoded = get_global_serialization_registry().from_chunk(
+                chunk, selector
+            )
         except Exception:  # noqa: BLE001 - an undecodable chunk is not fatal
             logging.debug("undecodable content chunk", exc_info=True)
             continue
-        text.append(_shape_text(decoded))
-    joined = "".join(text)
-    if joined:
-        parts.append(
-            NormalizedPart(type=NormalizedContentType.TEXT, text=joined)
-        )
+        parts.extend(_shape_parts(decoded))
     for call in interaction.action_calls:
         parts.append(
             NormalizedPart(
@@ -624,6 +720,18 @@ def normalize_by_shape(interaction: Interaction) -> NormalizedMessage:
             )
         )
     return NormalizedMessage(role=interaction.role, parts=parts)
+
+
+def has_image_chunks(interaction: Interaction) -> bool:
+    """Whether `interaction.content` includes a raw image chunk."""
+    current_mimetype = ""
+    for chunk in interaction.content:
+        if chunk.get_mimetype():
+            current_mimetype = chunk.get_mimetype()
+        media_type = current_mimetype.split(";", 1)[0].strip().lower()
+        if media_type.startswith("image/"):
+            return True
+    return False
 
 
 def normalize_interaction(
@@ -759,11 +867,77 @@ def decode_action_output_fragments(fragments: list[a11.NodeFragment]) -> Any:
 
 
 async def decoded_output_text(fragments: list[a11.NodeFragment]) -> str:
-    """One action's outputs as text, JSON-encoding anything that is not."""
+    """One action's outputs as text, JSON-encoding anything that is not.
+
+    An output port carries whatever its media type says: a packed grid, a
+    msgpack model holding raw frames, a signature. UTF-8 encoding refuses those
+    bytes, so they go out as ``bytes_mode="base64"`` writes them -- base64url,
+    unpadded -- and a model calling the action reads a result rather than a
+    failed call.
+    """
     content = decode_action_output_fragments(fragments)
     if isinstance(content, str):
         return content
-    return (await asyncio.to_thread(pydantic_core.to_json, content)).decode()
+    encoded = await asyncio.to_thread(
+        functools.partial(pydantic_core.to_json, bytes_mode="base64"), content
+    )
+    return encoded.decode()
+
+
+def split_output_images(
+    fragments: list[a11.NodeFragment],
+) -> tuple[list[a11.NodeFragment], list[NormalizedPart]]:
+    """The fragments that carry no encoded image, and the images among them.
+
+    An output port declaring an `image/*` media type carries the encoding
+    itself, which is not JSON and not UTF-8. Splitting those fragments out
+    leaves the remaining ports to
+    [decode_action_output_fragments][a11.sdk.llm.decode_action_output_fragments]
+    and hands each frame to a backend as a `NormalizedContentType.IMAGE` part.
+
+    A mimetype is sticky per port, so only a stream's first chunk names one.
+
+    Returns:
+        The non-image fragments in order, and one part per image chunk.
+    """
+    rest: list[a11.NodeFragment] = []
+    images: list[NormalizedPart] = []
+    sticky: dict[str, str] = {}
+    for fragment in fragments:
+        chunk = fragment.get_chunk()
+        if chunk.get_mimetype():
+            sticky[fragment.id] = chunk.get_mimetype()
+        declared = sticky.get(fragment.id, "")
+        media_type = declared.split(";", 1)[0].strip().lower()
+        if not media_type.startswith("image/"):
+            rest.append(fragment)
+            continue
+        if chunk.is_null():
+            continue
+        images.append(
+            NormalizedPart(
+                type=NormalizedContentType.IMAGE,
+                data=base64.b64encode(chunk.data).decode("ascii"),
+                mime_type=media_type,
+            )
+        )
+    return rest, images
+
+
+async def decoded_output_content(
+    fragments: list[a11.NodeFragment],
+) -> tuple[str, list[NormalizedPart]]:
+    """One action's outputs as text, and the encoded images among them.
+
+    An action with no image output answers as
+    [decoded_output_text][a11.sdk.llm.decoded_output_text] does. An action
+    whose only output is an image answers with empty text, so a result carries
+    the frame alone rather than an empty JSON object beside it.
+    """
+    rest, images = split_output_images(fragments)
+    if not images:
+        return await decoded_output_text(fragments), []
+    return (await decoded_output_text(rest) if rest else ""), images
 
 
 class ActionCallAdapter:
@@ -861,8 +1035,8 @@ class ActionCallAdapter:
                 ).to_exception()
 
         for expected_input_name, expected_input in schema.inputs.items():
-            # An autofilled input is omitted from the tool definition, so a caller cannot
-            # send it, and the loop below refuses it when sent anyway.
+            # An autofilled input is absent from the tool definition. The loop
+            # below rejects one supplied by the caller.
             if (
                 expected_input.required
                 and not expected_input.autofills
@@ -919,30 +1093,41 @@ async def add_tool_calls_to_interaction(
 
 async def build_tool_results(
     executed: Any,
-    format_result: Callable[[str, str, str | None], dict[str, Any]],
+    format_result: Callable[
+        [str, str, str | None, list[NormalizedPart]],
+        dict[str, Any] | list[dict[str, Any]],
+    ],
 ) -> list[dict[str, Any]]:
-    """One provider-shaped result message per executed action call.
+    """One or more provider-shaped result messages per executed action call.
 
     Decoding an action's outputs, and reporting a failure to the model
     alongside the calls that succeeded, are the same job for every backend; only
     the shape of the resulting message differs. ``format_result`` receives the
-    call id, the content as text, and the failure message when there was one.
+    call id, the content as text, the failure message when there was one, and
+    the encoded images the action wrote on its `image/*` output ports.
+
+    A provider whose tool-result shape holds an image block puts the frames
+    there. One whose shape is text-only returns a list: the tool result, then a
+    user message carrying the frames.
 
     Args:
         executed: The `llm_tools.runner.ExecutedActions` to report on. Untyped
             here because `runner` imports this module.
-        format_result: Builds one provider-shaped message.
+        format_result: Builds one provider-shaped message, or several.
 
     Returns:
-        One message per executed call, in the order the calls were run.
+        The messages, in the order the calls were run.
     """
-    results = []
+    results: list[dict[str, Any]] = []
     for call_id, fragments in executed.outputs.items():
         failure = executed.error_message(call_id)
-        content = (
-            failure
-            if failure is not None
-            else await decoded_output_text(fragments)
+        images: list[NormalizedPart] = []
+        if failure is not None:
+            content = failure
+        else:
+            content, images = await decoded_output_content(fragments)
+        formatted = format_result(call_id, content, failure, images)
+        results.extend(
+            formatted if isinstance(formatted, list) else [formatted]
         )
-        results.append(format_result(call_id, content, failure))
     return results

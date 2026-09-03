@@ -170,6 +170,30 @@ test('TypeScript-native extended values round-trip', async () => {
   assert.deepEqual(await registry.fromChunk(jsonBytes), new Uint8Array([4, 5, 6]));
 });
 
+test('image Blobs use concrete self-describing media types', async () => {
+  const registry = new SerializationRegistry({ registerDefaults: true });
+  for (const mimetype of ['image/png', 'image/jpeg', 'image/webp']) {
+    const original = new Blob([new Uint8Array([1, 2, 3])], { type: mimetype });
+    const chunk = await registry.toChunk(original, mimetype);
+    assert.equal(isOk(chunk), true);
+    assert.equal(chunk.mimetype, mimetype);
+
+    const decoded = await registry.fromChunk(chunk, 'image/*');
+    assert.equal(isOk(decoded), true);
+    assert.ok(decoded instanceof Blob);
+    assert.equal(decoded.type, mimetype);
+    assert.deepEqual(new Uint8Array(await decoded.arrayBuffer()), new Uint8Array([1, 2, 3]));
+  }
+
+  const bytes = await registry.toChunk(new Uint8Array([4, 5]), 'image/png');
+  assert.equal(isOk(bytes), true);
+  assert.equal(bytes.mimetype, 'image/png');
+  assert.deepEqual(
+    new Uint8Array(await (await registry.fromChunk(bytes)).arrayBuffer()),
+    new Uint8Array([4, 5]),
+  );
+});
+
 test('foreign serialization callbacks become statuses, not rejections', async () => {
   const registry = new SerializationRegistry();
   const registered = registry.register({

@@ -142,3 +142,55 @@ test('interact_with_gemma streams tokens and produces an assistant turn', async 
     resetGemmaEngineFactory();
   }
 });
+
+test('interact_with_gemma sends image prompt parts to MediaPipe', async () => {
+  let factoryConfig;
+  setGemmaEngineFactory(async (config) => {
+    factoryConfig = config;
+    return {
+      async generate(prompt, onToken) {
+        assert.ok(Array.isArray(prompt));
+        assert.equal(prompt[0], '<start_of_turn>user\nDescribe this: ');
+        assert.deepEqual(prompt[1], {
+          imageSource: 'data:image/png;base64,AQID',
+        });
+        assert.equal(prompt[2], '<end_of_turn>\n<start_of_turn>model\n');
+        onToken('A tiny image.');
+        return 'A tiny image.';
+      },
+    };
+  });
+  try {
+    const registry = new ActionRegistry();
+    need(registry.register('interact_with_gemma', INTERACT_WITH_GEMMA_SCHEMA, interactWithGemma));
+    const action = need(
+      Action.create(INTERACT_WITH_GEMMA_SCHEMA, { handler: interactWithGemma, registry }),
+    );
+    need(action.run());
+
+    const interactions = need(await action.getInput('interactions'));
+    const user = need(makeInteraction({
+      role: 'user',
+      content: [
+        new Chunk({
+          metadata: new ChunkMetadata({ mimetype: 'text/plain' }),
+          data: new TextEncoder().encode('Describe this: '),
+        }),
+        new Chunk({
+          metadata: new ChunkMetadata({ mimetype: 'image/png' }),
+          data: new Uint8Array([1, 2, 3]),
+        }),
+      ],
+    }));
+    need(await interactions.finalize(user));
+    const config = need(await action.getInput('config'));
+    need(await config.finalize({}));
+
+    const newInteractions = need(await action.getOutput('new_interactions', false));
+    need(await newInteractions.next());
+    need(await action.wait(5_000));
+    assert.equal(factoryConfig.max_num_images, 1);
+  } finally {
+    resetGemmaEngineFactory();
+  }
+});

@@ -50,13 +50,18 @@ _TYPE_PARAMETER = "type"
 #: Media types that describe a value completely on their own, so a chunk using
 #: one carries no ``type`` parameter and no framing inside the payload.
 #:
-#: ``text/plain`` is UTF-8 text and ``application/octet-stream`` is bytes; there
-#: is nothing a ``;type=`` could add, and a peer matching on the bare media type
-#: would fail to recognise a decorated one. These are the default
-#: representations for :class:`str` and :class:`bytes`, which is what makes a
-#: string chunk the string itself rather than a JSON-quoted copy of it, and a
-#: bytes chunk the bytes rather than base64 inside a JSON string.
+#: ``text/plain`` is UTF-8 text, ``application/octet-stream`` is bytes, and an
+#: ``image/*`` value is encoded image bytes. A ``;type=`` parameter adds no
+#: information to these representations. Text and octet-stream remain the
+#: defaults for :class:`str` and :class:`bytes`.
 _SELF_DESCRIBING_MEDIA_TYPES = frozenset({TEXT_MIMETYPE, BYTES_MIMETYPE})
+
+
+def _is_self_describing_media_type(media_type: str) -> bool:
+    return media_type in _SELF_DESCRIBING_MEDIA_TYPES or media_type.startswith(
+        "image/"
+    )
+
 
 #: Tags a JSON or MessagePack payload already spells out for itself. A chunk
 #: holding one of these carries no ``type`` parameter at all: ``;type=object``
@@ -318,7 +323,7 @@ def _format_exact_mimetype(mimetype: _Mimetype, type_identifier: str) -> str:
     parameters = list(mimetype.without_parameter(_TYPE_PARAMETER).parameters)
     if (
         type_identifier not in _GENERIC_TAGS
-        and mimetype.media_type not in _SELF_DESCRIBING_MEDIA_TYPES
+        and not _is_self_describing_media_type(mimetype.media_type)
     ):
         parameters.append((
             _TYPE_PARAMETER,
@@ -357,14 +362,18 @@ def _registration_matches(registered: _Mimetype, selection: _Mimetype) -> bool:
     A registration never carries a ``type`` parameter -- `_registration_key`
     strips it -- so only the media type and any other parameters are compared.
     """
-    if not fnmatch.fnmatchcase(registered.media_type, selection.media_type):
+    if not (
+        fnmatch.fnmatchcase(registered.media_type, selection.media_type)
+        or fnmatch.fnmatchcase(selection.media_type, registered.media_type)
+    ):
         return False
 
     selected_parameters = dict(selection.parameters)
     for name, value in registered.parameters:
         selected_value = selected_parameters.get(name)
-        if selected_value is not None and not fnmatch.fnmatchcase(
-            value, selected_value
+        if selected_value is not None and not (
+            fnmatch.fnmatchcase(value, selected_value)
+            or fnmatch.fnmatchcase(selected_value, value)
         ):
             return False
     return True
@@ -717,6 +726,36 @@ class SerializationRegistry:
             self._registering_defaults = False
         self._invalidate_resolution_cache()
 
+    def _register_builtin_pattern(
+        self,
+        obj_type: type,
+        mimetype: str,
+        serializer: SerializerFn,
+        deserializer: DeserializerFn,
+    ) -> None:
+        """Register one wildcard representation owned by this registry."""
+        parsed = _parse_mimetype(mimetype, allow_patterns=True)
+        serializer_order = self._take_order()
+        deserializer_order = self._take_order()
+        self._serializers.append(
+            _SerializerRegistration(
+                obj_type, parsed, serializer, serializer_order, builtin=True
+            )
+        )
+        call_mode, receives_chunk = _deserializer_call_info(deserializer, None)
+        self._deserializers.append(
+            _DeserializerRegistration(
+                obj_type,
+                parsed,
+                deserializer,
+                call_mode,
+                receives_chunk,
+                deserializer_order,
+                builtin=True,
+            )
+        )
+        self._remember_type(obj_type)
+
     def _resolve_serializer(
         self, obj: Any, mimetype: str
     ) -> tuple[_SerializerRegistration, str]:
@@ -755,14 +794,21 @@ class SerializationRegistry:
             raise Status(
                 code=StatusCode.NOT_FOUND,
                 message=(
-                    f"No serializer is registered for"
+                    "No serializer is registered for"
                     f" {actual_type.__name__} and {requested!r}."
                 ),
             ).to_exception()
 
         registration = candidates[0]
+        output_mimetype = registration.mimetype
+        if (
+            selection is not None
+            and "*" in registration.mimetype.media_type
+            and "*" not in selection.media_type
+        ):
+            output_mimetype = selection
         exact_mimetype = _format_exact_mimetype(
-            registration.mimetype, self._type_tag(actual_type)
+            output_mimetype, self._type_tag(actual_type)
         )
         # Remembering the type is part of resolving it, and like the rest of it
         # only has to happen once per type.
@@ -1879,6 +1925,19 @@ def _register_default_serializers(registry: SerializationRegistry) -> None:
         registry.register(
             obj_type,
             BYTES_MIMETYPE,
+            _serialize_bytes,
+            _deserialize_bytes,
+        )
+        for mimetype in ("image/png", "image/jpeg"):
+            registry.register(
+                obj_type,
+                mimetype,
+                _serialize_bytes,
+                _deserialize_bytes,
+            )
+        registry._register_builtin_pattern(
+            obj_type,
+            "image/*",
             _serialize_bytes,
             _deserialize_bytes,
         )

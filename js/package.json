@@ -1,6 +1,6 @@
 {
   "name": "@curiositystack/a11",
-  "version": "0.5.5",
+  "version": "0.5.6",
   "description": "TypeScript client for the A11 streaming action runtime",
   "homepage": "https://docs.a11.to/typescript.html",
   "bugs": {

@@ -120,6 +120,14 @@ Normally `from_chunk()` reads the exact MIME type from the chunk:
 value = registry.from_chunk(chunk)
 ```
 
+Encoded images use their concrete media type and decode to bytes. PNG, JPEG,
+and other `image/*` values share this binary codec:
+
+```python
+image = registry.to_chunk(png_bytes, "image/png")
+assert registry.from_chunk(image, "image/*") == png_bytes
+```
+
 The optional `mimetype_patterns` argument can be one selector or an ordered
 sequence. Explicit selectors are authoritative, so they can also be used when
 metadata is missing or stale:

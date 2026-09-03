@@ -12,7 +12,7 @@
 import { z } from 'zod';
 
 import type { Action } from '../action.js';
-import { base64Decode, utf8Decode } from '../bytes.js';
+import { base64Decode, base64Encode, utf8Decode } from '../bytes.js';
 import { ActionMessage, Chunk, NodeFragment } from '../data.js';
 import { toChunk } from '../serialization.js';
 import {
@@ -34,7 +34,6 @@ import {
   type Fields,
 } from '../wire_values.js';
 import {
-  failedPreconditionError,
   invalidArgumentError,
   isOk,
   type NonOkStatus,
@@ -557,23 +556,136 @@ export function interactionBackend(interaction: Interaction): string | null {
   return isOk(text) && text ? text : null;
 }
 
+function shapeParts(value: unknown): NormalizedPart[] {
+  if (typeof value === 'string') {
+    return value ? [{ type: NormalizedContentType.TEXT, text: value }] : [];
+  }
+  if (!value || typeof value !== 'object') return [];
+  const record = value as Record<string, unknown>;
+  if (Array.isArray(record.steps)) {
+    return record.steps.flatMap((step) => shapeParts(step));
+  }
+  const blocks = Array.isArray(value) ? value : record.content;
+  if (!Array.isArray(blocks)) {
+    const text = typeof record.content === 'string'
+      ? record.content
+      : typeof record.text === 'string' ? record.text : '';
+    const parts: NormalizedPart[] = text
+      ? [{ type: NormalizedContentType.TEXT, text }]
+      : [];
+    if (Array.isArray(record.images)) {
+      for (const image of record.images) {
+        if (typeof image === 'string') {
+          parts.push({ type: NormalizedContentType.IMAGE, data: image });
+        }
+      }
+    }
+    return parts;
+  }
+  const parts: NormalizedPart[] = [];
+  for (const block of blocks) {
+    if (typeof block === 'string') {
+      parts.push({ type: NormalizedContentType.TEXT, text: block });
+      continue;
+    }
+    if (!block || typeof block !== 'object') continue;
+    const part = block as Record<string, unknown>;
+    if (part.type === 'text' && typeof part.text === 'string') {
+      parts.push({ type: NormalizedContentType.TEXT, text: part.text });
+    } else if (part.type === 'image' && typeof part.data === 'string') {
+      parts.push({
+        type: NormalizedContentType.IMAGE,
+        data: part.data,
+        mime_type: typeof part.mime_type === 'string' ? part.mime_type : undefined,
+      });
+    } else if (part.type === 'image') {
+      const source = part.source;
+      if (source && typeof source === 'object') {
+        const image = source as Record<string, unknown>;
+        if (typeof image.data === 'string') {
+          parts.push({
+            type: NormalizedContentType.IMAGE,
+            data: image.data,
+            mime_type: typeof image.media_type === 'string' ? image.media_type : undefined,
+          });
+        }
+      }
+    } else if (part.type === 'image_url') {
+      const imageUrl = part.image_url;
+      const url = imageUrl && typeof imageUrl === 'object'
+        ? (imageUrl as Record<string, unknown>).url
+        : undefined;
+      if (typeof url === 'string' && url.startsWith('data:')) {
+        const comma = url.indexOf(',');
+        const header = comma < 0 ? '' : url.slice(5, comma);
+        if (comma >= 0 && header.includes(';base64')) {
+          parts.push({
+            type: NormalizedContentType.IMAGE,
+            data: url.slice(comma + 1),
+            mime_type: header.split(';', 1)[0] || undefined,
+          });
+        }
+      }
+    }
+  }
+  return parts;
+}
+
+/** Normalize portable text/image chunks without provider-specific knowledge. */
+export function normalizeByShape(interaction: Interaction): NormalizedMessage {
+  const parts: NormalizedPart[] = [];
+  let currentMimetype = '';
+  for (const item of interaction.content ?? []) {
+    if (!(item instanceof Chunk)) {
+      parts.push(...shapeParts(item));
+      continue;
+    }
+    if (item.mimetype) currentMimetype = item.mimetype;
+    const mediaType = currentMimetype.split(';')[0]?.trim().toLowerCase() ?? '';
+    if (mediaType.startsWith('image/')) {
+      parts.push({
+        type: NormalizedContentType.IMAGE,
+        data: base64Encode(item.data),
+        mime_type: mediaType,
+      });
+      continue;
+    }
+    const decoded = utf8Decode(item.data);
+    if (!isOk(decoded)) continue;
+    if (mediaType.startsWith('text/')) {
+      parts.push(...shapeParts(decoded));
+      continue;
+    }
+    try {
+      parts.push(...shapeParts(JSON.parse(decoded) as unknown));
+    } catch {
+      parts.push(...shapeParts(decoded));
+    }
+  }
+  for (const call of interaction.action_calls ?? []) {
+    parts.push({
+      type: NormalizedContentType.TOOL_CALL,
+      id: call.id,
+      name: call.name,
+    });
+  }
+  for (const callId of Object.keys(interaction.action_outputs ?? {})) {
+    parts.push({ type: NormalizedContentType.TOOL_RESULT, call_id: callId });
+  }
+  return { role: interaction.role as Role, parts };
+}
+
 /** Build the normalized view of a (foreign) interaction via its producer. */
 export function normalizeInteraction(
   interaction: Interaction,
 ): StatusOr<NormalizedMessage> {
   const backend = interactionBackend(interaction);
   if (backend === null) {
-    return invalidArgumentError(
-      'Cannot normalize an interaction with no backend tag.',
-    );
+    return normalizeByShape(interaction);
   }
   const normalizer = interactionNormalizers.get(backend);
   if (normalizer === undefined) {
-    return failedPreconditionError(
-      `No interaction normalizer is registered for backend ${JSON.stringify(
-        backend,
-      )}; its module must be imported to consume its interactions.`,
-    );
+    return normalizeByShape(interaction);
   }
   return normalizer(interaction);
 }

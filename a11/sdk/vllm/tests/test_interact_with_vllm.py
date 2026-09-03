@@ -500,6 +500,75 @@ def test_an_inline_image_travels_as_a_data_url():
     }
 
 
+def test_raw_image_chunks_travel_as_chat_content_parts():
+    conversation = mod.Conversation()
+    conversation.feed_next_interaction(
+        Interaction(
+            role=Role.USER,
+            content=[
+                a11.to_chunk("what is this?"),
+                a11.to_chunk(b"ABC", "image/jpeg"),
+            ],
+        )
+    )
+
+    (message,) = conversation.messages
+    assert message["content"] == [
+        {"type": "text", "text": "what is this?"},
+        {
+            "type": "image_url",
+            "image_url": {"url": "data:image/jpeg;base64,QUJD"},
+        },
+    ]
+
+
+def test_tool_output_images_survive_normalization():
+    interaction = Interaction(
+        role=Role.USER,
+        content=[
+            a11.to_chunk({
+                "messages": [
+                    {
+                        "role": "tool",
+                        "tool_call_id": "call-1",
+                        "content": '{"width":4}',
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": mod._IMAGE_RESULT_NOTE,
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": "data:image/jpeg;base64,QUJD"
+                                },
+                            },
+                        ],
+                    },
+                ]
+            })
+        ],
+        backend_specific_metadata={
+            mod.llm.BACKEND_METADATA_KEY: str(mod.llm.Backend.VLLM).encode()
+        },
+    )
+
+    normalized = mod.llm.normalize_interaction(interaction)
+
+    assert [part.type for part in normalized.parts] == [
+        mod.llm.NormalizedContentType.TOOL_RESULT,
+        mod.llm.NormalizedContentType.TEXT,
+        mod.llm.NormalizedContentType.IMAGE,
+    ]
+    assert normalized.parts[0].call_id == "call-1"
+    assert normalized.parts[0].content == '{"width":4}'
+    assert normalized.parts[2].data == "QUJD"
+    assert normalized.parts[2].mime_type == "image/jpeg"
+
+
 @pytest.mark.parametrize(
     ("given", "expected"),
     [

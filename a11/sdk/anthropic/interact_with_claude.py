@@ -46,21 +46,46 @@ class _ToolCall(llm.ToolCall):
 async def _build_tool_results_from_outputs(
     executed: runner.ExecutedActions,
 ) -> list[dict[str, Any]]:
-    """One `tool_result` per call: its outputs, or why it failed."""
+    """One `tool_result` per call: its outputs, or why it failed.
+
+    A call that wrote an `image/*` output answers with a block list, since
+    `tool_result.content` takes an image block beside its text.
+    """
 
     def as_tool_result(
-        call_id: str, content: str, failure: str | None
+        call_id: str,
+        content: str,
+        failure: str | None,
+        images: list[llm.NormalizedPart],
     ) -> dict[str, Any]:
-        result = {
+        result: dict[str, Any] = {
             "type": "tool_result",
             "tool_use_id": call_id,
             "content": content,
         }
+        if images:
+            blocks: list[dict[str, Any]] = []
+            if content:
+                blocks.append({"type": "text", "text": content})
+            blocks.extend(_image_block(image) for image in images)
+            result["content"] = blocks
         if failure is not None:
             result["is_error"] = True
         return result
 
     return await llm.build_tool_results(executed, as_tool_result)
+
+
+def _image_block(image: llm.NormalizedPart) -> dict[str, Any]:
+    """One encoded frame as an Anthropic base64 image block."""
+    return {
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": image.mime_type or "application/octet-stream",
+            "data": image.data or "",
+        },
+    }
 
 
 def _build_usage_metadata(

@@ -111,6 +111,56 @@ async def test_narration_is_taken_out_of_the_tool_result():
 
 
 @pytest.mark.asyncio
+async def test_structured_child_log_reaches_parent_before_child_finishes():
+    import asyncio
+
+    logged = asyncio.Event()
+    release = asyncio.Event()
+    schema = ActionSchema(
+        name="slow_tool",
+        outputs={
+            "done": ActionPortSchema(
+                "done", "application/json", typeinfo=dict, unary=True
+            )
+        },
+    )
+
+    async def slow(action: a11.Action) -> None:
+        await action.log({"stage": "walking", "distance": 1.25})
+        logged.set()
+        await release.wait()
+        await action["done"].finalize({"ok": True})
+
+    registry = ActionRegistry()
+    registry.register(schema.name, schema, slow)
+
+    async def host_handler(action: a11.Action) -> None:
+        interaction = Interaction(
+            action_calls=[a11.ActionMessage(id="slow-1", name=schema.name)]
+        )
+        await runner.execute_actions_from_interaction(
+            interaction, action, registry
+        )
+
+    registry.register(
+        INTERACT_WITH_LLM_SCHEMA.name, INTERACT_WITH_LLM_SCHEMA, host_handler
+    )
+    host = registry.make_action(INTERACT_WITH_LLM_SCHEMA.name)
+    host.set_header(LlmHeaders.ALLOWED_LLM_ACTIONS.value, schema.name)
+    parent_log = host.get_log_node()
+    host.run()
+
+    await logged.wait()
+    chunk = await asyncio.wait_for(parent_log.next_chunk(), timeout=1)
+    assert chunk is not None
+    assert a11.from_chunk(chunk) == {"stage": "walking", "distance": 1.25}
+    assert not host.is_done()
+
+    release.set()
+    await host.wait()
+
+
+@pytest.mark.asyncio
 async def test_log_metadata_is_empty_when_no_tool_narrated_its_run():
     assert runner.ExecutedActions(outputs={}, errors={}).log_metadata() == {}
 

@@ -325,6 +325,44 @@ async def user_facing_log(node: a11.AsyncNode, timeout: a11.Duration) -> str:
     )
 
 
+async def relay_user_facing_logs(
+    node: a11.AsyncNode,
+    parent: a11.Action,
+    action_name: str,
+    call_id: str,
+    timeout: a11.Duration,
+) -> str:
+    """Relay a child log to `parent` as it arrives and return its text."""
+    entries: list[str] = []
+    try:
+        async for chunk in node.iter_chunks(timeout=timeout):
+            if chunk is None or chunk.is_null() or _native.is_status_chunk(chunk):
+                continue
+            try:
+                record = _native.log_record_from_chunk(chunk)
+            except Exception:
+                logging.debug("undecodable log chunk", exc_info=True)
+                continue
+            if record["internal"]:
+                continue
+            entries.append(record["text"])
+            await parent.log(
+                chunk,
+                level=record["level"],
+                channel=record["channel"],
+                internal=False,
+                file=record["file"],
+                lineno=record["lineno"],
+                metadata={
+                    "a11-child-action": action_name,
+                    "a11-child-call-id": call_id,
+                },
+            )
+    except StatusException:
+        logging.debug("a tool's log port did not end", exc_info=True)
+    return "".join(entries)
+
+
 async def feed_action_inputs(
     action: a11.Action, fragments: list[NodeFragment | None]
 ) -> None:
@@ -439,7 +477,7 @@ async def execute_actions_from_interaction(
 
     allowed_patterns = get_allowed_llm_action_patterns(action)
     nested_actions: list[a11.Action] = []
-    log_nodes: dict[str, a11.AsyncNode] = {}
+    log_tasks: dict[str, asyncio.Task[str]] = {}
     errors: dict[str, Status] = dict(rejected or {})
     for call in interaction.action_calls:
         # Setting a call up can fail on its own — an action the model may not
@@ -462,8 +500,17 @@ async def execute_actions_from_interaction(
             # Claimed before the run, because the log the handler writes on its
             # first line has to arrive here rather than on the process sink:
             # this runner is the consumer that shows it to a person.
-            log_nodes[call.id] = nested_action.get_log_node()
+            log_node = nested_action.get_log_node()
             nested_action.run()
+            log_tasks[call.id] = asyncio.create_task(
+                relay_user_facing_logs(
+                    log_node,
+                    action,
+                    call.name,
+                    call.id,
+                    max(deadline - a11.now(), a11.zero_duration()),
+                )
+            )
             await feed_action_inputs(
                 nested_action, interaction.action_inputs.get(call.id, [])
             )
@@ -510,12 +557,17 @@ async def execute_actions_from_interaction(
         # it by accident. Nothing has to close the port either -- the action
         # does, with its other outputs -- so an action that never logs costs one
         # ended read.
-        node = log_nodes.get(nested_action.id)
-        if node is not None:
+        task = log_tasks.get(nested_action.id)
+        if task is not None:
             try:
-                if log := await user_facing_log(node, _drain_timeout(deadline)):
+                if log := await asyncio.wait_for(
+                    task,
+                    timeout=_drain_timeout(deadline).float_seconds(),
+                ):
                     logs[nested_action.id] = log
-            except StatusException as error:
-                errors.setdefault(nested_action.id, error.status)
+            except TimeoutError:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                logging.debug("a tool's log port did not end")
 
     return ExecutedActions(outputs=dict(all_outputs), errors=errors, logs=logs)

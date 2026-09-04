@@ -57,6 +57,8 @@ export const USAGE_METADATA_TAG = 'a11.sdk.UsageMetadata';
 export const INTERACT_WITH_CLAUDE_CONFIG_TAG = 'a11.sdk.InteractWithClaudeConfig';
 export const INTERACT_WITH_CLAUDE_CODE_CONFIG_TAG = 'a11.sdk.InteractWithClaudeCodeConfig';
 export const INTERACT_WITH_GEMINI_CONFIG_TAG = 'a11.sdk.InteractWithGeminiConfig';
+export const INTERACT_WITH_GPT_CONFIG_TAG = 'a11.sdk.InteractWithGptConfig';
+export const INTERACT_WITH_CODEX_CONFIG_TAG = 'a11.sdk.InteractWithCodexConfig';
 export const INTERACT_WITH_OLLAMA_CONFIG_TAG = 'a11.sdk.InteractWithOllamaConfig';
 export const INTERACT_WITH_VLLM_CONFIG_TAG = 'a11.sdk.InteractWithVllmConfig';
 export const INTERACT_WITH_GEMMA_CONFIG_TAG = 'a11.sdk.InteractWithGemmaConfig';
@@ -70,4 +72,3 @@ export const AUDIO_DEVICE_INFO_TAG = 'a11.sdk.AudioDeviceInfo';
 export const AUDIO_CONTROL_EVENT_TAG = 'a11.sdk.AudioControlEvent';
 export const AUDIO_CAPTURE_EVENT_TAG = 'a11.sdk.AudioCaptureEvent';
 export const TRANSCRIPTION_EVENT_TAG = 'a11.sdk.TranscriptionEvent';
-

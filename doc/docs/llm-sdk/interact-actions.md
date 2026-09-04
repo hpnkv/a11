@@ -1,10 +1,9 @@
 # Provide tools to interact_with_*
 
 The included `interact_with_llm` action routes a conversation to Claude, Claude
-Code, Gemini, Ollama, or a vLLM deployment reached through its
-OpenAI-compatible API. Its `tools` input is a stream of provider-neutral tool
-definitions. Bind the same registry to the action so requested names can be
-resolved and run.
+Code, Codex, Gemini, GPT, Ollama, or a vLLM deployment. Its `tools` input is a
+stream of provider-neutral tool definitions. Bind the same registry to the
+action so requested names can be resolved and run.
 
 The handler owns the repeated model/tool loop: send definitions, receive tool
 calls, run them, encode one result for every call, and ask the model to
@@ -88,11 +87,12 @@ history.extend([question, *new_interactions])
 ```
 
 The backend-specific actions (`interact_with_claude`,
-`interact_with_claude_code`, `interact_with_gemini`, `interact_with_ollama`,
-and `interact_with_vllm`) expose the same `tools` port and registry pattern
-when direct provider control is preferable. The routing action provides one
-application boundary: switching providers requires only a header change and
-leaves the conversation flow unchanged.
+`interact_with_claude_code`, `interact_with_codex`, `interact_with_gemini`,
+`interact_with_gpt`, `interact_with_ollama`, and `interact_with_vllm`) expose
+the same `tools` port and registry pattern when direct provider control is
+preferable. The routing action provides one application boundary: switching
+providers requires only a header change and leaves the conversation flow
+unchanged.
 
 `interact_with_claude_code` reaches the same allow-list and registry through a
 different mechanism: Claude Code runs the agent loop, and the handler publishes

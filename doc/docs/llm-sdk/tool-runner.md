@@ -83,7 +83,9 @@ Where each provider puts them:
 |---|---|
 | `interact_with_claude` | an `image` block inside the `tool_result` |
 | `interact_with_claude_code` | MCP `ImageContent` in the tool result |
+| `interact_with_codex` | a Codex `--image` attachment on the resumed turn |
 | `interact_with_gemini` | a `user_input` step after the `function_result` |
+| `interact_with_gpt` | a user message's `image_url` part, after the tool message |
 | `interact_with_ollama` | a user message's `images`, after the tool message |
 | `interact_with_vllm` | a user message's `image_url` part, after the tool message |
 

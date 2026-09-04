@@ -629,6 +629,7 @@ absl::Status Action::WriteLog(data::Chunk chunk, const LogOptions& options) {
   std::string node_id;
   std::string action_name;
   std::string action_id;
+  std::shared_ptr<Action> parent;
   bool claimed = false;
   bool finished = false;
   bool readable = false;
@@ -641,6 +642,7 @@ absl::Status Action::WriteLog(data::Chunk chunk, const LogOptions& options) {
     }
     action_name = schema_.name;
     action_id = id_;
+    parent = parent_.lock();
     claimed = log_claimed_;
     finished = outputs_finished_;
     // Avoid buffering an unclaimed local log port. Peers mirror the node and
@@ -649,6 +651,21 @@ absl::Status Action::WriteLog(data::Chunk chunk, const LogOptions& options) {
     if (const auto found = output_ids_.find(std::string(kActionLogOutput));
         found != output_ids_.end()) {
       node_id = found->second;
+    }
+  }
+  if (!claimed && parent != nullptr) {
+    if (chunk.metadata->attributes.find(kLogChildActionAttribute) ==
+        chunk.metadata->attributes.end()) {
+      ABSL_RETURN_IF_ERROR(chunk.metadata->SetAttribute(
+          std::string(kLogChildActionAttribute), action_name));
+    }
+    if (chunk.metadata->attributes.find(kLogChildCallIdAttribute) ==
+        chunk.metadata->attributes.end()) {
+      ABSL_RETURN_IF_ERROR(chunk.metadata->SetAttribute(
+          std::string(kLogChildCallIdAttribute), action_id));
+    }
+    if (parent->WriteLog(chunk, options).ok()) {
+      return absl::OkStatus();
     }
   }
   if (!claimed) {

@@ -363,6 +363,30 @@ async def relay_user_facing_logs(
     return "".join(entries)
 
 
+async def wait_and_report_status(
+    child: a11.Action,
+    parent: a11.Action,
+    action_name: str,
+    deadline: a11.Time,
+) -> Status:
+    """Wait for one child and report its native completion status immediately."""
+    try:
+        await child.wait(max(deadline - a11.now(), a11.zero_duration()))
+        status = Status()
+    except Exception as error:
+        status = _status_of(error)
+    if parent.has_been_run() and not parent.is_done():
+        await parent.log(
+            status,
+            channel="status",
+            metadata={
+                "a11-child-action": action_name,
+                "a11-child-call-id": child.id,
+            },
+        )
+    return status
+
+
 async def feed_action_inputs(
     action: a11.Action, fragments: list[NodeFragment | None]
 ) -> None:
@@ -501,6 +525,15 @@ async def execute_actions_from_interaction(
             # first line has to arrive here rather than on the process sink:
             # this runner is the consumer that shows it to a person.
             log_node = nested_action.get_log_node()
+            if action.has_been_run() and not action.is_done():
+                await action.log(
+                    "started",
+                    channel="lifecycle",
+                    metadata={
+                        "a11-child-action": call.name,
+                        "a11-child-call-id": call.id,
+                    },
+                )
             nested_action.run()
             log_tasks[call.id] = asyncio.create_task(
                 relay_user_facing_logs(
@@ -522,14 +555,15 @@ async def execute_actions_from_interaction(
     # other calls mid-flight, leaving results the model is never told about.
     finished = await asyncio.gather(
         *[
-            nested_action.wait(max(deadline - a11.now(), a11.zero_duration()))
+            wait_and_report_status(
+                nested_action, action, nested_action.get_schema().name, deadline
+            )
             for nested_action in nested_actions
         ],
-        return_exceptions=True,
     )
-    for nested_action, outcome in zip(nested_actions, finished):
-        if isinstance(outcome, BaseException):
-            errors[nested_action.id] = _status_of(outcome)
+    for nested_action, status in zip(nested_actions, finished):
+        if not status.is_ok():
+            errors[nested_action.id] = status
 
     all_outputs: dict[str, list[NodeFragment]] = defaultdict(list)
     logs: dict[str, str] = {}

@@ -191,6 +191,15 @@ def get_output_text_from_interaction(interaction: Interaction) -> str:
     if content.get("output_text"):
         return content["output_text"]
 
+    if isinstance(content.get("content"), str):
+        return content["content"]
+    if isinstance(content.get("content"), list):
+        return "".join(
+            part.get("text", "")
+            for part in content["content"]
+            if isinstance(part, dict) and part.get("type") == "text"
+        )
+
     texts: list[str] = []
     for step in content.get("steps") or []:
         if step.get("type") != "model_output":

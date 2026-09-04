@@ -54,12 +54,14 @@ class _FakePipeline:
         generator,
         callback_on_step_end,
     ):
-        self.calls.append({
-            "prompt": prompt,
-            "num_inference_steps": num_inference_steps,
-            "height": height,
-            "width": width,
-        })
+        self.calls.append(
+            {
+                "prompt": prompt,
+                "num_inference_steps": num_inference_steps,
+                "height": height,
+                "width": width,
+            }
+        )
         for step in range(num_inference_steps):
             assert callback_on_step_end(self, step, 0, {}) == {}
         return _FakeResult()
@@ -99,8 +101,7 @@ def pipeline(monkeypatch):
 async def _run(request: dict, *, read_image: bool = True):
     """Drive the action, draining both output ports the way a client does."""
     action = (
-        a11
-        .Action(t2i.TEXT_TO_IMAGE_SCHEMA)
+        a11.Action(t2i.TEXT_TO_IMAGE_SCHEMA)
         .bind_handler(t2i.text_to_image)
         .run()
     )
@@ -124,15 +125,24 @@ async def _run(request: dict, *, read_image: bool = True):
     return progress, image
 
 
+def test_request_port_declares_the_diffusion_model():
+    assert (
+        t2i.TEXT_TO_IMAGE_SCHEMA.inputs["request"].typeinfo
+        is t2i.DiffusionRequest
+    )
+
+
 @pytest.mark.asyncio
 async def test_progress_arrives_per_step_and_the_image_at_the_end(
     stub_torch, pipeline
 ):
     """Progress precedes the final image on its separate port."""
-    progress, image = await _run({
-        "prompt": "a lighthouse",
-        "num_inference_steps": 4,
-    })
+    progress, image = await _run(
+        {
+            "prompt": "a lighthouse",
+            "num_inference_steps": 4,
+        }
+    )
 
     assert [value["step"] for value in progress] == [1, 2, 3, 4]
     assert {value["steps"] for value in progress} == {4}
@@ -203,8 +213,7 @@ async def test_both_ports_close_when_the_pipeline_fails(
     monkeypatch.setattr(t2i, "_PIPELINE", _Failing())
 
     action = (
-        a11
-        .Action(t2i.TEXT_TO_IMAGE_SCHEMA)
+        a11.Action(t2i.TEXT_TO_IMAGE_SCHEMA)
         .bind_handler(t2i.text_to_image)
         .run()
     )

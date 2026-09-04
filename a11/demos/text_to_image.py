@@ -53,7 +53,7 @@ TEXT_TO_IMAGE_SCHEMA = a11.ActionSchema(
         "request": a11.ActionPortSchema(
             name="request",
             type="application/json",
-            typeinfo=dict,
+            typeinfo=DiffusionRequest,
             unary=True,
             required=True,
             description=(
@@ -177,10 +177,8 @@ async def text_to_image(action: a11.Action) -> None:
     progress = action["progress"]
     image_out = action["image"]
     try:
-        request = DiffusionRequest.model_validate(
-            await action["request"].consume(dict)
-        )
-        logging.info(
+        request = await action["request"].consume(DiffusionRequest)
+        await action.logf(
             "text_to_image %s: %r (%d steps, %dx%d)",
             action.get_id(),
             request.prompt,
@@ -227,7 +225,7 @@ async def text_to_image(action: a11.Action) -> None:
 
         png = await asyncio.to_thread(_png_bytes, result.images[0])
         await image_out.put_chunk(_png_chunk(png), final=True)
-        logging.info(
+        await action.logf(
             "text_to_image %s: %d bytes of PNG", action.get_id(), len(png)
         )
     finally:

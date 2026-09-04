@@ -274,8 +274,10 @@ class _ActionProtocol:
         used. Only a running action may log; logging before ``run`` or from the
         calling side of ``call`` raises.
 
-        The default sink is A11's logger (see [a11.logging][]). Call
-        `get_log_node` to consume the chunks directly.
+        A nested action forwards unclaimed logs through its parent. A root
+        action sends them to A11's logger (see [a11.logging][]). Call
+        `get_log_node` before the action runs to consume its chunks directly
+        and suppress the default route.
 
         Args:
             value: What to log.

@@ -95,6 +95,8 @@ std::vector<std::string> CppTags() {
       std::string(kInteractWithClaudeConfigTag),
       std::string(kInteractWithClaudeCodeConfigTag),
       std::string(kInteractWithGeminiConfigTag),
+      std::string(kInteractWithGptConfigTag),
+      std::string(kInteractWithCodexConfigTag),
       std::string(kInteractWithOllamaConfigTag),
       std::string(kInteractWithVllmConfigTag),
       std::string(kInteractWithGemmaConfigTag),

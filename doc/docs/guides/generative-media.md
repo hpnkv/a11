@@ -81,7 +81,7 @@ TEXT_TO_IMAGE_SCHEMA = a11.ActionSchema(
     description="Draw an image from a prompt, reporting progress as it goes.",
     inputs={
         "request": a11.ActionPortSchema(
-            name="request", type="application/json", typeinfo=dict,
+            name="request", type="application/json", typeinfo=DiffusionRequest,
             unary=True, required=True,
             description="`{prompt, num_inference_steps, height, width, seed}`.",
         )
@@ -97,12 +97,12 @@ TEXT_TO_IMAGE_SCHEMA = a11.ActionSchema(
 ```
 
 `unary=True` declares a port that carries one complete value. The `progress`
-port omits it and carries a stream. The browser sends the request as plain JSON,
-which needs no shared type registry. The handler validates it into a Pydantic
-model on arrival:
+port omits it and carries a stream. The declared `DiffusionRequest` type adds
+its JSON Schema to the action contract and decodes the browser's plain JSON
+into the model:
 
 ```python
-request = DiffusionRequest.model_validate(await action["request"].consume(dict))
+request = await action["request"].consume(DiffusionRequest)
 ```
 
 ## 2. Report from a worker thread

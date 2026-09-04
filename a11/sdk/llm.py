@@ -500,7 +500,9 @@ TOOL_LOGS_METADATA_KEY = "tool_logs"
 class Backend(enum.StrEnum):
     CLAUDE = "claude"
     CLAUDE_CODE = "claude_code"
+    CODEX = "codex"
     GEMINI = "gemini"
+    GPT = "gpt"
     OLLAMA = "ollama"
     VLLM = "vllm"
 

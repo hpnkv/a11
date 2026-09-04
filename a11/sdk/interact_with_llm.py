@@ -61,6 +61,21 @@ _PROVIDERS: dict[str, _Provider] = {
         handler="interact_with_gemini",
         extra="gemini",
     ),
+    "gpt": _Provider(
+        module="a11.sdk.openai.interact_with_gpt",
+        handler="interact_with_gpt",
+        extra="openai",
+    ),
+    "openai": _Provider(
+        module="a11.sdk.openai.interact_with_gpt",
+        handler="interact_with_gpt",
+        extra="openai",
+    ),
+    "codex": _Provider(
+        module="a11.sdk.openai.interact_with_codex",
+        handler="interact_with_codex",
+        extra="codex",
+    ),
     "ollama": _Provider(
         module="a11.sdk.ollama.interact_with_ollama",
         handler="interact_with_ollama",
@@ -79,6 +94,10 @@ _PROVIDERS: dict[str, _Provider] = {
 _MODEL_PREFIXES: tuple[tuple[str, str], ...] = (
     ("claude", "claude"),
     ("gemini", "gemini"),
+    ("gpt", "gpt"),
+    ("o1", "gpt"),
+    ("o3", "gpt"),
+    ("o4", "gpt"),
     ("llama", "ollama"),
     ("qwen", "ollama"),
     ("mistral", "ollama"),
@@ -143,6 +162,9 @@ INTERACT_WITH_LLM_SCHEMA = a11.ActionSchema(
     | {
         LlmHeaders.API_KEY: a11.ActionHeaderSchema(
             LlmHeaders.API_KEY, "The backend API key."
+        ),
+        LlmHeaders.MODEL: a11.ActionHeaderSchema(
+            LlmHeaders.MODEL, "The backend model."
         ),
         LlmHeaders.PROVIDER: a11.ActionHeaderSchema(
             LlmHeaders.PROVIDER,

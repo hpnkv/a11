@@ -34,13 +34,38 @@ const asSchema = (value: unknown): JsonSchema | undefined =>
 const requiredNames = (schema: JsonSchema): string[] =>
   Array.isArray(schema['required']) ? (schema['required'] as unknown[]).filter((n): n is string => typeof n === 'string') : [];
 
+interface SchemaShape {
+  readonly schema: JsonSchema;
+  readonly nullable: boolean;
+}
+
+/** Unwrap `T | null` while retaining constraints declared beside the union. */
+function schemaShape(schema: JsonSchema | undefined): SchemaShape | undefined {
+  if (!schema) return undefined;
+  for (const keyword of ['anyOf', 'oneOf']) {
+    const alternatives = schema[keyword];
+    if (!Array.isArray(alternatives)) continue;
+    const shapes = alternatives.map(asSchema);
+    if (shapes.some((shape) => shape === undefined)) continue;
+    const concrete = (shapes as JsonSchema[]).filter((shape) => shape['type'] !== 'null');
+    const nulls = (shapes as JsonSchema[]).filter((shape) => shape['type'] === 'null');
+    if (concrete.length !== 1 || nulls.length !== 1) continue;
+    const unwrapped = { ...schema, ...concrete[0] };
+    delete unwrapped['anyOf'];
+    delete unwrapped['oneOf'];
+    return { schema: unwrapped, nullable: true };
+  }
+  return { schema, nullable: schema['type'] === 'null' };
+}
+
 /** Whether the schema is specific enough to render as a typed widget. */
 function isFormable(schema: JsonSchema | undefined): boolean {
-  if (!schema) return false;
-  if (Array.isArray(schema['enum'])) return true;
-  const type = schema['type'];
-  if (type === 'object') return asSchema(schema['properties']) !== undefined;
-  if (type === 'array') return asSchema(schema['items']) !== undefined;
+  const shape = schemaShape(schema)?.schema;
+  if (!shape) return false;
+  if (Array.isArray(shape['enum'])) return true;
+  const type = shape['type'];
+  if (type === 'object') return asSchema(shape['properties']) !== undefined;
+  if (type === 'array') return asSchema(shape['items']) !== undefined;
   return type === 'string' || type === 'number' || type === 'integer' || type === 'boolean';
 }
 
@@ -126,6 +151,55 @@ function booleanEditor(): ValueEditor {
   input.type = 'checkbox';
   input.className = 'field-checkbox';
   return { element: input, read: () => input.checked };
+}
+
+/** A nullable value starts unset and exposes its concrete editor on demand. */
+function nullableEditor(schema: JsonSchema, path: string, required: boolean): ValueEditor {
+  const element = document.createElement('div');
+  element.className = 'field-nullable';
+  const editor = valueEditor(schema, path, true);
+  const controls = document.createElement('div');
+  controls.className = 'field-nullable-controls';
+  const set = document.createElement('button');
+  set.type = 'button';
+  set.className = 'ghost-button';
+  set.textContent = 'Set value';
+  const clear = document.createElement('button');
+  clear.type = 'button';
+  clear.className = 'ghost-button remove';
+  clear.textContent = 'Clear';
+  clear.title = 'Use null';
+  controls.append(set, clear);
+  element.append(controls, editor.element);
+
+  let present = false;
+  let cleared = false;
+  const show = (): void => {
+    editor.element.hidden = !present;
+    set.hidden = present;
+    clear.hidden = !present;
+  };
+  set.onclick = () => {
+    present = true;
+    cleared = false;
+    show();
+    editor.element.querySelector<HTMLElement>('input, select, textarea, button')?.focus();
+  };
+  clear.onclick = () => {
+    present = false;
+    cleared = true;
+    show();
+  };
+  show();
+
+  return {
+    element,
+    read: () => {
+      if (!present) return cleared || required ? null : undefined;
+      const value = editor.read();
+      return value === undefined ? missing(path) : value;
+    },
+  };
 }
 
 function missing(path: string): never {
@@ -255,7 +329,9 @@ function valueEditor(schema: JsonSchema | undefined, path: string, required: boo
       },
     };
   }
-  const shape = schema as JsonSchema;
+  const resolved = schemaShape(schema) as SchemaShape;
+  const shape = resolved.schema;
+  if (resolved.nullable) return nullableEditor(shape, path, required);
   if (Array.isArray(shape['enum'])) return enumEditor(shape, path, required);
   switch (shape['type']) {
     case 'object':
@@ -283,8 +359,8 @@ export function describeSchema(schema: JsonSchema | undefined): HTMLElement | nu
   const element = document.createElement('div');
   element.className = 'schema-fields';
   if (!properties) {
-    const type = str(schema, 'type');
-    if (!type) return null;
+    const type = typeLabel(schema);
+    if (type === 'any') return null;
     const row = document.createElement('div');
     row.className = 'schema-field';
     row.append(fieldType(type));
@@ -316,10 +392,13 @@ export function describeSchema(schema: JsonSchema | undefined): HTMLElement | nu
 
 /** A field's JSON type, including the item type of an array. */
 function typeLabel(schema: JsonSchema): string {
-  const type = str(schema, 'type') || 'any';
-  if (type !== 'array') return type;
-  const items = asSchema(schema['items']);
-  return `array<${items ? str(items, 'type') || 'any' : 'any'}>`;
+  const resolved = schemaShape(schema);
+  const shape = resolved?.schema ?? schema;
+  const type = str(shape, 'type') || 'any';
+  const suffix = resolved?.nullable ? ' | null' : '';
+  if (type !== 'array') return `${type}${suffix}`;
+  const items = asSchema(shape['items']);
+  return `array<${items ? typeLabel(items) : 'any'}>${suffix}`;
 }
 
 function fieldType(text: string): HTMLElement {

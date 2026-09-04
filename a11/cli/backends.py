@@ -55,6 +55,16 @@ PROVIDERS: dict[str, Provider] = {
         default_model="gemini-3.5-flash",
         api_key_env=("GEMINI_API_KEY", "GOOGLE_API_KEY"),
     ),
+    "gpt": Provider(
+        name="gpt",
+        default_model="gpt-6-astra",
+        api_key_env=("OPENAI_API_KEY",),
+    ),
+    "codex": Provider(
+        name="codex",
+        default_model="",
+        api_key_env=(),
+    ),
     "ollama": Provider(
         name="ollama",
         default_model="glm-4.7-flash",

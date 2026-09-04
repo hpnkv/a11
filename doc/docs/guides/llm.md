@@ -93,6 +93,24 @@ Set the `x-a11-claude-code-system-preset` header to `claude_code` to keep
 Claude Code's own system prompt and append the interaction's system
 instructions to it.
 
+### Run with OpenAI or Codex
+
+Set the provider to `gpt` (or its `openai` alias) for the OpenAI API. The
+handler reads `OPENAI_API_KEY`, streams text and reasoning, executes admitted
+A11 actions as function tools, and accepts structured-output options through
+`CreateChatCompletionConfig`.
+
+Set the provider to `codex` to use the locally installed Codex CLI and its
+existing login. The handler consumes `codex exec --json` events, records the
+thread id on assistant interactions, and resumes that thread on the next
+turn. `CreateCodexSessionConfig` controls its workspace, sandbox, reasoning
+effort, and final output schema. Registry actions use a schema-guided tool loop
+and return through the same interaction and action-output fields as the API
+providers.
+
+Install API support with `pip install 'a11-kit[openai]'`. Install the Codex CLI
+with `npm install -g @openai/codex`.
+
 ## Stream the reply as it arrives
 
 The assistant's visible text lands, already extracted from the raw provider

@@ -316,7 +316,8 @@ class Conversation:
     _messages: list[dict[str, Any]]
     _system_instructions: list[str]
 
-    def __init__(self):
+    def __init__(self, backend: llm.Backend = llm.Backend.VLLM):
+        self._backend = backend
         self._interactions = []
         self._messages = []
         self._system_instructions = []
@@ -397,7 +398,7 @@ class Conversation:
             messages = _vllm_from_normalized(
                 llm.normalize_by_shape(interaction)
             )
-        elif backend is not None and backend != llm.Backend.VLLM:
+        elif backend is not None and backend != self._backend:
             # Produced by another backend: bridge it through the normalized
             # representation and leave the interaction's own content untouched.
             messages = _vllm_from_normalized(
@@ -481,9 +482,15 @@ class _StreamAccumulator:
     session's node map.
     """
 
-    def __init__(self, prefix: str, base_id: int = 0):
+    def __init__(
+        self,
+        prefix: str,
+        base_id: int = 0,
+        backend: llm.Backend = llm.Backend.VLLM,
+    ):
         self._prefix = prefix
         self._base_id = base_id
+        self._backend = backend
         self._content = ""
         self._reasoning = ""
         self._pending: dict[int, dict[str, str]] = {}
@@ -591,7 +598,7 @@ class _StreamAccumulator:
     def backend_specific_metadata(self) -> dict[str, bytes]:
         """Fields of the completion that don't map onto the shared models."""
         metadata: dict[str, bytes] = {
-            llm.BACKEND_METADATA_KEY: str(llm.Backend.VLLM).encode()
+            llm.BACKEND_METADATA_KEY: str(self._backend).encode()
         }
         for field, value in (
             ("response_id", self._response_id),

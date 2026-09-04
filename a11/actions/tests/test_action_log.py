@@ -291,6 +291,42 @@ async def test_a_claimed_log_port_carries_the_chunks_and_closes_itself() -> (
 
 
 @pytest.mark.asyncio
+async def test_an_unclaimed_nested_log_flows_through_its_parent() -> None:
+    child_id = ""
+
+    async def child_handler(child: Action) -> None:
+        await child.log({"step": 1}, channel="progress")
+
+    async def parent_handler(parent: Action) -> None:
+        nonlocal child_id
+        child = parent.make_nested(_schema("child"), propagate_io=False)
+        child.bind_handler(child_handler)
+        child_id = child.id
+        child.run()
+        await child.wait()
+
+    with _Sink() as sink:
+        parent = Action(_schema("parent"), handler=parent_handler)
+        logs = parent.get_log_node()
+        parent.run()
+        chunk = await asyncio.wait_for(logs.next_chunk(), timeout=5)
+        await asyncio.wait_for(parent.wait(), timeout=5)
+
+    assert chunk is not None
+    assert a11.from_chunk(chunk) == {"step": 1}
+    assert chunk.metadata.attributes[_native.LOG_CHANNEL_ATTRIBUTE] == b"progress"
+    assert (
+        chunk.metadata.attributes[_native.LOG_CHILD_ACTION_ATTRIBUTE]
+        == b"child"
+    )
+    assert (
+        chunk.metadata.attributes[_native.LOG_CHILD_CALL_ID_ATTRIBUTE]
+        == child_id.encode()
+    )
+    assert sink.records == []
+
+
+@pytest.mark.asyncio
 async def test_the_default_sink_reaches_the_action_logger_once(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

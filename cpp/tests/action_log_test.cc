@@ -18,6 +18,7 @@
 #include <vector>
 
 #include <absl/status/status.h>
+#include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
 #include <absl/time/clock.h>
 #include <absl/time/time.h>
@@ -363,6 +364,53 @@ TEST(ActionLogTest, AClaimedLogPortCarriesTheChunksAndClosesItself) {
   EXPECT_EQ(second.level, LogLevel::kWarning);
   EXPECT_TRUE(second.internal);
   EXPECT_EQ(second.lineno, 7);
+}
+
+TEST(ActionLogTest, AnUnclaimedNestedLogFlowsThroughItsParent) {
+  SinkCapture capture;
+  auto parent = *Action::Create(QuietSchema(), "parent-call");
+  std::string child_id;
+  absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> logs = parent->GetLogNode();
+  ASSERT_TRUE(logs.ok()) << logs.status();
+
+  ASSERT_TRUE(
+      RunWith(
+          parent,
+          [&child_id](const std::shared_ptr<Action>& running) -> absl::Status {
+            ABSL_ASSIGN_OR_RETURN(std::shared_ptr<Action> child,
+                                  running->MakeNested(QuietSchema()));
+            child_id = child->GetId();
+            ABSL_RETURN_IF_ERROR(
+                child->BindHandler([](std::shared_ptr<Action> nested) {
+                  return a11::SubmitTask(
+                      [nested = std::move(nested)]() -> absl::Status {
+                        return nested->Log(
+                            "from the child",
+                            LogOptions{.level = "warning", .channel = "work"});
+                      });
+                }));
+            ABSL_RETURN_IF_ERROR(child->Run().status());
+            return child->Wait(absl::Seconds(5)).Await().status();
+          })
+          .ok());
+
+  const absl::StatusOr<std::optional<data::Chunk>> received =
+      (*logs)->NextChunk().Await(absl::Now() + absl::Seconds(5));
+  ASSERT_TRUE(received.ok()) << received.status();
+  ASSERT_TRUE(received->has_value());
+  const LogRecord record = LogRecordFromChunk(**received);
+  EXPECT_EQ(record.data, "from the child");
+  EXPECT_EQ(record.level, LogLevel::kWarning);
+  EXPECT_EQ(record.channel, "work");
+  const absl::StatusOr<std::string> source_action =
+      (*received)->metadata->GetAttribute(kLogChildActionAttribute);
+  const absl::StatusOr<std::string> source_id =
+      (*received)->metadata->GetAttribute(kLogChildCallIdAttribute);
+  ASSERT_TRUE(source_action.ok()) << source_action.status();
+  ASSERT_TRUE(source_id.ok()) << source_id.status();
+  EXPECT_EQ(*source_action, "quiet");
+  EXPECT_EQ(*source_id, child_id);
+  EXPECT_TRUE(capture.records().empty());
 }
 
 TEST(ActionLogTest, AChattyActionNobodyDrainsStillFinishes) {

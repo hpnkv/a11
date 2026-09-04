@@ -9,8 +9,9 @@ module under [a11.cli.commands][a11.cli.commands] exposes a
 that [a11.cli.app][a11.cli.app] discovers and wires into the top-level argument
 parser.
 
-Provider SDKs (``anthropic``, ``google-genai``) are pulled in lazily by the
-backends that need them so ``a11 --help`` works on a bare ``pip install a11-kit``.
+Provider SDKs (``anthropic``, ``google-genai``, ``openai``) are pulled in lazily
+by the backends that need them so ``a11 --help`` works on a bare
+``pip install a11-kit``.
 """
 
 from a11.cli.app import Command, build_parser, main

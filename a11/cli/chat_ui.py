@@ -56,7 +56,7 @@ if TYPE_CHECKING:
 
 _HELP = (
     "Commands:\n"
-    "  /model <claude|claude_code|gemini|ollama|vllm> [model]  switch"
+    "  /model <claude|claude_code|codex|gemini|gpt|ollama|vllm> [model]  switch"
     " backend (and optionally model)\n"
     "  /clear                                                  forget the"
     " conversation so far\n"

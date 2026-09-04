@@ -52,6 +52,9 @@ mcp = [
 ollama = [
     { name = "ollama" },
 ]
+openai = [
+    { name = "openai" },
+]
 vllm = [
     { name = "openai" },
 ]
@@ -96,6 +99,9 @@ mcp = [
 ollama = [
     { name = "ollama" },
 ]
+openai = [
+    { name = "openai" },
+]
 vllm = [
     { name = "openai" },
 ]
@@ -118,6 +124,7 @@ requires-dist = [
     { name = "ollama", marker = "extra == 'llm'", specifier = ">=0.6.0" },
     { name = "ollama", marker = "extra == 'ollama'", specifier = ">=0.6.0" },
     { name = "openai", marker = "extra == 'llm'", specifier = ">=2.0.0" },
+    { name = "openai", marker = "extra == 'openai'", specifier = ">=2.0.0" },
     { name = "openai", marker = "extra == 'vllm'", specifier = ">=2.0.0" },
     { name = "ormsgpack", specifier = ">=1.12.2" },
     { name = "prompt-toolkit", specifier = ">=3.0.0" },
@@ -127,12 +134,13 @@ requires-dist = [
     { name = "transformers", marker = "extra == 'diffusion'", specifier = ">=4.40.0" },
     { name = "uvicorn", specifier = ">=0.52.1" },
 ]
-provides-extras = ["claude", "claude-code", "gemini", "ollama", "vllm", "diffusion", "mcp", "llm"]
+provides-extras = ["claude", "claude-code", "gemini", "openai", "codex", "ollama", "vllm", "diffusion", "mcp", "llm"]
 
 [package.metadata.requires-dev]
 anthropic = [{ name = "anthropic", specifier = ">=0.120.0" }]
 claude = [{ name = "anthropic", specifier = ">=0.120.0" }]
 claude-code = [{ name = "claude-agent-sdk", specifier = ">=0.2.140" }]
+codex = []
 dev = [
     { name = "anthropic", specifier = ">=0.120.0" },
     { name = "black", specifier = ">=26.5.1" },
@@ -157,6 +165,7 @@ docs = [
 gemini = [{ name = "google-genai", specifier = ">=1.55.0" }]
 mcp = [{ name = "mcp", specifier = ">=2.1.1" }]
 ollama = [{ name = "ollama", specifier = ">=0.6.0" }]
+openai = [{ name = "openai", specifier = ">=2.0.0" }]
 vllm = [{ name = "openai", specifier = ">=2.0.0" }]
 
 [[package]]

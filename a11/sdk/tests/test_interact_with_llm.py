@@ -83,6 +83,56 @@ async def test_provider_inferred_from_model_prefix(monkeypatch):
     assert len(out) == 1
 
 
+@pytest.mark.parametrize("model", ["gpt-6-astra", "o3", "o4-mini"])
+@pytest.mark.asyncio
+async def test_openai_model_families_infer_gpt(monkeypatch, model):
+    seen = {}
+
+    async def fake_handler(action):
+        seen["ran"] = True
+        await action["new_interactions"].put(Interaction(model="fake"))
+        for name in ("event_stream", "text_output", "thoughts"):
+            await action[name].finalize()
+        await action["new_interactions"].finalize()
+
+    module = types.ModuleType("a11.sdk._fake_gpt")
+    module.fake_handler = fake_handler
+    monkeypatch.setitem(sys.modules, "a11.sdk._fake_gpt", module)
+    monkeypatch.setitem(
+        illm._PROVIDERS,
+        "gpt",
+        illm._Provider("a11.sdk._fake_gpt", "fake_handler", "openai"),
+    )
+
+    out = await _run({LlmHeaders.MODEL.value: model})
+    assert seen.get("ran") is True
+    assert len(out) == 1
+
+
+@pytest.mark.asyncio
+async def test_openai_is_an_explicit_gpt_provider_alias(monkeypatch):
+    seen = {}
+
+    async def fake_handler(action):
+        seen["ran"] = True
+        await action["new_interactions"].put(Interaction(model="fake"))
+        for name in ("event_stream", "text_output", "thoughts"):
+            await action[name].finalize()
+        await action["new_interactions"].finalize()
+
+    module = types.ModuleType("a11.sdk._fake_openai")
+    module.fake_handler = fake_handler
+    monkeypatch.setitem(sys.modules, "a11.sdk._fake_openai", module)
+    monkeypatch.setitem(
+        illm._PROVIDERS,
+        "openai",
+        illm._Provider("a11.sdk._fake_openai", "fake_handler", "openai"),
+    )
+
+    await _run({LlmHeaders.PROVIDER.value: "OpenAI"})
+    assert seen.get("ran") is True
+
+
 @pytest.mark.parametrize(
     "provider", ["claude_code", "claude-code", "Claude-Code"]
 )
@@ -115,8 +165,8 @@ async def test_claude_code_provider_names(monkeypatch, provider):
 
 
 def test_claude_code_install_hint():
-    assert illm.install_hint("claude_code") == (
-        "pip install 'a11-kit[claude-code]'"
+    assert (
+        illm.install_hint("claude_code") == "pip install 'a11-kit[claude-code]'"
     )
 
 

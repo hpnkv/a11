@@ -54,6 +54,8 @@ Discussions = "https://github.com/hpnkv/a11/discussions"
 claude = ["anthropic>=0.120.0"]
 claude-code = ["claude-agent-sdk>=0.2.140"]
 gemini = ["google-genai>=1.55.0"]
+openai = ["openai>=2.0.0"]
+codex = []
 ollama = ["ollama>=0.6.0"]
 vllm = ["openai>=2.0.0"]
 # What `a11.demos.text_to_image` needs: a diffusion pipeline and the text
@@ -205,6 +207,10 @@ claude-code = [
 gemini = [
     "google-genai>=1.55.0",
 ]
+openai = [
+    "openai>=2.0.0",
+]
+codex = []
 ollama = [
     "ollama>=0.6.0",
 ]

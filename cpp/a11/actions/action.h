@@ -236,11 +236,11 @@ class Action : public std::enable_shared_from_this<Action> {
    * built, a transport or lifecycle failure is reported through the sink rather
    * than returned, so an action never fails because it narrated itself.
    *
-   * Where the log goes: always to the process's a11::actions::ActionLogSink,
-   * and additionally onto the log port when something could read it -- a peer
-   * is attached, or a local consumer claimed the port with GetLogNode. Nobody
-   * has to drain it and nobody has to close it; the action closes it with its
-   * other outputs.
+   * Where the log goes: an unclaimed nested action forwards it through its
+   * parent's log, while an unclaimed root action reports it to the process's
+   * a11::actions::ActionLogSink and also to an attached peer. A local consumer
+   * that claimed the port with GetLogNode receives it there instead. Nobody
+   * has to close the port; the action closes it with its other outputs.
    *
    * @param value Object to log.
    * @param options Level, media type, channel, location and extra metadata.
@@ -288,9 +288,10 @@ class Action : public std::enable_shared_from_this<Action> {
   /**
    * @brief Returns the log port's node, claiming it for this consumer.
    *
-   * Claiming suppresses the process sink for this action, so a consumer that
-   * presents the logs itself does not also have them reported twice. Claim
-   * before the action runs: logs written earlier have already gone to the sink.
+   * Claiming suppresses default forwarding and the process sink for this
+   * action, so a consumer that presents the logs itself does not also have them
+   * reported twice. Claim before the action runs: logs written earlier have
+   * already followed the default route.
    *
    * The node's stream is not bound: on the calling side, binding an output
    * would echo received fragments back to the peer.
@@ -329,7 +330,8 @@ class Action : public std::enable_shared_from_this<Action> {
    * The child always receives a new action id and therefore new derived port
    * ids. With @p propagate_io it shares this action's NodeMap, stream, and
    * Session; it does not copy this action's port mappings. Registry and nested
-   * concurrency context are inherited in either mode.
+   * concurrency context are inherited in either mode. Unclaimed child logs
+   * forward through this action by default.
    *
    * @param schema Schema for the nested action.
    * @param propagate_io Share this action's NodeMap, stream, and Session.

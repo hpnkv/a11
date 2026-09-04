@@ -59,7 +59,9 @@ absl::StatusOr<LogLevel> ParseLogLevel(std::string_view name);
 /**
  * @brief Metadata attribute naming the log's level.
  *
- * Log attributes use unprefixed names on the reserved log port.
+ * Attributes intrinsic to the log record use unprefixed names on the reserved
+ * log port. Nested-action provenance uses the framework-prefixed attributes
+ * below.
  */
 inline constexpr std::string_view kLogLevelAttribute = "level";
 /**
@@ -79,6 +81,11 @@ inline constexpr std::string_view kLogChannelAttribute = "channel";
 inline constexpr std::string_view kLogFileAttribute = "file";
 /** @brief Metadata attribute naming the source line the log came from. */
 inline constexpr std::string_view kLogLinenoAttribute = "lineno";
+/** @brief Metadata attribute naming the nested action that wrote a log. */
+inline constexpr std::string_view kLogChildActionAttribute = "a11-child-action";
+/** @brief Metadata attribute naming the nested action call that wrote a log. */
+inline constexpr std::string_view kLogChildCallIdAttribute =
+    "a11-child-call-id";
 
 /** @brief The value ::kLogInternalAttribute takes when the log is internal. */
 inline constexpr std::string_view kLogInternalTrue = "true";

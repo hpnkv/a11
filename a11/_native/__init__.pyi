@@ -105,6 +105,8 @@ __all__: list[str] = [
     "InProcessWireStream",
     "JSON_MIMETYPE",
     "LOG_CHANNEL_ATTRIBUTE",
+    "LOG_CHILD_ACTION_ATTRIBUTE",
+    "LOG_CHILD_CALL_ID_ATTRIBUTE",
     "LOG_FILE_ATTRIBUTE",
     "LOG_INTERNAL_ATTRIBUTE",
     "LOG_INTERNAL_FALSE",
@@ -578,8 +580,10 @@ class Action:
         used. Only a running action may log; logging before ``run`` or from the
         calling side of ``call`` raises.
 
-        The default sink is A11's logger (see [a11.logging][]). Call
-        `get_log_node` to consume the chunks directly.
+        A nested action forwards unclaimed logs through its parent. A root
+        action sends them to A11's logger (see [a11.logging][]). Call
+        `get_log_node` before the action runs to consume its chunks directly
+        and suppress the default route.
 
         Args:
             value: What to log.
@@ -9813,6 +9817,8 @@ EMPTY_WIRE_MESSAGE_SIZE: int = 4
 ERROR: SignallingMessageType
 JSON_MIMETYPE: str = "application/json"
 LOG_CHANNEL_ATTRIBUTE: str = "channel"
+LOG_CHILD_ACTION_ATTRIBUTE: str = "a11-child-action"
+LOG_CHILD_CALL_ID_ATTRIBUTE: str = "a11-child-call-id"
 LOG_FILE_ATTRIBUTE: str = "file"
 LOG_INTERNAL_ATTRIBUTE: str = "internal"
 LOG_INTERNAL_FALSE: str = "false"

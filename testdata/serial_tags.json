@@ -47,6 +47,8 @@
     "interact_with_claude_config": "a11.sdk.InteractWithClaudeConfig",
     "interact_with_claude_code_config": "a11.sdk.InteractWithClaudeCodeConfig",
     "interact_with_gemini_config": "a11.sdk.InteractWithGeminiConfig",
+    "interact_with_gpt_config": "a11.sdk.InteractWithGptConfig",
+    "interact_with_codex_config": "a11.sdk.InteractWithCodexConfig",
     "interact_with_ollama_config": "a11.sdk.InteractWithOllamaConfig",
     "interact_with_vllm_config": "a11.sdk.InteractWithVllmConfig",
     "interact_with_gemma_config": "a11.sdk.InteractWithGemmaConfig"

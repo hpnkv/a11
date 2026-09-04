@@ -1592,6 +1592,10 @@ Examples:
   module.attr("LOG_FILE_ATTRIBUTE") = std::string(actions::kLogFileAttribute);
   module.attr("LOG_LINENO_ATTRIBUTE") =
       std::string(actions::kLogLinenoAttribute);
+  module.attr("LOG_CHILD_ACTION_ATTRIBUTE") =
+      std::string(actions::kLogChildActionAttribute);
+  module.attr("LOG_CHILD_CALL_ID_ATTRIBUTE") =
+      std::string(actions::kLogChildCallIdAttribute);
   module.attr("LOG_INTERNAL_TRUE") = std::string(actions::kLogInternalTrue);
   module.attr("LOG_INTERNAL_FALSE") = std::string(actions::kLogInternalFalse);
   {

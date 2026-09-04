@@ -15,6 +15,7 @@ import a11
 from a11.actions import ActionPortSchema, ActionRegistry, ActionSchema
 from a11.sdk.interact_with_llm_schema import INTERACT_WITH_LLM_SCHEMA
 from a11.sdk.llm import (
+    ActionCallAdapter,
     add_tool_calls_to_interaction,
     FailedToolRounds,
     Interaction,
@@ -372,3 +373,65 @@ def test_a_round_with_no_calls_at_all_counts_as_no_failure():
     rounds = FailedToolRounds()
     assert rounds.record(runner.ExecutedActions(outputs={}, errors={}))
     assert rounds.rounds == 0
+
+
+_TYPED_SCHEMA = ActionSchema(
+    name="typed_tool",
+    description="Take one structured request.",
+    inputs={
+        "request": ActionPortSchema(
+            "request",
+            "application/json;type=Ask",
+            typeinfo=None,
+            unary=True,
+            required=True,
+        ),
+        "note": ActionPortSchema("note", "text/plain", typeinfo=str, unary=True),
+    },
+    outputs={"done": ActionPortSchema("done", "text/plain", required=True)},
+)
+
+
+@pytest.mark.asyncio
+async def test_an_argument_sent_as_a_string_reaches_its_port_as_the_object():
+    """A model asked for an object sometimes sends one inside a JSON string.
+
+    Put verbatim it arrived as `text/plain`, and no codec built the port's own
+    type out of text: the call failed on a mimetype the model never chose.
+    """
+    call = ToolCall(
+        name="typed_tool",
+        id="call-1",
+        params={
+            "request": '{"question": "how far?"}',
+            "note": '{"still": "text"}',
+        },
+    )
+    adapter = ActionCallAdapter.create(call, _TYPED_SCHEMA)
+    by_port = {}
+    for fragment in await adapter.get_action_inputs():
+        if fragment is None:
+            continue
+        by_port[fragment.id] = fragment.get_chunk()
+
+    structured = by_port["request"]
+    assert structured.metadata.mimetype == "application/json"
+    assert a11.from_chunk(structured) == {"question": "how far?"}
+
+    # The text port keeps what it was sent, JSON-shaped or not.
+    assert by_port["note"].metadata.mimetype == "text/plain"
+
+
+@pytest.mark.asyncio
+async def test_a_string_that_is_not_json_reaches_its_port_unchanged():
+    """So the port's own error explains the value, rather than this guessing."""
+    call = ToolCall(
+        name="typed_tool", id="call-1", params={"request": "how far?"}
+    )
+    adapter = ActionCallAdapter.create(call, _TYPED_SCHEMA)
+    chunks = [
+        fragment.get_chunk()
+        for fragment in await adapter.get_action_inputs()
+        if fragment is not None
+    ]
+    assert chunks[0].metadata.mimetype == "text/plain"

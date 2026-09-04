@@ -1126,7 +1126,9 @@ class SerializationRegistry:
             raise Status(
                 code=StatusCode.INVALID_ARGUMENT,
                 message=(
-                    f"The chunk cannot be deserialized as {obj_type.__name__}."
+                    f"The chunk cannot be deserialized as {obj_type.__name__}:"
+                    f" no codec builds one from {_chunk_summary(chunk)}."
+                    + _validation_detail(chunk, obj_type)
                 ),
             ).to_exception()
         requested = (
@@ -1341,6 +1343,48 @@ class SerializationRegistry:
                 ),
             ).to_exception()
         return result
+
+
+_SUMMARY_CHARS = 120
+
+
+def _chunk_summary(chunk: types.Chunk) -> str:
+    mimetype = (
+        chunk.metadata.mimetype
+        if chunk.metadata and chunk.metadata.mimetype
+        else "<missing>"
+    )
+    data = chunk.data
+    if isinstance(data, (bytes, bytearray, memoryview)):
+        raw = bytes(data)
+        try:
+            text = raw.decode()
+        except UnicodeDecodeError:
+            return f"{mimetype!r} carrying {len(raw)} bytes"
+    else:
+        text = data if isinstance(data, str) else repr(data)
+    clipped = (
+        text
+        if len(text) <= _SUMMARY_CHARS
+        else text[:_SUMMARY_CHARS] + "..."
+    )
+    return f"{mimetype!r} carrying {clipped!r}"
+
+
+def _validation_detail(chunk: types.Chunk, obj_type: type) -> str:
+    if not (
+        isinstance(obj_type, type) and issubclass(obj_type, pydantic.BaseModel)
+    ):
+        return ""
+    data = chunk.data
+    payload = bytes(data) if isinstance(data, (bytes, bytearray, memoryview)) else data
+    try:
+        obj_type.model_validate_json(payload)
+    except pydantic.ValidationError as error:
+        return f" {obj_type.__name__} reports: {error}"
+    except Exception:
+        return ""
+    return ""
 
 
 _MSGPACK_MIN_INT = -(2**63)

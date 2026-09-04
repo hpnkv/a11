@@ -668,6 +668,18 @@ def _shape_parts(value: Any) -> list[NormalizedPart]:
     return parts
 
 
+def normalized_parts_by_shape(value: Any) -> list[NormalizedPart]:
+    """The portable text and image parts one decoded content value carries.
+
+    The block-level half of [normalize_by_shape][a11.sdk.llm.normalize_by_shape], for a consumer
+    holding content rather than a whole interaction: a backend translating a client's content
+    into its own parts reads the portable image shapes here -- Anthropic's
+    ``source``/``media_type`` envelope, OpenAI's ``image_url`` data URL, a native
+    ``data``/``mime_type`` pair -- instead of hand-rolling each.
+    """
+    return _shape_parts(value)
+
+
 def normalize_by_shape(interaction: Interaction) -> NormalizedMessage:
     """Normalize an interaction whose producer is unknown, by reading shapes.
 
@@ -940,6 +952,34 @@ async def decoded_output_content(
     return (await decoded_output_text(rest) if rest else ""), images
 
 
+def _argument_for_port(value: Any, port: Any) -> Any:
+    """One tool-call argument as the value its port's own declared type wants.
+
+    A model asked for an object sometimes sends that object *as a string*: one JSON document
+    inside a JSON string. Put verbatim it reaches the port as ``text/plain``, and no codec
+    builds the port's type out of text -- the call then fails with a mimetype the model never
+    chose and cannot see. Where the port declares a structured type and the string parses as a
+    JSON object or array, the parsed value is what the port was given.
+
+    Everything else arrives exactly as it was sent: a text port keeps its text, a string that
+    is not JSON stays a string, and base64 for an ``image/*`` port is untouched. A payload the
+    port still refuses is refused by the port, with the port's own error.
+    """
+    if not isinstance(value, str) or port is None:
+        return value
+    mimetype = str(getattr(port, "type", "") or "").lower()
+    if not mimetype or mimetype.startswith("text/"):
+        return value
+    stripped = value.strip()
+    if not stripped or stripped[0] not in "{[":
+        return value
+    try:
+        parsed = pydantic_core.from_json(stripped)
+    except ValueError:
+        return value
+    return parsed if isinstance(parsed, (dict, list)) else value
+
+
 class ActionCallAdapter:
     """One model tool call, validated against the action schema it names."""
 
@@ -956,12 +996,16 @@ class ActionCallAdapter:
     async def get_action_inputs(self) -> list[a11.NodeFragment]:
         inputs = list()
         for key, value_list in self._arguments.items():
+            port = self._schema.inputs.get(key)
             if not isinstance(value_list, list):
                 value_list = [value_list]
 
             node = a11.AsyncNode.create("node")
             for idx, value in enumerate(value_list):
-                await node.put(value, final=idx == len(value_list) - 1)
+                await node.put(
+                    _argument_for_port(value, port),
+                    final=idx == len(value_list) - 1,
+                )
             # Closed, not finalized: the last put above already marked finality
             # (and an empty argument list has nothing to mark).
             await node.close()

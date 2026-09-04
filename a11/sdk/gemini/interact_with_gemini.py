@@ -58,6 +58,64 @@ _STEP_TYPES = frozenset(
 _MODEL_STEP_TYPES = frozenset({"model_output", "function_call", "thought"})
 
 
+#: Image bytes by the prefix their base64 begins with, for a portable image block that named
+#: no media type. Gemini rejects an image part without one, so a sniffed type beats no type.
+_IMAGE_MAGIC = (
+    ("iVBORw0KGgo", "image/png"),
+    ("/9j/", "image/jpeg"),
+    ("R0lGOD", "image/gif"),
+    ("UklGR", "image/webp"),
+)
+
+
+def _sniffed_mimetype(data: str | None) -> str | None:
+    """The media type a base64 payload's own prefix names, or ``None``."""
+    if not data:
+        return None
+    for prefix, mimetype in _IMAGE_MAGIC:
+        if data.startswith(prefix):
+            return mimetype
+    return None
+
+
+def _native_content_blocks(blocks: list[Any]) -> list[Any]:
+    """User content blocks as Gemini's own parts.
+
+    A block Gemini already reads passes through untouched. An image block minted for another
+    provider is translated through `llm.normalized_parts_by_shape`, because Gemini rejects an
+    image part carrying no ``mime_type``: a client sending Anthropic's portable
+    ``source``/``media_type`` envelope got HTTP 400 ``Missing/unsupported mime_type in image
+    content``, since this handler read the block as native and found neither field.
+    """
+    out: list[Any] = []
+    for block in blocks:
+        native = (
+            isinstance(block, dict)
+            and block.get("type") == "image"
+            and isinstance(block.get("data"), str)
+        )
+        foreign = isinstance(block, dict) and block.get("type") in (
+            "image",
+            "image_url",
+        )
+        if native or not foreign:
+            if native and not block.get("mime_type"):
+                block = {**block, "mime_type": _sniffed_mimetype(block.get("data"))}
+            out.append(block)
+            continue
+        for part in llm.normalized_parts_by_shape([block]):
+            if part.type != llm.NormalizedContentType.IMAGE:
+                continue
+            out.append(
+                {
+                    "type": "image",
+                    "data": part.data,
+                    "mime_type": part.mime_type or _sniffed_mimetype(part.data),
+                }
+            )
+    return out
+
+
 def _content_to_steps(content: Any) -> list[dict[str, Any]]:
     """Normalize an interaction's content into a list of Interactions steps.
 
@@ -88,7 +146,9 @@ def _content_to_steps(content: Any) -> list[dict[str, Any]]:
             for item in content
         ):
             return content
-        return [{"type": "user_input", "content": content}]
+        return [
+            {"type": "user_input", "content": _native_content_blocks(content)}
+        ]
 
     raise Status(
         code=StatusCode.INVALID_ARGUMENT,

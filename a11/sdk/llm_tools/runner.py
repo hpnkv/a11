@@ -196,8 +196,7 @@ async def collect_tools(
     local = sorted(
         name
         for name in registry.list_registered_actions()
-        if name not in requested
-        and name != action.get_schema().name
+        if name not in requested and name != action.get_schema().name
         # A11's reserved actions are protocol operations, not model tools.
         and not describe.is_reserved_action(name)
         and action_name_matches_allowed(name, allowed_patterns)
@@ -420,6 +419,7 @@ async def execute_actions_from_interaction(
     interaction: Interaction,
     action: a11.Action,
     registry: a11.ActionRegistry | None = None,
+    rejected: Mapping[str, Status] | None = None,
 ) -> ExecutedActions:
     """Run an interaction's tool calls and collect a result for each of them.
 
@@ -440,7 +440,7 @@ async def execute_actions_from_interaction(
     allowed_patterns = get_allowed_llm_action_patterns(action)
     nested_actions: list[a11.Action] = []
     log_nodes: dict[str, a11.AsyncNode] = {}
-    errors: dict[str, Status] = {}
+    errors: dict[str, Status] = dict(rejected or {})
     for call in interaction.action_calls:
         # Setting a call up can fail on its own — an action the model may not
         # call, a name no longer in the registry, inputs that will not go onto
@@ -453,8 +453,7 @@ async def execute_actions_from_interaction(
                 ).to_exception()
 
             nested_action = (
-                action
-                .make_nested(registry.get_schema(call.name))
+                action.make_nested(registry.get_schema(call.name))
                 .set_id(call.id)
                 .bind_stream(None)
                 .bind_handler(registry.get_handler(call.name))
@@ -494,6 +493,8 @@ async def execute_actions_from_interaction(
     # reads as the model falling silent.
     for call in interaction.action_calls:
         all_outputs.setdefault(call.id, [])
+    for call_id in errors:
+        all_outputs.setdefault(call_id, [])
 
     for nested_action in nested_actions:
         fragments, failure = await collect_action_outputs(

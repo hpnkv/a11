@@ -4,8 +4,9 @@
 
 It keeps a tool's narration out of the result the model is shown and
 hands it back as that call's log, it offers the model the actions registered
-on this side that the caller's allowed-tool patterns match, and it honours a
-schema that nominates one output as the whole result.
+on this side that the caller's allowed-tool patterns match, it honours a
+schema that nominates one output as the whole result, and it reports a call it
+could not even record as that call's own failure.
 """
 
 import pytest
@@ -14,11 +15,16 @@ import a11
 from a11.actions import ActionPortSchema, ActionRegistry, ActionSchema
 from a11.sdk.interact_with_llm_schema import INTERACT_WITH_LLM_SCHEMA
 from a11.sdk.llm import (
+    add_tool_calls_to_interaction,
+    FailedToolRounds,
     Interaction,
     LlmHeaders,
+    Role,
     TOOL_LOGS_METADATA_KEY,
+    ToolCall,
     decode_action_output_fragments,
 )
+from a11.status import Status, StatusCode
 from a11.sdk.llm_tools import runner
 
 _ECHO_SCHEMA = ActionSchema(
@@ -286,3 +292,83 @@ async def test_the_drain_window_is_bounded_whatever_the_turn_deadline_is():
     # And the turn's deadline is still the ceiling when it is the tighter one.
     soon = a11.now() + a11.Duration.milliseconds(50)
     assert runner._drain_timeout(soon) < runner.DRAIN_AFTER_COMPLETION
+
+
+@pytest.mark.asyncio
+async def test_a_call_the_schema_refuses_is_reported_rather_than_raised():
+    """A model that mis-shaped its arguments reads the reason and calls again.
+
+    `add_tool_calls_to_interaction` used to raise, which ended the whole
+    conversation on one malformed argument.
+    """
+    registry = _registry()
+    interaction = Interaction(role=Role.ASSISTANT)
+    rejected = await add_tool_calls_to_interaction(
+        [
+            ToolCall(name="echo_tool", id="good", params={"word": "hello"}),
+            ToolCall(name="echo_tool", id="stray", params={"words": "hello"}),
+            ToolCall(name="no_such_tool", id="absent", params={}),
+        ],
+        interaction,
+        registry,
+    )
+
+    assert sorted(rejected) == ["absent", "stray"]
+    assert "words" in rejected["stray"].message
+    assert [call.id for call in interaction.action_calls] == ["good"]
+
+    executed: list[runner.ExecutedActions] = []
+
+    async def host_handler(action: a11.Action) -> None:
+        executed.append(
+            await runner.execute_actions_from_interaction(
+                interaction, action, registry, rejected=rejected
+            )
+        )
+
+    registry.register(
+        INTERACT_WITH_LLM_SCHEMA.name, INTERACT_WITH_LLM_SCHEMA, host_handler
+    )
+    host = registry.make_action(INTERACT_WITH_LLM_SCHEMA.name)
+    host.set_header(LlmHeaders.ALLOWED_LLM_ACTIONS.value, b"echo_tool")
+    host.run()
+    await host.wait()
+    round_one = executed[0]
+
+    # One result per call the model made, the two rejections among them.
+    assert sorted(round_one.outputs) == ["absent", "good", "stray"]
+    assert round_one.error_message("good") is None
+    assert "words" in (round_one.error_message("stray") or "")
+    assert round_one.error_message("absent") is not None
+
+
+def test_a_round_of_nothing_but_failures_ends_the_conversation_after_five():
+    rounds = FailedToolRounds()
+    all_failed = runner.ExecutedActions(
+        outputs={"call-1": []},
+        errors={
+            "call-1": Status(
+                code=StatusCode.INVALID_ARGUMENT, message="unexpected input"
+            )
+        },
+    )
+    one_worked = runner.ExecutedActions(
+        outputs={"call-1": [], "call-2": []},
+        errors={
+            "call-1": Status(
+                code=StatusCode.INVALID_ARGUMENT, message="unexpected input"
+            )
+        },
+    )
+
+    assert [rounds.record(all_failed) for _ in range(4)] == [True] * 4
+    # A round with one call that worked is a model making progress.
+    assert rounds.record(one_worked)
+    assert rounds.rounds == 0
+    assert [rounds.record(all_failed) for _ in range(5)] == [True] * 4 + [False]
+
+
+def test_a_round_with_no_calls_at_all_counts_as_no_failure():
+    rounds = FailedToolRounds()
+    assert rounds.record(runner.ExecutedActions(outputs={}, errors={}))
+    assert rounds.rounds == 0

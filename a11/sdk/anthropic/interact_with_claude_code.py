@@ -115,14 +115,11 @@ def _sdk_tool(
             role=llm.Role.ASSISTANT,
             created_at_millis=a11.now().nanoseconds_since_epoch // 1000000,
         )
-        try:
-            # Arguments the action's ports refuse are this call's failure, and
-            # the model is owed a result it can read rather than a dead turn.
-            await llm.add_tool_calls_to_interaction([call], holder, registry)
-        except StatusException as error:
-            return _as_mcp_result(call.id, str(error.status), str(error), [])
+        rejected = await llm.add_tool_calls_to_interaction(
+            [call], holder, registry
+        )
         executed = await runner.execute_actions_from_interaction(
-            holder, action, registry
+            holder, action, registry, rejected=rejected
         )
         logs.update(executed.logs)
         results = await llm.build_tool_results(executed, _as_mcp_result)

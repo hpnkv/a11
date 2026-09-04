@@ -814,6 +814,7 @@ async def interact_with_vllm(action: a11.Action):
     call_id_prefix = f"call_{uuid.uuid4().hex[:12]}"
     next_tool_call_id = 0
     try:
+        failed_rounds = llm.FailedToolRounds()
         while True:
             messages: list[dict[str, Any]] = []
             if conversation.system_prompt:
@@ -877,14 +878,14 @@ async def interact_with_vllm(action: a11.Action):
                 usage_metadata=_build_usage_metadata(accumulator.usage),
             )
             previous_interaction_id = interaction.id
-            await llm.add_tool_calls_to_interaction(
+            rejected = await llm.add_tool_calls_to_interaction(
                 tool_calls, interaction, action.get_registry()
             )
 
             interaction = conversation.feed_next_interaction(interaction)
 
             await action["new_interactions"].put(interaction)
-            if not interaction.action_calls:
+            if not interaction.action_calls and not rejected:
                 if action.trace_id:
                     try:
                         action.set_span_output(message_dict)
@@ -895,7 +896,7 @@ async def interact_with_vllm(action: a11.Action):
                 break
 
             executed = await runner.execute_actions_from_interaction(
-                interaction, action, action.get_registry()
+                interaction, action, action.get_registry(), rejected=rejected
             )
 
             tool_output_interaction = llm.Interaction(
@@ -923,6 +924,14 @@ async def interact_with_vllm(action: a11.Action):
             )
 
             await action["new_interactions"].put(tool_output_interaction)
+
+            if not failed_rounds.record(executed):
+                logging.warning(
+                    "ending the conversation after %d rounds in which every"
+                    " tool call failed",
+                    failed_rounds.rounds,
+                )
+                break
 
     except StatusException:
         raise

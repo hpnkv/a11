@@ -16,7 +16,7 @@ import pydantic_core
 
 from a11.data import serial_tags
 from a11.data.serialization import get_global_serialization_registry
-from a11.status import Status, StatusCode
+from a11.status import Status, StatusCode, StatusException
 from pydantic import (
     BaseModel,
     Field,
@@ -1075,20 +1075,56 @@ async def add_tool_calls_to_interaction(
     tool_calls: list[ToolCall],
     interaction: Interaction,
     registry: a11.ActionRegistry,
-) -> None:
-    """Record each tool call, and its encoded inputs, on the interaction."""
+) -> dict[str, Status]:
+    rejected: dict[str, Status] = {}
     for tool_call in tool_calls:
-        adapter = ActionCallAdapter.create(
-            tool_call,
-            registry.get_schema(tool_call.name),
-        )
+        try:
+            adapter = ActionCallAdapter.create(
+                tool_call,
+                registry.get_schema(tool_call.name),
+            )
+            action_inputs = await adapter.get_action_inputs()
+        except StatusException as error:
+            rejected[tool_call.id] = error.status
+            continue
+        except Exception as error:
+            # An argument value the port's own encoding refuses, which is the
+            # model's mistake and not this conversation's failure.
+            rejected[tool_call.id] = Status(
+                code=StatusCode.INVALID_ARGUMENT, message=str(error)
+            )
+            continue
 
         interaction.action_calls.append(adapter.action_message)
         if tool_call.id not in interaction.action_inputs:
             interaction.action_inputs[tool_call.id] = []
-        interaction.action_inputs[tool_call.id].extend(
-            await adapter.get_action_inputs()
+        interaction.action_inputs[tool_call.id].extend(action_inputs)
+    return rejected
+
+
+MAX_FAILED_TOOL_ROUNDS = 5
+
+
+class FailedToolRounds:
+    def __init__(self, limit: int = MAX_FAILED_TOOL_ROUNDS):
+        self._limit = limit
+        self._rounds = 0
+
+    @property
+    def rounds(self) -> int:
+        """Rounds in which every call has failed, counting back from the last."""
+        return self._rounds
+
+    def record(self, executed: Any) -> bool:
+        """Whether the conversation may continue after this round's results."""
+        calls = list(executed.outputs)
+        failed = [
+            call for call in calls if executed.error_message(call) is not None
+        ]
+        self._rounds = (
+            self._rounds + 1 if calls and len(failed) == len(calls) else 0
         )
+        return self._rounds < self._limit
 
 
 async def build_tool_results(

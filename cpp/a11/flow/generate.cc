@@ -1,4 +1,16 @@
-// Copyright 2026 The A11 Authors.
+// Copyright 2026 The A11 Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include "a11/flow/generate.h"
 
@@ -231,6 +243,20 @@ std::string FieldModifierRules() {
 /// they are a table that already exists.
 constexpr std::string_view kSublimeTemplate = R"(%YAML 1.2
 ---
+# Copyright 2026 The A11 Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # Syntax highlighting for the A11 Flow language (see cpp/a11/flow/ in the A11
 # repo).
 #
@@ -760,7 +786,19 @@ std::string Sublime() {
 /// prose about flows rather than a file being edited, so it stops at what a
 /// reader of a documentation page sees and leaves the error states out.
 constexpr std::string_view kPygmentsTemplate =
-    R"PY(# Copyright 2026 The A11 Authors.
+    R"PY(# Copyright 2026 The A11 Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 """Syntax highlighting for the A11 Flow language, as a Pygments lexer.
 

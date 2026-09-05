@@ -4,17 +4,17 @@
     {
       "at": {
         "column": 1,
-        "end": 619,
-        "line": 17,
-        "start": 615
+        "end": 1199,
+        "line": 31,
+        "start": 1195
       },
       "body": [
         {
           "at": {
             "column": 3,
-            "end": 1074,
-            "line": 30,
-            "start": 1068
+            "end": 1654,
+            "line": 44,
+            "start": 1648
           },
           "kind": "bind",
           "name": "search",
@@ -26,17 +26,17 @@
                 {
                   "at": {
                     "column": 34,
-                    "end": 1107,
-                    "line": 30,
-                    "start": 1099
+                    "end": 1687,
+                    "line": 44,
+                    "start": 1679
                   },
                   "kind": "pipeline",
                   "source": {
                     "at": {
                       "column": 34,
-                      "end": 1107,
-                      "line": 30,
-                      "start": 1099
+                      "end": 1687,
+                      "line": 44,
+                      "start": 1679
                     },
                     "kind": "name",
                     "name": "question"
@@ -49,17 +49,17 @@
                 {
                   "at": {
                     "column": 51,
-                    "end": 1122,
-                    "line": 30,
-                    "start": 1116
+                    "end": 1702,
+                    "line": 44,
+                    "start": 1696
                   },
                   "kind": "pipeline",
                   "source": {
                     "at": {
                       "column": 51,
-                      "end": 1122,
-                      "line": 30,
-                      "start": 1116
+                      "end": 1702,
+                      "line": 44,
+                      "start": 1696
                     },
                     "kind": "name",
                     "name": "budget"
@@ -70,9 +70,9 @@
             ],
             "at": {
               "column": 12,
-              "end": 1080,
-              "line": 30,
-              "start": 1077
+              "end": 1660,
+              "line": 44,
+              "start": 1657
             },
             "kind": "call",
             "mode": "run",
@@ -81,9 +81,9 @@
               "after": [],
               "at": {
                 "column": 58,
-                "end": 1124,
-                "line": 30,
-                "start": 1123
+                "end": 1704,
+                "line": 44,
+                "start": 1703
               },
               "forward": [],
               "headers": [],
@@ -98,18 +98,18 @@
         {
           "at": {
             "column": 3,
-            "end": 1232,
-            "line": 34,
-            "start": 1227
+            "end": 1812,
+            "line": 48,
+            "start": 1807
           },
           "kind": "bind",
           "name": "pages",
           "value": {
             "at": {
               "column": 11,
-              "end": 1239,
-              "line": 34,
-              "start": 1235
+              "end": 1819,
+              "line": 48,
+              "start": 1815
             },
             "id": null,
             "kind": "node",
@@ -119,26 +119,26 @@
         {
           "at": {
             "column": 3,
-            "end": 1250,
-            "line": 36,
-            "start": 1245
+            "end": 1830,
+            "line": 50,
+            "start": 1825
           },
           "body": [
             {
               "after": [],
               "at": {
                 "column": 5,
-                "end": 1268,
-                "line": 37,
-                "start": 1265
+                "end": 1848,
+                "line": 51,
+                "start": 1845
               },
               "body": [
                 {
                   "at": {
                     "column": 7,
-                    "end": 1311,
-                    "line": 38,
-                    "start": 1307
+                    "end": 1891,
+                    "line": 52,
+                    "start": 1887
                   },
                   "kind": "bind",
                   "name": "page",
@@ -150,24 +150,24 @@
                         {
                           "at": {
                             "column": 38,
-                            "end": 1341,
-                            "line": 38,
-                            "start": 1338
+                            "end": 1921,
+                            "line": 52,
+                            "start": 1918
                           },
                           "kind": "pipeline",
                           "source": {
                             "at": {
                               "column": 41,
-                              "end": 1342,
-                              "line": 38,
-                              "start": 1341
+                              "end": 1922,
+                              "line": 52,
+                              "start": 1921
                             },
                             "base": {
                               "at": {
                                 "column": 38,
-                                "end": 1341,
-                                "line": 38,
-                                "start": 1338
+                                "end": 1921,
+                                "line": 52,
+                                "start": 1918
                               },
                               "kind": "name",
                               "name": "hit"
@@ -181,9 +181,9 @@
                     ],
                     "at": {
                       "column": 14,
-                      "end": 1317,
-                      "line": 38,
-                      "start": 1314
+                      "end": 1897,
+                      "line": 52,
+                      "start": 1894
                     },
                     "kind": "call",
                     "mode": "call",
@@ -192,9 +192,9 @@
                       "after": [],
                       "at": {
                         "column": 46,
-                        "end": 1347,
-                        "line": 38,
-                        "start": 1346
+                        "end": 1927,
+                        "line": 52,
+                        "start": 1926
                       },
                       "forward": [
                         "authorization"
@@ -205,9 +205,9 @@
                           {
                             "at": {
                               "column": 26,
-                              "end": 1405,
-                              "line": 40,
-                              "start": 1394
+                              "end": 1985,
+                              "line": 54,
+                              "start": 1974
                             },
                             "kind": "literal",
                             "value": "text/html"
@@ -228,18 +228,18 @@
                   "after": [],
                   "at": {
                     "column": 7,
-                    "end": 1617,
-                    "line": 45,
-                    "start": 1613
+                    "end": 2197,
+                    "line": 59,
+                    "start": 2193
                   },
                   "kind": "wait",
                   "race": false,
                   "subject": {
                     "at": {
                       "column": 12,
-                      "end": 1622,
-                      "line": 45,
-                      "start": 1618
+                      "end": 2202,
+                      "line": 59,
+                      "start": 2198
                     },
                     "kind": "name",
                     "name": "page"
@@ -252,25 +252,25 @@
                   "after": [],
                   "at": {
                     "column": 7,
-                    "end": 1760,
-                    "line": 49,
-                    "start": 1757
+                    "end": 2340,
+                    "line": 63,
+                    "start": 2337
                   },
                   "kind": "pipe",
                   "pipeline": {
                     "at": {
                       "column": 7,
-                      "end": 1760,
-                      "line": 49,
-                      "start": 1757
+                      "end": 2340,
+                      "line": 63,
+                      "start": 2337
                     },
                     "kind": "pipeline",
                     "source": {
                       "at": {
                         "column": 7,
-                        "end": 1760,
-                        "line": 49,
-                        "start": 1757
+                        "end": 2340,
+                        "line": 63,
+                        "start": 2337
                       },
                       "kind": "name",
                       "name": "hit"
@@ -280,9 +280,9 @@
                         "arg": {
                           "at": {
                             "column": 17,
-                            "end": 1773,
-                            "line": 49,
-                            "start": 1767
+                            "end": 2353,
+                            "line": 63,
+                            "start": 2347
                           },
                           "kind": "typed-value",
                           "type": {
@@ -295,9 +295,9 @@
                           "value": {
                             "at": {
                               "column": 23,
-                              "end": 1774,
-                              "line": 49,
-                              "start": 1773
+                              "end": 2354,
+                              "line": 63,
+                              "start": 2353
                             },
                             "kind": "object",
                             "pairs": [
@@ -306,17 +306,17 @@
                                 {
                                   "at": {
                                     "column": 24,
-                                    "end": 1777,
-                                    "line": 49,
-                                    "start": 1774
+                                    "end": 2357,
+                                    "line": 63,
+                                    "start": 2354
                                   },
                                   "kind": "spread",
                                   "value": {
                                     "at": {
                                       "column": 27,
-                                      "end": 1779,
-                                      "line": 49,
-                                      "start": 1777
+                                      "end": 2359,
+                                      "line": 63,
+                                      "start": 2357
                                     },
                                     "kind": "it"
                                   }
@@ -327,16 +327,16 @@
                                 {
                                   "at": {
                                     "column": 40,
-                                    "end": 1791,
-                                    "line": 49,
-                                    "start": 1790
+                                    "end": 2371,
+                                    "line": 63,
+                                    "start": 2370
                                   },
                                   "base": {
                                     "at": {
                                       "column": 38,
-                                      "end": 1790,
-                                      "line": 49,
-                                      "start": 1788
+                                      "end": 2370,
+                                      "line": 63,
+                                      "start": 2368
                                     },
                                     "kind": "it"
                                   },
@@ -349,17 +349,17 @@
                                 {
                                   "at": {
                                     "column": 54,
-                                    "end": 1805,
-                                    "line": 49,
-                                    "start": 1804
+                                    "end": 2385,
+                                    "line": 63,
+                                    "start": 2384
                                   },
                                   "items": [
                                     {
                                       "at": {
                                         "column": 55,
-                                        "end": 1815,
-                                        "line": 49,
-                                        "start": 1805
+                                        "end": 2395,
+                                        "line": 63,
+                                        "start": 2385
                                       },
                                       "kind": "literal",
                                       "value": "searched"
@@ -373,9 +373,9 @@
                         },
                         "at": {
                           "column": 13,
-                          "end": 1766,
-                          "line": 49,
-                          "start": 1763
+                          "end": 2346,
+                          "line": 63,
+                          "start": 2343
                         },
                         "into": null,
                         "kind": "stage",
@@ -391,9 +391,9 @@
                     {
                       "at": {
                         "column": 71,
-                        "end": 1828,
-                        "line": 49,
-                        "start": 1821
+                        "end": 2408,
+                        "line": 63,
+                        "start": 2401
                       },
                       "kind": "name",
                       "name": "sources"
@@ -404,32 +404,32 @@
                   "after": [],
                   "at": {
                     "column": 7,
-                    "end": 1998,
-                    "line": 52,
-                    "start": 1994
+                    "end": 2578,
+                    "line": 66,
+                    "start": 2574
                   },
                   "kind": "pipe",
                   "pipeline": {
                     "at": {
                       "column": 7,
-                      "end": 1998,
-                      "line": 52,
-                      "start": 1994
+                      "end": 2578,
+                      "line": 66,
+                      "start": 2574
                     },
                     "kind": "pipeline",
                     "source": {
                       "at": {
                         "column": 11,
-                        "end": 1999,
-                        "line": 52,
-                        "start": 1998
+                        "end": 2579,
+                        "line": 66,
+                        "start": 2578
                       },
                       "base": {
                         "at": {
                           "column": 7,
-                          "end": 1998,
-                          "line": 52,
-                          "start": 1994
+                          "end": 2578,
+                          "line": 66,
+                          "start": 2574
                         },
                         "kind": "name",
                         "name": "page"
@@ -442,9 +442,9 @@
                         "arg": 200,
                         "at": {
                           "column": 19,
-                          "end": 2014,
-                          "line": 52,
-                          "start": 2006
+                          "end": 2594,
+                          "line": 66,
+                          "start": 2586
                         },
                         "into": null,
                         "kind": "stage",
@@ -458,17 +458,17 @@
                         "arg": {
                           "at": {
                             "column": 43,
-                            "end": 2032,
-                            "line": 52,
-                            "start": 2030
+                            "end": 2612,
+                            "line": 66,
+                            "start": 2610
                           },
                           "kind": "binary",
                           "left": {
                             "at": {
                               "column": 40,
-                              "end": 2029,
-                              "line": 52,
-                              "start": 2027
+                              "end": 2609,
+                              "line": 66,
+                              "start": 2607
                             },
                             "kind": "it"
                           },
@@ -476,9 +476,9 @@
                           "right": {
                             "at": {
                               "column": 46,
-                              "end": 2035,
-                              "line": 52,
-                              "start": 2033
+                              "end": 2615,
+                              "line": 66,
+                              "start": 2613
                             },
                             "kind": "literal",
                             "value": ""
@@ -486,9 +486,9 @@
                         },
                         "at": {
                           "column": 34,
-                          "end": 2026,
-                          "line": 52,
-                          "start": 2021
+                          "end": 2606,
+                          "line": 66,
+                          "start": 2601
                         },
                         "into": null,
                         "kind": "stage",
@@ -504,9 +504,9 @@
                             {
                               "at": {
                                 "column": 61,
-                                "end": 2050,
-                                "line": 52,
-                                "start": 2048
+                                "end": 2630,
+                                "line": 66,
+                                "start": 2628
                               },
                               "kind": "it"
                             }
@@ -516,9 +516,9 @@
                         },
                         "at": {
                           "column": 51,
-                          "end": 2041,
-                          "line": 52,
-                          "start": 2038
+                          "end": 2621,
+                          "line": 66,
+                          "start": 2618
                         },
                         "into": null,
                         "kind": "stage",
@@ -534,9 +534,9 @@
                     {
                       "at": {
                         "column": 67,
-                        "end": 2059,
-                        "line": 52,
-                        "start": 2054
+                        "end": 2639,
+                        "line": 66,
+                        "start": 2634
                       },
                       "kind": "name",
                       "name": "pages"
@@ -549,24 +549,24 @@
               "pipeline": {
                 "at": {
                   "column": 16,
-                  "end": 1282,
-                  "line": 37,
-                  "start": 1276
+                  "end": 1862,
+                  "line": 51,
+                  "start": 1856
                 },
                 "kind": "pipeline",
                 "source": {
                   "at": {
                     "column": 22,
-                    "end": 1283,
-                    "line": 37,
-                    "start": 1282
+                    "end": 1863,
+                    "line": 51,
+                    "start": 1862
                   },
                   "base": {
                     "at": {
                       "column": 16,
-                      "end": 1282,
-                      "line": 37,
-                      "start": 1276
+                      "end": 1862,
+                      "line": 51,
+                      "start": 1856
                     },
                     "kind": "name",
                     "name": "search"
@@ -591,17 +591,17 @@
           ],
           "at": {
             "column": 3,
-            "end": 2078,
-            "line": 56,
-            "start": 2073
+            "end": 2658,
+            "line": 70,
+            "start": 2653
           },
           "kind": "drain",
           "target": {
             "at": {
               "column": 9,
-              "end": 2084,
-              "line": 56,
-              "start": 2079
+              "end": 2664,
+              "line": 70,
+              "start": 2659
             },
             "kind": "name",
             "name": "pages"
@@ -611,26 +611,26 @@
           "after": [],
           "at": {
             "column": 3,
-            "end": 2254,
-            "line": 60,
-            "start": 2251
+            "end": 2834,
+            "line": 74,
+            "start": 2831
           },
           "body": [
             {
               "after": [],
               "at": {
                 "column": 5,
-                "end": 2312,
-                "line": 61,
-                "start": 2303
+                "end": 2892,
+                "line": 75,
+                "start": 2883
               },
               "kind": "pipe",
               "pipeline": {
                 "at": {
                   "column": 5,
-                  "end": 2312,
-                  "line": 61,
-                  "start": 2303
+                  "end": 2892,
+                  "line": 75,
+                  "start": 2883
                 },
                 "kind": "pipeline",
                 "source": {
@@ -638,9 +638,9 @@
                     {
                       "at": {
                         "column": 15,
-                        "end": 2321,
-                        "line": 61,
-                        "start": 2313
+                        "end": 2901,
+                        "line": 75,
+                        "start": 2893
                       },
                       "kind": "literal",
                       "value": "%s: %s"
@@ -648,9 +648,9 @@
                     {
                       "at": {
                         "column": 25,
-                        "end": 2326,
-                        "line": 61,
-                        "start": 2323
+                        "end": 2906,
+                        "line": 75,
+                        "start": 2903
                       },
                       "kind": "name",
                       "name": "url"
@@ -658,9 +658,9 @@
                     {
                       "at": {
                         "column": 30,
-                        "end": 2337,
-                        "line": 61,
-                        "start": 2328
+                        "end": 2917,
+                        "line": 75,
+                        "start": 2908
                       },
                       "kind": "name",
                       "name": "page_text"
@@ -668,9 +668,9 @@
                   ],
                   "at": {
                     "column": 5,
-                    "end": 2312,
-                    "line": 61,
-                    "start": 2303
+                    "end": 2892,
+                    "line": 75,
+                    "start": 2883
                   },
                   "kind": "builtin",
                   "name": "strformat"
@@ -681,9 +681,9 @@
                 {
                   "at": {
                     "column": 44,
-                    "end": 2347,
-                    "line": 61,
-                    "start": 2342
+                    "end": 2927,
+                    "line": 75,
+                    "start": 2922
                   },
                   "kind": "name",
                   "name": "notes"
@@ -696,26 +696,26 @@
           "pipeline": {
             "at": {
               "column": 25,
-              "end": 2276,
-              "line": 60,
-              "start": 2273
+              "end": 2856,
+              "line": 74,
+              "start": 2853
             },
             "kind": "pipeline",
             "source": {
               "at": {
                 "column": 25,
-                "end": 2276,
-                "line": 60,
-                "start": 2273
+                "end": 2856,
+                "line": 74,
+                "start": 2853
               },
               "kind": "zip",
               "sources": [
                 {
                   "at": {
                     "column": 29,
-                    "end": 2282,
-                    "line": 60,
-                    "start": 2277
+                    "end": 2862,
+                    "line": 74,
+                    "start": 2857
                   },
                   "kind": "name",
                   "name": "pages"
@@ -723,16 +723,16 @@
                 {
                   "at": {
                     "column": 42,
-                    "end": 2291,
-                    "line": 60,
-                    "start": 2290
+                    "end": 2871,
+                    "line": 74,
+                    "start": 2870
                   },
                   "base": {
                     "at": {
                       "column": 36,
-                      "end": 2290,
-                      "line": 60,
-                      "start": 2284
+                      "end": 2870,
+                      "line": 74,
+                      "start": 2864
                     },
                     "kind": "name",
                     "name": "search"
@@ -753,9 +753,9 @@
         {
           "at": {
             "column": 3,
-            "end": 2360,
-            "line": 64,
-            "start": 2355
+            "end": 2940,
+            "line": 78,
+            "start": 2935
           },
           "kind": "bind",
           "name": "brief",
@@ -767,17 +767,17 @@
                 {
                   "at": {
                     "column": 39,
-                    "end": 2399,
-                    "line": 64,
-                    "start": 2391
+                    "end": 2979,
+                    "line": 78,
+                    "start": 2971
                   },
                   "kind": "pipeline",
                   "source": {
                     "at": {
                       "column": 39,
-                      "end": 2399,
-                      "line": 64,
-                      "start": 2391
+                      "end": 2979,
+                      "line": 78,
+                      "start": 2971
                     },
                     "kind": "name",
                     "name": "question"
@@ -790,17 +790,17 @@
                 {
                   "at": {
                     "column": 56,
-                    "end": 2413,
-                    "line": 64,
-                    "start": 2408
+                    "end": 2993,
+                    "line": 78,
+                    "start": 2988
                   },
                   "kind": "pipeline",
                   "source": {
                     "at": {
                       "column": 56,
-                      "end": 2413,
-                      "line": 64,
-                      "start": 2408
+                      "end": 2993,
+                      "line": 78,
+                      "start": 2988
                     },
                     "kind": "name",
                     "name": "pages"
@@ -811,9 +811,9 @@
             ],
             "at": {
               "column": 11,
-              "end": 2366,
-              "line": 64,
-              "start": 2363
+              "end": 2946,
+              "line": 78,
+              "start": 2943
             },
             "kind": "call",
             "mode": "run",
@@ -822,9 +822,9 @@
               "after": [],
               "at": {
                 "column": 62,
-                "end": 2415,
-                "line": 64,
-                "start": 2414
+                "end": 2995,
+                "line": 78,
+                "start": 2994
               },
               "forward": [],
               "headers": [
@@ -833,9 +833,9 @@
                   {
                     "at": {
                       "column": 30,
-                      "end": 2452,
-                      "line": 65,
-                      "start": 2444
+                      "end": 3032,
+                      "line": 79,
+                      "start": 3024
                     },
                     "kind": "name",
                     "name": "deadline"
@@ -853,9 +853,9 @@
         {
           "at": {
             "column": 3,
-            "end": 2540,
-            "line": 68,
-            "start": 2537
+            "end": 3120,
+            "line": 82,
+            "start": 3117
           },
           "kind": "let",
           "name": "summary",
@@ -865,24 +865,24 @@
           "pipeline": {
             "at": {
               "column": 17,
-              "end": 2556,
-              "line": 68,
-              "start": 2551
+              "end": 3136,
+              "line": 82,
+              "start": 3131
             },
             "kind": "pipeline",
             "source": {
               "at": {
                 "column": 22,
-                "end": 2557,
-                "line": 68,
-                "start": 2556
+                "end": 3137,
+                "line": 82,
+                "start": 3136
               },
               "base": {
                 "at": {
                   "column": 17,
-                  "end": 2556,
-                  "line": 68,
-                  "start": 2551
+                  "end": 3136,
+                  "line": 82,
+                  "start": 3131
                 },
                 "kind": "name",
                 "name": "brief"
@@ -897,25 +897,25 @@
           "after": [],
           "at": {
             "column": 3,
-            "end": 2574,
-            "line": 69,
-            "start": 2567
+            "end": 3154,
+            "line": 83,
+            "start": 3147
           },
           "kind": "pipe",
           "pipeline": {
             "at": {
               "column": 3,
-              "end": 2574,
-              "line": 69,
-              "start": 2567
+              "end": 3154,
+              "line": 83,
+              "start": 3147
             },
             "kind": "pipeline",
             "source": {
               "at": {
                 "column": 3,
-                "end": 2574,
-                "line": 69,
-                "start": 2567
+                "end": 3154,
+                "line": 83,
+                "start": 3147
               },
               "kind": "name",
               "name": "summary"
@@ -925,9 +925,9 @@
                 "arg": 4096,
                 "at": {
                   "column": 13,
-                  "end": 2582,
-                  "line": 69,
-                  "start": 2577
+                  "end": 3162,
+                  "line": 83,
+                  "start": 3157
                 },
                 "into": null,
                 "kind": "stage",
@@ -943,9 +943,9 @@
             {
               "at": {
                 "column": 27,
-                "end": 2597,
-                "line": 69,
-                "start": 2591
+                "end": 3177,
+                "line": 83,
+                "start": 3171
               },
               "kind": "name",
               "name": "frames"
@@ -955,9 +955,9 @@
         {
           "at": {
             "column": 3,
-            "end": 2750,
-            "line": 73,
-            "start": 2747
+            "end": 3330,
+            "line": 87,
+            "start": 3327
           },
           "kind": "let",
           "name": "read",
@@ -967,17 +967,17 @@
           "pipeline": {
             "at": {
               "column": 14,
-              "end": 2763,
-              "line": 73,
-              "start": 2758
+              "end": 3343,
+              "line": 87,
+              "start": 3338
             },
             "kind": "pipeline",
             "source": {
               "at": {
                 "column": 14,
-                "end": 2763,
-                "line": 73,
-                "start": 2758
+                "end": 3343,
+                "line": 87,
+                "start": 3338
               },
               "kind": "name",
               "name": "pages"
@@ -987,9 +987,9 @@
                 "arg": null,
                 "at": {
                   "column": 22,
-                  "end": 2771,
-                  "line": 73,
-                  "start": 2766
+                  "end": 3351,
+                  "line": 87,
+                  "start": 3346
                 },
                 "into": null,
                 "kind": "stage",
@@ -1008,9 +1008,9 @@
           ],
           "at": {
             "column": 3,
-            "end": 2778,
-            "line": 74,
-            "start": 2774
+            "end": 3358,
+            "line": 88,
+            "start": 3354
           },
           "kind": "log",
           "log": {
@@ -1018,9 +1018,9 @@
               {
                 "at": {
                   "column": 24,
-                  "end": 2799,
-                  "line": 74,
-                  "start": 2795
+                  "end": 3379,
+                  "line": 88,
+                  "start": 3375
                 },
                 "kind": "name",
                 "name": "read"
@@ -1033,24 +1033,24 @@
         {
           "at": {
             "column": 3,
-            "end": 2817,
-            "line": 75,
-            "start": 2815
+            "end": 3397,
+            "line": 89,
+            "start": 3395
           },
           "condition": {
             "at": {
               "column": 11,
-              "end": 2824,
-              "line": 75,
-              "start": 2823
+              "end": 3404,
+              "line": 89,
+              "start": 3403
             },
             "kind": "binary",
             "left": {
               "at": {
                 "column": 6,
-                "end": 2822,
-                "line": 75,
-                "start": 2818
+                "end": 3402,
+                "line": 89,
+                "start": 3398
               },
               "kind": "name",
               "name": "read"
@@ -1059,9 +1059,9 @@
             "right": {
               "at": {
                 "column": 13,
-                "end": 2826,
-                "line": 75,
-                "start": 2825
+                "end": 3406,
+                "line": 89,
+                "start": 3405
               },
               "kind": "literal",
               "value": 0
@@ -1072,9 +1072,9 @@
               "after": [],
               "at": {
                 "column": 5,
-                "end": 2869,
-                "line": 78,
-                "start": 2866
+                "end": 3449,
+                "line": 92,
+                "start": 3446
               },
               "kind": "log",
               "log": {
@@ -1082,9 +1082,9 @@
                   {
                     "at": {
                       "column": 17,
-                      "end": 2901,
-                      "line": 78,
-                      "start": 2878
+                      "end": 3481,
+                      "line": 92,
+                      "start": 3458
                     },
                     "kind": "literal",
                     "value": "nothing worth reading"
@@ -1098,16 +1098,16 @@
               "after": [],
               "at": {
                 "column": 5,
-                "end": 2910,
-                "line": 79,
-                "start": 2906
+                "end": 3490,
+                "line": 93,
+                "start": 3486
               },
               "code": {
                 "at": {
                   "column": 10,
-                  "end": 2920,
-                  "line": 79,
-                  "start": 2911
+                  "end": 3500,
+                  "line": 93,
+                  "start": 3491
                 },
                 "kind": "name",
                 "name": "not_found"
@@ -1116,9 +1116,9 @@
               "message": {
                 "at": {
                   "column": 20,
-                  "end": 2944,
-                  "line": 79,
-                  "start": 2921
+                  "end": 3524,
+                  "line": 93,
+                  "start": 3501
                 },
                 "kind": "literal",
                 "value": "nothing worth reading"
@@ -1131,25 +1131,25 @@
               "after": [],
               "at": {
                 "column": 5,
-                "end": 2840,
-                "line": 76,
-                "start": 2833
+                "end": 3420,
+                "line": 90,
+                "start": 3413
               },
               "kind": "pipe",
               "pipeline": {
                 "at": {
                   "column": 5,
-                  "end": 2840,
-                  "line": 76,
-                  "start": 2833
+                  "end": 3420,
+                  "line": 90,
+                  "start": 3413
                 },
                 "kind": "pipeline",
                 "source": {
                   "at": {
                     "column": 5,
-                    "end": 2840,
-                    "line": 76,
-                    "start": 2833
+                    "end": 3420,
+                    "line": 90,
+                    "start": 3413
                   },
                   "kind": "name",
                   "name": "summary"
@@ -1160,9 +1160,9 @@
                 {
                   "at": {
                     "column": 16,
-                    "end": 2850,
-                    "line": 76,
-                    "start": 2844
+                    "end": 3430,
+                    "line": 90,
+                    "start": 3424
                   },
                   "kind": "name",
                   "name": "answer"
@@ -1174,9 +1174,9 @@
         {
           "at": {
             "column": 3,
-            "end": 3179,
-            "line": 85,
-            "start": 3176
+            "end": 3759,
+            "line": 99,
+            "start": 3756
           },
           "kind": "let",
           "name": "page_line",
@@ -1186,17 +1186,17 @@
           "pipeline": {
             "at": {
               "column": 19,
-              "end": 3197,
-              "line": 85,
-              "start": 3192
+              "end": 3777,
+              "line": 99,
+              "start": 3772
             },
             "kind": "pipeline",
             "source": {
               "at": {
                 "column": 19,
-                "end": 3197,
-                "line": 85,
-                "start": 3192
+                "end": 3777,
+                "line": 99,
+                "start": 3772
               },
               "kind": "name",
               "name": "pages"
@@ -1208,17 +1208,17 @@
           "after": [],
           "at": {
             "column": 3,
-            "end": 3209,
-            "line": 86,
-            "start": 3200
+            "end": 3789,
+            "line": 100,
+            "start": 3780
           },
           "kind": "pipe",
           "pipeline": {
             "at": {
               "column": 3,
-              "end": 3209,
-              "line": 86,
-              "start": 3200
+              "end": 3789,
+              "line": 100,
+              "start": 3780
             },
             "kind": "pipeline",
             "source": {
@@ -1226,9 +1226,9 @@
                 {
                   "at": {
                     "column": 13,
-                    "end": 3221,
-                    "line": 86,
-                    "start": 3210
+                    "end": 3801,
+                    "line": 100,
+                    "start": 3790
                   },
                   "kind": "literal",
                   "value": "first: %s"
@@ -1236,9 +1236,9 @@
                 {
                   "at": {
                     "column": 26,
-                    "end": 3232,
-                    "line": 86,
-                    "start": 3223
+                    "end": 3812,
+                    "line": 100,
+                    "start": 3803
                   },
                   "kind": "name",
                   "name": "page_line"
@@ -1246,9 +1246,9 @@
               ],
               "at": {
                 "column": 3,
-                "end": 3209,
-                "line": 86,
-                "start": 3200
+                "end": 3789,
+                "line": 100,
+                "start": 3780
               },
               "kind": "builtin",
               "name": "strformat"
@@ -1259,9 +1259,9 @@
             {
               "at": {
                 "column": 40,
-                "end": 3242,
-                "line": 86,
-                "start": 3237
+                "end": 3822,
+                "line": 100,
+                "start": 3817
               },
               "kind": "name",
               "name": "notes"
@@ -1271,9 +1271,9 @@
         {
           "at": {
             "column": 3,
-            "end": 3252,
-            "line": 87,
-            "start": 3245
+            "end": 3832,
+            "line": 101,
+            "start": 3825
           },
           "kind": "advance",
           "name": "page_line"
@@ -1282,17 +1282,17 @@
           "after": [],
           "at": {
             "column": 3,
-            "end": 3274,
-            "line": 88,
-            "start": 3265
+            "end": 3854,
+            "line": 102,
+            "start": 3845
           },
           "kind": "pipe",
           "pipeline": {
             "at": {
               "column": 3,
-              "end": 3274,
-              "line": 88,
-              "start": 3265
+              "end": 3854,
+              "line": 102,
+              "start": 3845
             },
             "kind": "pipeline",
             "source": {
@@ -1300,9 +1300,9 @@
                 {
                   "at": {
                     "column": 13,
-                    "end": 3287,
-                    "line": 88,
-                    "start": 3275
+                    "end": 3867,
+                    "line": 102,
+                    "start": 3855
                   },
                   "kind": "literal",
                   "value": "second: %s"
@@ -1310,9 +1310,9 @@
                 {
                   "at": {
                     "column": 27,
-                    "end": 3298,
-                    "line": 88,
-                    "start": 3289
+                    "end": 3878,
+                    "line": 102,
+                    "start": 3869
                   },
                   "kind": "name",
                   "name": "page_line"
@@ -1320,9 +1320,9 @@
               ],
               "at": {
                 "column": 3,
-                "end": 3274,
-                "line": 88,
-                "start": 3265
+                "end": 3854,
+                "line": 102,
+                "start": 3845
               },
               "kind": "builtin",
               "name": "strformat"
@@ -1333,9 +1333,9 @@
             {
               "at": {
                 "column": 41,
-                "end": 3308,
-                "line": 88,
-                "start": 3303
+                "end": 3888,
+                "line": 102,
+                "start": 3883
               },
               "kind": "name",
               "name": "notes"
@@ -1346,25 +1346,25 @@
           "after": [],
           "at": {
             "column": 3,
-            "end": 3601,
-            "line": 94,
-            "start": 3596
+            "end": 4181,
+            "line": 108,
+            "start": 4176
           },
           "kind": "pipe",
           "pipeline": {
             "at": {
               "column": 3,
-              "end": 3601,
-              "line": 94,
-              "start": 3596
+              "end": 4181,
+              "line": 108,
+              "start": 4176
             },
             "kind": "pipeline",
             "source": {
               "at": {
                 "column": 3,
-                "end": 3601,
-                "line": 94,
-                "start": 3596
+                "end": 4181,
+                "line": 108,
+                "start": 4176
               },
               "kind": "name",
               "name": "pages"
@@ -1374,9 +1374,9 @@
                 "arg": "{title:line}",
                 "at": {
                   "column": 11,
-                  "end": 3609,
-                  "line": 94,
-                  "start": 3604
+                  "end": 4189,
+                  "line": 108,
+                  "start": 4184
                 },
                 "into": null,
                 "kind": "stage",
@@ -1390,16 +1390,16 @@
                 "arg": {
                   "at": {
                     "column": 40,
-                    "end": 3634,
-                    "line": 94,
-                    "start": 3633
+                    "end": 4214,
+                    "line": 108,
+                    "start": 4213
                   },
                   "base": {
                     "at": {
                       "column": 38,
-                      "end": 3633,
-                      "line": 94,
-                      "start": 3631
+                      "end": 4213,
+                      "line": 108,
+                      "start": 4211
                     },
                     "kind": "it"
                   },
@@ -1408,9 +1408,9 @@
                 },
                 "at": {
                   "column": 34,
-                  "end": 3630,
-                  "line": 94,
-                  "start": 3627
+                  "end": 4210,
+                  "line": 108,
+                  "start": 4207
                 },
                 "into": null,
                 "kind": "stage",
@@ -1426,9 +1426,9 @@
             {
               "at": {
                 "column": 50,
-                "end": 3648,
-                "line": 94,
-                "start": 3643
+                "end": 4228,
+                "line": 108,
+                "start": 4223
               },
               "kind": "name",
               "name": "notes"
@@ -1438,9 +1438,9 @@
         {
           "at": {
             "column": 3,
-            "end": 3654,
-            "line": 95,
-            "start": 3651
+            "end": 4234,
+            "line": 109,
+            "start": 4231
           },
           "kind": "let",
           "name": "head",
@@ -1451,9 +1451,9 @@
           "pipeline": {
             "at": {
               "column": 20,
-              "end": 3673,
-              "line": 95,
-              "start": 3668
+              "end": 4253,
+              "line": 109,
+              "start": 4248
             },
             "kind": "pipeline",
             "source": {
@@ -1461,9 +1461,9 @@
                 {
                   "at": {
                     "column": 26,
-                    "end": 3695,
-                    "line": 95,
-                    "start": 3674
+                    "end": 4275,
+                    "line": 109,
+                    "start": 4254
                   },
                   "kind": "literal",
                   "value": "{head}. {tail:rest}"
@@ -1471,9 +1471,9 @@
                 {
                   "at": {
                     "column": 49,
-                    "end": 3704,
-                    "line": 95,
-                    "start": 3697
+                    "end": 4284,
+                    "line": 109,
+                    "start": 4277
                   },
                   "kind": "name",
                   "name": "summary"
@@ -1481,9 +1481,9 @@
               ],
               "at": {
                 "column": 20,
-                "end": 3673,
-                "line": 95,
-                "start": 3668
+                "end": 4253,
+                "line": 109,
+                "start": 4248
               },
               "kind": "builtin",
               "name": "match"
@@ -1495,17 +1495,17 @@
           "after": [],
           "at": {
             "column": 3,
-            "end": 3717,
-            "line": 96,
-            "start": 3708
+            "end": 4297,
+            "line": 110,
+            "start": 4288
           },
           "kind": "pipe",
           "pipeline": {
             "at": {
               "column": 3,
-              "end": 3717,
-              "line": 96,
-              "start": 3708
+              "end": 4297,
+              "line": 110,
+              "start": 4288
             },
             "kind": "pipeline",
             "source": {
@@ -1513,9 +1513,9 @@
                 {
                   "at": {
                     "column": 13,
-                    "end": 3728,
-                    "line": 96,
-                    "start": 3718
+                    "end": 4308,
+                    "line": 110,
+                    "start": 4298
                   },
                   "kind": "literal",
                   "value": "%s || %s"
@@ -1523,9 +1523,9 @@
                 {
                   "at": {
                     "column": 25,
-                    "end": 3734,
-                    "line": 96,
-                    "start": 3730
+                    "end": 4314,
+                    "line": 110,
+                    "start": 4310
                   },
                   "kind": "name",
                   "name": "head"
@@ -1533,9 +1533,9 @@
                 {
                   "at": {
                     "column": 31,
-                    "end": 3740,
-                    "line": 96,
-                    "start": 3736
+                    "end": 4320,
+                    "line": 110,
+                    "start": 4316
                   },
                   "kind": "name",
                   "name": "tail"
@@ -1543,9 +1543,9 @@
               ],
               "at": {
                 "column": 3,
-                "end": 3717,
-                "line": 96,
-                "start": 3708
+                "end": 4297,
+                "line": 110,
+                "start": 4288
               },
               "kind": "builtin",
               "name": "strformat"
@@ -1556,9 +1556,9 @@
             {
               "at": {
                 "column": 40,
-                "end": 3750,
-                "line": 96,
-                "start": 3745
+                "end": 4330,
+                "line": 110,
+                "start": 4325
               },
               "kind": "name",
               "name": "notes"
@@ -1568,41 +1568,41 @@
         {
           "at": {
             "column": 3,
-            "end": 4018,
-            "line": 102,
-            "start": 4011
+            "end": 4598,
+            "line": 116,
+            "start": 4591
           },
           "kind": "bind",
           "name": "checked",
           "value": {
             "at": {
               "column": 13,
-              "end": 4024,
-              "line": 102,
-              "start": 4021
+              "end": 4604,
+              "line": 116,
+              "start": 4601
             },
             "body": [
               {
                 "at": {
                   "column": 5,
-                  "end": 4033,
-                  "line": 103,
-                  "start": 4031
+                  "end": 4613,
+                  "line": 117,
+                  "start": 4611
                 },
                 "condition": {
                   "at": {
                     "column": 13,
-                    "end": 4040,
-                    "line": 103,
-                    "start": 4039
+                    "end": 4620,
+                    "line": 117,
+                    "start": 4619
                   },
                   "kind": "binary",
                   "left": {
                     "at": {
                       "column": 8,
-                      "end": 4038,
-                      "line": 103,
-                      "start": 4034
+                      "end": 4618,
+                      "line": 117,
+                      "start": 4614
                     },
                     "kind": "name",
                     "name": "read"
@@ -1611,9 +1611,9 @@
                   "right": {
                     "at": {
                       "column": 15,
-                      "end": 4047,
-                      "line": 103,
-                      "start": 4041
+                      "end": 4627,
+                      "line": 117,
+                      "start": 4621
                     },
                     "kind": "name",
                     "name": "budget"
@@ -1626,16 +1626,16 @@
                     "after": [],
                     "at": {
                       "column": 7,
-                      "end": 4060,
-                      "line": 104,
-                      "start": 4056
+                      "end": 4640,
+                      "line": 118,
+                      "start": 4636
                     },
                     "code": {
                       "at": {
                         "column": 12,
-                        "end": 4079,
-                        "line": 104,
-                        "start": 4061
+                        "end": 4659,
+                        "line": 118,
+                        "start": 4641
                       },
                       "kind": "name",
                       "name": "resource_exhausted"
@@ -1644,9 +1644,9 @@
                     "message": {
                       "at": {
                         "column": 31,
-                        "end": 4116,
-                        "line": 104,
-                        "start": 4080
+                        "end": 4696,
+                        "line": 118,
+                        "start": 4660
                       },
                       "kind": "literal",
                       "value": "more pages than the budget allowed"
@@ -1663,17 +1663,17 @@
           "after": [],
           "at": {
             "column": 3,
-            "end": 4138,
-            "line": 107,
-            "start": 4129
+            "end": 4718,
+            "line": 121,
+            "start": 4709
           },
           "kind": "pipe",
           "pipeline": {
             "at": {
               "column": 3,
-              "end": 4138,
-              "line": 107,
-              "start": 4129
+              "end": 4718,
+              "line": 121,
+              "start": 4709
             },
             "kind": "pipeline",
             "source": {
@@ -1681,9 +1681,9 @@
                 {
                   "at": {
                     "column": 13,
-                    "end": 4152,
-                    "line": 107,
-                    "start": 4139
+                    "end": 4732,
+                    "line": 121,
+                    "start": 4719
                   },
                   "kind": "literal",
                   "value": "checked: %s"
@@ -1691,16 +1691,16 @@
                 {
                   "at": {
                     "column": 35,
-                    "end": 4162,
-                    "line": 107,
-                    "start": 4161
+                    "end": 4742,
+                    "line": 121,
+                    "start": 4741
                   },
                   "base": {
                     "at": {
                       "column": 28,
-                      "end": 4161,
-                      "line": 107,
-                      "start": 4154
+                      "end": 4741,
+                      "line": 121,
+                      "start": 4734
                     },
                     "kind": "name",
                     "name": "checked"
@@ -1711,9 +1711,9 @@
               ],
               "at": {
                 "column": 3,
-                "end": 4138,
-                "line": 107,
-                "start": 4129
+                "end": 4718,
+                "line": 121,
+                "start": 4709
               },
               "kind": "builtin",
               "name": "strformat"
@@ -1724,9 +1724,9 @@
             {
               "at": {
                 "column": 43,
-                "end": 4174,
-                "line": 107,
-                "start": 4169
+                "end": 4754,
+                "line": 121,
+                "start": 4749
               },
               "kind": "name",
               "name": "notes"
@@ -1737,9 +1737,9 @@
           "after": [],
           "at": {
             "column": 3,
-            "end": 4182,
-            "line": 109,
-            "start": 4178
+            "end": 4762,
+            "line": 123,
+            "start": 4758
           },
           "count": null,
           "kind": "skip",
@@ -1750,24 +1750,24 @@
               "pipeline": {
                 "at": {
                   "column": 8,
-                  "end": 4189,
-                  "line": 109,
-                  "start": 4183
+                  "end": 4769,
+                  "line": 123,
+                  "start": 4763
                 },
                 "kind": "pipeline",
                 "source": {
                   "at": {
                     "column": 14,
-                    "end": 4190,
-                    "line": 109,
-                    "start": 4189
+                    "end": 4770,
+                    "line": 123,
+                    "start": 4769
                   },
                   "base": {
                     "at": {
                       "column": 8,
-                      "end": 4189,
-                      "line": 109,
-                      "start": 4183
+                      "end": 4769,
+                      "line": 123,
+                      "start": 4763
                     },
                     "kind": "name",
                     "name": "search"
@@ -1788,9 +1788,9 @@
           "alias": "deadline",
           "at": {
             "column": 3,
-            "end": 989,
-            "line": 27,
-            "start": 983
+            "end": 1569,
+            "line": 41,
+            "start": 1563
           },
           "default": null,
           "description": "",
@@ -1801,9 +1801,9 @@
           "alias": "budget",
           "at": {
             "column": 3,
-            "end": 1027,
-            "line": 28,
-            "start": 1021
+            "end": 1607,
+            "line": 42,
+            "start": 1601
           },
           "default": 3,
           "description": "",
@@ -1817,9 +1817,9 @@
         {
           "at": {
             "column": 3,
-            "end": 687,
-            "line": 20,
-            "start": 685
+            "end": 1267,
+            "line": 34,
+            "start": 1265
           },
           "description": "What to find out.",
           "direction": "inputs",
@@ -1838,9 +1838,9 @@
         {
           "at": {
             "column": 3,
-            "end": 741,
-            "line": 22,
-            "start": 738
+            "end": 1321,
+            "line": 36,
+            "start": 1318
           },
           "description": "The answer.",
           "direction": "outputs",
@@ -1859,9 +1859,9 @@
         {
           "at": {
             "column": 3,
-            "end": 784,
-            "line": 23,
-            "start": 781
+            "end": 1364,
+            "line": 37,
+            "start": 1361
           },
           "description": "Where it came from.",
           "direction": "outputs",
@@ -1880,9 +1880,9 @@
         {
           "at": {
             "column": 3,
-            "end": 835,
-            "line": 24,
-            "start": 832
+            "end": 1415,
+            "line": 38,
+            "start": 1412
           },
           "description": "Each page, against the source it came from.",
           "direction": "outputs",
@@ -1901,9 +1901,9 @@
         {
           "at": {
             "column": 3,
-            "end": 910,
-            "line": 25,
-            "start": 907
+            "end": 1490,
+            "line": 39,
+            "start": 1487
           },
           "description": "The answer, in pieces small enough to send.",
           "direction": "outputs",
@@ -1928,18 +1928,18 @@
     {
       "at": {
         "column": 1,
-        "end": 328,
-        "line": 5,
-        "start": 322
+        "end": 908,
+        "line": 19,
+        "start": 902
       },
       "description": "Where an answer came from.",
       "fields": [
         {
           "at": {
             "column": 3,
-            "end": 384,
-            "line": 8,
-            "start": 381
+            "end": 964,
+            "line": 22,
+            "start": 961
           },
           "description": "The page.",
           "kind": "field",
@@ -1958,9 +1958,9 @@
         {
           "at": {
             "column": 3,
-            "end": 446,
-            "line": 9,
-            "start": 441
+            "end": 1026,
+            "line": 23,
+            "start": 1021
           },
           "description": "",
           "kind": "field",
@@ -1982,9 +1982,9 @@
         {
           "at": {
             "column": 3,
-            "end": 469,
-            "line": 10,
-            "start": 465
+            "end": 1049,
+            "line": 24,
+            "start": 1045
           },
           "description": "",
           "kind": "field",
@@ -2010,9 +2010,9 @@
         {
           "at": {
             "column": 3,
-            "end": 495,
-            "line": 11,
-            "start": 491
+            "end": 1075,
+            "line": 25,
+            "start": 1071
           },
           "default": 0.5,
           "description": "",
@@ -2035,9 +2035,9 @@
         {
           "at": {
             "column": 3,
-            "end": 529,
-            "line": 12,
-            "start": 525
+            "end": 1109,
+            "line": 26,
+            "start": 1105
           },
           "default": "page",
           "description": "",
@@ -2060,9 +2060,9 @@
         {
           "at": {
             "column": 3,
-            "end": 586,
-            "line": 13,
-            "start": 582
+            "end": 1166,
+            "line": 27,
+            "start": 1162
           },
           "description": "",
           "kind": "field",
@@ -2080,9 +2080,9 @@
         {
           "at": {
             "column": 3,
-            "end": 603,
-            "line": 14,
-            "start": 597
+            "end": 1183,
+            "line": 28,
+            "start": 1177
           },
           "description": "",
           "kind": "field",

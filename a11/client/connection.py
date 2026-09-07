@@ -116,6 +116,7 @@ class GatewayConnection:
         *,
         registry: a11.ActionRegistry | None = None,
         timeout: timing.Duration | None = None,
+        headers: list[tuple[str, str]] | None = None,
     ) -> GatewayConnection:
         """Open a session to the gateway at ``url``.
 
@@ -132,6 +133,7 @@ class GatewayConnection:
         handshake_deadline = timing.now() + (timeout or CONNECT_TIMEOUT)
         options = net.WireStreamOptions()  # no deadline: the stream lives on
         websocket_options = websocket_client_options(handshake_deadline)
+        websocket_options.headers = headers or []
         stream = net.WebSocketWireStream.connect(
             url, options, websocket_options=websocket_options
         )
@@ -210,8 +212,7 @@ class GatewayConnection:
             schema if schema is not None else self._registry.get_schema(name)
         )
         return (
-            a11
-            .Action(resolved)
+            a11.Action(resolved)
             .bind_node_map(self.session.node_map)
             .bind_session(self.session)
             .bind_stream(self.stream)

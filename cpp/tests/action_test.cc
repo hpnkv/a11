@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "a11/actions/action.h"
+#include "a11/actions/authorization.h"
 
 #include <atomic>
 #include <memory>
@@ -20,6 +21,7 @@
 #include <string>
 
 #include <absl/status/status.h>
+#include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
 #include <absl/time/clock.h>
 #include <absl/time/time.h>
@@ -98,6 +100,20 @@ TEST(ActionLimiterTest, TryAcquireReportsImmediateCapacity) {
   limiter->Release();
   EXPECT_TRUE(limiter->TryAcquire());
   limiter->Release();
+}
+
+TEST(ActionTest, NestedActionsDoNotForwardAuthorizationReferences) {
+  auto parent = *Action::Create(EmptySchema("parent"));
+  ASSERT_TRUE(parent->SetHeader("x-a11-auth", "proof").ok());
+  ASSERT_TRUE(parent->SetHeader("x-a11-auth-ref", "connection-local").ok());
+  ASSERT_TRUE(parent->SetHeader("x-a11-trace", "trace").ok());
+
+  auto child = *parent->MakeNested(EmptySchema("child"));
+  EXPECT_EQ(*child->GetHeader("x-a11-auth"),
+            std::optional<data::Bytes>("proof"));
+  EXPECT_EQ(*child->GetHeader("x-a11-trace"),
+            std::optional<data::Bytes>("trace"));
+  EXPECT_EQ(*child->GetHeader("x-a11-auth-ref"), std::nullopt);
 }
 
 TEST(ActionTest, UncontendedSessionHandlerStartsWithoutAFiber) {
@@ -279,6 +295,85 @@ TEST(ActionTest, HandlerFailureAbortsUnfinishedOutput) {
   auto output = *action->GetOutput("output", false);
   EXPECT_EQ(output->NextChunk().Await().status().code(),
             absl::StatusCode::kDataLoss);
+}
+
+TEST(ActionTest, AuthorizationEnvelopeAndActionHelpersAreNative) {
+  const AuthorizationEnvelope envelope{
+      .version = kAuthorizationVersion,
+      .chain = {"header.payload.signature"}};
+  const auto encoded = EncodeAuthorization(envelope);
+  ASSERT_TRUE(encoded.ok()) << encoded.status();
+  const auto decoded = DecodeAuthorization(*encoded);
+  ASSERT_TRUE(decoded.ok()) << decoded.status();
+  EXPECT_EQ(*decoded, envelope);
+
+  const auto text = AuthorizationToText(envelope);
+  ASSERT_TRUE(text.ok()) << text.status();
+  EXPECT_EQ(*AuthorizationFromText(*text), envelope);
+
+  auto action = *Action::Create(EchoSchema());
+  ASSERT_TRUE(SetAuthorization(action, envelope).ok());
+  const auto attached = GetAuthorization(*action);
+  ASSERT_TRUE(attached.ok() && attached->has_value());
+  EXPECT_EQ(**attached, envelope);
+
+  const std::string reference(16, 'r');
+  ASSERT_TRUE(SetAuthorizationReference(action, reference).ok());
+  EXPECT_FALSE((*GetAuthorization(*action)).has_value());
+  EXPECT_EQ(**GetAuthorizationReference(*action), reference);
+  EXPECT_FALSE(action->GetHeader(kAuthorizationHeader)->has_value());
+
+  auto session = *service::Session::Create();
+  auto pair = *net::InProcessWireStream::CreatePair();
+  ASSERT_TRUE(action->BindSession(session).ok());
+  ASSERT_TRUE(action->BindStream(pair.first).ok());
+  auto verified = std::make_shared<VerifiedAuthorization>();
+  verified->envelope = envelope;
+  verified->subject = "user-1";
+  verified->subject_kind = "user";
+  verified->actors = {"user-1"};
+  verified->audience = "agent";
+  verified->expires_at = absl::Now() + absl::Minutes(1);
+  AuthorizationContextStore contexts;
+  const auto installed = contexts.Install(action, verified);
+  ASSERT_TRUE(installed.ok()) << installed.status();
+  EXPECT_TRUE(installed->is_default);
+
+  auto next = *Action::Create(EchoSchema(), "next", {}, nullptr, pair.first,
+                              session);
+  const auto resolved = contexts.Resolve(next);
+  ASSERT_TRUE(resolved.ok()) << resolved.status();
+  EXPECT_EQ((*resolved)->subject, "user-1");
+  auto child = *next->MakeNested(EchoSchema());
+  EXPECT_EQ(child->GetVerifiedAuthorization()->subject, "user-1");
+
+  auto registry = std::make_shared<ActionRegistry>();
+  const auto installed_authorizer = InstallAuthorizer(
+      registry, [verified](std::string_view raw)
+                    -> absl::StatusOr<VerifiedAuthorization> {
+        ABSL_RETURN_IF_ERROR(DecodeAuthorization(raw).status());
+        return *verified;
+      });
+  ASSERT_TRUE(installed_authorizer.ok()) << installed_authorizer.status();
+  auto authorizing = *registry->MakeAction(
+      kAuthorizeAction, "authorize", session->GetNodeMap(), pair.first,
+      session);
+  ASSERT_TRUE(SetAuthorization(authorizing, envelope).ok());
+  ASSERT_TRUE(authorizing->Run().ok());
+  ASSERT_TRUE(authorizing->Wait(absl::Seconds(5)).Await().ok());
+  auto result = *authorizing->GetOutput("output", false);
+  auto response = result->NextChunk().Await(absl::Now() + absl::Seconds(5));
+  ASSERT_TRUE(response.ok() && response->has_value());
+  EXPECT_NE(response->value().data.find("context_id"), std::string::npos);
+
+  auto protected_action =
+      *Action::Create(EchoSchema(), "protected", {}, session->GetNodeMap(),
+                      pair.first, session);
+  const auto protected_authorization =
+      (*installed_authorizer)->Resolve(protected_action);
+  ASSERT_TRUE(protected_authorization.ok())
+      << protected_authorization.status();
+  EXPECT_EQ((*protected_authorization)->subject, "user-1");
 }
 
 TEST(ActionTest, RemoteCallHasSymmetricInputOutputAndStatus) {

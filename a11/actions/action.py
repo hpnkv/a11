@@ -447,6 +447,10 @@ class DefaultHeaders(enum.StrEnum):
 
     #: Absolute execution deadline propagated through an action tree.
     DEADLINE = "x-a11-deadline"
+    #: Signed subject and caller delegation chain, or a one-shot proof.
+    AUTH = "x-a11-auth"
+    #: Receiver-issued connection-local authorization context.
+    AUTH_REF = "x-a11-auth-ref"
     #: Policy describing which actions an LLM may expose as tools.
     ALLOWED_LLM_ACTIONS = "x-a11-allowed-llm-actions"
     #: W3C/OpenTelemetry trace-parent context.
@@ -462,6 +466,10 @@ DEFAULT_HEADERS = {
     DefaultHeaders.DEADLINE: ActionHeaderSchema(
         DefaultHeaders.DEADLINE,
         "Deadline for execution in milliseconds since epoch.",
+    ),
+    DefaultHeaders.AUTH: ActionHeaderSchema(
+        DefaultHeaders.AUTH,
+        "Signed A11 subject and caller delegation chain.",
     ),
     DefaultHeaders.ALLOWED_LLM_ACTIONS: ActionHeaderSchema(
         DefaultHeaders.ALLOWED_LLM_ACTIONS,

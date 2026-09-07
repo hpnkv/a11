@@ -79,6 +79,7 @@ namespace a11::actions {
 
 class Action;
 class ActionRegistry;
+struct VerifiedAuthorization;
 
 /** @brief Default cap on concurrently running nested actions. */
 inline constexpr size_t kDefaultMaxConcurrentNestedActions = 64;
@@ -206,6 +207,12 @@ class Action : public std::enable_shared_from_this<Action> {
   absl::Status BindSession(const std::shared_ptr<service::Session>& session);
   /** @brief Returns the owning session, if any. */
   [[nodiscard]] std::shared_ptr<service::Session> GetSession() const;
+  /** @brief Binds identity and authority already verified for this action. */
+  absl::Status BindVerifiedAuthorization(
+      std::shared_ptr<const VerifiedAuthorization> authorization);
+  /** @brief Returns the verified authorization bound to this action. */
+  [[nodiscard]] std::shared_ptr<const VerifiedAuthorization>
+  GetVerifiedAuthorization() const;
 
   /** @brief Returns the port node with raw id @p node_id. */
   absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> GetNode(
@@ -531,6 +538,8 @@ class Action : public std::enable_shared_from_this<Action> {
   std::weak_ptr<service::Session> session_ ABSL_GUARDED_BY(mu_);
   std::weak_ptr<service::Session> tracked_session_ ABSL_GUARDED_BY(mu_);
   std::shared_ptr<ActionRegistry> registry_ ABSL_GUARDED_BY(mu_);
+  std::shared_ptr<const VerifiedAuthorization> verified_authorization_
+      ABSL_GUARDED_BY(mu_);
   absl::flat_hash_map<std::string, std::string> input_ids_ ABSL_GUARDED_BY(mu_);
   absl::flat_hash_map<std::string, std::string> output_ids_
       ABSL_GUARDED_BY(mu_);

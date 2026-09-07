@@ -53,6 +53,33 @@ from .actions import (
     action_from_callable,
 )
 from .actions.action import DEFAULT_HEADERS as DEFAULT_ACTION_HEADERS
+from .authorization import (
+    AUTHORIZATION_VERSION,
+    AUTHORIZE_ACTION,
+    AUTHORIZE_SCHEMA,
+    AUTH_DEFAULT_HEADER,
+    AUTH_HEADER,
+    AUTH_REF_HEADER,
+    AUTH_REPLACE_HEADER,
+    AuthorizationContextResponse,
+    AuthorizationContextStore,
+    AuthorizationEnvelope,
+    AuthorizationVerifier,
+    MAX_AUTHORIZATION_BYTES,
+    MAX_AUTHORIZATION_HOPS,
+    VerifiedAuthorization,
+    authorization_from_text,
+    authorization_to_text,
+    decode_authorization,
+    encode_authorization,
+    establish_authorization,
+    get_authorization,
+    get_verified_authorization,
+    install_authorizer,
+    set_authorization_header,
+    set_authorization_reference,
+    verify_action_authorization,
+)
 from .data.types import (
     ChunkMetadata,
     Chunk,

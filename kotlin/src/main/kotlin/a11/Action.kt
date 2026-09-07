@@ -334,9 +334,15 @@ class Action private constructor(
 
     fun setHeader(name: String, value: String): Status = setHeader(name, utf8Encode(value))
 
+    fun removeHeader(name: String): Status {
+        validateName(name).let { if (!it.isOk) return it }
+        headers.remove(name.lowercase())
+        return Status.ok()
+    }
+
     fun forwardHeadersWithPrefix(target: Action, prefix: String = ACTION_HEADER_PREFIX): Status {
         val folded = prefix.lowercase()
-        for ((name, value) in headers) if (name.startsWith(folded)) target.setHeader(name, value).let { if (!it.isOk) return it }
+        for ((name, value) in headers) if (name.startsWith(folded) && name != AUTHORIZATION_REFERENCE_HEADER) target.setHeader(name, value).let { if (!it.isOk) return it }
         return Status.ok()
     }
 

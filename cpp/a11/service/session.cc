@@ -891,6 +891,9 @@ a11::Task Session::DispatchActionMessage(
               dispatch_status = (*action)->SetHeader(name, value);
             }
             if (dispatch_status.ok()) {
+              dispatch_status = registry->ResolveAuthorization(*action);
+            }
+            if (dispatch_status.ok()) {
               (void)(*action)->ClearInputsAfterRun();
               (void)(*action)->ClearOutputsAfterRun();
               // The receiver applies its own input autofills (which may differ

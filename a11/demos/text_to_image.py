@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import secrets
 from typing import Any
 
 from absl import logging
@@ -222,9 +223,12 @@ async def text_to_image(action: a11.Action) -> None:
 
         import torch
 
-        generator = torch.Generator(pipeline.device)
-        if request.seed is not None:
-            generator = generator.manual_seed(request.seed)
+        seed = (
+            request.seed
+            if request.seed is not None
+            else secrets.randbits(63)
+        )
+        generator = torch.Generator(pipeline.device).manual_seed(seed)
 
         async with _PIPELINE_LOCK:
             result = await asyncio.to_thread(

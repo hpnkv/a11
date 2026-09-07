@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "a11/actions/action.h"
+#include "a11/actions/authorization.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -465,6 +466,22 @@ std::shared_ptr<service::Session> Action::GetSession() const {
   return session_.lock();
 }
 
+absl::Status Action::BindVerifiedAuthorization(
+    std::shared_ptr<const VerifiedAuthorization> authorization) {
+  if (authorization == nullptr) {
+    return absl::InvalidArgumentError("authorization must not be null");
+  }
+  thread::MutexLock lock(&mu_);
+  verified_authorization_ = std::move(authorization);
+  return absl::OkStatus();
+}
+
+std::shared_ptr<const VerifiedAuthorization>
+Action::GetVerifiedAuthorization() const {
+  thread::MutexLock lock(&mu_);
+  return verified_authorization_;
+}
+
 absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> Action::GetNode(
     std::string node_id) {
   std::shared_ptr<nodes::NodeMap> node_map;
@@ -816,7 +833,7 @@ absl::Status Action::ForwardHeadersWithPrefix(
   const std::string folded = absl::AsciiStrToLower(prefix);
   for (const data::ByteMap headers = Headers();
        const auto& [name, value] : headers) {
-    if (name.starts_with(folded)) {
+    if (name.starts_with(folded) && name != kAuthorizationReferenceHeader) {
       ABSL_RETURN_IF_ERROR(target->SetHeader(name, value));
     }
   }
@@ -830,6 +847,7 @@ absl::StatusOr<std::shared_ptr<Action>> Action::MakeNested(
   std::shared_ptr<service::Session> session;
   std::shared_ptr<ActionRegistry> registry;
   std::shared_ptr<ActionLimiter> limiter;
+  std::shared_ptr<const VerifiedAuthorization> verified_authorization;
   {
     thread::MutexLock lock(&mu_);
     std::shared_ptr<service::Session> bound_session = session_.lock();
@@ -839,6 +857,7 @@ absl::StatusOr<std::shared_ptr<Action>> Action::MakeNested(
     registry = registry_;
     limiter = bound_session != nullptr ? bound_session->GetActionLimiter(true)
                                        : nested_limiter_;
+    verified_authorization = propagate_io ? verified_authorization_ : nullptr;
   }
   ABSL_ASSIGN_OR_RETURN(
       std::shared_ptr<Action> child,
@@ -848,6 +867,7 @@ absl::StatusOr<std::shared_ptr<Action>> Action::MakeNested(
     thread::MutexLock child_lock(&child->mu_);
     child->nested_limiter_ = std::move(limiter);
     child->parent_ = shared_from_this();
+    child->verified_authorization_ = std::move(verified_authorization);
   }
   if (forward_headers) {
     ABSL_RETURN_IF_ERROR(ForwardHeadersWithPrefix(child));

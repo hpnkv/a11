@@ -56,6 +56,7 @@ import {
   ACTION_DISPATCH_STATUS_OUTPUT,
   ACTION_LOG_OUTPUT,
   ACTION_HEADER_PREFIX,
+  AUTHORIZATION_REFERENCE_HEADER,
   ACTION_STATUS_OUTPUT,
   CANCEL_ACTION_HEADER,
   CANCEL_ACTION_NAME,
@@ -615,7 +616,7 @@ export class Action {
     if (!(target instanceof Action)) return invalidArgumentError('target must be an Action.');
     const folded = prefix.toLowerCase();
     for (const [name, value] of this.headers) {
-      if (name.startsWith(folded)) {
+      if (name.startsWith(folded) && name !== AUTHORIZATION_REFERENCE_HEADER) {
         const status = target.setHeader(name, value);
         if (!isOk(status)) return status;
       }

@@ -46,6 +46,8 @@
 
 namespace a11::actions {
 
+class AuthorizationContextStore;
+
 /**
  * @brief A thread-safe catalogue mapping action names to schema and handler.
  *
@@ -114,11 +116,19 @@ class ActionRegistry : public std::enable_shared_from_this<ActionRegistry> {
    * @param clear_autofills When true, drop port autofill defaults in the copy.
    */
   std::shared_ptr<ActionRegistry> Copy(bool clear_autofills = true) const;
+  /** Require incoming application actions to resolve installed authorization. */
+  void SetAuthorizationContexts(
+      std::shared_ptr<AuthorizationContextStore> contexts);
+  /** Bind the configured authorization context before an action starts. */
+  absl::Status ResolveAuthorization(
+      const std::shared_ptr<Action>& action) const;
 
  private:
   mutable thread::Mutex mu_;
   absl::flat_hash_map<std::string, ActionSchema> schemas_ ABSL_GUARDED_BY(mu_);
   absl::flat_hash_map<std::string, ActionHandler> handlers_
+      ABSL_GUARDED_BY(mu_);
+  std::shared_ptr<AuthorizationContextStore> authorization_contexts_
       ABSL_GUARDED_BY(mu_);
 };
 

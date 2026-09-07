@@ -199,6 +199,23 @@ async def test_a_seed_reaches_the_generator(stub_torch, pipeline, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_a_missing_seed_rolls_a_random_seed(stub_torch, monkeypatch):
+    """A request without a seed receives a random seed."""
+    seen: list = []
+
+    class _Recording(_FakePipeline):
+        def __call__(self, *args, **kwargs):
+            seen.append(kwargs["generator"].seed)
+            return super().__call__(*args, **kwargs)
+
+    monkeypatch.setattr(t2i, "_PIPELINE", _Recording())
+    monkeypatch.setattr(t2i.secrets, "randbits", lambda bits: 123456789)
+    await _run({"prompt": "a comet", "num_inference_steps": 2})
+
+    assert seen == [123456789]
+
+
+@pytest.mark.asyncio
 async def test_a_request_the_model_would_refuse_is_refused_here(
     stub_torch, pipeline
 ):

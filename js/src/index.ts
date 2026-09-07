@@ -37,6 +37,7 @@ export * from './async_node.js';
 export * from './action_schema.js';
 export * from './action_log.js';
 export * from './action.js';
+export * from './authorization.js';
 export * from './action_registry.js';
 export * from './action_builtins.js';
 export * from './schema_json.js';

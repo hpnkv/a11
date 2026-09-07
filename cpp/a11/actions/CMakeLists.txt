@@ -15,6 +15,7 @@
 set(A11_ACTIONS_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/boundary.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/action.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/authorization.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/builtins.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/describe.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/log.cc

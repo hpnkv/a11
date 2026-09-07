@@ -29,6 +29,7 @@
 #include <absl/status/status.h>
 #include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
+#include <nlohmann/json.hpp>
 #include <pybind11/operators.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -38,6 +39,7 @@
 #include <pybind11_abseil/status_casters.h>
 
 #include "a11/actions/action.h"
+#include "a11/actions/authorization.h"
 #include "a11/actions/builtins.h"
 #include "a11/actions/describe.h"
 #include "a11/actions/registry.h"
@@ -61,6 +63,16 @@ namespace a11::python {
  * implementation, or nothing at all.
  */
 namespace {
+
+nlohmann::json AuthorizationJsonFromPython(const py::handle& value) {
+  const std::string encoded =
+      py::module_::import("json").attr("dumps")(value).cast<std::string>();
+  return nlohmann::json::parse(encoded);
+}
+
+py::object AuthorizationJsonToPython(const nlohmann::json& value) {
+  return py::module_::import("json").attr("loads")(value.dump());
+}
 
 template <typename T>
 class SchemaMapView {
@@ -552,6 +564,197 @@ NativeStatus StatusObject(const absl::Status& status) {
 }  // namespace
 
 void BindActions(py::module_& module) {
+  py::class_<actions::AuthorizationEnvelope>(
+      module, "AuthorizationEnvelope",
+      "A versioned ordered sequence of compact signed delegation statements.",
+      py::dynamic_attr())
+      .def(py::init([](std::vector<std::string> chain, int version) {
+             actions::AuthorizationEnvelope envelope{.version = version,
+                                                     .chain = std::move(chain)};
+             (void)ValueOrThrow(actions::EncodeAuthorization(envelope));
+             return envelope;
+           }),
+           py::arg("chain"),
+           py::arg("version") = actions::kAuthorizationVersion)
+      .def_readonly("version", &actions::AuthorizationEnvelope::version)
+      .def_property_readonly("chain",
+                             [](const actions::AuthorizationEnvelope& self) {
+                               return py::tuple(py::cast(self.chain));
+                             })
+      .def_property_readonly(
+          "fingerprint",
+          [](const actions::AuthorizationEnvelope& self) {
+            return ValueOrThrow(actions::AuthorizationFingerprint(self));
+          })
+      .def(py::self == py::self);
+  py::class_<actions::VerifiedAuthorization,
+             std::shared_ptr<actions::VerifiedAuthorization>>(
+      module, "VerifiedAuthorization",
+      "Identity and effective authority returned by an application verifier.")
+      .def(
+          py::init(
+              [](actions::AuthorizationEnvelope envelope, std::string subject,
+                 std::string subject_kind, std::vector<std::string> actors,
+                 std::string audience, double expires_at, py::object grants,
+                 py::object restrictions, std::int64_t authorization_epoch,
+                 std::vector<std::string> provenance, std::string assurance) {
+                auto value = std::make_shared<actions::VerifiedAuthorization>();
+                value->envelope = std::move(envelope);
+                value->subject = std::move(subject);
+                value->subject_kind = std::move(subject_kind);
+                value->actors = std::move(actors);
+                value->provenance = std::move(provenance);
+                value->assurance = std::move(assurance);
+                value->audience = std::move(audience);
+                value->expires_at =
+                    absl::UnixEpoch() + absl::Seconds(expires_at);
+                value->grants = AuthorizationJsonFromPython(grants);
+                value->restrictions = AuthorizationJsonFromPython(restrictions);
+                value->authorization_epoch = authorization_epoch;
+                return value;
+              }),
+          py::arg("envelope"), py::arg("subject"), py::arg("subject_kind"),
+          py::arg("actors"), py::arg("audience"), py::arg("expires_at"),
+          py::arg("grants") = py::tuple(), py::arg("restrictions") = py::dict(),
+          py::arg("authorization_epoch") = 0,
+          py::arg("provenance") = std::vector<std::string>{},
+          py::arg("assurance") = "")
+      .def_readonly("envelope", &actions::VerifiedAuthorization::envelope)
+      .def_readonly("subject", &actions::VerifiedAuthorization::subject)
+      .def_readonly("subject_kind",
+                    &actions::VerifiedAuthorization::subject_kind)
+      .def_property_readonly("actors",
+                             [](const actions::VerifiedAuthorization& self) {
+                               return py::tuple(py::cast(self.actors));
+                             })
+      .def_property_readonly("provenance",
+                             [](const actions::VerifiedAuthorization& self) {
+                               return py::tuple(py::cast(self.provenance));
+                             })
+      .def_readonly("assurance", &actions::VerifiedAuthorization::assurance)
+      .def_readonly("audience", &actions::VerifiedAuthorization::audience)
+      .def_property_readonly(
+          "expires_at",
+          [](const actions::VerifiedAuthorization& self) {
+            return absl::ToDoubleSeconds(self.expires_at - absl::UnixEpoch());
+          })
+      .def_property_readonly(
+          "grants",
+          [](const actions::VerifiedAuthorization& self) {
+            return py::tuple(AuthorizationJsonToPython(self.grants));
+          })
+      .def_property_readonly(
+          "restrictions",
+          [](const actions::VerifiedAuthorization& self) {
+            return AuthorizationJsonToPython(self.restrictions);
+          })
+      .def_readonly("authorization_epoch",
+                    &actions::VerifiedAuthorization::authorization_epoch)
+      .def_property_readonly(
+          "fingerprint",
+          [](const actions::VerifiedAuthorization& self) {
+            return ValueOrThrow(
+                actions::AuthorizationFingerprint(self.envelope));
+          })
+      .def_property_readonly(
+          "current_actor", [](const actions::VerifiedAuthorization& self) {
+            return self.actors.empty() ? self.subject : self.actors.back();
+          });
+  py::class_<actions::AuthorizationContext>(module, "AuthorizationContext")
+      .def_property_readonly("context_id",
+                             [](const actions::AuthorizationContext& self) {
+                               return py::bytes(self.context_id);
+                             })
+      .def_readonly("authorization",
+                    &actions::AuthorizationContext::authorization)
+      .def_readonly("is_default", &actions::AuthorizationContext::is_default);
+  py::class_<actions::AuthorizationContextStore,
+             std::shared_ptr<actions::AuthorizationContextStore>>(
+      module, "AuthorizationContextStore", py::dynamic_attr())
+      .def(py::init<size_t>(), py::arg("max_contexts_per_stream") = 128)
+      .def(
+          "install",
+          [](actions::AuthorizationContextStore& self,
+             const std::shared_ptr<actions::Action>& action,
+             std::shared_ptr<const actions::VerifiedAuthorization>
+                 authorization,
+             bool make_default, std::optional<std::string> replace) {
+            return ValueOrThrow(self.Install(action, std::move(authorization),
+                                             make_default, std::move(replace)));
+          },
+          py::arg("action"), py::arg("authorization"),
+          py::arg("make_default") = true, py::arg("replace") = std::nullopt)
+      .def(
+          "resolve",
+          [](actions::AuthorizationContextStore& self,
+             const std::shared_ptr<actions::Action>& action) {
+            return ValueOrThrow(self.Resolve(action));
+          },
+          py::arg("action"))
+      .def("clear_stream",
+           [](actions::AuthorizationContextStore& self,
+              const actions::Action& action) {
+             ThrowIfNotOk(self.ClearStream(action));
+           })
+      .def("clear_session", &actions::AuthorizationContextStore::ClearSession,
+           py::arg("session_id"));
+  module.def(
+      "_encode_authorization",
+      [](const actions::AuthorizationEnvelope& envelope) {
+        return py::bytes(ValueOrThrow(actions::EncodeAuthorization(envelope)));
+      },
+      py::arg("envelope"));
+  module.def(
+      "_decode_authorization",
+      [](const py::bytes& value) {
+        return ValueOrThrow(
+            actions::DecodeAuthorization(value.cast<std::string>()));
+      },
+      py::arg("value"));
+  module.def("_authorization_to_text",
+             [](const actions::AuthorizationEnvelope& envelope) {
+               return ValueOrThrow(actions::AuthorizationToText(envelope));
+             });
+  module.def("_authorization_from_text", [](const std::string& value) {
+    return ValueOrThrow(actions::AuthorizationFromText(value));
+  });
+  module.def(
+      "_get_authorization",
+      [](const actions::Action& action) {
+        return ValueOrThrow(actions::GetAuthorization(action));
+      },
+      py::arg("action"));
+  module.def(
+      "_set_authorization",
+      [](const std::shared_ptr<actions::Action>& action,
+         const std::optional<actions::AuthorizationEnvelope>& envelope) {
+        ThrowIfNotOk(actions::SetAuthorization(action, envelope));
+        return action;
+      },
+      py::arg("action"), py::arg("envelope"));
+  module.def(
+      "_get_authorization_reference",
+      [](const actions::Action& action) -> py::object {
+        std::optional<std::string> value =
+            ValueOrThrow(actions::GetAuthorizationReference(action));
+        if (!value.has_value()) {
+          return py::none();
+        }
+        return py::bytes(*value);
+      },
+      py::arg("action"));
+  module.def(
+      "_set_authorization_reference",
+      [](const std::shared_ptr<actions::Action>& action, py::object value) {
+        std::optional<std::string> context_id;
+        if (!value.is_none()) {
+          context_id = py::cast<py::bytes>(value).cast<std::string>();
+        }
+        ThrowIfNotOk(actions::SetAuthorizationReference(action, context_id));
+        return action;
+      },
+      py::arg("action"), py::arg("context_id"));
+
   py::class_<NativeActionHandler>(
       module, "NativeActionHandler",
       "An Action handler implemented in C++, such as one of the audio SDK's. "
@@ -1018,6 +1221,17 @@ void BindActions(py::module_& module) {
           py::arg("session"), py::keep_alive<1, 2>())
       .def("get_session", &actions::Action::GetSession,
            "Return the action's bound session.")
+      .def(
+          "bind_verified_authorization",
+          [](const std::shared_ptr<actions::Action>& self,
+             std::shared_ptr<const actions::VerifiedAuthorization> value) {
+            ThrowIfNotOk(self->BindVerifiedAuthorization(std::move(value)));
+            return self;
+          },
+          py::arg("authorization"))
+      .def("get_verified_authorization",
+           &actions::Action::GetVerifiedAuthorization,
+           "Return identity and authority already verified for this action.")
       // Every port accessor releases the GIL, because asking for a port is not
       // the lookup it looks like.
       .def(
@@ -1481,6 +1695,9 @@ Examples:
       .def("list_registered_actions",
            &actions::ActionRegistry::ListRegisteredActions,
            "Return the names of all registered actions.")
+      .def("_set_authorization_contexts",
+           &actions::ActionRegistry::SetAuthorizationContexts,
+           py::arg("contexts"))
       .def("copy", &actions::ActionRegistry::Copy,
            "Return a copy of the registry, optionally clearing autofills.",
            py::arg("clear_autofills") = true);

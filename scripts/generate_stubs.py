@@ -367,9 +367,7 @@ def _split_on_decode(stub: str) -> str:
             signature("typing.Literal[True] = True", "str | None") + " ..."
         )
         output.append("    @typing.overload")
-        output.append(
-            signature("bool = False", "bytes | str | None") + " ..."
-        )
+        output.append(signature("bool = False", "bytes | str | None") + " ...")
         rewritten += 1
 
     if rewritten != 1:
@@ -386,6 +384,14 @@ def _normalise_annotations(stub: str, submodule: str | None = None) -> str:
     classes it refers to by bare name; the root stub is generated without one.
     """
 
+    set_authorization_signature = (
+        "_set_authorization(action: Action, envelope: AuthorizationEnvelope"
+        " | None) -> ..."
+    )
+    set_authorization_reference_signature = (
+        "_set_authorization_reference(action: Action, context_id: typing.Any)"
+        " -> ..."
+    )
     replacements = {
         # A submodule's own classes come out fully qualified
         # (``a11._native.flow.FlowPlan``), and in its own file the bare name is
@@ -430,6 +436,35 @@ def _normalise_annotations(stub: str, submodule: str | None = None) -> str:
         ),
         "action_registry(self, arg1: ...)": (
             "action_registry(self, arg1: ActionRegistry)"
+        ),
+        "clear_stream(self, arg0: ...)": "clear_stream(self, action: Action)",
+        "install(self, action: ...": "install(self, action: Action",
+        "resolve(self, action: ...)": "resolve(self, action: Action)",
+        "_get_authorization(action: ...)": "_get_authorization(action: Action)",
+        "_get_authorization_reference(action: ...)": (
+            "_get_authorization_reference(action: Action)"
+        ),
+        "_set_authorization(action: ...": "_set_authorization(action: Action",
+        "_set_authorization_reference(action: ...": (
+            "_set_authorization_reference(action: Action"
+        ),
+        set_authorization_signature: (
+            "_set_authorization(action: Action, envelope: AuthorizationEnvelope"
+            " | None) -> Action"
+        ),
+        set_authorization_reference_signature: (
+            "_set_authorization_reference(action: Action, context_id:"
+            " typing.Any) -> Action"
+        ),
+        "provenance: collections.abc.Sequence[str] = [],": (
+            "provenance: collections.abc.Sequence[str] = (),"
+        ),
+        "def actors(self) -> tuple:": "def actors(self) -> tuple[str, ...]:",
+        "def provenance(self) -> tuple:": (
+            "def provenance(self) -> tuple[str, ...]:"
+        ),
+        "def grants(self) -> tuple:": (
+            "def grants(self) -> tuple[typing.Any, ...]:"
         ),
         "http2_options(self) -> ...": "http2_options(self) -> Http2Options",
         "http2_options(self, arg0: ...)": (
@@ -670,16 +705,18 @@ def _generate(output_dir: Path) -> Path:
     _load_optional_public_protocols()
     protocol_methods = _python_protocol_methods()
     _expose_bound_classes_in_native_module()
-    stubgen_main([
-        native.__name__,
-        "--output-dir",
-        str(output_dir),
-        "--ignore-invalid-expressions",
-        r"^(?:a11::|<).*$",
-        "--ignore-unresolved-names",
-        r".*",
-        "--exit-code",
-    ])
+    stubgen_main(
+        [
+            native.__name__,
+            "--output-dir",
+            str(output_dir),
+            "--ignore-invalid-expressions",
+            r"^(?:a11::|<).*$",
+            "--ignore-unresolved-names",
+            r".*",
+            "--exit-code",
+        ]
+    )
     package = output_dir / "a11" / "_native"
     _normalise_stub(package / "__init__.pyi", protocol_methods)
     written = {"__init__.pyi"}

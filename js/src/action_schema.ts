@@ -53,6 +53,8 @@ export const CANCEL_ACTION_NAME = '__cancel__';
 export const CANCEL_ACTION_HEADER = '__action';
 /** Prefix for framework headers normally forwarded to nested actions. */
 export const ACTION_HEADER_PREFIX = 'x-a11-';
+/** Connection-scoped authorization reference; never forwarded to a child. */
+export const AUTHORIZATION_REFERENCE_HEADER = 'x-a11-auth-ref';
 /** Output mapping sentinel meaning the output is the complete JSON value. */
 export const WHOLE_JSON_OUTPUT = '$';
 

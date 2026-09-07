@@ -27,6 +27,7 @@
 #include <absl/strings/str_cat.h>
 
 #include "a11/actions/action.h"
+#include "a11/actions/authorization.h"
 #include "a11/actions/builtins.h"
 #include "a11/actions/schema.h"
 #include "a11/data/types.h"
@@ -203,6 +204,7 @@ std::shared_ptr<ActionRegistry> ActionRegistry::Copy(
   auto result = std::make_shared<ActionRegistry>();
   thread::MutexLock lock(&mu_);
   thread::MutexLock result_lock(&result->mu_);
+  result->authorization_contexts_ = authorization_contexts_;
   for (const auto& [name, original] : schemas_) {
     ActionSchema schema = original;
     if (clear_autofills) {
@@ -222,6 +224,31 @@ std::shared_ptr<ActionRegistry> ActionRegistry::Copy(
     }
   }
   return result;
+}
+
+void ActionRegistry::SetAuthorizationContexts(
+    std::shared_ptr<AuthorizationContextStore> contexts) {
+  thread::MutexLock lock(&mu_);
+  authorization_contexts_ = std::move(contexts);
+}
+
+absl::Status ActionRegistry::ResolveAuthorization(
+    const std::shared_ptr<Action>& action) const {
+  if (action == nullptr) {
+    return absl::InvalidArgumentError("action must not be null");
+  }
+  if (action->GetSchema().name == kAuthorizeAction) {
+    return absl::OkStatus();
+  }
+  std::shared_ptr<AuthorizationContextStore> contexts;
+  {
+    thread::MutexLock lock(&mu_);
+    contexts = authorization_contexts_;
+  }
+  if (contexts == nullptr) {
+    return absl::OkStatus();
+  }
+  return contexts->Resolve(action).status();
 }
 
 }  // namespace a11::actions

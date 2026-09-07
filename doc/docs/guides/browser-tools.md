@@ -10,8 +10,8 @@ touches the canvas; and the model sees three ordinary A11 actions.
 !!! note "Before you start"
 
     The demo talks to `wss://a11.to/ws/demoserver`, which runs an Ollama
-    beside itself, so the default needs no key; Claude and Gemini want one. To run
-    the backend yourself:
+    beside itself, so the default needs no key. Claude, Gemini, and OpenAI use
+    their provider credentials. To run the backend yourself:
 
     ```sh
     python -m a11.demos.web_demos_server   # ws://127.0.0.1:9010/a11-demos
@@ -43,6 +43,11 @@ pane above it.
         <option value="ollama">Ollama</option>
         <option value="claude">Claude</option>
         <option value="gemini">Gemini</option>
+        <optgroup label="OpenAI API family">
+          <option value="openai">OpenAI</option>
+          <option value="vllm">vLLM</option>
+          <option value="openai-compatible">OpenAI-compatible endpoint</option>
+        </optgroup>
       </select>
     </span>
     <span class="a11-field">

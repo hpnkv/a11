@@ -4,8 +4,8 @@ This guide builds a persistent chat conversation. One action supports multiple
 providers, the page retains the model's structured interaction objects, and a
 reload continues the same conversation.
 
-The session design is provider-agnostic: Ollama, Claude, and Gemini use
-the same interface, configured via headers.
+The session design is provider-agnostic: Ollama, Claude, Gemini, OpenAI, vLLM,
+and OpenAI-compatible endpoints use the same interface, configured via headers.
 
 !!! note "Before you start"
 
@@ -13,7 +13,8 @@ the same interface, configured via headers.
     `wss://a11.to/ws/demoserver`, which runs an Ollama beside itself — so the
     default (Ollama, `glm-4.7-flash`, base URL `http://127.0.0.1:11434`) answers
     without a key. The process serving the action resolves the base URL, so
-    `127.0.0.1` refers to that backend host. Claude and Gemini need a key.
+    `127.0.0.1` refers to that backend host. Claude, Gemini, and OpenAI use
+    their provider credentials.
 
     To run the backend yourself instead:
 
@@ -52,6 +53,11 @@ there, on a port of its own, while `text_output` streams the answer.
         <option value="ollama">Ollama</option>
         <option value="claude">Claude</option>
         <option value="gemini">Gemini</option>
+        <optgroup label="OpenAI API family">
+          <option value="openai">OpenAI</option>
+          <option value="vllm">vLLM</option>
+          <option value="openai-compatible">OpenAI-compatible endpoint</option>
+        </optgroup>
       </select>
     </span>
     <span class="a11-field">
@@ -104,7 +110,7 @@ so one registration serves them and the caller selects the backend:
 ```python
 from a11.sdk.llm import LlmHeaders
 
-LlmHeaders.PROVIDER  # x-a11-llm-provider   claude | gemini | ollama
+LlmHeaders.PROVIDER  # claude | gemini | ollama | openai | vllm
 LlmHeaders.MODEL  # x-a11-llm-model
 LlmHeaders.API_KEY  # x-a11-llm-api-key
 LlmHeaders.BASE_URL  # x-a11-llm-base-url
@@ -126,6 +132,12 @@ need(await call.call());
 
 Select a hosted model by setting the provider, model, and API key. The ports,
 reading code, and conversation format remain unchanged.
+
+The demo groups OpenAI, vLLM, and generic OpenAI-compatible endpoints because
+they expose the same API shape. The generic option sends `openai` as the
+provider and uses the base URL entered beside it. vLLM uses its own provider
+adapter and can discover the model served by an endpoint when the model field
+is empty.
 
 The action's ports are the same whoever answers: `interactions`, `tools` and
 `config` in; `text_output`, `thoughts`, `event_stream` and `new_interactions`

@@ -86,16 +86,22 @@ export interface Backend {
 /**
  * What each provider is usually called and reached at.
  *
- * Hosted providers need a key and no base URL. Ollama uses a base URL and no
- * key. Other interaction handling remains provider-independent.
+ * Hosted providers need a key and no base URL. Ollama and vLLM use a base URL.
+ * Other interaction handling remains provider-independent.
  *
  * The action server resolves the base URL. The default therefore selects the
  * demo backend's local Ollama instance and requires no API key.
  */
-export const BACKEND_DEFAULTS: Record<string, { model: string; baseUrl: string }> = {
+export const BACKEND_DEFAULTS: Record<
+    string,
+    {provider?: string; model: string; baseUrl: string}
+> = {
     ollama: {model: 'glm-5.3-flash:cloud', baseUrl: 'https://ollama.com'},
     claude: {model: 'claude-sonnet-4-6', baseUrl: ''},
     gemini: {model: 'gemini-3.5-flash', baseUrl: ''},
+    openai: {model: 'gpt-6-astra', baseUrl: ''},
+    vllm: {model: '', baseUrl: 'http://127.0.0.1:8000/v1'},
+    'openai-compatible': {provider: 'openai', model: '', baseUrl: ''},
 };
 
 /** The visible demo key; the server substitutes the real one. */
@@ -134,8 +140,10 @@ export class BackendControls {
     }
 
     get value(): Backend {
+        const provider = this.provider.value;
+        const defaults = BACKEND_DEFAULTS[provider];
         return {
-            provider: this.provider.value,
+            provider: defaults?.provider ?? provider,
             model: this.model.value.trim(),
             apiKey: this.apiKey.value.trim(),
             baseUrl: this.baseUrl.value.trim(),

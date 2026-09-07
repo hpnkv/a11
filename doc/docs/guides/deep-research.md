@@ -217,8 +217,9 @@ exposes the same `deep-research` action boundary as the Python handler.
 
 !!! note "Running the demo backend"
 
-    The default endpoint uses the hosted demo resources; bring your own key
-    for a different provider. To run the backend locally:
+    The default endpoint uses the hosted demo resources. Enter your provider
+    key to use Claude, Gemini, OpenAI, or a protected OpenAI-compatible
+    endpoint. To run the backend locally:
 
     ```sh
     python -m a11.demos.web_demos_server
@@ -241,6 +242,11 @@ exposes the same `deep-research` action boundary as the Python handler.
         <option value="ollama">Ollama</option>
         <option value="claude">Claude</option>
         <option value="gemini">Gemini</option>
+        <optgroup label="OpenAI API family">
+          <option value="openai">OpenAI</option>
+          <option value="vllm">vLLM</option>
+          <option value="openai-compatible">OpenAI-compatible endpoint</option>
+        </optgroup>
       </select>
     </span>
     <span class="a11-field">

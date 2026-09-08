@@ -57,6 +57,7 @@ import {
   invalidArgumentError,
   isOk,
   okStatus,
+  StatusCode,
   type Status,
   type StatusOr,
 } from './status.js';
@@ -111,8 +112,11 @@ export type Fields = Record<string, unknown>;
 export interface WireValueCodec<T = unknown> {
   /** Canonical tag from `serial_tags.ts`, written as the object's key. */
   readonly tag: string;
+  /** Whether a runtime value belongs to this codec. */
   readonly test: (value: unknown) => boolean;
+  /** Convert a runtime value to plain serializable fields. */
   readonly dump: (value: T) => StatusOr<Fields>;
+  /** Rebuild and validate a runtime value from plain fields. */
   readonly load: (fields: Fields) => StatusOr<T>;
 }
 
@@ -440,9 +444,27 @@ function dumpStatus(value: Status): StatusOr<Fields> {
 function loadStatus(fields: Fields): StatusOr<Status> {
   const code = fields['code'];
   const details = fields['details'];
+  if (
+    !Number.isInteger(code) ||
+    (code as number) < StatusCode.OK ||
+    (code as number) > StatusCode.UNAUTHENTICATED ||
+    typeof fields['message'] !== 'string'
+  ) {
+    return invalidArgumentError(
+      'Status fields contain an invalid code or message.',
+    );
+  }
+  if (
+    details !== undefined &&
+    (!Array.isArray(details) || details.some(
+      (detail) => typeof detail !== 'object' || detail === null,
+    ))
+  ) {
+    return invalidArgumentError('Status details must be an array of objects.');
+  }
   const status: Status = {
-    code: typeof code === 'number' ? code : Number(code ?? 0),
-    message: readString(fields, 'message'),
+    code: code as StatusCode,
+    message: fields['message'],
   };
   if (Array.isArray(details) && details.length > 0) {
     status.details = details as Status['details'];

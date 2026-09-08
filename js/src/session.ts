@@ -79,7 +79,9 @@ const SESSION_STREAM_ABORT_MESSAGE = 'Session has aborted its streams';
 
 /** Which endpoint role a session asks an attached stream to drive. */
 export enum StreamMode {
+  /** Initiate the transport as its client or dialing endpoint. */
   START = 'start',
+  /** Accept the transport as its service endpoint. */
   ACCEPT = 'accept',
 }
 
@@ -107,14 +109,23 @@ export interface SessionOptions {
 
 /** Validated, default-filled form of {@link SessionOptions}. */
 export interface NormalizedSessionOptions {
+  /** Messages buffered across every attached stream. */
   maxBufferedMessagesTotal: number;
+  /** Messages buffered for any one attached stream. */
   maxBufferedMessagesPerStream: number;
+  /** Concurrent top-level action handlers. */
   maxConcurrentRootActions: number;
+  /** Concurrent child action handlers. */
   maxConcurrentNestedActions: number;
+  /** Maximum encoded size of one incoming message. */
   maxSingleMessageSize: number;
+  /** Encoded bytes buffered across every attached stream. */
   maxBufferedBytesTotal: number;
+  /** Encoded bytes buffered for any one attached stream. */
   maxBufferedBytesPerStream: number;
+  /** Grace period with no streams, or `null` when disabled. */
   noStreamTimeoutMs: number | null;
+  /** Absolute deadline as Unix milliseconds, or `null`. */
   deadline: number | null;
 }
 
@@ -136,11 +147,17 @@ export type OnSessionStreamDone = (
 
 /** Identity, callbacks, and shared registries used to create a Session. */
 export interface SessionCreateOptions extends SessionOptions {
+  /** Stable connection id; generated when omitted. */
   id?: string;
+  /** Inbound message callback, including remote half-close. */
   onStreamMessage?: OnSessionStreamMessage;
+  /** Callback run after one attached stream terminates. */
   onStreamDone?: OnSessionStreamDone;
+  /** Connection-scoped binary headers. */
   headers?: ByteMapInput;
+  /** Shared namespace for action port nodes. */
   nodeMap?: NodeMap;
+  /** Contracts and handlers available over this connection. */
   actionRegistry?: ActionRegistry | null;
 }
 
@@ -511,6 +528,13 @@ async function invokeSessionDoneCallback(
  * a structured failure to peers. The promise returned by {@link done} resolves
  * only after all attached stream state has been removed; `isClosed()` can
  * therefore become true before `isDone()`.
+ *
+ * @example Attach a WebSocket client transport.
+ * ```ts
+ * const session = valueOrThrow(Session.create({ actionRegistry: registry }));
+ * const stream = valueOrThrow(WebSocketWireStream.createClient(url));
+ * valueOrThrow(await session.addStream(stream, StreamMode.START));
+ * ```
  */
 export class Session {
   private readonly id: string;
@@ -582,10 +606,15 @@ export class Session {
     return okStatus();
   }
 
+  /** Stable connection id. */
   getId(): string { return this.id; }
+  /** Copy the connection-scoped binary headers. */
   getHeaders(): ByteMap { return copyByteMap(this.headers); }
+  /** Copy the validated session limits and deadline. */
   getOptions(): NormalizedSessionOptions { return { ...this.options }; }
+  /** Shared namespace for action port nodes. */
   getNodeMap(): NodeMap { return this.nodeMap; }
+  /** Current action registry, or `null` for a routing-only session. */
   getActionRegistry(): ActionRegistry | null { return this.actionRegistry; }
 
   /**
@@ -638,6 +667,7 @@ export class Session {
     }
   }
 
+  /** Find an attached stream by id. */
   getStream(streamId: string): StatusOr<WireStream> {
     try {
       const state = this.streamsById.get(streamId);
@@ -655,6 +685,7 @@ export class Session {
     catch { return []; }
   }
 
+  /** Find a currently tracked action by id. */
   getAction(actionId: string): StatusOr<Action> {
     try {
       return this.activeActions.get(actionId) ?? notFoundError(
@@ -750,6 +781,7 @@ export class Session {
     return okStatus();
   }
 
+  /** Remove a terminal action from connection accounting. */
   untrackAction(action: Action): void {
     try {
       const id = action.getId();
@@ -762,6 +794,7 @@ export class Session {
     }
   }
 
+  /** Await a root or nested handler-concurrency slot. */
   acquireActionSlot(nested: boolean, signal?: AbortSignal): Promise<Status> {
     try {
       return (nested ? this.nestedLimiter : this.rootLimiter).acquire(signal);
@@ -772,6 +805,7 @@ export class Session {
     }
   }
 
+  /** Release a root or nested handler-concurrency slot. */
   releaseActionSlot(nested: boolean): void {
     try { (nested ? this.nestedLimiter : this.rootLimiter).release(); }
     catch { /* A limiter release is best-effort cleanup. */ }
@@ -984,6 +1018,7 @@ export class Session {
     }
   }
 
+  /** Bind and start an existing local action under this session. */
   async dispatchAction(action: Action): Promise<Status> {
     try {
       if (!(action instanceof Action)) {
@@ -1299,6 +1334,7 @@ export class Session {
   /** Await full cleanup and receive the session's terminal status. */
   done(): Promise<Status> { return this.doneDeferred.promise; }
 
+  /** Current terminal status; OK is provisional while the session is open. */
   getStatus(): Status {
     if (this.phase === 'open' && this.deadlineExpired()) {
       this.abort(deadlineExceededError('The Session deadline has been exceeded.'));
@@ -1306,8 +1342,10 @@ export class Session {
     return this.sessionStatus;
   }
 
+  /** Absolute deadline as Unix milliseconds, or `null`. */
   getDeadline(): number | null { return this.options.deadline; }
 
+  /** Replace or clear the connection deadline. */
   setDeadline(deadline: WireDeadline = null): Status {
     const normalized = wireDeadlineMillis(deadline);
     if (!isOk(normalized)) return normalized;
@@ -1653,7 +1691,9 @@ export class Session {
 
 /** Pull-mode message paired with the transport that delivered it. */
 export interface ReceivedSessionMessage {
+  /** Received application message. */
   message: WireMessage;
+  /** Id of the stream that delivered the message. */
   streamId: string;
 }
 

@@ -75,6 +75,14 @@ export interface AsyncNodeOptions {
  * for a producer that cannot say which chunk was last. Failures should use
  * {@link abortWithStatus} so local and remote readers see why the sequence
  * ended.
+ *
+ * @example Write values and read them one-by-one.
+ * ```ts
+ * const node = valueOrThrow(await AsyncNode.create('tokens'));
+ * valueOrThrow(await node.put('Hello'));
+ * valueOrThrow(await node.finalize(' world'));
+ * for await (const token of node) console.log(token);
+ * ```
  */
 export class AsyncNode {
   /** Ordered storage shared by the node's reader and writer. */
@@ -195,7 +203,9 @@ export class AsyncNode {
     }
   }
 
+  /** Copy the current independent read-cursor options. */
   getReaderOptions(): ChunkStoreReaderOptions { return { ...this.readerOptions }; }
+  /** Copy the current buffered writer options. */
   getWriterOptions(): ChunkStoreWriterOptions { return { ...this.writerOptions }; }
 
   /** Replace and rewind the independent read cursor, optionally from an offset. */
@@ -213,6 +223,7 @@ export class AsyncNode {
     }
   }
 
+  /** Replace options used by the next reader reset. */
   setReaderOptions(options: ChunkStoreReaderOptions): Status {
     return this.resetReader(options);
   }
@@ -234,9 +245,13 @@ export class AsyncNode {
     }
   }
 
+  /** Current independent read-cursor status. */
   getReaderStatus(): Status { return this.readerInternal.getStatus(); }
+  /** Current buffered writer status. */
   getWriterStatus(): Status { return this.writerInternal.getStatus() ?? okStatus(); }
+  /** Structured writer-abort status, or `null`. */
   getWriterAbortStatus(): Status | null { return this.writerInternal.getAbortStatus(); }
+  /** Whether the producing half can accept another value. */
   async isWritable(): Promise<StatusOr<boolean>> { return this.writerInternal.isWritable(); }
 
   /** Persist a raw chunk, optionally at an explicit sequence and/or as final. */
@@ -444,6 +459,7 @@ export class AsyncNode {
     return first;
   }
 
+  /** Read one chunk and require the stream to contain no second value. */
   async consumeChunk(
     options: { timeoutMs?: number; allowNone?: boolean } = {},
   ): Promise<StatusOr<Chunk | null>> {
@@ -500,6 +516,7 @@ export class AsyncNode {
     }
   }
 
+  /** Iterate typed values until finality, closure, or failure. */
   [Symbol.asyncIterator](): AsyncGenerator<StatusOr<unknown>, void, void> { return this.values(); }
 
   /** Await outstanding writes without closing or adding a final marker. */
@@ -578,7 +595,10 @@ export class NodeMap {
     return found;
   }
 
+  /** Whether a node already exists without invoking the factory. */
   contains(nodeId: string): boolean { return this.nodes.has(nodeId); }
+  /** Number of materialized nodes. */
   get size(): number { return this.nodes.size; }
+  /** Iterate materialized ids and nodes. */
   entries(): IterableIterator<[string, AsyncNode]> { return this.nodes.entries(); }
 }

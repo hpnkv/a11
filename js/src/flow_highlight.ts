@@ -53,9 +53,13 @@ export type FlowTokenKind =
 
 /** One run of characters, with where it is. */
 export interface FlowToken {
+  /** Syntax category used for colour and font treatment. */
   kind: FlowTokenKind;
+  /** Inclusive UTF-16 source offset. */
   start: number;
+  /** Exclusive UTF-16 source offset. */
   end: number;
+  /** Source characters in this token. */
   text: string;
 }
 
@@ -99,6 +103,7 @@ export const FLOW_LOG_LEVELS: readonly string[] = [
 
 /** Literals that are words, and the operators that are. */
 export const FLOW_CONSTANTS: readonly string[] = ['true', 'false', 'null', '_'];
+/** Word-form boolean, membership, and negation operators. */
 export const FLOW_OPERATOR_WORDS: readonly string[] = ['and', 'or', 'not', 'in'];
 
 const KEYWORDS = new Set(FLOW_KEYWORDS);

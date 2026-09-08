@@ -66,11 +66,17 @@ export interface WireStreamOptions {
 
 /** Validated, default-filled form of {@link WireStreamOptions}. */
 export interface NormalizedWireStreamOptions {
+  /** Maximum messages waiting for the application callback. */
   maxBufferedIncomingMessages: number;
+  /** Maximum encoded size of one reassembled message. */
   maxSingleMessageSize: number;
+  /** Maximum aggregate bytes waiting for the application. */
   maxBufferedIncomingBytes: number;
+  /** Delivery timeout per buffered message, or `null`. */
   messageTimeoutMs: number | null;
+  /** Whether contiguous fragment MIME types may be elided. */
   stickyMetadata: boolean;
+  /** Absolute deadline as Unix milliseconds, or `null`. */
   deadline: number | null;
 }
 
@@ -335,6 +341,7 @@ export class WireStreamWithRecv implements WireStream {
     }
   }
 
+  /** Underlying callback-oriented stream. */
   get wrappedStream(): WireStream {
     return this.wrapped;
   }

@@ -93,7 +93,9 @@ function normalizeOptions(options: ChunkStoreWriterOptions): StatusOr<Normalized
 
 /** Minimal transport seam used to tee stored node fragments to peers. */
 export interface WritableWireStream {
+  /** Stable transport id used for attachment accounting. */
   getId(): string;
+  /** Admit a wire message for asynchronous delivery. */
   send(message: WireMessage): Status;
 }
 
@@ -127,7 +129,9 @@ type Lifecycle = 'none' | 'close' | 'abort' | 'cancel';
  * either drain and seal storage, propagate an error, or cancel immediately.
  */
 export class ChunkStoreWriter {
+  /** Ordered storage receiving committed fragments. */
   readonly store: ChunkStore;
+  /** Validated immutable writer options. */
   readonly options: Readonly<NormalizedWriterOptions>;
 
   private nextOffsetSeq: number;

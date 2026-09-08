@@ -45,14 +45,19 @@ import { ToolAdapter, type PortValueSchemas } from './tool_adapter.js';
 
 /** One tool definition surfaced to a model. */
 export interface ToolDefinition {
+  /** Registered action name exposed to the model. */
   name: string;
+  /** Model-facing action description. */
   description: string;
+  /** JSON Schema for the model-supplied arguments. */
   input_schema: Record<string, unknown>;
 }
 
 /** Minimal shape of an interaction's `action_calls` entries. */
 export interface ActionCall {
+  /** Registered action name selected by the model. */
   name: string;
+  /** Provider call id used to associate inputs and outputs. */
   id: string;
 }
 

@@ -102,15 +102,25 @@ export interface LogOptions {
 
 /** One log as a sink sees it. */
 export interface LogRecord {
+  /** Registered action name. */
   actionName: string;
+  /** Stable action-call id. */
   actionId: string;
+  /** Normalized log severity. */
   level: LogLevel;
+  /** Application-defined channel. */
   channel: string;
+  /** Source filename, when supplied. */
   file: string;
+  /** Source line, when supplied. */
   lineno: number | null;
+  /** Whether the record describes runtime bookkeeping. */
   internal: boolean;
+  /** Representation of the payload bytes. */
   mimetype: string;
+  /** Owned payload bytes. */
   data: Uint8Array;
+  /** Source timestamp, when supplied. */
   timestamp: Date | null;
 }
 

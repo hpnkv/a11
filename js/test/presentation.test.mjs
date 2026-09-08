@@ -38,6 +38,8 @@ import {
   Chunk,
   ChunkMetadata,
   PresentationReducer,
+  StatusCode,
+  isOk,
   makeInteraction,
   normalizeByShape,
   parseInteraction,
@@ -93,6 +95,20 @@ test('shape normalization finds images in provider step envelopes', () => {
   }]);
 });
 
+test('interaction status accepts failures and rejects invalid codes', () => {
+  const failed = parseInteraction({
+    status: { code: StatusCode.DEADLINE_EXCEEDED, message: 'model timed out' },
+  });
+  assert.equal(isOk(failed), true);
+  assert.equal(failed.status.code, StatusCode.DEADLINE_EXCEEDED);
+
+  const invalid = parseInteraction({
+    status: { code: 99, message: 'unknown' },
+  });
+  assert.equal(isOk(invalid), false);
+  assert.equal(invalid.code, StatusCode.INVALID_ARGUMENT);
+});
+
 /** One interaction from its tagged JSON, as another language would receive it. */
 function decode(payload) {
   return valueOrThrow(parseInteraction(JSON.parse(payload)));
@@ -107,7 +123,7 @@ function portable(block) {
   };
   if (block.id) entry.id = block.id;
   if (block.toolName) entry.tool_name = block.toolName;
-  if (block.status) entry.status_code = String(block.status.code);
+  if (block.status) entry.status_code = StatusCode[block.status.code];
   if (block.usage) {
     entry.usage = {
       input_tokens: block.usage.input_tokens ?? null,
@@ -117,28 +133,8 @@ function portable(block) {
   return entry;
 }
 
-/**
- * Whether this side can decode a case at all.
- *
- * Known asymmetry: `parseInteraction` surfaces an interaction's *own* `status`
- * field as the parse result's error, so an interaction recording a failed turn
- * cannot currently be read back here even though Python reads it fine. The case
- * stays in the fixture -- Python enforces it -- and is skipped here with this
- * reason rather than quietly dropped, so the gap is visible. Fixing it belongs in
- * the wire-value handling in `js/src/sdk/llm.ts`.
- */
-function decodable(expected) {
-  try {
-    expected.interactions.map(decode);
-    return '';
-  } catch (error) {
-    return `parseInteraction cannot read this case yet: ${error.message}`;
-  }
-}
-
 for (const [index, expected] of golden.cases.entries()) {
-  const skip = decodable(expected);
-  test(`presentation golden: ${expected.name}`, { skip: skip || false }, async () => {
+  test(`presentation golden: ${expected.name}`, async () => {
     const interactions = expected.interactions.map(decode);
     const turns = await presentConversation(interactions);
     const blocks = turns.flatMap((turn) => turn.blocks).map(portable);

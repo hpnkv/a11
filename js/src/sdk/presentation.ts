@@ -83,33 +83,47 @@ export enum BlockKind {
 
 /** One renderable piece of a turn. */
 export interface PresentationBlock {
+  /** Renderer-facing block category. */
   kind: BlockKind;
   /** Tool call id for TOOL_RUN/TOOL_RESULT; the two are matched on it. */
   id: string;
   /** The body. For a tool run this is its user-facing log. */
   text: string;
+  /** Registered tool name for a tool block. */
   toolName: string;
+  /** Failure represented by an error or failed tool block. */
   status?: Status;
+  /** Media type for image and binary content. */
   mimeType: string;
+  /** Owned image or binary bytes. */
   data?: Uint8Array;
+  /** Provider-independent token accounting. */
   usage?: UsageMetadata;
   /** Still being appended to; only ever true on the live path. */
   partial: boolean;
+  /** Interaction that produced this block. */
   interactionId: string;
+  /** Conversation role that produced this block. */
   role: string;
 }
 
 /** The blocks one conversational turn contributes. */
 export interface PresentationTurn {
+  /** Conversation role for this turn. */
   role: string;
+  /** Interactions folded into this turn. */
   interactionIds: string[];
+  /** Ordered renderer-independent content. */
   blocks: PresentationBlock[];
 }
 
 /** What a renderer implements to be driven incrementally. */
 export interface PresentationSink {
+  /** Observe a newly opened live block. */
   onBlockOpened?(block: PresentationBlock): void;
+  /** Append one text delta to an open live block. */
   onBlockAppended?(block: PresentationBlock, delta: string): void;
+  /** Observe a block becoming complete. */
   onBlockClosed?(block: PresentationBlock): void;
 }
 
@@ -285,6 +299,16 @@ export async function presentConversation(
  * The live feeder calls {@link onText}/{@link onThought} as deltas arrive and
  * {@link onInteraction} as whole interactions land on `new_interactions`; a
  * replay feeder calls only {@link onInteraction}.
+ *
+ * @example Feed text deltas into a renderer-independent turn.
+ * ```ts
+ * const reducer = new PresentationReducer({
+ *   onBlockAppended: (_block, delta) => output.append(delta),
+ * });
+ * reducer.onText('The first');
+ * reducer.onText(' result');
+ * reducer.endTurn();
+ * ```
  */
 export class PresentationReducer {
   private readonly collected: PresentationBlock[] = [];

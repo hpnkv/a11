@@ -1028,7 +1028,18 @@ export function getStatusAndValue<T>(val: StatusOr<T>): [Status, T | unknown] {
   return [{ ...kOkStatusSingleton }, val];
 }
 
-/** Return the successful value or throw a code-specific StatusException. */
+/**
+ * Return the successful value or throw a code-specific StatusException.
+ *
+ * @example Keep Status handling at an application boundary.
+ * ```ts
+ * try {
+ *   const node = valueOrThrow(await AsyncNode.create('answer'));
+ * } catch (error) {
+ *   if (error instanceof StatusException) report(error.status);
+ * }
+ * ```
+ */
 export function valueOrThrow<T>(val: StatusOr<T>): T {
   const [valIsStatus] = isStatusAndIsOk(val);
   if (!valIsStatus) {
@@ -1133,8 +1144,11 @@ export async function noexceptFetch(
 
 /** JSON representation shared by A11's HTTP and signalling boundaries. */
 export interface StatusJson {
+  /** Canonical numeric status code. */
   code: number;
+  /** Human-readable outcome message. */
   message: string;
+  /** Structured language-neutral details. */
   details: object[];
 }
 

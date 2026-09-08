@@ -221,8 +221,17 @@ function validateActionSettings(settings: unknown): Status {
  * the peer accepted the action, while {@link wait} follows its eventual status
  * after handler and output-writer cleanup. Local handlers can create children
  * with {@link makeNested}; a shared session applies nested limits and includes
- * tracked children in session-wide abort, but each child has an independent
- * cancellation signal.
+ * tracked children in session-wide abort. Cancelling a parent recursively
+ * cancels every active child.
+ *
+ * @example Run a local action and read its unary result.
+ * ```ts
+ * const action = valueOrThrow(Action.create(schema, { handler }));
+ * valueOrThrow(action.run());
+ * const result = valueOrThrow(await action.getOutput('result', false));
+ * const value = valueOrThrow(await result.next());
+ * valueOrThrow(await action.wait());
+ * ```
  */
 export class Action {
   private schema: ActionSchema;
@@ -254,6 +263,7 @@ export class Action {
   private readonly cancelController = new AbortController();
   private readonly cancelCallbacks: OnActionCancelled[] = [];
   private parent: Action | null = null;
+  private readonly children = new Set<Action>();
 
   private constructor(schema: ActionSchema, options: ActionCreateOptions, id: string) {
     this.schema = schema;
@@ -318,22 +328,35 @@ export class Action {
 
   /** AbortSignal a handler can observe for cooperative cancellation. */
   get signal(): AbortSignal { return this.cancelController.signal; }
+  /** Stable id shared by action messages and port node ids. */
   getId(): string { return this.id; }
+  /** Callable contract for this action. */
   getSchema(): ActionSchema { return this.schema; }
+  /** Local implementation, or `null` for a remote-only action. */
   getHandler(): ActionHandler | null { return this.handler; }
+  /** Whether a local implementation is bound. */
   hasHandler(): boolean { return this.handler !== null; }
+  /** Copy the current port binding and retention policy. */
   getSettings(): ActionSettings { return { ...this.settings }; }
+  /** Node namespace that owns this action's port ids. */
   getNodeMap(): NodeMap { return this.nodeMap; }
+  /** Direct transport, or `null` when a session routes the action. */
   getStream(): WireStream | null { return this.stream; }
+  /** Registry used to resolve nested actions. */
   getRegistry(): ActionRegistryLike | null { return this.registry; }
+  /** Session responsible for routing and lifetime tracking. */
   getSession(): ActionSessionContext | null { return this.session; }
   /** Completion status; OK is provisional until `isDone()` becomes true. */
   getStatus(): Status { return this.completionStatus ?? okStatus(); }
   /** Remote acknowledgement status, or `null` before it arrives. */
   getDispatchStatus(): Status | null { return this.dispatchStatus; }
+  /** Whether terminal status and cleanup have completed. */
   isDone(): boolean { return this.completionStatus !== null; }
+  /** Whether local execution has started. */
   hasBeenRun(): boolean { return this.mode === 'run'; }
+  /** Whether remote dispatch has started. */
   hasBeenCalled(): boolean { return this.mode === 'call'; }
+  /** Whether cancellation was requested or became the terminal status. */
   isCancelled(): boolean {
     return this.cancelRequested || this.completionStatus?.code === cancelledError().code;
   }
@@ -377,6 +400,7 @@ export class Action {
     return okStatus();
   }
 
+  /** Replace the port binding and post-run retention policy. */
   setSettings(settings: ActionSettings): Status {
     const validation = validateActionSettings(settings);
     if (!isOk(validation)) return validation;
@@ -388,36 +412,42 @@ export class Action {
     }
   }
 
+  /** Set whether opened inputs attach to the action transport by default. */
   bindStreamsOnInputsByDefault(bind: boolean): Status {
     if (typeof bind !== 'boolean') return invalidArgumentError('bind must be boolean.');
     this.settings.bindStreamsOnInputsByDefault = bind;
     return okStatus();
   }
 
+  /** Set whether opened outputs attach to the action transport by default. */
   bindStreamsOnOutputsByDefault(bind: boolean): Status {
     if (typeof bind !== 'boolean') return invalidArgumentError('bind must be boolean.');
     this.settings.bindStreamsOnOutputsByDefault = bind;
     return okStatus();
   }
 
+  /** Set whether terminal cleanup removes input nodes from the node map. */
   clearInputsAfterRun(clear = true): Status {
     if (typeof clear !== 'boolean') return invalidArgumentError('clear must be boolean.');
     this.settings.clearInputsAfterRun = clear;
     return okStatus();
   }
 
+  /** Set whether terminal cleanup removes output nodes from the node map. */
   clearOutputsAfterRun(clear = true): Status {
     if (typeof clear !== 'boolean') return invalidArgumentError('clear must be boolean.');
     this.settings.clearOutputsAfterRun = clear;
     return okStatus();
   }
 
+  /** Replace the port node namespace. Configure this before opening ports. */
   bindNodeMap(nodeMap: NodeMap): Status {
     if (!(nodeMap instanceof NodeMap)) return invalidArgumentError('nodeMap must be a NodeMap.');
     this.nodeMap = nodeMap;
     return okStatus();
   }
 
+  /** Replace the registry used by subsequent nested actions. */
   bindRegistry(registry: ActionRegistryLike | null): Status {
     if (registry !== null && !hasRegistryShape(registry)) {
       return invalidArgumentError('registry must implement ActionRegistryLike or be null.');
@@ -485,6 +515,7 @@ export class Action {
     return okStatus();
   }
 
+  /** Open any node by its concrete id. */
   async getNode(nodeId: string): Promise<StatusOr<AsyncNode>> {
     return this.nodeMap.get(nodeId);
   }
@@ -526,6 +557,7 @@ export class Action {
     return isOk(attached) ? node : attached;
   }
 
+  /** Open an unambiguous input or output by schema port name. */
   async getPort(name: string): Promise<StatusOr<AsyncNode>> {
     const input = this.inputIds.has(name);
     const output = this.outputIds.has(name);
@@ -539,6 +571,7 @@ export class Action {
     return notFoundError('Action port is not mapped.');
   }
 
+  /** Whether the schema maps an input or output with this name. */
   containsPort(name: string): boolean {
     return this.inputIds.has(name) || this.outputIds.has(name);
   }
@@ -575,8 +608,10 @@ export class Action {
     return okStatus();
   }
 
+  /** Copy all action-scoped binary headers. */
   getHeaders(): ByteMap { return copyByteMap(this.headers); }
 
+  /** Return a copy of one header, or `null` when absent. */
   getHeader(name: string): StatusOr<Uint8Array | null> {
     const valid = validateName(name);
     if (!isOk(valid)) return valid;
@@ -584,10 +619,12 @@ export class Action {
     return value === undefined ? null : new Uint8Array(value);
   }
 
+  /** Whether a valid header name is present. */
   hasHeader(name: string): boolean {
     return isOk(validateName(name)) && this.headers.has(name.toLowerCase());
   }
 
+  /** Set an owned binary header value. */
   setHeader(name: string, value: ByteSource): Status {
     const valid = validateName(name);
     if (!isOk(valid)) return valid;
@@ -597,6 +634,7 @@ export class Action {
     return okStatus();
   }
 
+  /** Remove a header if present. */
   removeHeader(name: string): Status {
     const valid = validateName(name);
     if (!isOk(valid)) return valid;
@@ -604,6 +642,7 @@ export class Action {
     return okStatus();
   }
 
+  /** Copy one present header to another action. */
   forwardHeader(target: Action, name: string): Status {
     if (!(target instanceof Action)) return invalidArgumentError('target must be an Action.');
     const value = this.getHeader(name);
@@ -631,7 +670,8 @@ export class Action {
    * session, while retaining its own id, derived port ids, and AbortSignal.
    * The registry is shared in either mode, and framework headers are forwarded
    * when `forwardHeaders` is true. A shared session supplies nested concurrency
-   * limits and session-wide abort; cancelling only the parent is not recursive.
+   * limits and session-wide abort. Parent cancellation reaches the child even
+   * when `propagateIo` is false.
    */
   makeNested(
     schemaOrName: ActionSchema | string,
@@ -678,6 +718,7 @@ export class Action {
         const forwarded = this.forwardHeadersWithPrefix(child);
         if (!isOk(forwarded)) return forwarded;
       }
+      this.children.add(child);
       return child;
     } catch (error) {
       return statusFromUnknown(error, 'Creating nested Action raised an exception.');
@@ -795,6 +836,9 @@ export class Action {
         first = firstError(first, statusFromUnknown(error, 'Action cancel callback raised.'));
       }
     }
+    for (const child of [...this.children]) {
+      first = firstError(first, child.cancel());
+    }
     const cancelled = cancelledError('Action was cancelled.');
     if (this.mode === 'call') {
       first = firstError(first, this.sendRemoteCancel());
@@ -810,6 +854,7 @@ export class Action {
     return first;
   }
 
+  /** Add a synchronous hook invoked on the first cancellation request. */
   setOnCancelled(callback: OnActionCancelled): Status {
     if (typeof callback !== 'function') return invalidArgumentError('callback must be callable.');
     this.cancelCallbacks.push(callback);
@@ -1186,6 +1231,14 @@ export class Action {
     this.finishing = true;
     try {
       let finalStatus = initialStatus;
+      if (!isOk(finalStatus)) {
+        const cancelled = finalStatus.code === cancelledError().code;
+        await Promise.all([...this.children].map(async (child) => {
+          await child.abortInputs(finalStatus as NonOkStatus);
+          if (cancelled) child.cancel();
+        }));
+        if (cancelled) await this.abortInputs(finalStatus as NonOkStatus);
+      }
       const outputStatus = await this.finishOutputNodes(finalStatus);
       if (isOk(finalStatus) && !isOk(outputStatus)) finalStatus = outputStatus;
       let communicated = await this.communicateStatus(finalStatus);
@@ -1197,6 +1250,7 @@ export class Action {
       await this.releaseNodesAfterRun();
       this.completionStatus = finalStatus;
       this.done.resolve(finalStatus);
+      this.parent?.children.delete(this);
       this.untrackFromSession();
       return communicated;
     } catch (error) {
@@ -1206,6 +1260,7 @@ export class Action {
       );
       this.completionStatus = failure;
       this.done.resolve(failure);
+      this.parent?.children.delete(this);
       this.untrackFromSession();
       return failure;
     }
@@ -1255,6 +1310,24 @@ export class Action {
         ? await node.close()
         : await node.abortWithStatus(status);
       first = firstError(first, closed);
+    }
+    return first;
+  }
+
+  private async abortInputs(status: NonOkStatus): Promise<Status> {
+    let first: Status = okStatus();
+    for (const id of this.inputIds.values()) {
+      const node = await this.nodeMap.get(id);
+      if (!isOk(node)) {
+        first = firstError(first, node);
+        continue;
+      }
+      this.inputNodes.add(node);
+      const writable = await node.isWritable();
+      if (!isOk(writable)) first = firstError(first, writable);
+      else if (writable) {
+        first = firstError(first, await node.abortWithStatus(status));
+      }
     }
     return first;
   }
@@ -1365,6 +1438,7 @@ export class Action {
       this.completionStatus = status;
       this.detachBoundNodes();
       this.done.resolve(status);
+      this.parent?.children.delete(this);
     }
     if (removeFromSession) this.untrackFromSession();
   }

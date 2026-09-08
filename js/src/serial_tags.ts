@@ -52,39 +52,68 @@
 
 // --- Core runtime ------------------------------------------------------------
 
+/** Wire tag for {@link ChunkMetadata}. */
 export const CHUNK_METADATA_TAG = 'a11.ChunkMetadata';
+/** Wire tag for {@link Chunk}. */
 export const CHUNK_TAG = 'a11.Chunk';
+/** Wire tag for {@link NodeRef}. */
 export const NODE_REF_TAG = 'a11.NodeRef';
+/** Wire tag for {@link NodeFragment}. */
 export const NODE_FRAGMENT_TAG = 'a11.NodeFragment';
+/** Wire tag for {@link Port}. */
 export const PORT_TAG = 'a11.Port';
+/** Wire tag for {@link ActionMessage}. */
 export const ACTION_MESSAGE_TAG = 'a11.ActionMessage';
+/** Wire tag for {@link WireMessage}. */
 export const WIRE_MESSAGE_TAG = 'a11.WireMessage';
+/** Wire tag for a Status carried as data. */
 export const STATUS_TAG = 'a11.Status';
+/** Wire tag for an A11 timestamp. */
 export const TIME_TAG = 'a11.Time';
+/** Wire tag for an A11 duration. */
 export const DURATION_TAG = 'a11.Duration';
 
 // --- Model-interaction SDK ---------------------------------------------------
 
+/** Wire tag for an SDK interaction. */
 export const INTERACTION_TAG = 'a11.sdk.Interaction';
+/** Wire tag for an SDK peer address. */
 export const PEER_TAG = 'a11.sdk.Peer';
+/** Wire tag for an action routing configuration. */
 export const ACTION_CONFIG_TAG = 'a11.sdk.ActionConfig';
+/** Wire tag for provider-independent token accounting. */
 export const USAGE_METADATA_TAG = 'a11.sdk.UsageMetadata';
 
+/** Wire tag for a Claude interaction configuration. */
 export const INTERACT_WITH_CLAUDE_CONFIG_TAG = 'a11.sdk.InteractWithClaudeConfig';
+/** Wire tag for a Claude Code session configuration. */
 export const INTERACT_WITH_CLAUDE_CODE_CONFIG_TAG = 'a11.sdk.InteractWithClaudeCodeConfig';
+/** Wire tag for a Gemini interaction configuration. */
 export const INTERACT_WITH_GEMINI_CONFIG_TAG = 'a11.sdk.InteractWithGeminiConfig';
+/** Wire tag for an OpenAI interaction configuration. */
 export const INTERACT_WITH_GPT_CONFIG_TAG = 'a11.sdk.InteractWithGptConfig';
+/** Wire tag for a Codex interaction configuration. */
 export const INTERACT_WITH_CODEX_CONFIG_TAG = 'a11.sdk.InteractWithCodexConfig';
+/** Wire tag for an Ollama chat configuration. */
 export const INTERACT_WITH_OLLAMA_CONFIG_TAG = 'a11.sdk.InteractWithOllamaConfig';
+/** Wire tag for a vLLM chat configuration. */
 export const INTERACT_WITH_VLLM_CONFIG_TAG = 'a11.sdk.InteractWithVllmConfig';
+/** Wire tag for an in-browser Gemma configuration. */
 export const INTERACT_WITH_GEMMA_CONFIG_TAG = 'a11.sdk.InteractWithGemmaConfig';
 
 // --- Audio SDK ---------------------------------------------------------------
 
+/** Wire tag for an SDK audio buffer. */
 export const AUDIO_BUFFER_TAG = 'a11.sdk.AudioBuffer';
+/** Wire tag for audio input options. */
 export const AUDIO_INPUT_OPTIONS_TAG = 'a11.sdk.AudioInputOptions';
+/** Wire tag for speech recognizer options. */
 export const SPEECH_RECOGNIZER_OPTIONS_TAG = 'a11.sdk.SpeechRecognizerOptions';
+/** Wire tag for audio device information. */
 export const AUDIO_DEVICE_INFO_TAG = 'a11.sdk.AudioDeviceInfo';
+/** Wire tag for an audio control event. */
 export const AUDIO_CONTROL_EVENT_TAG = 'a11.sdk.AudioControlEvent';
+/** Wire tag for an audio capture event. */
 export const AUDIO_CAPTURE_EVENT_TAG = 'a11.sdk.AudioCaptureEvent';
+/** Wire tag for a transcription event. */
 export const TRANSCRIPTION_EVENT_TAG = 'a11.sdk.TranscriptionEvent';

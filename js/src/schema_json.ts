@@ -57,37 +57,57 @@ export type PortView = 'callable' | 'all';
 
 /** One entry of a document's `actions` array. */
 export interface SchemaEntry {
+  /** Registered action name. */
   name: string;
+  /** Developer-facing action description. */
   description?: string;
+  /** Whether this document's producer can execute the action. */
   runnable?: boolean;
+  /** Callable or complete input contracts. */
   inputs?: PortEntry[];
+  /** Callable or complete output contracts. */
   outputs?: PortEntry[];
+  /** Binary metadata contracts. */
   headers?: HeaderEntry[];
+  /** Output-to-result JSON mappings. */
   output_to_json_field?: Record<string, string>;
 }
 
 /** One port, as an entry writes it. */
 export interface PortEntry {
+  /** Port name. */
   name: string;
+  /** MIME-facing type description. */
   type: string;
+  /** Developer and model-facing value description. */
   description?: string;
+  /** Whether callers must provide the port. */
   required?: boolean;
+  /** Whether the port carries at most one value. */
   unary?: boolean;
+  /** Whether the receiver supplies this input. */
   autofilled?: boolean;
+  /** JSON Schema for one value. */
   json_schema?: unknown;
 }
 
 /** One header, as an entry writes it. */
 export interface HeaderEntry {
+  /** Header name. */
   name: string;
+  /** Developer-facing metadata description. */
   description?: string;
+  /** Whether a receiver-owned default exists. */
   has_default?: boolean;
+  /** Base64-encoded default bytes. */
   default?: string;
 }
 
 /** A whole document. */
 export interface SchemaDocument {
+  /** Versioned schema document format. */
   format: string;
+  /** Published action contracts. */
   actions: SchemaEntry[];
 }
 

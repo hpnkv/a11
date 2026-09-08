@@ -14,14 +14,22 @@ import {
   type StatusOr,
 } from './status.js';
 
+/** Header carrying an inline authorization envelope. */
 export const AUTHORIZATION_HEADER = 'x-a11-auth';
+/** Reserved action that exchanges authorization context. */
 export const AUTHORIZE_ACTION = '__authorize__';
+/** Current authorization envelope version. */
 export const AUTHORIZATION_VERSION = 1;
+/** Maximum encoded envelope size accepted from a peer. */
 export const MAX_AUTHORIZATION_BYTES = 16 * 1024;
+/** Maximum compact-JWS delegation chain length. */
 export const MAX_AUTHORIZATION_HOPS = 8;
 
+/** Versioned chain of compact JWS authorization statements. */
 export interface AuthorizationEnvelope {
+  /** Wire format version. */
   readonly version: 1;
+  /** Delegation statements ordered from issuer to current holder. */
   readonly chain: readonly string[];
 }
 
@@ -39,6 +47,7 @@ function validateEnvelope(value: AuthorizationEnvelope): Status {
   return okStatus();
 }
 
+/** Validate and encode an authorization envelope as canonical MessagePack. */
 export function encodeAuthorization(
   value: AuthorizationEnvelope,
 ): StatusOr<Uint8Array> {
@@ -54,6 +63,7 @@ export function encodeAuthorization(
   }
 }
 
+/** Decode and validate a canonical MessagePack authorization envelope. */
 export function decodeAuthorization(
   bytes: Uint8Array,
 ): StatusOr<AuthorizationEnvelope> {
@@ -87,6 +97,7 @@ export function decodeAuthorization(
   }
 }
 
+/** Encode an envelope as an `a11-auth/1` base64url value. */
 export function authorizationToText(
   value: AuthorizationEnvelope,
 ): StatusOr<string> {
@@ -99,6 +110,7 @@ export function authorizationToText(
   return `a11-auth/1.${body}`;
 }
 
+/** Decode an `a11-auth/1` base64url value. */
 export function authorizationFromText(
   value: string,
 ): StatusOr<AuthorizationEnvelope> {
@@ -117,6 +129,7 @@ export function authorizationFromText(
   return isOk(decoded) ? decodeAuthorization(decoded) : decoded;
 }
 
+/** Read the inline envelope from an action that carries no reference. */
 export function getAuthorization(
   action: Action,
 ): StatusOr<AuthorizationEnvelope | null> {
@@ -129,6 +142,7 @@ export function getAuthorization(
     : invalidArgumentError('An action cannot carry both authorization forms.');
 }
 
+/** Set an inline envelope and remove any authorization reference. */
 export function setAuthorizationHeader(
   action: Action,
   value: AuthorizationEnvelope | null,
@@ -141,6 +155,7 @@ export function setAuthorizationHeader(
   return action.removeHeader(AUTHORIZATION_REFERENCE_HEADER);
 }
 
+/** Set a 128-bit context reference and remove any inline envelope. */
 export function setAuthorizationReference(
   action: Action,
   contextId: string | null,

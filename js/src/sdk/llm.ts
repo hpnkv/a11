@@ -59,10 +59,15 @@ import {
 
 /** Framework headers that select and configure an LLM backend. */
 export enum LlmHeaders {
+  /** Provider credential forwarded to the backend. */
   API_KEY = 'x-a11-llm-api-key',
+  /** Provider model id. */
   MODEL = 'x-a11-llm-model',
+  /** Backend name used by a shared interaction action. */
   PROVIDER = 'x-a11-llm-provider',
+  /** Provider-compatible API base URL. */
   BASE_URL = 'x-a11-llm-base-url',
+  /** Encoded action-name patterns the model may call. */
   ALLOWED_LLM_ACTIONS = 'x-a11-allowed-llm-actions',
 }
 
@@ -70,8 +75,11 @@ export enum LlmHeaders {
  * Conversation roles. `model` is the assistant role, matching the Python SDK.
  */
 export enum Role {
+  /** Instructions supplied outside the conversational turn sequence. */
   SYSTEM = 'system',
+  /** Model-produced interaction. */
   ASSISTANT = 'model',
+  /** User or tool-result interaction. */
   USER = 'user',
 }
 
@@ -112,6 +120,7 @@ export const usageMetadataSchema = z
     reasoning_tokens: z.number().int().nullish(),
   })
   .loose();
+/** Validated provider-independent token accounting. */
 export type UsageMetadata = z.infer<typeof usageMetadataSchema>;
 
 // --- Peers -------------------------------------------------------------------
@@ -154,6 +163,9 @@ function wireValueField<T>(tag: string) {
       return z.NEVER;
     }
     const loaded: StatusOr<unknown> = codec.load(value as Fields);
+    if (tag === STATUS_TAG && valueTag(loaded) === STATUS_TAG) {
+      return loaded as T;
+    }
     if (!isOk(loaded)) {
       ctx.addIssue({ code: 'custom', message: (loaded as NonOkStatus).message });
       return z.NEVER;
@@ -195,6 +207,7 @@ const byteRecordSchema = z
 /** Global WebRTC signalling endpoint used when an `rtc` peer omits one. */
 export const GLOBAL_WEBRTC_SIGNALLING_ENDPOINT = 'wss://a11.services/ice';
 
+/** Runtime validator for an A11 or MCP peer address. */
 export const a11PeerSchema = z.object({
   protocol: z.enum(['a11', 'mcp']).default('a11'),
   scheme: z
@@ -203,6 +216,7 @@ export const a11PeerSchema = z.object({
   identity: z.string().default(''),
   endpoint: z.string().default(''),
 });
+/** Validated protocol, transport, identity, and endpoint for a peer. */
 export type A11Peer = z.infer<typeof a11PeerSchema>;
 
 /** Enforce the cross-field invariants the Python model validates. */
@@ -305,10 +319,12 @@ export function a11PeerFromString(peer: string): StatusOr<A11Peer> {
 
 // --- Action config -----------------------------------------------------------
 
+/** Runtime validator for per-action peer and header routing. */
 export const a11ActionConfigSchema = z.object({
   peer: z.union([z.string(), taggedOr(PEER_TAG, a11PeerSchema)]).default('a11://$sender'),
   header_autofills: byteRecordSchema,
 });
+/** Validated routing configuration for one action. */
 export type A11ActionConfig = z.infer<typeof a11ActionConfigSchema>;
 
 // --- Interaction -------------------------------------------------------------
@@ -518,38 +534,59 @@ export const BACKEND_METADATA_KEY = 'backend';
 
 /** Backends that can produce and normalize interactions. */
 export enum Backend {
+  /** Anthropic Claude messages. */
   CLAUDE = 'claude',
+  /** Google Gemini content. */
   GEMINI = 'gemini',
+  /** Ollama chat messages. */
   OLLAMA = 'ollama',
+  /** In-browser MediaPipe Gemma interactions. */
   GEMMA = 'gemma',
 }
 
+/** Backend-independent content categories used by clients. */
 export enum NormalizedContentType {
+  /** Human-readable text. */
   TEXT = 'text',
+  /** Inline encoded image. */
   IMAGE = 'image',
+  /** Model request to run a tool. */
   TOOL_CALL = 'tool_call',
+  /** Result supplied for an earlier tool call. */
   TOOL_RESULT = 'tool_result',
 }
 
 /** A single, backend-independent piece of an interaction's content. */
 export interface NormalizedPart {
+  /** Content category that determines which remaining fields apply. */
   type: NormalizedContentType;
+  /** Text content for a text part. */
   text?: string;
+  /** Encoded bytes for an image part. */
   data?: string;
+  /** Media type for encoded image data. */
   mime_type?: string;
+  /** Provider tool-call id when the provider assigns one. */
   id?: string;
+  /** Action name requested by a tool-call part. */
   name?: string;
+  /** Decoded arguments supplied to the requested action. */
   arguments?: Record<string, unknown>;
+  /** Tool-call id answered by a result part. */
   call_id?: string;
+  /** Text form of a tool result. */
   content?: string;
 }
 
 /** Backend-independent view of one interaction's content. */
 export interface NormalizedMessage {
+  /** Conversation role that produced the interaction. */
   role: Role;
+  /** Content in provider order. */
   parts: NormalizedPart[];
 }
 
+/** Convert one provider interaction into portable presentation parts. */
 export type InteractionNormalizer = (
   interaction: Interaction,
 ) => StatusOr<NormalizedMessage>;

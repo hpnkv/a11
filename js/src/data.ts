@@ -170,8 +170,11 @@ function isValidDate(value: Date): boolean {
 
 /** Descriptive fields accepted by {@link ChunkMetadata}. */
 export interface ChunkMetadataOptions {
+  /** MIME type, including an optional canonical `type` parameter. */
   mimetype?: string;
+  /** Source timestamp, or `null` when none was supplied. */
   timestamp?: Date | null;
+  /** Application and runtime metadata encoded as byte values. */
   attributes?: ReadonlyMap<string, Uint8Array>;
 }
 
@@ -181,8 +184,11 @@ export interface ChunkMetadataOptions {
  * correct codec and retain application-specific context.
  */
 export class ChunkMetadata {
+  /** Representation and optional serialized value type. */
   mimetype: string;
+  /** Source timestamp with millisecond precision in JavaScript. */
   timestamp: Date | null;
+  /** Owned binary attributes keyed by valid A11 names. */
   attributes: ByteMap;
 
   constructor(options: ChunkMetadataOptions = {}) {
@@ -220,12 +226,14 @@ export class ChunkMetadata {
     }
   }
 
+  /** Approximate encoded field size. */
   get approxBytes(): number {
     let result = this.mimetype.length + 9;
     for (const [key, value] of this.attributes) result += key.length + value.byteLength;
     return result;
   }
 
+  /** Validate MIME, timestamp, and attribute fields. */
   validate(): Status {
     try {
       if (typeof this.mimetype !== 'string') {
@@ -252,6 +260,7 @@ export class ChunkMetadata {
     }
   }
 
+  /** Return a copy of one attribute. */
   getAttribute(key: string): StatusOr<Uint8Array> {
     try {
       const valid = validateName(key);
@@ -265,6 +274,7 @@ export class ChunkMetadata {
     }
   }
 
+  /** Set one attribute after validating its name. */
   setAttribute(key: string, value: Uint8Array): Status {
     const status = validateName(key);
     if (!isOk(status)) return status;
@@ -276,6 +286,7 @@ export class ChunkMetadata {
     }
   }
 
+  /** Encode the concatenated MessagePack metadata record. */
   toMsgpack(): StatusOr<Uint8Array> {
     const status = this.validate();
     if (!isOk(status)) return status;
@@ -294,6 +305,7 @@ export class ChunkMetadata {
     ]);
   }
 
+  /** Decode a concatenated MessagePack metadata record. */
   static fromMsgpack(bytes: Uint8Array): StatusOr<ChunkMetadata> {
     const fields = decodeMsgpackFields(bytes, 3, 'ChunkMetadata');
     if (!isOk(fields)) return fields;
@@ -319,8 +331,11 @@ export class ChunkMetadata {
 
 /** Inline payload, reference, and metadata accepted by {@link Chunk}. */
 export interface ChunkOptions {
+  /** Description of the bytes, or `null` when none is available. */
   metadata?: ChunkMetadata | null;
+  /** External content reference; mutually exclusive with `data`. */
   ref?: string;
+  /** Owned inline payload bytes. */
   data?: Uint8Array;
 }
 
@@ -333,8 +348,11 @@ export interface ChunkOptions {
  * octet-stream chunk is the explicit null/end marker used by unary flows.
  */
 export class Chunk {
+  /** Description of the payload. */
   metadata: ChunkMetadata | null;
+  /** External content reference, or an empty string for inline data. */
   ref: string;
+  /** Inline payload bytes. */
   data: Uint8Array;
 
   constructor(options: ChunkOptions = {}) {
@@ -343,6 +361,7 @@ export class Chunk {
     this.data = options.data === undefined ? new Uint8Array() : new Uint8Array(options.data);
   }
 
+  /** Construct and validate a chunk. */
   static create(options: ChunkOptions = {}): StatusOr<Chunk> {
     try {
       if (options.metadata !== undefined && options.metadata !== null && !(options.metadata instanceof ChunkMetadata)) {
@@ -362,14 +381,17 @@ export class Chunk {
     }
   }
 
+  /** Approximate encoded field and payload size. */
   get approxBytes(): number {
     return this.ref.length + this.data.byteLength + (this.metadata?.approxBytes ?? 1) + 5;
   }
 
+  /** MIME type from metadata, or an empty string. */
   get mimetype(): string {
     return this.metadata?.mimetype ?? '';
   }
 
+  /** Whether the chunk contains neither inline nor referenced data. */
   get isEmpty(): boolean {
     return this.ref === '' && this.data.byteLength === 0;
   }
@@ -379,6 +401,7 @@ export class Chunk {
     return this.isEmpty && this.mimetype === 'application/octet-stream';
   }
 
+  /** Validate payload ownership and metadata. */
   validate(): Status {
     try {
       if (typeof this.ref !== 'string') return invalidArgumentError('Chunk.ref must be a string.');
@@ -395,6 +418,7 @@ export class Chunk {
     }
   }
 
+  /** Encode the concatenated MessagePack chunk record. */
   toMsgpack(): StatusOr<Uint8Array> {
     const status = this.validate();
     if (!isOk(status)) return status;
@@ -403,6 +427,7 @@ export class Chunk {
     return encodeMsgpackFields([metadata, this.ref, this.data]);
   }
 
+  /** Decode a concatenated MessagePack chunk record. */
   static fromMsgpack(bytes: Uint8Array): StatusOr<Chunk> {
     const fields = decodeMsgpackFields(bytes, 3, 'Chunk');
     if (!isOk(fields)) return fields;
@@ -424,15 +449,21 @@ export class Chunk {
 
 /** Node id and optional window accepted by {@link NodeRef}. */
 export interface NodeRefOptions {
+  /** Referenced node id. */
   id: string;
+  /** First referenced fragment offset. */
   offset?: number;
+  /** Number of fragments, or `null` for the remaining node. */
   length?: number | null;
 }
 
 /** Reference to all or part of another logical node instead of inline bytes. */
 export class NodeRef {
+  /** Referenced node id. */
   id: string;
+  /** First referenced fragment offset. */
   offset: number;
+  /** Number of fragments, or `null` for the remaining node. */
   length: number | null;
 
   constructor(options: NodeRefOptions) {
@@ -441,6 +472,7 @@ export class NodeRef {
     this.length = options.length ?? null;
   }
 
+  /** Construct and validate a node reference. */
   static create(options: NodeRefOptions): StatusOr<NodeRef> {
     try {
       if (typeof options !== 'object' || options === null) {
@@ -454,10 +486,12 @@ export class NodeRef {
     }
   }
 
+  /** Approximate encoded field size. */
   get approxBytes(): number {
     return this.id.length + 5 + (this.length === null ? 0 : 8);
   }
 
+  /** Validate the id and uint32 window. */
   validate(): Status {
     try {
       const nameStatus = validateName(this.id);
@@ -480,6 +514,7 @@ export class NodeRef {
     }
   }
 
+  /** Encode the concatenated MessagePack node-reference record. */
   toMsgpack(): StatusOr<Uint8Array> {
     const status = this.validate();
     return isOk(status)
@@ -487,6 +522,7 @@ export class NodeRef {
       : status;
   }
 
+  /** Decode a concatenated MessagePack node-reference record. */
   static fromMsgpack(bytes: Uint8Array): StatusOr<NodeRef> {
     const fields = decodeMsgpackFields(bytes, 3, 'NodeRef');
     if (!isOk(fields)) return fields;
@@ -506,9 +542,13 @@ export class NodeRef {
 
 /** Stream identity, payload, sequence, and continuation fields. */
 export interface NodeFragmentOptions {
+  /** Destination node id. */
   id?: string;
+  /** Inline chunk or reference to existing node data. */
   data?: Chunk | NodeRef;
+  /** Logical sequence number, assigned by a writer when omitted. */
   seq?: number | null;
+  /** Whether another fragment follows this one. */
   continued?: boolean;
 }
 
@@ -520,9 +560,13 @@ export interface NodeFragmentOptions {
  * Payload is either an inline {@link Chunk} or a {@link NodeRef}.
  */
 export class NodeFragment {
+  /** Destination node id. */
   id: string;
+  /** Inline chunk or node reference. */
   data: Chunk | NodeRef;
+  /** Logical sequence number, or `null` before assignment. */
   seq: number | null;
+  /** Whether another fragment follows. */
   continued: boolean;
 
   constructor(options: NodeFragmentOptions = {}) {
@@ -532,6 +576,7 @@ export class NodeFragment {
     this.continued = options.continued ?? false;
   }
 
+  /** Construct and validate a fragment. */
   static create(options: NodeFragmentOptions = {}): StatusOr<NodeFragment> {
     try {
       const result = new NodeFragment(options);
@@ -542,10 +587,12 @@ export class NodeFragment {
     }
   }
 
+  /** Approximate encoded field and payload size. */
   get approxBytes(): number {
     return this.id.length + this.data.approxBytes + (this.seq === null ? 1 : 4) + 6;
   }
 
+  /** Validate identity, sequence, continuation, and payload. */
   validate(): Status {
     try {
       const idStatus = validateOptionalName(this.id);
@@ -565,18 +612,21 @@ export class NodeFragment {
     }
   }
 
+  /** Return inline data, or a failed-precondition status for a reference. */
   getChunk(): StatusOr<Chunk> {
     return this.data instanceof Chunk
       ? this.data
       : failedPreconditionError('Data is not a Chunk');
   }
 
+  /** Return referenced data, or a failed-precondition status for a chunk. */
   getNodeRef(): StatusOr<NodeRef> {
     return this.data instanceof NodeRef
       ? this.data
       : failedPreconditionError('Data is not a NodeRef');
   }
 
+  /** Encode the concatenated MessagePack fragment record. */
   toMsgpack(): StatusOr<Uint8Array> {
     const status = this.validate();
     if (!isOk(status)) return status;
@@ -591,6 +641,7 @@ export class NodeFragment {
     ]);
   }
 
+  /** Decode a concatenated MessagePack fragment record. */
   static fromMsgpack(bytes: Uint8Array): StatusOr<NodeFragment> {
     const fields = decodeMsgpackFields(bytes, 5, 'NodeFragment');
     if (!isOk(fields)) return fields;
@@ -617,8 +668,14 @@ export class NodeFragment {
 
 /** Maps one schema port name onto the concrete node id for an action instance. */
 export class Port {
-  constructor(public name: string = '', public id: string = '') {}
+  constructor(
+    /** Schema port name. */
+    public name: string = '',
+    /** Concrete node id for one action instance. */
+    public id: string = '',
+  ) {}
 
+  /** Construct and validate a port mapping. */
   static create(name: string = '', id: string = ''): StatusOr<Port> {
     try {
       const result = new Port(name, id);
@@ -629,8 +686,10 @@ export class Port {
     }
   }
 
+  /** Approximate encoded field size. */
   get approxBytes(): number { return this.name.length + this.id.length + 1; }
 
+  /** Validate the optional port and node names. */
   validate(): Status {
     try {
       const nameStatus = validateOptionalName(this.name);
@@ -640,11 +699,13 @@ export class Port {
     }
   }
 
+  /** Encode the concatenated MessagePack port record. */
   toMsgpack(): StatusOr<Uint8Array> {
     const status = this.validate();
     return isOk(status) ? encodeMsgpackFields([this.name, this.id]) : status;
   }
 
+  /** Decode a concatenated MessagePack port record. */
   static fromMsgpack(bytes: Uint8Array): StatusOr<Port> {
     const fields = decodeMsgpackFields(bytes, 2, 'Port');
     if (!isOk(fields)) return fields;
@@ -657,10 +718,15 @@ export class Port {
 
 /** Action call identity, port mappings, and headers accepted on the wire. */
 export interface ActionMessageOptions {
+  /** Stable action-call id. */
   id?: string;
+  /** Registered action name. */
   name?: string;
+  /** Input port mappings. */
   inputs?: readonly Port[];
+  /** Output port mappings. */
   outputs?: readonly Port[];
+  /** Call-scoped binary headers. */
   headers?: ReadonlyMap<string, Uint8Array>;
 }
 
@@ -672,10 +738,15 @@ export interface ActionMessageOptions {
  * Streamed values travel separately as NodeFragments in WireMessages.
  */
 export class ActionMessage {
+  /** Stable action-call id. */
   id: string;
+  /** Registered action name. */
   name: string;
+  /** Input port mappings. */
   inputs: Port[];
+  /** Output port mappings. */
   outputs: Port[];
+  /** Call-scoped binary headers. */
   headers: ByteMap;
 
   constructor(options: ActionMessageOptions = {}) {
@@ -686,6 +757,7 @@ export class ActionMessage {
     this.headers = options.headers === undefined ? new Map() : copyByteMap(options.headers);
   }
 
+  /** Construct and validate an action message. */
   static create(options: ActionMessageOptions = {}): StatusOr<ActionMessage> {
     try {
       const result = new ActionMessage(options);
@@ -696,6 +768,7 @@ export class ActionMessage {
     }
   }
 
+  /** Approximate encoded field and payload size. */
   get approxBytes(): number {
     let result = this.id.length + this.name.length + 8;
     for (const port of [...this.inputs, ...this.outputs]) result += port.approxBytes;
@@ -703,6 +776,7 @@ export class ActionMessage {
     return result;
   }
 
+  /** Validate identity, port mappings, and headers. */
   validate(): Status {
     try {
       for (const name of [this.id, this.name]) {
@@ -735,6 +809,7 @@ export class ActionMessage {
     }
   }
 
+  /** Encode the concatenated MessagePack action record. */
   toMsgpack(): StatusOr<Uint8Array> {
     const status = this.validate();
     if (!isOk(status)) return status;
@@ -750,6 +825,7 @@ export class ActionMessage {
     return encodeMsgpackFields([this.id, this.name, inputs, outputs, msgpackByteMap(this.headers)]);
   }
 
+  /** Decode a concatenated MessagePack action record. */
   static fromMsgpack(bytes: Uint8Array): StatusOr<ActionMessage> {
     const fields = decodeMsgpackFields(bytes, 5, 'ActionMessage');
     if (!isOk(fields)) return fields;
@@ -779,8 +855,11 @@ export class ActionMessage {
 
 /** Fragments, calls, and connection metadata batched into a WireMessage. */
 export interface WireMessageOptions {
+  /** Node data carried by this message. */
   nodeFragments?: readonly NodeFragment[];
+  /** Action calls carried by this message. */
   actions?: readonly ActionMessage[];
+  /** Message-scoped binary headers. */
   headers?: ReadonlyMap<string, Uint8Array>;
 }
 
@@ -795,8 +874,11 @@ export interface WireMessageOptions {
 export class WireMessage {
   /** Current MessagePack/JSON wire schema version. */
   static readonly VERSION = 1;
+  /** Node data carried by this message. */
   nodeFragments: NodeFragment[];
+  /** Action calls carried by this message. */
   actions: ActionMessage[];
+  /** Message-scoped binary headers. */
   headers: ByteMap;
 
   constructor(options: WireMessageOptions = {}) {
@@ -805,6 +887,7 @@ export class WireMessage {
     this.headers = options.headers === undefined ? new Map() : copyByteMap(options.headers);
   }
 
+  /** Construct and validate a wire message. */
   static create(options: WireMessageOptions = {}): StatusOr<WireMessage> {
     try {
       const result = new WireMessage(options);
@@ -815,6 +898,7 @@ export class WireMessage {
     }
   }
 
+  /** Approximate encoded field and payload size. */
   get approxBytes(): number {
     let result = 8;
     for (const fragment of this.nodeFragments) result += fragment.approxBytes;
@@ -823,6 +907,7 @@ export class WireMessage {
     return result;
   }
 
+  /** Validate all fragments, calls, and headers. */
   validate(): Status {
     try {
       if (!Array.isArray(this.nodeFragments)) {
@@ -864,6 +949,7 @@ export class WireMessage {
     return this.actions.length === 0 && this.nodeFragments.length === 0;
   }
 
+  /** Encode the current concatenated MessagePack wire record. */
   toMsgpack(): StatusOr<Uint8Array> {
     const status = this.validate();
     if (!isOk(status)) return status;
@@ -882,6 +968,7 @@ export class WireMessage {
     return encodeMsgpackFields([WireMessage.VERSION, fragments, actions, msgpackByteMap(this.headers)]);
   }
 
+  /** Decode a concatenated MessagePack wire record. */
   static fromMsgpack(bytes: Uint8Array): StatusOr<WireMessage> {
     const fields = decodeMsgpackFields(bytes, 4, 'WireMessage');
     if (!isOk(fields)) return fields;
@@ -911,12 +998,14 @@ export class WireMessage {
     return WireMessage.create({ nodeFragments: fragments, actions, headers });
   }
 
+  /** Convert the message to its language-neutral JSON field map. */
   toJsonValue(): StatusOr<Record<string, unknown>> {
     const status = this.validate();
     if (!isOk(status)) return status;
     return wireMessageToJsonValue(this);
   }
 
+  /** Encode the message as JSON text. */
   toJson(): StatusOr<string> {
     const value = this.toJsonValue();
     if (!isOk(value)) return value;
@@ -927,6 +1016,7 @@ export class WireMessage {
     }
   }
 
+  /** Decode a message from JSON text. */
   static fromJson(value: string): StatusOr<WireMessage> {
     if (typeof value !== 'string') {
       return invalidArgumentError('WireMessage JSON must be a string.');

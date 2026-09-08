@@ -124,7 +124,9 @@ interface ReadRequest {
  * with real per-read latency arrives, such as one backed by a fetch.
  */
 export class ChunkStoreReader {
+  /** Ordered storage followed by this cursor. */
   readonly store: ChunkStore;
+  /** Validated immutable cursor options. */
   readonly options: Readonly<NormalizedReaderOptions>;
 
   private position: number;
@@ -224,6 +226,7 @@ export class ChunkStoreReader {
     }
   }
 
+  /** Iterate fragments until finality, closure, or failure. */
   [Symbol.asyncIterator](): AsyncGenerator<StatusOr<NodeFragment>, void, void> {
     return this.values();
   }

@@ -26,6 +26,7 @@ import {
 
 /** Box used where a decoded non-OK Status is a successful return value. */
 export interface DecodedStatus {
+  /** Decoded status, including non-OK values carried as data. */
   status: Status;
 }
 

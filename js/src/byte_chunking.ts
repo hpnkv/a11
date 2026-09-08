@@ -37,17 +37,25 @@ const UINT64_MAX = 0xffff_ffff_ffff_ffffn;
 
 /** Packet shapes in the Action Engine-compatible byte framing format. */
 export enum BytePacketType {
+  /** One packet contains the complete logical message. */
   COMPLETE_BYTES = 0x00,
+  /** One numbered packet of a known packet count. */
   BYTE_CHUNK = 0x01,
+  /** One numbered packet whose final bytes carry the message length. */
   LENGTH_SUFFIXED_BYTE_CHUNK = 0x02,
 }
 
 /** Parsed packet metadata plus an owned payload slice. */
 export interface BytePacket {
+  /** Framing layout used by this packet. */
   type: BytePacketType;
+  /** Owned application payload slice. */
   payload: Uint8Array;
+  /** Temporary logical-message id. */
   transientId: bigint;
+  /** Zero-based packet position. */
   sequence: number;
+  /** Total packets, when carried by this layout. */
   packetCount: number;
 }
 
@@ -65,9 +73,13 @@ export interface ByteChunkingOptions {
 
 /** Validated, default-filled form of {@link ByteChunkingOptions}. */
 export interface NormalizedByteChunkingOptions {
+  /** Maximum encoded size of each transport packet. */
   packetSize: number;
+  /** Maximum reassembled logical message size. */
   maxMessageSize: number;
+  /** Simultaneous incomplete message ids retained. */
   maxPendingMessages: number;
+  /** Aggregate bytes retained by incomplete messages. */
   maxPendingBytes: number;
 }
 
@@ -289,6 +301,7 @@ interface PendingMessage {
  * Limits prevent an untrusted peer from retaining unbounded partial data.
  */
 export class ByteReassembler {
+  /** Validated immutable packet and pending-message bounds. */
   readonly options: Readonly<NormalizedByteChunkingOptions>;
   private readonly pending = new Map<bigint, PendingMessage>();
   private pendingBytesInternal = 0;

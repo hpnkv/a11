@@ -93,12 +93,19 @@ export interface ActionPortSchemaOptions {
  * autofilled input that already contains data.
  */
 export class ActionPortSchema {
+  /** Port name used by handlers and on the wire. */
   name: string;
+  /** MIME-facing type description. */
   type: string;
+  /** Developer and model-facing explanation of the value. */
   description: string;
+  /** Whether callers must provide the port. */
   required: boolean;
+  /** Whether the port carries at most one value. */
   unary: boolean;
+  /** Default input fragments applied before a handler runs. */
   autofills: Array<NodeFragment | null>;
+  /** JSON Schema text supplied by a peer or caller. */
   jsonSchema: string;
 
   constructor(options: ActionPortSchemaOptions) {
@@ -111,6 +118,7 @@ export class ActionPortSchema {
     this.jsonSchema = options.jsonSchema ?? '';
   }
 
+  /** Construct and validate a port schema. */
   static create(
     options: ActionPortSchemaOptions,
   ): StatusOr<ActionPortSchema> {
@@ -123,6 +131,7 @@ export class ActionPortSchema {
     }
   }
 
+  /** Validate the port contract and autofill fragments. */
   validate(): Status {
     try {
       const name = validateName(this.name);
@@ -156,15 +165,21 @@ export class ActionPortSchema {
 
 /** Declarative header fields accepted by {@link ActionHeaderSchema}. */
 export interface ActionHeaderSchemaOptions {
+  /** Header name. */
   name: string;
+  /** Developer-facing explanation of the metadata. */
   description?: string;
+  /** Receiver-owned default bytes. */
   defaultValue?: ByteSource | null;
 }
 
 /** Describes one binary metadata value accepted by an action call. */
 export class ActionHeaderSchema {
+  /** Header name. */
   name: string;
+  /** Developer-facing explanation of the metadata. */
   description: string;
+  /** Receiver-owned default bytes. */
   defaultValue: Uint8Array | null;
   private constructionStatus: Status = okStatus();
 
@@ -183,6 +198,7 @@ export class ActionHeaderSchema {
     }
   }
 
+  /** Construct and validate a header schema. */
   static create(
     options: ActionHeaderSchemaOptions,
   ): StatusOr<ActionHeaderSchema> {
@@ -195,6 +211,7 @@ export class ActionHeaderSchema {
     }
   }
 
+  /** Validate the name, description, and default bytes. */
   validate(): Status {
     try {
       if (!isOk(this.constructionStatus)) return this.constructionStatus;
@@ -229,11 +246,17 @@ type StringCollection =
 
 /** Complete declarative interface accepted by {@link ActionSchema}. */
 export interface ActionSchemaOptions {
+  /** Registered operation name. */
   name: string;
+  /** Developer and model-facing operation description. */
   description?: string;
+  /** Named input contracts. */
   inputs?: PortCollection;
+  /** Named output contracts. */
   outputs?: PortCollection;
+  /** Named binary metadata contracts. */
   headers?: HeaderCollection;
+  /** Output port names mapped to tool-result JSON fields. */
   outputToJsonField?: StringCollection;
 }
 
@@ -254,11 +277,17 @@ function collectionEntries<T>(
  * so caller and receiver schemas must agree on the wire-facing contract.
  */
 export class ActionSchema {
+  /** Registered operation name. */
   name: string;
+  /** Developer and model-facing operation description. */
   description: string;
+  /** Named input contracts. */
   inputs: Map<string, ActionPortSchema>;
+  /** Named output contracts. */
   outputs: Map<string, ActionPortSchema>;
+  /** Named binary metadata contracts. */
   headers: Map<string, ActionHeaderSchema>;
+  /** Output ports mapped to tool-result JSON fields. */
   outputToJsonField: Map<string, string>;
 
   constructor(options: ActionSchemaOptions) {
@@ -281,6 +310,7 @@ export class ActionSchema {
     }
   }
 
+  /** Validate names, contracts, reserved ports, and output mappings. */
   validate(): Status {
     try {
       return this.validateUnchecked();

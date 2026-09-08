@@ -197,5 +197,10 @@ nav:
       - Observability: api/observability.md
       - Status & timing: api/status-timing.md
   - Flow reference: api/flow.md
-  - TypeScript reference: typescript.md
+  - TypeScript:
+      - Overview: typescript.md
+      - Actions and streams: guides/typescript-actions.md
+      - Sessions and transports: guides/typescript-sessions.md
+      - LLM client utilities: guides/typescript-llm.md
+      - API reference: https://docs.a11.to/typescript/index.html
   - C++ reference: cpp.md

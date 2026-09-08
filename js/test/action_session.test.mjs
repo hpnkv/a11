@@ -136,6 +136,73 @@ test('Action catches handler failures and cancellation callbacks', async () => {
   assert.equal(cancellation.code, StatusCode.CANCELLED);
 });
 
+test('parent cancellation reaches active nested Actions', async () => {
+  let child;
+  let childStarted;
+  const started = new Promise((resolve) => { childStarted = resolve; });
+  const parent = Action.create(new ActionSchema({ name: 'parent' }), {
+    handler: async (running) => {
+      child = running.makeNested(new ActionSchema({ name: 'child' }));
+      if (!isOk(child)) return child;
+      assert.equal(isOk(child.bindHandler(async (nested) => {
+        childStarted();
+        await new Promise((resolve) =>
+          nested.signal.addEventListener('abort', resolve, { once: true }),
+        );
+        return cancelledError('child observed cancellation');
+      })), true);
+      const launched = child.run();
+      if (!isOk(launched)) return launched;
+      await new Promise((resolve) =>
+        running.signal.addEventListener('abort', resolve, { once: true }),
+      );
+      return cancelledError('parent observed cancellation');
+    },
+  });
+  assert.equal(isOk(parent), true);
+  assert.equal(isOk(parent.run()), true);
+  await started;
+
+  assert.equal(isOk(parent.cancel()), true);
+  const [parentStatus, childStatus] = await Promise.all([
+    parent.wait(1000),
+    child.wait(1000),
+  ]);
+  assert.equal(isOk(parentStatus), false);
+  assert.equal(parentStatus.code, StatusCode.CANCELLED);
+  assert.equal(isOk(childStatus), false);
+  assert.equal(childStatus.code, StatusCode.CANCELLED);
+});
+
+test('a parent failure aborts nested Action inputs', async () => {
+  const stopped = unavailableError('retrieval stopped');
+  let request;
+  const parent = Action.create(new ActionSchema({ name: 'parent' }), {
+    handler: async (running) => {
+      const child = running.makeNested(new ActionSchema({
+        name: 'child',
+        inputs: {
+          request: new ActionPortSchema({
+            name: 'request', type: 'text/plain', required: true,
+          }),
+        },
+      }));
+      if (!isOk(child)) return child;
+      request = await child.getInput('request', false);
+      if (!isOk(request)) return request;
+      return stopped;
+    },
+  });
+  assert.equal(isOk(parent), true);
+  assert.equal(isOk(parent.run()), true);
+  const result = await parent.wait(1000);
+  assert.equal(isOk(result), false);
+  assert.equal(result.code, StatusCode.UNAVAILABLE);
+  const inputResult = await request.next(1000);
+  assert.equal(isOk(inputResult), false);
+  assert.equal(inputResult.code, StatusCode.UNAVAILABLE);
+});
+
 test('ActionRegistry copies schemas and can clear autofills', () => {
   const schema = new ActionSchema({
     name: 'registered',

@@ -47,9 +47,13 @@ interface Registration {
 
 /** Per-instance collaborators supplied by {@link ActionRegistry.makeAction}. */
 export interface MakeActionOptions {
+  /** Stable call id; generated when omitted. */
   id?: string;
+  /** Node namespace backing the action ports. */
   nodeMap?: NodeMap;
+  /** Direct transport for calls and mirrored node fragments. */
   stream?: WireStream | null;
+  /** Connection runtime responsible for routing and lifetime. */
   session?: ActionSessionContext | null;
 }
 
@@ -124,6 +128,13 @@ function cloneSchema(
  * work. Client-only entries may omit handlers while still exposing schemas for
  * constructing remote calls or model tool definitions. Registrations are
  * copied so later caller mutation cannot change a live service contract.
+ *
+ * @example Register a handler used by a Session.
+ * ```ts
+ * const registry = new ActionRegistry();
+ * valueOrThrow(registry.register('summarize', schema, summarize));
+ * const session = valueOrThrow(Session.create({ actionRegistry: registry }));
+ * ```
  */
 export class ActionRegistry {
   private readonly registrations = new Map<string, Registration>();
@@ -191,6 +202,7 @@ export class ActionRegistry {
     }
   }
 
+  /** Whether the registry or builtins answer for a valid action name. */
   isRegistered(actionName: string): boolean {
     try {
       if (!isOk(validateName(actionName))) return false;

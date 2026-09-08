@@ -40,7 +40,17 @@ function mimeToJsonSchema(mimetype: string): Record<string, unknown> {
   return { type: 'object' };
 }
 
-/** Builds the input/output JSON Schemas that describe an action as a tool. */
+/**
+ * Build the input/output JSON Schemas that describe an action as a tool.
+ *
+ * @example Supply the value shape TypeScript cannot derive from a MIME type.
+ * ```ts
+ * const adapter = new ToolAdapter(schema, {
+ *   city: z.string().describe('City and country'),
+ * });
+ * const inputSchema = valueOrThrow(adapter.getInputSchema());
+ * ```
+ */
 export class ToolAdapter {
   constructor(
     private readonly schema: ActionSchema,

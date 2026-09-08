@@ -668,7 +668,7 @@ export class ChannelWireStream implements WireStream {
   }
 
   /**
-   * Fold whatever is already queued behind @p outbound into it, and return the
+   * Fold whatever is already queued behind `outbound` into it, and return the
    * bytes to send.
    *
    * Nothing is ever held back to build a bigger frame: only messages *already*

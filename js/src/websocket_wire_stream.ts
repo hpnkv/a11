@@ -541,6 +541,14 @@ class WebSocketBinaryChannel implements BinaryChannel {
  * {@link ChannelWireStream}. Create the endpoint, call {@link start} once, and
  * await {@link wait} for full bidirectional completion. `start()` only waits
  * for transport startup; it is not the stream's completion future.
+ *
+ * @example
+ * ```ts
+ * const stream = valueOrThrow(WebSocketWireStream.createClient(
+ *   'wss://agent.example/actions',
+ * ));
+ * valueOrThrow(await stream.start(onMessage));
+ * ```
  */
 export class WebSocketWireStream implements WireStream {
   private constructor(private readonly stream: ChannelWireStream) {}

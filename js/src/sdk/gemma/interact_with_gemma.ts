@@ -132,10 +132,14 @@ export const gemmaConfigSchema = z.object({
     .default('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-genai/wasm')
     .describe('Base URL of the MediaPipe GenAI WebAssembly fileset.'),
 });
+/** Validated configuration for an in-browser Gemma run. */
 export type GemmaConfig = z.infer<typeof gemmaConfigSchema>;
 
 /** One text or image input accepted by MediaPipe LLM Inference. */
-export type GemmaPromptPart = string | { imageSource: string };
+export type GemmaPromptPart = string | {
+  /** Object URL or data URL accepted by the MediaPipe runtime. */
+  imageSource: string;
+};
 
 /** A loaded, streaming Gemma runtime. */
 export interface GemmaEngine {

@@ -52,8 +52,7 @@ flow {
   # materialised for the block, so `needle` is one string and `it` is one window.
   #
   # The width is 2 and cannot be an argument: every count in this language is a
-  # literal, so `window width` is not something that can be written. That limit
-  # is recorded in `../../cpp/a11/flow/NOTES.md` rather than worked around here.
+  # literal, so `window width` is not something that can be written.
   for needle in wanted {
     input.lines
       | window 2

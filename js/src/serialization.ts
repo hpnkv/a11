@@ -170,11 +170,15 @@ export type SerializedData = AsyncByteSource | Chunk;
 export interface SerializationCodec<T = unknown> {
   /** Stable, cross-language value tag written as the MIME `type` parameter. */
   readonly tag: string;
+  /** Exact media type or wildcard representation pattern. */
   readonly mimetype: string;
+  /** Whether this codec accepts a value for serialization. */
   readonly test: (value: unknown) => value is T;
+  /** Encode one accepted value. */
   readonly serialize: (
     value: T,
   ) => StatusOr<SerializedData> | Promise<StatusOr<SerializedData>>;
+  /** Decode owned payload bytes. */
   readonly deserialize: (
     data: Uint8Array,
     chunk: Chunk,
@@ -757,12 +761,26 @@ export function setGlobalSerializationRegistry(registry: SerializationRegistry):
   return { code: 0, message: 'OK' };
 }
 
-/** Serialize through the current process-wide registry. */
+/**
+ * Serialize through the current process-wide registry.
+ *
+ * @example
+ * ```ts
+ * const chunk = valueOrThrow(await toChunk({ query: 'ocean weather' }));
+ * ```
+ */
 export async function toChunk(value: unknown, mimetype = ''): Promise<StatusOr<Chunk>> {
   return globalRegistry.toChunk(value, mimetype);
 }
 
-/** Deserialize through the current process-wide registry. */
+/**
+ * Deserialize through the current process-wide registry.
+ *
+ * @example
+ * ```ts
+ * const result = valueOrThrow(await fromChunk<{ answer: string }>(chunk));
+ * ```
+ */
 export async function fromChunk<T = unknown>(
   chunk: Chunk,
   mimetypePatterns: string | readonly string[] = '',

@@ -42,6 +42,7 @@ import { zodParse } from './llm.js';
 
 /** How the Gemini handler carries conversation state across turns. */
 export const geminiStateModeSchema = z.enum(['full-history', 'last-id', 'auto']);
+/** Validated Gemini conversation-state strategy. */
 export type GeminiStateMode = z.infer<typeof geminiStateModeSchema>;
 
 /** Parameters for starting a Gemini interaction (`interactions.create`). */
@@ -80,6 +81,7 @@ export const geminiCreateInteractionConfigSchema = z.object({
     .default(false)
     .describe('Enable the built-in URL context tool.'),
 });
+/** Validated Gemini interaction request options. */
 export type GeminiCreateInteractionConfig = z.infer<
   typeof geminiCreateInteractionConfigSchema
 >;
@@ -131,6 +133,7 @@ export const ollamaCreateChatConfigSchema = z.object({
     .default(false)
     .describe('Constrain the model to emit valid JSON (Ollama `format="json"`).'),
 });
+/** Validated Ollama chat request options. */
 export type OllamaCreateChatConfig = z.infer<typeof ollamaCreateChatConfigSchema>;
 
 /** Parameters for a single vLLM chat completion (OpenAI-compatible route). */
@@ -204,6 +207,7 @@ export const vllmCreateChatCompletionConfigSchema = z.object({
         ' deployment-specific sampling parameters this config does not name.',
     ),
 });
+/** Validated vLLM chat-completion request options. */
 export type VllmCreateChatCompletionConfig = z.infer<
   typeof vllmCreateChatCompletionConfigSchema
 >;
@@ -247,6 +251,7 @@ export const claudeCreateMessageConfigSchema = z.object({
     .default(false)
     .describe('Enable the built-in code execution tool.'),
 });
+/** Validated Claude message request options. */
 export type ClaudeCreateMessageConfig = z.infer<
   typeof claudeCreateMessageConfigSchema
 >;
@@ -265,6 +270,7 @@ export const claudeCodeBuiltinToolSchema = z.enum([
   'WebSearch',
   'Write',
 ]);
+/** Built-in tool name accepted by a Claude Code session. */
 export type ClaudeCodeBuiltinTool = z.infer<typeof claudeCodeBuiltinToolSchema>;
 
 /** Parameters for one Claude Code session. */
@@ -353,6 +359,7 @@ export const claudeCodeCreateSessionConfigSchema = z.object({
     .describe('Branch a resumed session instead of extending it.'),
   cli_path: z.string().nullish().describe('Path to the `claude` executable.'),
 });
+/** Validated Claude Code session options. */
 export type ClaudeCodeCreateSessionConfig = z.infer<
   typeof claudeCodeCreateSessionConfigSchema
 >;
@@ -418,8 +425,11 @@ export const makeClaudeCodeCreateSessionConfig = registerConfigCodec(
 
 /** Default model ids matching the Python SDK. */
 export const GEMINI_DEFAULT_MODEL = 'gemini-3.5-flash';
+/** Default Ollama model id. */
 export const OLLAMA_DEFAULT_MODEL = 'llama3.2';
 // A vLLM deployment serves the models it was started with; the Python handler
 // asks it for the first of them when no model is named.
+/** Empty so the vLLM handler selects the deployment's first model. */
 export const VLLM_DEFAULT_MODEL = '';
+/** Default Claude model id. */
 export const CLAUDE_DEFAULT_MODEL = 'claude-sonnet-4-6';

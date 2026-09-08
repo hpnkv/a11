@@ -42,6 +42,17 @@ A11 is a stack of independently linkable components:
 - Actions and dispatch: `a11::actions::Action`, `a11::actions::ActionRegistry`.
 - Networking: `a11::net::WireStream`, `a11::service::Session`.
 
+## C++ guides
+
+- [Build and run an action](@ref cpp_actions) defines a schema, registers a
+  handler, and drives its ports locally.
+- [Stream values through a node](@ref cpp_streaming) covers typed values, raw
+  chunks, finality, and backpressure.
+- [Move an action to another peer](@ref cpp_remote_actions) replaces local
+  `Run()` with `Call()` over connected sessions.
+- [Export native telemetry](@ref cpp_telemetry) configures OTLP and propagates
+  trace context through actions.
+
 For task-oriented walkthroughs shared by the language APIs, see the
 [main A11 documentation](../index.html). Build and linking instructions are in
 [`BUILDING.md`](https://github.com/hpnkv/a11/blob/main/BUILDING.md).

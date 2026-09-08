@@ -16,7 +16,11 @@ PROJECT_BRIEF          = "Native C++ implementation of the A11 streaming action 
 # hand-written landing page (mainpage.md) lives beside this Doxyfile and is
 # promoted to the index via USE_MDFILE_AS_MAINPAGE below.
 INPUT                  = ../../cpp/a11 \
-                         mainpage.md
+                         mainpage.md \
+                         actions.md \
+                         streaming.md \
+                         remote-actions.md \
+                         telemetry.md
 USE_MDFILE_AS_MAINPAGE = mainpage.md
 RECURSIVE              = YES
 

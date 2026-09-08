@@ -174,7 +174,7 @@ and provider continuation IDs. It is completed conversation state, not a live
 stream or an agent checkpoint. Store it as ordinary application data; use the
 output streams for content that must be rendered or processed incrementally.
 
-## Putting it together
+## Run the complete model call
 
 ```python
 import asyncio

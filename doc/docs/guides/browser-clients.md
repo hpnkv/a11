@@ -1,9 +1,8 @@
 # Call an A11 service from a browser
 
-This guide connects a TypeScript page to a Python `echo` service over HTTP/2
-Server-Sent Events (SSE). Both sides describe the same action and its input and
-output streams. The page can therefore construct, call, and observe the action
-without a browser-specific request format.
+Connect a TypeScript page to a Python `echo` service over HTTP/2 Server-Sent
+Events (SSE). Both peers use the same action schema and named streams, with no
+browser-specific request format.
 
 !!! note "Before you start"
 
@@ -15,8 +14,8 @@ without a browser-specific request format.
 
 ## Try it
 
-Say something and watch what crosses the wire. The wire
-inspector records both action messages and node fragments; select a row to see
+Send a message and inspect what crosses the wire. The inspector records action
+messages and node fragments; select a row to see
 its action names, node IDs, and encoded byte size. **Half-close** says that the
 client will send no more data while allowing already-sent work to drain.
 **Reconnect** creates a fresh transport and session.
@@ -167,9 +166,9 @@ const reply = need(await output.next({timeoutMs: 10_000}));
 need(await action.wait(30_000));
 ```
 
-The interface field remains an A11 node, while the action and session retain
-their identities and lifecycle on both peers. The page can therefore use the
-same streaming and completion operations as the service.
+The interface field remains an A11 node. Action and session identity persists
+on both peers, so the page uses the same streaming and completion operations as
+the service.
 
 ## 6. Display failures
 

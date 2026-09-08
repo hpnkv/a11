@@ -11,10 +11,9 @@ sends transcript fragments while audio is arriving, an image-generation API
 reports progress before returning a PNG, and a model gateway serves tokens from
 a GPU process to browser, Python, and native clients.
 
-These systems have the same runtime needs as an agent: they wait on independent
-producers, exchange structured and multimodal data, and often move components
-between processes as they grow. An agent adds a model/tool loop, but A11 does
-not require one.
+These systems wait on independent producers, exchange structured and multimodal
+data, and move components between processes. An agent adds a model/tool loop;
+the runtime does not require one.
 
 A11 keeps the operation's contract stable through those changes. The
 application describes work as actions and moves data through streams; storage
@@ -24,7 +23,7 @@ and network placement remain deployment choices.
 <link rel="stylesheet" href="assets/navigation-cards.css">
 
 <nav class="a11-card-nav" aria-label="Problems A11 can help solve">
-  <a href="#a-research-agent-built-from-actions-and-streams">
+  <a href="#research-agent-composition">
     <strong>Build a research agent that works in parallel</strong>
     <span>Stream the plan and report while several investigations run.</span>
   </a>
@@ -58,7 +57,7 @@ and network placement remain deployment choices.
   </a>
 </nav>
 
-## A research agent, built from actions and streams
+## Research agent composition
 
 The [deep-research example](guides/deep-research.md) presents a typical agent as
 one `deep-research` action. Its inputs and outputs are the stable product
@@ -78,7 +77,7 @@ browser-hosted actions. The handler registers as one action, so callers only
 need its topic, plan, and report ports. An optional Flow implementation can
 express the same composition when it needs to be supplied at runtime.
 
-## See how the interfaces fit together
+## Interface relationships
 
 Solid arrows show what an interface owns or creates; dashed arrows show a
 dependency. The highlighted extension points have supported implementations in
@@ -297,9 +296,9 @@ A11 supports throughput by controlling data movement:
   transport for Python and C++ services, while TypeScript shares the same wire
   and action contracts.
 
-This does not prescribe one server topology. Keep decoding beside its caller,
-place inference on a GPU host, persist selected streams in SQLite or Redis, and
-move only the action ports that cross those boundaries. The
+Deployment can keep decoding beside its caller, place inference on a GPU host,
+persist selected streams in SQLite or Redis, and move only the action ports
+that cross those boundaries. The
 [generative-media](guides/generative-media.md),
 [HTTP actions](api/http-actions.md), and
 [local-to-remote](guides/local-to-remote.md) guides show these choices in
@@ -333,9 +332,9 @@ The action may produce output as soon as its inputs arrive, and a consumer may
 start before the producer finishes. Waiting on data supplies the usual
 dependency ordering.
 
-This is close to calling asynchronous functions, with the arguments and results
-represented as named streams. It supports linear pipelines, fan-out, loops, and
-parallel tool calls without making every application adopt a graph runtime.
+Arguments and results behave like asynchronous function parameters represented
+as named streams. They support linear pipelines, fan-out, loops, and parallel
+tool calls without a graph runtime.
 
 [Flow](guides/flow.md) uses the same rule. Statements start concurrently unless
 an explicit ordering constraint says otherwise. A graph-shaped declaration is
@@ -360,10 +359,9 @@ for hit in search.hits parallel 3 {
 brief.summary -> answer
 ```
 
-`brief` is dispatched with its `pages` port open. Fetches feed that port as
-results arrive, and the runtime closes it when the loop finishes. The source
-describes a familiar search-fetch-summarize dependency, but execution is
-coordinated by the data already moving between actions.
+`brief` starts with its `pages` port open. Fetches feed that port as results
+arrive, and the runtime closes it when the loop finishes. Data arrival
+coordinates the search, fetch, and summary steps.
 
 Intermediate results travel directly between ports. They need not be copied by
 a model, added to its context, collected into a graph state object, or sent to
@@ -377,7 +375,7 @@ input and output ports. Its handler can run in the caller's process or be
 registered on another peer. Callers feed and read the same ports in either
 case.
 
-This makes location a deployment decision:
+The deployment selects the execution location:
 
 - keep a formatter or parser beside its caller;
 - put model access behind a service that owns credentials or a GPU;

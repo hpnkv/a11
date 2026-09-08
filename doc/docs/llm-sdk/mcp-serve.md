@@ -43,7 +43,7 @@ Starlette app to mount.
 Its lifespan runs the MCP session manager, so the mounting application has to
 run that lifespan.
 
-## From the command line
+## Serve from the command line
 
 `a11 serve` publishes a registry over A11's own transports and MCP at once,
 from the same process and the same registry.

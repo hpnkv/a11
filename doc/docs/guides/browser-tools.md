@@ -3,9 +3,9 @@
 Browser-hosted actions let a model operate on state that exists only in the
 page, such as a canvas, selection, or editor.
 
-This guide serves three actions from a web page, registers them with the backend,
-and lets a model use them. The page's handlers run in the page; the backend never
-touches the canvas; and the model sees three ordinary A11 actions.
+Serve page actions through the existing A11 session and register their schemas
+with the model backend. The handlers retain page state while the model sees
+ordinary A11 actions.
 
 !!! note "Before you start"
 
@@ -28,9 +28,9 @@ touches the canvas; and the model sees three ordinary A11 actions.
 
 ## Try it
 
-Try "make blob 2 red and move it up", "spread them out", or "give them a warm palette". Drag the scene to orbit it. The
-right pane logs every call the page served, including what each tool narrated; the model's own sentence arrives in the
-pane above it.
+Try "make blob 2 red and move it up", "spread them out", or "give them a
+warm palette". Drag the scene to orbit it. The right pane logs each tool call
+and its activity message. The model response appears above the log.
 
 <link rel="stylesheet" href="../assets/web-demos.css">
 <div id="tools-demo" class="a11-demo">
@@ -90,11 +90,11 @@ The page is
 webview does the same thing with the IDE's editor and index instead of a scene — see
 `intellij-plugin/webview/src/ideTools.ts`.
 
-## 1. Ports are the model's arguments
+## 1. Define model arguments as ports
 
 An A11 action's tool definition is derived from its *ports*
-([`ToolAdapter`](../llm-sdk/action-tools.md)): one port per argument, a streaming port becoming an array. So the action
-is designed the way the model should see it —
+([`ToolAdapter`](../llm-sdk/action-tools.md)): one port per argument, with a
+streaming port represented as an array. Define the action at that boundary:
 
 ```ts
 const SET_COLOR_SCHEMA = new ActionSchema({
@@ -151,10 +151,10 @@ need(await action.log(`Recoloured ${recoloured} blob(s).`));
 
 The log channel requires no declared port or result cleanup.
 
-## 3. The page serves its actions
+## 3. Serve actions from the page
 
-A handler in the page is a handler like any other: read the declared inputs, do the work, write the declared outputs,
-close them.
+A page handler reads the declared inputs, modifies page state, writes the
+declared outputs, and closes them.
 
 ```ts
 const registry = new ActionRegistry();
@@ -178,11 +178,11 @@ const value = finiteNumber(raw[axis], axis, 2 * span[axis]);
 if (isStatus(value)) return await refuse(action, value, onLog);
 ```
 
-Returning `invalidArgumentError('dx must be a number of pixels; got "a bit left".')`
-is not a dead end — the tool runner hands it to the model as *this call's result*,
-so the model sees what was wrong and can call again with a number. Coercing
-instead is what hurts: `Number('a bit left')` is `NaN`, `blob.x + NaN` is `NaN`,
-and the blob leaves the canvas for good while the tool reports "moved 5 blobs".
+Return a specific status such as
+`invalidArgumentError('dx must be a number of pixels; got "a bit left".')`.
+The tool runner supplies it to the model as the call result, allowing a second
+call with a numeric value. Validate before arithmetic because
+`Number('a bit left')` produces `NaN`.
 
 Apply two constraints in each handler:
 
@@ -217,11 +217,10 @@ The response is an `a11.actions/v1` document containing one JSON
 `ActionSchema` per entry. Each port retains its JSON Schema, allowing the
 backend to derive the model-facing tool definition without a second contract.
 
-## 5. The turn
+## 5. Run the turn
 
-From there it is one ordinary `interact_with_llm` call. The allowed-actions header
-is the request: a tool not named there is not offered to the model and cannot be
-called.
+Use an ordinary `interact_with_llm` call. The allowed-actions header selects
+the page tools exposed to the model for this request.
 
 ```ts
 need(call.setHeader(LlmHeaders.ALLOWED_LLM_ACTIONS, 'describe_scene,set_color,shift_position'));

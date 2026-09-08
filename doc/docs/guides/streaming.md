@@ -100,7 +100,7 @@ raises, its outputs are aborted with the corresponding status.
 For the rare producer that can say "no more are coming" but cannot say which
 chunk was last — a log, say — `close()` is closure without finality.
 
-## Putting it together
+## Run the complete stream
 
 ```python
 import asyncio

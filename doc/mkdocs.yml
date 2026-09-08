@@ -164,9 +164,9 @@ nav:
   - Examples:
       - All examples: examples.md
       - Stream data through an AsyncNode: guides/streaming.md
-      - A WebSocket echo session: guides/echo-session.md
+      - Run a WebSocket echo session: guides/echo-session.md
       - Talk to a model: guides/llm.md
-      - From a local run to a remote call: guides/local-to-remote.md
+      - Move a local action to a remote call: guides/local-to-remote.md
       - A toy agent with a tool: guides/agent-tool.md
       - Agent harnesses and evaluations: guides/harnesses-evals.md
       - Going distributed: guides/going-distributed.md
@@ -178,8 +178,9 @@ nav:
       - Local models on the web: guides/local-models-web.md
       - Compose actions without deploying code: guides/flow.md
       - Checking flows from a toolchain: guides/flow-tooling.md
-      - P2P Chat Room: guides/p2p-chat.md
-      - Getting the faster allocator: guides/allocator.md
+      - Run a peer-to-peer chat room: guides/p2p-chat.md
+      - Enable telemetry: guides/telemetry.md
+      - Configure the native allocator: guides/allocator.md
       - Debugging fiber deadlocks: guides/debugging-concurrency.md
   - Python reference:
       - Nodes: api/nodes.md

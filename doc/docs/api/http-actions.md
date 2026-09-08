@@ -159,7 +159,7 @@ The two are separately selectable because they answer to different amounts of
 trust: a gateway happy to let a caller fetch a document may not want to hand out
 streamed uploads, arbitrary methods and server pushes.
 
-## From Python
+## Python API
 
 ```python
 from a11.sdk import http

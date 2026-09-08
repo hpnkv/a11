@@ -47,9 +47,8 @@ DEEP_RESEARCH_SCHEMA = a11.ActionSchema(
 )
 ```
 
-This schema is the product boundary. A browser or another service only needs
-the action name and ports; it does not need to know how the research is
-orchestrated.
+The schema is the product boundary. Browsers and services depend on its action
+name and ports, independent of the internal orchestration.
 
 ## Run model calls as nested actions
 
@@ -58,8 +57,8 @@ research action. `propagate_io=False` keeps its raw events, reasoning, and
 completed interactions in the process. Only text copied to a parent output is
 sent to the research caller.
 
-The helper reads only the text it needs. When the parent action finishes in a
-session, A11 cleans up the unused nested outputs with the rest of the action.
+The helper reads the text output. When the parent action finishes in a session,
+A11 cleans up the remaining nested outputs with the rest of the action.
 
 ```python
 async def _read_text(
@@ -171,10 +170,9 @@ Investigation findings:
     await action["report"].finalize()
 ```
 
-The planner completes before investigations start. Investigations overlap up
-to the explicit limit, and synthesis waits for their returned strings. The
-final model call writes tokens directly to the public `report` node, so the
-caller can render the report before the model finishes it.
+The planner completes before investigations start. Up to three investigations
+overlap, and synthesis waits for their returned strings. The final model call
+writes tokens directly to the public `report` node for incremental rendering.
 
 If any child action or Python task fails, the parent action finishes with a
 non-OK status and its open outputs are aborted. Callers do not receive a normal
@@ -212,8 +210,8 @@ its investigations, activity follows the standard action log, and the report
 streams as it is synthesized. Several `[investigate]` entries overlap, while
 their full intermediate reports stay on the backend.
 
-The hosted demo currently uses the optional Flow spelling described below. It
-exposes the same `deep-research` action boundary as the Python handler.
+The hosted demo uses the Flow composition below and exposes the same
+`deep-research` action boundary as the Python handler.
 
 !!! note "Running the demo backend"
 
@@ -321,9 +319,8 @@ others.
 
 ## Optional: express the composition with Flow
 
-Flow can describe the same orchestration when the composition should be loaded,
-checked, or changed at runtime. The corresponding section is concise because
-actions and streams provide the same execution model:
+Flow represents the orchestration as runtime-loaded, checked source. Actions
+and streams retain the same execution model:
 
 ```a11flow
 planned = run plan-research(topic: topic)
@@ -366,9 +363,7 @@ allows the flow to inspect the step's status and continue; without `try`, the
 failure propagates. The `nodes research` block also keeps investigation ports
 and fragments on the service instead of sending them to the caller.
 
-The Python handler is appropriate when orchestration is application code and
-normal Python control flow is the clearest expression. Flow is useful when the
-composition itself is runtime data, such as a checked plan supplied by a user
-or model, and it provides these lifecycle rules without more orchestration
-code. The deployed demo's complete Flow source is
+Use the Python handler when orchestration belongs in application code. Use Flow
+when the composition is runtime data, such as a checked plan supplied by a user
+or model. The deployed demo's complete Flow source is
 [`a11/demos/deep_research.flow`](https://github.com/hpnkv/a11/blob/main/a11/demos/deep_research.flow).

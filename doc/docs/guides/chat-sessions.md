@@ -1,8 +1,8 @@
 # A chat that survives a reload
 
-This guide builds a persistent chat conversation. One action supports multiple
-providers, the page retains the model's structured interaction objects, and a
-reload continues the same conversation.
+Build a persistent chat with one action for multiple providers. The page stores
+the model's structured interaction objects and resumes the conversation after a
+reload.
 
 The session design is provider-agnostic: Ollama, Claude, Gemini, OpenAI, vLLM,
 and OpenAI-compatible endpoints use the same interface, configured via headers.
@@ -36,11 +36,9 @@ and OpenAI-compatible endpoints use the same interface, configured via headers.
 
 ## Try it
 
-Ask something, then reload the page: the conversation is still there, and the
-next answer is given in its context. **New** starts a fresh one without dropping
-the socket. The right-hand pane is
-the `thoughts` port — a model that thinks before it speaks shows its working
-there, on a port of its own, while `text_output` streams the answer.
+Send a turn, reload the page, and continue with the restored context. **New**
+starts another conversation on the existing socket. The right pane renders the
+`thoughts` port while `text_output` streams the answer.
 
 <link rel="stylesheet" href="../assets/web-demos.css">
 <div id="chat-demo" class="a11-demo">
@@ -98,8 +96,7 @@ over
 [`js/demo/demo_support.ts`](https://github.com/hpnkv/a11/blob/main/js/demo/demo_support.ts),
 and the backend is
 [`a11/demos/web_demos_server.py`](https://github.com/hpnkv/a11/blob/main/a11/demos/web_demos_server.py).
-An `a11 gateway run` serves the same three actions, so a page can point at one of
-those instead.
+`a11 gateway run` serves the same three actions as another compatible endpoint.
 
 ## 1. One action, every provider
 
@@ -139,12 +136,12 @@ provider and uses the base URL entered beside it. vLLM uses its own provider
 adapter and can discover the model served by an endpoint when the model field
 is empty.
 
-The action's ports are the same whoever answers: `interactions`, `tools` and
-`config` in; `text_output`, `thoughts`, `event_stream` and `new_interactions`
-out. A page reads the visible answer off `text_output` and never has to parse a
-provider's event stream.
+Every provider uses the same ports: `interactions`, `tools`, and `config` as
+inputs; `text_output`, `thoughts`, `event_stream`, and `new_interactions` as
+outputs. The page reads visible text from `text_output` without parsing provider
+events.
 
-## 2. The conversation is a list of interactions
+## 2. Store the interaction list
 
 A turn's history is not a transcript rebuilt from text. It is the list of
 `a11.sdk.llm.Interaction` objects the provider produced, including tool calls
@@ -170,8 +167,6 @@ from a11.gateway import conversation_actions, conversations
 
 store = conversations.ConversationStore("/var/lib/a11/conversations")
 conversation_actions.install(registry, store)
-# registers: interact_with_llm (recording), get_conversation,
-#            get_conversations
 ```
 
 The store is [SQLite][a11.stores.sqlite_chunk_store.SQLiteChunkStore]: one
@@ -208,7 +203,7 @@ const GET_CONVERSATION_SCHEMA = new ActionSchema({
 });
 ```
 
-What comes back is re-parsed on the way in, and that matters more than it looks:
+Parse each restored value with its expected serialisation tag:
 
 ```ts
 const next = need(await node.next({timeoutMs: 30_000, expectedTag: INTERACTION_TAG}));
@@ -218,16 +213,15 @@ restored.push(need(parseInteraction(next)));
 `parseInteraction` brands the value with its serialization tag, which is
 what lets it go back out to the backend as an `a11.sdk.Interaction` on the next
 turn with the `a11.sdk.Interaction` type expected by the `interactions` port.
-The same tag table is what makes this work across languages at all — see
+The shared tag table provides the cross-language mapping; see
 `js/src/serial_tags.ts` and `a11/data/serial_tags.py`.
 
-Because the restored interactions *become* the history, the next turn continues
-the same conversation and lands on the same conversation node on the backend: its
-id is the first interaction's id, replayed unchanged.
+The restored interactions become the next turn's history. Their first ID also
+selects the same backend conversation node.
 
 ## 5. Keep the id in the URL
 
-The last piece of "survives a reload" is not A11 at all:
+Store the conversation ID in the page URL:
 
 ```ts
 const url = new URL(window.location.href);

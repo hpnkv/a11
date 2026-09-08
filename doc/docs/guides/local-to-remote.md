@@ -1,4 +1,4 @@
-# From a local run to a remote call
+# Move a local action to a remote call
 
 `.run()` starts an action handler in the current process. `.call()` dispatches
 the same action to another peer over a session. This supports servers that hold
@@ -18,7 +18,7 @@ This guide demonstrates the transition with a small action. The same steps move
 import a11
 ```
 
-## An action, run locally
+## Run the action locally
 
 Here is a one-line action and a local `.run()` — feed its input port, read its
 output port, exactly like the LLM interaction:
@@ -52,7 +52,7 @@ async def run_locally() -> str:
     return result
 ```
 
-## Register it so a server can host it
+## Register the action with the server
 
 To run the handler on a peer, put it in an
 [`ActionRegistry`][a11.actions.registry.ActionRegistry] under its name. A server
@@ -64,7 +64,7 @@ registry = a11.ActionRegistry()
 registry.register("shout", SHOUT, shout)
 ```
 
-## Stand up the server
+## Start the server
 
 This uses the server structure from the [echo session](echo-session.md), with an
 `action_registry` in place of the echo callback so the session can dispatch
@@ -82,7 +82,7 @@ options.path = "/ws"
 server = a11.WebSocketWireServer.create(accept, options)
 ```
 
-## Call it from a client
+## Call the action from a client
 
 The client opens a session over a wire stream, then builds the action with
 `registry.make_action`, binding it to that stream and session. `make_action`
@@ -100,7 +100,7 @@ action = registry.make_action(
 await action.call()
 ```
 
-## Feed and read, unchanged
+## Feed and read the same ports
 
 Once dispatched, the ports behave exactly as in the local case — write the
 input, read the output — but the bytes now travel over the network to the
@@ -118,7 +118,7 @@ closes too. A handler that streams with plain `put()` and then closes therefore
 ends the caller's read even though it never marked a fragment final — see
 [the node lifecycle](../lifecycles/async-node.md#4-close-writes).
 
-## Putting it together
+## Run the complete example
 
 Register the handler and create the sessions **inside the async entrypoint**
 under its running event loop, then run the action both ways:

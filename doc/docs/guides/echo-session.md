@@ -1,4 +1,4 @@
-# A WebSocket echo session
+# Run a WebSocket echo session
 
 A [`Session`][a11.service.session.Session] is A11's connection-scoped runtime:
 hand it a [`WireStream`][a11.net.wire_stream.WireStream] transport and it
@@ -13,7 +13,7 @@ A wire stream delivers messages with **no ordering guarantee**, but it is
 **synchronised on closure**: a reader sees every delivered message before the
 stream reports done. The session takes care of that lifecycle.
 
-## The echo handler
+## Implement the echo handler
 
 A server session dispatches each inbound message to a callback. Ours echoes the
 message straight back, and treats a `None` message — the peer's half-close — as
@@ -85,7 +85,7 @@ await session.done.wait()
 server.stop()
 ```
 
-## Putting it together
+## Run the complete session
 
 ```python
 import asyncio

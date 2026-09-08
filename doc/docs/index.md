@@ -1,8 +1,7 @@
 # A11
 
-A11 is an open-source library and runtime for building AI agents and the
-services around them. It connects model calls, application tools, storage, and
-user interfaces through one small set of concepts that work in Python,
+A11 connects model calls, application tools, storage, and user interfaces
+through actions and streams. The open-source runtime supports Python,
 TypeScript, and C++.
 
 An agent can use the included model actions, expose application functions as
@@ -10,11 +9,10 @@ tools, keep conversation state in ordinary application data, and compose work
 at runtime with Flow. The same action can run beside the agent, on a GPU host,
 or in the browser that owns the state it needs to change.
 
-The same runtime can serve a GPU model to several clients, stream live captions
-from speech recognition, feed decoded records into an indexing pipeline, or
-report diffusion progress before returning an image. None of these products
-needs an agent loop. They need well-scoped operations, typed data exchange, and
-streaming across component and process boundaries.
+The runtime also serves GPU models, streams speech-recognition captions, feeds
+decoded records into indexing pipelines, and reports diffusion progress before
+returning an image. These systems use the same typed operations and streams
+without an agent loop.
 
 If A11 is new to you, start with an **action**: an asynchronous operation whose
 inputs and outputs have names. Each input and output is a **node**, an ordered
@@ -83,7 +81,7 @@ The [examples page](examples.md) groups the remaining guides by task, including
 persistent chat, browser-hosted tools, parallel research, local models, and
 distributed streams.
 
-## See an agent assembled from these pieces
+## Research-agent composition
 
 The [deep-research agent](guides/deep-research.md) exposes one
 `deep-research` action to a browser. Its Python handler asks a model to plan the
@@ -91,10 +89,9 @@ topic, starts several investigations with an `asyncio` concurrency limit, and
 keeps their reports local. A final model action synthesizes those findings while
 its report streams to the caller.
 
-The browser receives the plan, action log, and final report, but the larger
-intermediate reports stay on the backend. The example shows model integration,
-tool-like actions, bounded parallel work, streamed progress, and remote serving
-with ordinary Python control flow and no separate agent graph.
+The browser receives the plan, action log, and final report. Larger intermediate
+reports remain on the backend. The implementation uses ordinary Python control
+flow for bounded parallel work and streams progress through action ports.
 
 ## A stream in one minute
 
@@ -123,7 +120,7 @@ Action inputs and outputs use these same streams. A handler can therefore emit
 progress or partial output before it has finished, and its caller can begin
 processing that output immediately.
 
-## The choices that keep an application flexible
+## Core interfaces
 
 - An **action** is a named operation with described inputs and outputs.
 - Each input or output is a **node**, so a single value and a live stream use

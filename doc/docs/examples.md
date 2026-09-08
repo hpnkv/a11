@@ -1,8 +1,8 @@
 # Examples by task
 
-Each guide starts from an application outcome and introduces the A11 concepts
-needed to reach it. Begin with a core example, or go directly to the agent,
-model service, streaming API, or data pipeline you are building.
+Each guide starts from an application outcome and introduces the required A11
+interfaces. Choose a streaming API, model service, agent, browser, or operations
+example below.
 
 <link rel="stylesheet" href="assets/navigation-cards.css">
 <nav class="a11-card-nav" aria-label="Example categories">
@@ -69,6 +69,8 @@ model service, streaming API, or data pipeline you are building.
 
 ## Distribute and operate
 
+- **[Export runtime telemetry with OpenTelemetry](guides/telemetry.md).**
+  Configure OTLP or Langfuse and inspect action, session, and stream spans.
 - **[Exchange durable streams through Redis](guides/going-distributed.md).** Let
   two programs communicate without a direct connection.
 - **[Choose and verify the native allocator](guides/allocator.md).** Enable the

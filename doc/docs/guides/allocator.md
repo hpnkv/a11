@@ -1,9 +1,8 @@
 # Native allocator
 
-Replacing the C library's `malloc` improved A11's native server throughput by
-about **25%** on the reference Linux benchmark: from 15.7k to 19.8k operations
-per second at 256 concurrent clients, while per-operation CPU fell from 286 µs
-to 234 µs.
+The reference Linux benchmark reports 19.8k operations per second with the
+packaged allocator and 15.7k with glibc `malloc` at 256 concurrent clients.
+Per-operation CPU is 234 µs and 286 µs respectively.
 
 A11 enables the allocator for its executables and CLI. Applications embedding
 A11 in another process must preload it before startup.
@@ -16,7 +15,7 @@ allocator directly.
 **The `a11` command** re-executes itself once at startup with the allocator
 preloaded, so commands such as `a11 gateway` use it automatically.
 
-## Applications that embed A11
+## Preload for applications that embed A11
 
 When A11 runs inside an existing process — `python myserver.py`, a notebook,
 uvicorn, or pytest — preload the allocator before starting that process.
@@ -71,7 +70,7 @@ This asks the dynamic loader whether the allocator's symbols resolve in the
 current process. It remains accurate when the environment variable is set but
 the allocator was not loaded.
 
-## Platform considerations
+## Account for platform constraints
 
 **macOS System Integrity Protection strips `DYLD_INSERT_LIBRARIES`** from signed
 interpreters. A Homebrew or `uv`-managed Python normally keeps it; the system
@@ -89,7 +88,7 @@ allocators to track memory errors and thread safety issues.
 `a11` command from re-executing itself, which is occasionally useful when
 debugging process startup.
 
-## Choosing a different allocator when building from source
+## Choose an allocator when building from source
 
 `-DA11_ALLOCATOR=` takes `auto` (the default), `mimalloc`, `tcmalloc` or
 `system`. `auto` is a *preference order*, per platform, following the
@@ -100,6 +99,5 @@ produced by `scripts/bootstrap_wheel_deps.sh`, therefore selects mimalloc on
 Linux. An explicit selection is required to exist:
 `-DA11_ALLOCATOR=tcmalloc` fails when the prefix does not contain tcmalloc.
 
-jemalloc, mimalloc and tcmalloc all measured within a few percent of each other
-and all beat glibc by 20–30%, so which one is chosen matters much less than not
-being on glibc.
+The reference benchmark places jemalloc, mimalloc, and tcmalloc within a few
+percent of each other and 20–30% above glibc.

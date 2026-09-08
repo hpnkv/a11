@@ -20,7 +20,7 @@ fiber stacks or where their saved frames begin.
 object it waits on and its frame pointer when it blocks; unwinding from that
 frame pointer reconstructs the parked backtrace on demand.
 
-## Getting a report
+## Get a report
 
 Four ways, in increasing order of how wedged the process is.
 
@@ -98,7 +98,7 @@ pair a hang needs — the threads show every worker parked in
 `PoolAlgorithm::suspend_until`, and the report says which fibers are stuck and
 why.
 
-### Loading it automatically
+### Load the debugger integration automatically
 
 The repository has a `.lldbinit` and a `.gdbinit` that run the import, so a
 debugger started in the repo root has both commands. Both debuggers require a
@@ -244,7 +244,7 @@ Most of A11's data path uses stackless callback pumps (`ChunkStoreReader`,
 `ChunkStoreWriter`), so an idle process often has an empty fiber snapshot.
 Fibers back synchronous-looking APIs and the Flow runtime.
 
-## Environment dials
+## Configure report collection
 
 | Variable | Effect |
 | --- | --- |
@@ -256,7 +256,7 @@ Fibers back synchronous-looking APIs and the Flow runtime.
 | `A11_POOL_STATS=1` | Worker-pool counters, reported at exit |
 | `A11_POOL_PIN=<spec>` | Pin pool workers to CPUs |
 
-## Runtime overhead
+## Measure runtime overhead
 
 Recording a frame pointer is one register read, and everything except mutex
 holder tracking sits on a path that already pays a context switch. Measured with
@@ -292,7 +292,7 @@ On an architecture with no frame-record layout in
 `(frame-pointer walk unsupported on this architecture)`. AArch64 and x86-64 are
 supported.
 
-## Trying it
+## Generate a test report
 
 `fiber_deadlock_demo` hangs, in three shapes:
 

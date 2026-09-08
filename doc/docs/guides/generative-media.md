@@ -5,11 +5,9 @@ the model runs and one image when it finishes. Giving each result its own output
 port lets a caller drain them concurrently, apply different size limits, and
 display either one without decoding a mixed event stream.
 
-The pattern applies across generative-model APIs. A video service can separate
-preview frames, logs, and the completed asset; a
-speech synthesizer can separate audio frames from alignment records; an image
-editor can return masks and rendered output under distinct media types. Each
-consumer subscribes to the result it understands.
+The same port structure supports video previews and completed assets, speech
+frames and alignment records, or image masks and rendered output. Each
+consumer subscribes only to its required result.
 
 !!! note "Before you start"
 
@@ -133,9 +131,9 @@ result = await asyncio.to_thread(
 )
 ```
 
-The handler does not await each progress tick's confirmation future, so a
-denoising step does not wait for storage. Await both stages for payloads that
-must be confirmed — `await (await node.put(value))` — as
+The handler omits each progress tick's confirmation future, allowing denoising
+to continue while storage accepts the record. Payloads that require confirmed
+storage await both stages with `await (await node.put(value))`, as
 `a11.gateway.conversations.ConversationStore.record` does.
 
 Both ports are closed however the handler ends:
@@ -165,10 +163,10 @@ png = await asyncio.to_thread(_png_bytes, result.images[0])
 await image_out.put_chunk(_png_chunk(png), final=True)
 ```
 
-`put` encodes a value through the serialization registry, which holds a codec
-per (type, media type) pair and has none for bytes as `image/png` — so `put`
-answers `NOT_FOUND`. A payload that is already bytes in its final format goes on
-the port as a chunk, the same way `a11.sdk.http.client` writes a request body.
+`put` encodes a value through a registered `(type, media type)` codec. Raw PNG
+bytes have no application value codec, so `put` returns `NOT_FOUND`. Write an
+already encoded payload as a chunk, as `a11.sdk.http.client` does for request
+bodies.
 
 The browser reads the PNG as a *chunk* because it has no registered application
 type:

@@ -1,17 +1,16 @@
 # Run a model in the browser
 
 The [Browser clients](browser-clients.md) guide calls a model hosted on a
-server. This guide runs the model locally: `interact_with_gemma` loads a
+server. Run the model locally with `interact_with_gemma`, which loads a
 [Gemma](https://ai.google.dev/gemma)-family model **into the page** and runs it
-on the browser's GPU through [WebGPU](https://developer.mozilla.org/docs/Web/API/WebGPU_API).
-Nothing leaves the device, and the reply streams onto an `AsyncNode` exactly as
-a remote backend's would.
+on the browser's GPU through
+[WebGPU](https://developer.mozilla.org/docs/Web/API/WebGPU_API). Prompts and
+responses stay in the page, and the reply streams through an `AsyncNode`.
 
 `interact_with_gemma` is an A11 action with the same interaction ports as the
 other LLM backends: an `interactions` input, a unary `config` input, and
-`text_output` / `new_interactions` outputs — so the code that drives it is the
-same as for `interact_with_llm`. Its handler runs a local model instead of
-calling an API.
+`text_output` / `new_interactions` outputs. The caller uses the same port
+contract as `interact_with_llm`; its handler executes through WebGPU.
 
 !!! note "Before you start"
 
@@ -44,7 +43,7 @@ reload. A WebGPU-capable browser is required.
 </div>
 <script type="module" src="../assets/local-models.js"></script>
 
-## 1. The action contract
+## 1. Import the action contract
 
 Import the backend and SDK types. `INTERACT_WITH_GEMMA_SCHEMA` describes the
 ports and registers like any other schema.
@@ -140,7 +139,7 @@ need(await action.wait(5_000));
 history = [...history, user, assistant];
 ```
 
-## 5. Swap the runtime (optional)
+## 5. Provide another runtime (optional)
 
 By default, the handler dynamically imports Google's MediaPipe `LlmInference`
 task and runs it on WebGPU. Use `setGemmaEngineFactory` to cache a loaded model
@@ -152,8 +151,6 @@ import {setGemmaEngineFactory, type GemmaEngine} from '@curiositystack/a11';
 setGemmaEngineFactory(async (config) => {
     const engine: GemmaEngine = {
         async generate(prompt, onToken) {
-            // stream pieces via onToken(delta); resolve with the full text,
-            // or return a Status on failure — never throw.
             return '...';
         },
     };
@@ -161,9 +158,9 @@ setGemmaEngineFactory(async (config) => {
 });
 ```
 
-A factory returns a `StatusOr<GemmaEngine>`. Return a status such as
-`unavailableError(...)` on failure; the runtime aborts the output ports with
-that status.
+A factory returns a `StatusOr<GemmaEngine>`. It reports failures with a status
+such as `unavailableError(...)`; the runtime aborts the output ports with that
+status.
 
 ## 6. Display failures
 

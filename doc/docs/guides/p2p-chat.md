@@ -1,17 +1,13 @@
-# P2P Chat Room
+# Run a peer-to-peer chat room
 
-A fully decentralised chat room running entirely in the browser. Peers
-connect over WebRTC using A11's signalling infrastructure. The room creator
-becomes the host — an A11 service exposing actions that other peers call to
-send messages, set names, and receive the replicated event log. When the host
-leaves, the peer with the lowest ID takes over seamlessly.
+Peers connect from the browser over WebRTC. The room creator hosts an A11
+service with actions for messages, display names, and event-log replication.
+The peer with the lowest ID becomes the next host after a departure.
 
-**Privacy guarantee:** a11x is performatively not nosy. It hands out anonymous
-identities with time-limited TURN credentials and routes signalling messages
-between them. It never receives room identifiers, peer lists, or any data that
-could correlate which peers belong to the same room. TURN relays only
-DTLS-encrypted frames. Logs do not correlate client identities with IP
-addresses.
+The a11x signalling service issues anonymous identities and time-limited TURN
+credentials. Its requests contain no room identifier or peer list. TURN
+relays carry DTLS-encrypted frames, and service logs omit identity-to-IP
+correlation.
 
 ## Try it
 
@@ -68,11 +64,10 @@ STUN path, orange for TURN relay.
 The source is
 [`js/demo/p2p_chat/`](https://github.com/hpnkv/a11/tree/main/js/demo/p2p_chat).
 
-## 1. Anonymous identity and signalling
+## 1. Claim an anonymous identity
 
 Each peer independently claims an anonymous identity from a11x. The request
-carries no room identifier, no peer list — nothing that could tell a11x
-which room the peer intends to join or who else is in it:
+carries no room identifier or peer list:
 
 ```
 POST https://a11.to/v1/anonymous/claim
@@ -84,14 +79,13 @@ The exchange generates a random identity, issues a short-lived claim
 does not track rooms, does not maintain peer lists, and does not log any
 correlation between the anonymous identity and the caller's IP address.
 
-Room coordination is entirely client-side: the share URL encodes the host's
-peer ID (`?host=<peerId>`), so a joiner knows who to WebRTC-connect to
-without asking a11x.
+Room coordination stays client-side. The share URL encodes the host's peer ID
+as `?host=<peerId>`, which identifies the WebRTC endpoint to a joiner.
 
 Anonymous TURN access is limited to 10 minutes and, where the TURN server
 supports it, to 100 KiB/s bandwidth.
 
-### Keeping credentials current
+### Keep credentials current
 
 The anonymous endpoint mints a new identity on every call, and the renewal
 and ICE endpoints an account holder uses (`/v1/identities/.../claim/renew`,
@@ -126,7 +120,7 @@ Carrying a room past that window needs the peers to agree on new identities
 before the old ones lapse -- a `rekey` event in the log, announced over the
 connections that are still up. The demo does not do this.
 
-## 2. The host as an A11 service
+## 2. Host the room as an A11 service
 
 The room creator becomes the initial host. It runs an `ActionRegistry` with
 four actions, each implemented as a handler that reads inputs and writes
@@ -150,7 +144,7 @@ with `ChannelEndpointRole.SERVER`. That adapter reads a single data channel,
 so the peer asks for one with `desiredChannels: 1`; the client default of 8
 stripes packets round-robin across every open channel.
 
-## 3. Calling actions from peers
+## 3. Call actions from peers
 
 A non-host peer connects to the host's signalling identity, establishes a
 WebRTC data channel, and wraps it in a `Session` with `StreamMode.START`.
@@ -171,7 +165,7 @@ await action.waitForDispatch(10_000);
 The peer registers the same schemas client-side (without handlers) so the
 session's node map and action framing work identically on both ends.
 
-## 4. Event-log replication
+## 4. Replicate the event log
 
 The host maintains an ordered event log:
 
@@ -198,7 +192,7 @@ connected. An action's output ports close when its handler returns, so a
 handler that pushes live values holds itself open — here on the peer's
 departure and on `action.signal`.
 
-## 5. Departures, liveness, and failover
+## 5. Handle departures and elect a host
 
 A peer leaves in one of three ways, and the room converges on all of them
 within ten seconds:
@@ -254,7 +248,7 @@ Reconnection is the same machinery everywhere: `retry` in
 gives claiming an identity, binding a listener, and dialling a host one
 policy, the one `a11.client.hosting` applies to a hosted agent.
 
-## 6. Connection monitoring
+## 6. Monitor the connection path
 
 Each peer polls `RTCPeerConnection.getStats()` every 3 seconds. The selected
 candidate pair reveals the active ICE path:
@@ -264,14 +258,14 @@ candidate pair reveals the active ICE path:
 | `host`, `srflx`, `prflx` | Direct (STUN) | ● green |
 | `relay` | TURN relayed | ◆ orange + warning |
 
-TURN usage is prominently displayed with an orange badge and a "TURN relayed"
-label. The badge updates dynamically as ICE candidates change — if a peer
-re-signals and switches from relay to direct, the badge turns green.
+TURN usage appears with an orange "TURN relayed" badge. The badge follows ICE
+candidate changes and turns green when a re-signalled connection switches to
+a direct path.
 
-## 7. Privacy model
+## 7. Inspect the privacy boundary
 
-The demo is designed so that a11x is structurally unable to correlate peers
-into rooms:
+The signalling request and share-link design expose the following data to
+a11x:
 
 | What a11x sees | What a11x does NOT see |
 |---|---|

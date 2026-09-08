@@ -783,6 +783,7 @@ async def _resolve_model(client: Any, model: str) -> str:
 
 
 async def interact_with_vllm(action: a11.Action):
+    output = llm.OrderedOutputStreams(action)
     deadline = a11.get_deadline(action)
 
     def remaining_timeout():
@@ -876,10 +877,7 @@ async def interact_with_vllm(action: a11.Action):
             async for chunk in stream:
                 await action["event_stream"].put(chunk)
                 text, reasoning = accumulator.add(chunk)
-                if text:
-                    await action["text_output"].put(text)
-                if reasoning:
-                    await action["thoughts"].put(reasoning)
+                await output.put(text=text, thought=reasoning)
 
             tool_calls = await accumulator.finalize()
             next_tool_call_id += len(tool_calls)

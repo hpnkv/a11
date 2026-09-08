@@ -685,6 +685,7 @@ def _build_tools(
 
 
 async def interact_with_gemini(action: a11.Action):
+    output = llm.OrderedOutputStreams(action)
     deadline = a11.get_deadline(action)
 
     def remaining_timeout():
@@ -818,7 +819,7 @@ async def interact_with_gemini(action: a11.Action):
                     delta_type = getattr(delta, "type", None)
                     if delta_type == "text":
                         if delta.text:
-                            await action["text_output"].put(delta.text)
+                            await output.put(text=delta.text)
                     elif delta_type == "thought_summary":
                         content = getattr(delta, "content", None)
                         if (
@@ -826,7 +827,7 @@ async def interact_with_gemini(action: a11.Action):
                             and getattr(content, "type", None) == "text"
                             and getattr(content, "text", None)
                         ):
-                            await action["thoughts"].put(content.text)
+                            await output.put(thought=content.text)
 
                 elif event_type == "interaction.completed":
                     snapshot = event.interaction

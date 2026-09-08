@@ -334,6 +334,21 @@ async def test_thoughts_flush_once_before_first_text(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_a_combined_chunk_cannot_split_the_visible_answer(monkeypatch):
+    rounds = [[
+        _chunk(_message(thinking="considering ", content="Hello")),
+        _chunk(_message(thinking="late", content=" world")),
+        _chunk(done=True),
+    ]]
+
+    thoughts, _ = await _run(rounds, monkeypatch, read="thoughts")
+    text, _ = await _run(rounds, monkeypatch, read="text_output")
+
+    assert "".join(thoughts) == "considering "
+    assert "".join(text) == "Hello world"
+
+
+@pytest.mark.asyncio
 async def test_logs_round_shape_and_token_usage(monkeypatch):
     rounds = [[_chunk(_message(content="Hello.")), _chunk(done=True)]]
 

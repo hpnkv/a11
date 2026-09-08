@@ -75,6 +75,19 @@ class ProviderCase:
     encode: Callable[[llm.NormalizedMessage], Any]
 
 
+class _OutputPort:
+    def __init__(self, name: str, events: list[tuple[str, str]]):
+        self.name = name
+        self.events = events
+        self.writer = self
+
+    async def put(self, value: str) -> None:
+        self.events.append((self.name, value))
+
+    def flush(self) -> None:
+        self.events.append((self.name, "flush"))
+
+
 def _anthropic(message: llm.NormalizedMessage) -> dict[str, Any]:
     return anthropic_messages.from_normalized(message)
 
@@ -237,6 +250,26 @@ def test_action_and_adapter_surface_is_shared(case: ProviderCase):
     )
     assert case.adapter(interaction).get_message_text() == "hello"
     assert a11.from_chunk(interaction.system_instructions[0]) == "Be concise."
+
+
+@pytest.mark.asyncio
+async def test_live_outputs_have_one_thought_phase_before_text():
+    events: list[tuple[str, str]] = []
+    ports = {
+        "thoughts": _OutputPort("thoughts", events),
+        "text_output": _OutputPort("text", events),
+    }
+    output = llm.OrderedOutputStreams(ports)  # type: ignore[arg-type]
+
+    await output.put(thought="considering ", text="Hello")
+    await output.put(thought="late reasoning", text=" world")
+
+    assert events == [
+        ("thoughts", "considering "),
+        ("thoughts", "flush"),
+        ("text", "Hello"),
+        ("text", " world"),
+    ]
 
 
 # Imports above intentionally register these normalizers. Keep aliases live so

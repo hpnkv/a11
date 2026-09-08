@@ -523,6 +523,7 @@ def _check_result(message: cc.ResultMessage) -> None:
 
 
 async def interact_with_claude_code(action: a11.Action):
+    output = llm.OrderedOutputStreams(action)
     deadline = a11.get_deadline(action)
 
     def remaining_timeout():
@@ -637,11 +638,11 @@ async def interact_with_claude_code(action: a11.Action):
                     continue
                 delta = event.get("delta") or {}
                 if delta.get("type") == "text_delta" and delta.get("text"):
-                    await action["text_output"].put(delta["text"])
+                    await output.put(text=delta["text"])
                 elif delta.get("type") == "thinking_delta" and delta.get(
                     "thinking"
                 ):
-                    await action["thoughts"].put(delta["thinking"])
+                    await output.put(thought=delta["thinking"])
                 continue
 
             if isinstance(message, cc.AssistantMessage):

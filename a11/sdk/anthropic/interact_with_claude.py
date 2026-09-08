@@ -194,6 +194,7 @@ def _build_server_tools(config: CreateMessageConfig) -> list[dict[str, Any]]:
 
 
 async def interact_with_claude(action: a11.Action):
+    output = llm.OrderedOutputStreams(action)
     deadline = a11.get_deadline(action)
 
     def remaining_timeout():
@@ -301,10 +302,10 @@ async def interact_with_claude(action: a11.Action):
                         )
                     elif delta.type == "text_delta":
                         if delta.text:
-                            await action["text_output"].put(delta.text)
+                            await output.put(text=delta.text)
                     elif delta.type == "thinking_delta":
                         if delta.thinking:
-                            await action["thoughts"].put(delta.thinking)
+                            await output.put(thought=delta.thinking)
 
                 if (
                     event.type == "content_block_stop"

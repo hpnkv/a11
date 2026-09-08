@@ -107,49 +107,60 @@ def _build_prompt(
     return "\n\n".join([*system, body])
 
 
-def _tool_protocol_schema(
-    tools: list[dict[str, Any]], final_schema: dict[str, Any] | None
-) -> dict[str, Any]:
-    calls = []
-    for tool in tools:
-        calls.append(
-            {
-                "type": "object",
-                "properties": {
-                    "type": {"const": "tool_call"},
-                    "name": {"const": tool["name"]},
-                    "arguments": (
-                        tool.get("input_schema")
-                        or {"type": "object", "properties": {}}
-                    ),
-                },
-                "required": ["type", "name", "arguments"],
-                "additionalProperties": False,
-            }
-        )
-    response_schema = final_schema or {"type": "string"}
-    calls.append(
-        {
-            "type": "object",
-            "properties": {
-                "type": {"const": "response"},
-                "response": response_schema,
+def _tool_protocol_schema(tools: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "type": {"type": "string", "enum": ["tool_call", "response"]},
+            "name": {
+                "type": "string",
+                "enum": ["", *(t["name"] for t in tools)],
             },
-            "required": ["type", "response"],
-            "additionalProperties": False,
-        }
-    )
-    return {"oneOf": calls}
+            "arguments": {"type": "string"},
+            "response": {"type": "string"},
+        },
+        "required": ["type", "name", "arguments", "response"],
+        "additionalProperties": False,
+    }
 
 
-def _tool_protocol_prompt(tools: list[dict[str, Any]]) -> str:
+def _tool_protocol_prompt(
+    tools: list[dict[str, Any]], final_schema: dict[str, Any] | None
+) -> str:
     definitions = json.dumps(tools, separators=(",", ":"))
-    return (
-        "A11 actions are available as external tools. Return a tool_call object"
-        " when one is needed, then wait for its result. Return a response"
-        " object only when the answer is complete. Available actions: "
-        + definitions
+    final = (
+        " The response string must contain JSON matching this schema: "
+        + json.dumps(final_schema, separators=(",", ":"))
+        if final_schema
+        else ""
     )
+    return (
+        "A11 actions are available as external tools. Return all four envelope"
+        " fields. For a tool call, set type to tool_call, name to the action"
+        " name, arguments to its JSON-encoded argument object, and response to"
+        " an empty string. Then wait for the result. When the answer is"
+        " complete, set type to response, name and arguments to empty strings,"
+        " and response to the answer. Available actions: "
+        + definitions
+        + final
+    )
+
+
+def _tool_arguments(value: Any) -> dict[str, Any]:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise Status(
+                code=StatusCode.INTERNAL,
+                message=f"Codex tool arguments are not valid JSON: {exc}",
+            ).to_exception() from exc
+    if not isinstance(value, dict):
+        raise Status(
+            code=StatusCode.INTERNAL,
+            message="Codex tool arguments are not a JSON object.",
+        ).to_exception()
+    return value
 
 
 def _toml_value(value: Any) -> str:
@@ -214,6 +225,7 @@ async def _run_codex(
     env: dict[str, str],
     image_paths: list[str] | None = None,
 ) -> tuple[str, str | None, llm.UsageMetadata | None]:
+    output = llm.OrderedOutputStreams(action)
     options = _options(
         config,
         model,
@@ -272,7 +284,7 @@ async def _run_codex(
                 if item.get("type") == "agent_message":
                     final_text = text
                 elif item.get("type") == "reasoning" and text:
-                    await action["thoughts"].put(text)
+                    await output.put(thought=text)
             elif event_type == "turn.completed":
                 values = event.get("usage") or {}
                 usage = llm.UsageMetadata(
@@ -361,6 +373,7 @@ async def _write_tool_images(
 
 async def interact_with_codex(action: a11.Action) -> None:
     """Run a Codex CLI turn, including schema-guided A11 tool calls."""
+    output = llm.OrderedOutputStreams(action)
     deadline = a11.get_deadline(action)
     config = await action["config"].consume(
         CreateCodexSessionConfig,
@@ -411,7 +424,7 @@ async def interact_with_codex(action: a11.Action) -> None:
         with tempfile.TemporaryDirectory(prefix="a11-codex-") as directory:
             image_paths = _write_prompt_images(prompt_interactions, directory)
             schema = (
-                _tool_protocol_schema(definitions, config.output_schema)
+                _tool_protocol_schema(definitions)
                 if definitions
                 else config.output_schema
             )
@@ -421,7 +434,10 @@ async def interact_with_codex(action: a11.Action) -> None:
                 path.write_text(json.dumps(schema), encoding="utf-8")
                 schema_path = str(path)
             if definitions:
-                prompt = f"{_tool_protocol_prompt(definitions)}\n\n{prompt}"
+                protocol_prompt = _tool_protocol_prompt(
+                    definitions, config.output_schema
+                )
+                prompt = f"{protocol_prompt}\n\n{prompt}"
 
             failed_rounds = llm.FailedToolRounds()
             while True:
@@ -455,7 +471,7 @@ async def interact_with_codex(action: a11.Action) -> None:
                         if not definitions
                         else _response_text(protocol.get("response"))
                     )
-                    await action["text_output"].put(answer)
+                    await output.put(text=answer)
                     interaction = llm.Interaction(
                         previous_interaction_id=previous_id,
                         role=llm.Role.ASSISTANT,
@@ -495,7 +511,7 @@ async def interact_with_codex(action: a11.Action) -> None:
                 call = llm.ToolCall(
                     name=protocol.get("name", ""),
                     id=f"call_{os.urandom(8).hex()}",
-                    params=protocol.get("arguments") or {},
+                    params=_tool_arguments(protocol.get("arguments", "")),
                 )
                 interaction = llm.Interaction(
                     previous_interaction_id=previous_id,

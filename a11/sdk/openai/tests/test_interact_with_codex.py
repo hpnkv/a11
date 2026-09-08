@@ -154,6 +154,7 @@ async def test_jsonl_transport_streams_events_reasoning_and_usage(monkeypatch):
     action = {
         "event_stream": _Sink(),
         "thoughts": _Sink(),
+        "text_output": _Sink(),
     }
     text, thread_id, usage = await mod._run_codex(
         action,
@@ -270,11 +271,17 @@ async def test_a11_tool_call_executes_then_resumes_codex(monkeypatch):
     text, produced, calls = await _run(
         [
             (
-                '{"type":"tool_call","name":"lookup","arguments":{"key":"x"}}',
+                '{"type":"tool_call","name":"lookup",'
+                '"arguments":"{\\"key\\":\\"x\\"}","response":""}',
                 "thread-8",
                 None,
             ),
-            ('{"type":"response","response":"Done."}', "thread-8", None),
+            (
+                '{"type":"response","name":"","arguments":"",'
+                '"response":"Done."}',
+                "thread-8",
+                None,
+            ),
         ],
         monkeypatch,
         tools=[definition],
@@ -285,3 +292,15 @@ async def test_a11_tool_call_executes_then_resumes_codex(monkeypatch):
     assert produced[0].action_calls[0].name == "lookup"
     assert produced[1].action_outputs
     assert calls[1][4] == "thread-8"
+
+
+def test_tool_protocol_schema_is_a_codex_supported_object():
+    schema = mod._tool_protocol_schema(
+        [{"name": "lookup", "input_schema": {"oneOf": []}}]
+    )
+
+    assert schema["type"] == "object"
+    assert schema["additionalProperties"] is False
+    assert schema["required"] == list(schema["properties"])
+    assert schema["properties"]["name"]["enum"] == ["", "lookup"]
+    assert "oneOf" not in json.dumps(schema)

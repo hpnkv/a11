@@ -119,6 +119,7 @@ def _api_status(exc: openai.APIError) -> Status:
 
 async def interact_with_gpt(action: a11.Action) -> None:
     """Run one OpenAI turn, including any registry-backed tool rounds."""
+    output = llm.OrderedOutputStreams(action)
     deadline = a11.get_deadline(action)
 
     def remaining_timeout():
@@ -192,10 +193,7 @@ async def interact_with_gpt(action: a11.Action) -> None:
             async for chunk in stream:
                 await action["event_stream"].put(chunk)
                 text, reasoning = accumulator.add(chunk)
-                if text:
-                    await action["text_output"].put(text)
-                if reasoning:
-                    await action["thoughts"].put(reasoning)
+                await output.put(text=text, thought=reasoning)
             tool_calls = await accumulator.finalize()
             next_call_id += len(tool_calls)
             message = accumulator.message_dict()

@@ -45,6 +45,30 @@ class LlmHeaders(enum.StrEnum):
     ALLOWED_LLM_ACTIONS = "x-a11-allowed-llm-actions"
 
 
+class OrderedOutputStreams:
+    """Keep a live assistant turn in one thought phase, then one text phase.
+
+    Provider events may carry both fields or expose a late reasoning delta after
+    answer text has started. The provider-native event stream and accumulated
+    interaction retain that data; the live presentation stream admits thoughts
+    only until the first text and flushes that boundary before writing text.
+    """
+
+    def __init__(self, action: a11.Action):
+        self._thoughts = action["thoughts"]
+        self._text = action["text_output"]
+        self._text_started = False
+
+    async def put(self, *, thought: str = "", text: str = "") -> None:
+        if thought and not self._text_started:
+            await self._thoughts.put(thought)
+        if text:
+            if not self._text_started:
+                self._thoughts.writer.flush()
+                self._text_started = True
+            await self._text.put(text)
+
+
 def get_allowed_llm_action_patterns(action: a11.Action) -> list[str]:
     """Regex patterns for the actions the LLM may invoke as tools.
 

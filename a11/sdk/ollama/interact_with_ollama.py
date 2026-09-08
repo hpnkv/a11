@@ -691,8 +691,7 @@ async def interact_with_ollama(action: a11.Action):
     call_id_prefix = f"call_{uuid.uuid4().hex[:12]}"
     next_tool_call_id = 0
     round_number = 0
-    thoughts = action["thoughts"]
-    thoughts_flushed = False
+    output = llm.OrderedOutputStreams(action)
     try:
         failed_rounds = llm.FailedToolRounds()
         while True:
@@ -741,13 +740,10 @@ async def interact_with_ollama(action: a11.Action):
                 message = getattr(chunk, "message", None)
                 if message is not None:
                     accumulator.add(message)
-                    if message.content:
-                        if not thoughts_flushed:
-                            thoughts.writer.flush()
-                            thoughts_flushed = True
-                        await action["text_output"].put(message.content)
-                    if message.thinking:
-                        await thoughts.put(message.thinking)
+                    await output.put(
+                        thought=message.thinking or "",
+                        text=message.content or "",
+                    )
 
                 if getattr(chunk, "done", False):
                     snapshot = chunk

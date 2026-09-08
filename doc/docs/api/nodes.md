@@ -6,27 +6,46 @@ Nodes carry data between action ports and across network transports.
 
 ## Using AsyncNode
 
-### Creating and Writing
+### Creating and writing
 
 Create a node with [`create`][a11.nodes.async_node.AsyncNode.create] and write items
-sequentially with [`put`][a11.nodes.async_node.AsyncNode.put]. Each write returns
-a future confirming storage acceptance. Mark the end of stream with
-[`finalize`][a11.nodes.async_node.AsyncNode.finalize]:
+sequentially with [`put`][a11.nodes.async_node.AsyncNode.put]. A write has two
+asynchronous stages: admission to the bounded writer, then acceptance by the
+backing store. Await both when later work depends on durable acceptance:
 
 ```python
 import a11
 
 node = a11.AsyncNode.create("events")
 
-await node.put({"event": "start"})
+confirmation = await node.put({"event": "start"})
+sequence = await confirmation
+```
+
+The first await applies local backpressure. The confirmation reports store
+acceptance and any local transport failure; it is not an acknowledgement from
+a remote reader. Code that will drain the node before shutdown can omit the
+second await.
+
+[`finalize`][a11.nodes.async_node.AsyncNode.finalize] records the logical end
+of the data and closes the writer:
+
+```python
 await node.put({"event": "progress", "percent": 50})
 await node.finalize({"event": "complete", "percent": 100})
 ```
 
-### Reading and Consuming
+`finalize(value)` makes `value` the final visible record. `finalize()` writes
+an invisible final marker after previously admitted records. Pass `wait=True`
+when the process must remain alive until finality and closure reach the store.
+Use `abort_with_status()` when partial output must be reported as a failure.
 
-Consume items with `async for` or [`next`][a11.nodes.async_node.AsyncNode.next]. For
-actions returning a single complete value, use [`consume`][a11.nodes.async_node.AsyncNode.consume]:
+### Iterating streams and reading unary values
+
+Read items one-by-one with `async for` or
+[`next`][a11.nodes.async_node.AsyncNode.next]. For an action returning one
+complete value, use
+[`consume`][a11.nodes.async_node.AsyncNode.consume]:
 
 ```python
 async for event in node:
@@ -34,6 +53,26 @@ async for event in node:
 
 result = await unary_node.consume()
 ```
+
+`next()` returns one independent value and `None` at the end of a successful
+stream. `consume()` requires one logically complete value, including the final
+marker, and rejects an incomplete unary result. Use `next_chunk()` or
+`next_fragment()` when code needs media metadata, serialization tags, sequence
+numbers, or routing fields.
+
+The [AsyncNode lifecycle](../lifecycles/async-node.md) defines finality,
+closure, reset, replay, and failure in detail.
+
+## Values and encoded chunks
+
+`put()` serializes an application value through the node's registry.
+`put_chunk()` writes bytes that already have their final representation, such
+as a PNG or an HTTP body. The chunk metadata must state the media type because
+readers use that metadata to interpret the bytes. The
+[data reference](data.md) describes representations and type tags.
+
+Pre-encoded binary assets use chunks directly. The reader uses
+`next_chunk()` and an explicit size limit.
 
 ::: a11.nodes.async_node.AsyncNode
 

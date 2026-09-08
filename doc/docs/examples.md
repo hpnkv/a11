@@ -76,7 +76,7 @@ example below.
 - **[Choose and verify the native allocator](guides/allocator.md).** Enable the
   packaged allocator for native executables or embedding processes.
 - **[Integrate Flow diagnostics into an editor or CI](guides/flow-tooling.md).**
-  Consume stable diagnostic, formatting, completion, and navigation responses.
+  Read stable diagnostic, formatting, completion, and navigation responses.
 
 Runnable companion programs are available in the repository's
 [`examples/`](https://github.com/hpnkv/a11/tree/main/examples) directory.

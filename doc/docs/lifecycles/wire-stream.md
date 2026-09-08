@@ -63,7 +63,7 @@ Starting installs two callbacks:
 - the done callback runs once after full clean completion or failure.
 
 The runtime awaits the message callback before delivering another message on
-that endpoint, so a slow consumer applies backpressure.
+that endpoint, so a slow callback applies backpressure.
 
 `start` and `accept` are startup barriers, not completion barriers. In the C++
 runtime they resolve after the channel handshake; TypeScript follows the same
@@ -151,7 +151,7 @@ stream.
 | Operation | What completion means |
 | --- | --- |
 | `start` / `accept` | The endpoint is configured and its transport handshake completed |
-| message callback | The application has finished consuming one inbound event |
+| message callback | The application has finished handling one inbound event |
 | `drain_outgoing_messages` | Local messages queued before half-close reached the transport delivery barrier |
 | TypeScript `wait()` / done callback | Both directions ended, or the stream failed |
 

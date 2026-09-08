@@ -275,7 +275,7 @@ def get_conversation_store(path: str | pathlib.Path = "") -> ConversationStore:
 async def read_interactions(
     store: chunk_store.ChunkStore, timeout: timing.Duration | None = None
 ) -> list[llm.Interaction]:
-    """Every interaction on a *terminated* stream, without consuming it.
+    """Every interaction on a *terminated* stream, without advancing it.
 
     An explicit ``offset`` gives the reader its own view, so this never touches
     the store's persistent cursor -- the one that ``AsyncNode.next()`` shares

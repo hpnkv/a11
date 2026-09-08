@@ -39,7 +39,7 @@ brief.summary -> answer
 ```
 
 The summarizer is available while searches and fetches are running. Pages
-stream into its open `pages` port, so it can begin consuming the first page
+stream into its open `pages` port, so it can begin reading the first page
 without waiting for a collected list. Declaring calls first gives the document
 a graph-like overview when that is useful; ports still provide the scheduling
 and synchronization.

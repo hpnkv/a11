@@ -83,7 +83,7 @@ const echoSchema = new ActionSchema({
 ## 2. Implement the server-only handler
 
 Only the server registers a handler. Inputs and outputs are `AsyncNode`s, so
-the handler consumes the final input value and puts the same value into the
+the handler reads the final input value and puts the same value into the
 output node:
 
 ```python

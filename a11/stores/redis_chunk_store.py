@@ -163,7 +163,7 @@ class _RedisChunkStoreProtocol:
 
         The cursor advances through sequence numbers and waits at gaps;
         ``None`` marks clean end-of-stream. Use `get_by_arrival_order` for
-        ingestion order. Prefer `ChunkStoreReader` for normal node consumption;
+        ingestion order. Prefer `ChunkStoreReader` for normal node reads;
         it adds buffering, offsets, and final-sequence handling above this
         primitive.
         """

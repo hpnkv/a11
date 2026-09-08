@@ -1,7 +1,7 @@
 # Checking flows from a toolchain
 
 Use `a11 flow` to check, format, inspect, and run Flow source from CI or an
-editor. Its versioned machine-readable formats let integrations consume the
+editor. Its versioned machine-readable formats let integrations read the
 native language tooling directly.
 
 ```sh
@@ -33,7 +33,7 @@ cannot be read. A file named `-` reads standard input.
     <span>Add Flow language services to an editor or CI image.</span>
   </a>
   <a href="#the-formats">
-    <strong>Consume stable formats</strong>
+    <strong>Read stable formats</strong>
     <span>Read diagnostics, plans, tokens, completion, and fixes.</span>
   </a>
   <a href="#severities-and-families">
@@ -257,7 +257,7 @@ check incomplete source.
 * **A duration is `{"$duration": seconds}`.** `250ms` and `0.25` are different
   things, and a reader should not have to guess which one a bare number was.
 * **An unreadable statement becomes an `error` node** containing the expected
-  syntax, so consumers can distinguish it from an omitted subtree.
+  syntax, so clients can distinguish it from an omitted subtree.
 
 The format is pinned by `testdata/flow/example.flow` and `testdata/flow/syntax.json`
 — one small flow using nearly every construct, and the tree it produces.

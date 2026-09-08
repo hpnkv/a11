@@ -15,7 +15,7 @@
 """Action schemas, lifecycle types, and Python validation conveniences.
 
 An [Action][a11.actions.action.Action] is one schema-described unit of agent
-work. Its input and output ports map to AsyncNodes, so a handler can consume and
+work. Its input and output ports map to AsyncNodes, so a handler can read and
 produce streaming values locally or across a Session. This module keeps the
 native runtime objects as the public model while adding Pydantic-style schema
 validation and helpers for the structured status chunks used during dispatch

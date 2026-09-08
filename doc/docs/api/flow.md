@@ -51,7 +51,7 @@ This page is the language reference and Python API. Start with
   </a>
   <a href="#diagnostics">
     <strong>Report diagnostics</strong>
-    <span>Consume syntax and resolution failures from Python.</span>
+    <span>Read syntax and resolution failures from Python.</span>
   </a>
 </nav>
 

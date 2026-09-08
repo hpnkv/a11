@@ -242,8 +242,8 @@ its role, then select it to open the corresponding reference.
     <text x="885" y="306">AsyncNode</text>
     <g class="a11-map-tip">
       <rect x="30" y="600" width="940" height="80" rx="9"/>
-      <text x="55" y="632">AsyncNode is every action port: producers append values, consumers</text>
-      <text x="55" y="657">iterate or consume them, and final status makes completion observable.</text>
+      <text x="55" y="632">AsyncNode is every action port: producers append values, readers</text>
+      <text x="55" y="657">iterate streams or read unary values; final status makes completion observable.</text>
     </g>
   </a>
 
@@ -279,7 +279,7 @@ progress as small JSON records while its final image remains encoded bytes with
 an `image/png` media type.
 
 These contracts remain modular because a caller routes each port to the
-consumer that needs it and explicitly drains or omits the rest. Adding progress
+reader that needs it and explicitly drains or omits the rest. Adding progress
 or diagnostics does not turn every result into a larger event union. The schema
 also remains the same for an in-process call, a model tool, and a service
 reached through a session.
@@ -328,7 +328,7 @@ actions as tools, MCP, and tool execution.
 
 A11 does not require a graph object, scheduler, or checkpoint format to connect
 operations. Starting an action creates its input and output streams immediately.
-The action may produce output as soon as its inputs arrive, and a consumer may
+The action may produce output as soon as its inputs arrive, and a reader may
 start before the producer finishes. Waiting on data supplies the usual
 dependency ordering.
 
@@ -423,12 +423,12 @@ or one complete object. The caller chooses whether to process each value or
 collect a unary result.
 
 - `put()` appends a value and exposes confirmation from the backing store.
-- `async for` consumes values until the stream ends.
+- `async for` iterates over values until the stream ends.
 - `consume()` reads a port expected to contain one complete value.
 - `finalize()` marks the logical end of the data and closes the writer.
 - `abort_with_status()` ends the stream with a structured failure.
 
-Because a consumer can start before the producer finishes, connected actions
+Because a reader can start before the producer finishes, connected actions
 can overlap their work. A text interface can display model output immediately;
 a media action can report progress on one port while preparing an image on
 another. See [streaming through a node](guides/streaming.md) and
@@ -440,7 +440,7 @@ A [`ChunkStore`][a11.stores.chunk_store.ChunkStore] is the extensible storage
 interface behind a node's ordered chunks. A11 includes an in-memory store,
 embedded SQLite persistence, and Redis-backed streams. Applications can provide
 a `ChunkStore` and factory for another database, object store, retention policy,
-or test environment without changing the producer, consumer, or action schema:
+or test environment without changing the producer, reader, or action schema:
 
 - SQLite can retain conversations and reopen them after a process restart;
 - Redis can connect programs through durable, named streams even when their
@@ -486,7 +486,7 @@ the main requirement is durable stream data that either side may read later.
 
 ## Make completion and failure observable
 
-Stream termination is part of the data contract. Finalization tells a consumer
+Stream termination is part of the data contract. Finalization tells a reader
 that it received a complete result; an aborted stream carries a status instead
 of appearing to be valid but truncated.
 

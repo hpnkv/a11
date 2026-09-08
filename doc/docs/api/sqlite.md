@@ -42,7 +42,7 @@ Every store opened under the same root shares one database, connection set, and
 worker pool. Use one factory per root to share those resources across nodes.
 
 The `nodes` table holds a row per represented node: the shared producer and
-consumer cursors, closure state and terminal status, the declared final
+reader cursors, closure state and terminal status, the declared final
 sequence, `owner_id`, `created_at`/`updated_at`, and cached counters such as
 `size` so
 [`size`][a11.stores.sqlite_chunk_store.SQLiteChunkStore.size] and

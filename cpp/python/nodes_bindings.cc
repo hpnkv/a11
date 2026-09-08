@@ -248,14 +248,14 @@ void BindNodes(py::module_& module) {
             }
           },
           "The serialization registry used to encode and decode "
-          "typed values streamed through this node. Set it to change "
+          "typed values carried by this node. Set it to change "
           "how put()/next-object conversions map values to chunks.")
       .def(
           "reader",
           [](nodes::AsyncNode& self) {
             return ValueOrThrow(WithoutGil([&] { return self.reader(); }));
           },
-          "Returns the node's chunk-store reader, the consuming end of the "
+          "Returns the node's chunk-store reader, the read end of the "
           "stream. Read from it to pull chunks as they become available; it is "
           "kept alive for as long as you hold the returned reader.",
           py::keep_alive<0, 1>())
@@ -265,7 +265,7 @@ void BindNodes(py::module_& module) {
             return ValueOrThrow(WithoutGil([&] { return self.writer(); }));
           },
           "Returns the node's chunk-store writer, the producing end of the "
-          "stream. Write to it to append chunks that readers can consume "
+          "stream. Write to it to append chunks that readers can read "
           "concurrently; it is kept alive for as long as you hold the returned "
           "writer.",
           py::keep_alive<0, 1>())
@@ -317,7 +317,7 @@ void BindNodes(py::module_& module) {
                 WithoutGil([&] { return self.GetReaderStatus(); }));
           },
           "Returns the current status of the node's reader. Check it to tell "
-          "whether the consuming end of the stream is healthy, has completed, "
+          "whether the read end of the stream is healthy, has completed, "
           "or has failed while streaming.")
       .def(
           "get_writer_status",
@@ -412,7 +412,7 @@ void BindNodes(py::module_& module) {
                 WithoutGil([&] { return self->NextFragment(*converted); }));
           },
           "Returns a future resolving to the next fragment in the stream, or "
-          "None at end-of-stream. This is the consuming counterpart to "
+          "None at end-of-stream. This is the read counterpart to "
           "put_fragment: await it in a loop to process a node's output "
           "incrementally as it arrives. The optional timeout bounds how long "
           "the future waits for the next fragment.",
@@ -454,7 +454,7 @@ void BindNodes(py::module_& module) {
                 WithoutGil([&] { return self->NextChunk(*converted); }));
           },
           "Returns a future resolving to the next chunk in the stream, or None "
-          "at end-of-stream. This is the consuming counterpart to put_chunk: "
+          "at end-of-stream. This is the read counterpart to put_chunk: "
           "await it in a loop to read a node's raw chunks incrementally as "
           "they arrive. The optional timeout bounds how long the future waits "
           "for the next chunk.",
@@ -467,7 +467,7 @@ void BindNodes(py::module_& module) {
           },
           "Returns a future that resolves once the write buffer has drained. "
           "Await it to apply backpressure from a fast producer, letting "
-          "consumers catch up before you push more chunks.")
+          "readers catch up before you push more chunks.")
       .def(
           "close",
           [](const std::shared_ptr<nodes::AsyncNode>& self) {
@@ -487,7 +487,7 @@ void BindNodes(py::module_& module) {
                 [&] { return self->AbortWithStatus(std::move(aborted)); }));
           },
           "Aborts the stream with the given error status and returns a future "
-          "that resolves once the abort has propagated. Consumers then "
+          "that resolves once the abort has propagated. Readers then "
           "observe the error rather than a normal end-of-stream.",
           py::arg("status"))
       .def(
@@ -522,7 +522,7 @@ void BindNodes(py::module_& module) {
             WithoutGil([&] { self.CancelReader(); });
           },
           "Cancels the node's reader, unblocking any pending next-chunk or "
-          "next-fragment awaits on the consuming side of the stream.")
+          "next-fragment awaits on the read side of the stream.")
       .def(
           "cancel_writer",
           [](nodes::AsyncNode& self) {

@@ -96,7 +96,7 @@ flow for bounded parallel work and streams progress through action ports.
 ## A stream in one minute
 
 An `AsyncNode` is an ordered stream. A producer writes values and finalizes the
-stream; a consumer can process each value as it arrives.
+stream; a reader can process each value as it arrives.
 
 ```python
 import asyncio

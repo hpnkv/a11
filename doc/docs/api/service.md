@@ -8,6 +8,25 @@ A [`Service`][a11.service.service.Service] manages an action registry across
 multiple sessions, allowing one instance to serve several listeners and
 protocols.
 
+## Session boundary
+
+A session owns the node namespace, action registry, active-action accounting,
+transport buffers, and connection deadline for one peer relationship. Attaching
+a stream in `start` or `accept` mode installs the session's callbacks and begins
+its receive pump immediately.
+
+One `WireMessage` can carry action control for several calls and fragments for
+several nodes. This multiplexing lets concurrent action and data streams share
+one physical connection. A session may also attach several wire streams, with
+per-stream and session-wide limits bounding queued messages and bytes.
+
+Clean shutdown is a two-sided operation. `half_close()` rejects new work and
+half-closes active transports while already admitted actions and callbacks
+finish. `await session.done.wait()` is the Python barrier for released stream
+state. `get_status()` then reports the authoritative terminal status. The
+[Session lifecycle](../lifecycles/session.md) covers deadlines, aborts,
+pull-style reception, and completion barriers.
+
 ## Dynamic services over shared transports
 
 A [gRPC channel](https://grpc.io/docs/what-is-grpc/core-concepts/) provides an
@@ -17,13 +36,8 @@ and physical connections, but resolves action schemas from a live registry.
 Clients can discover and call the operations available in a particular session
 without generated service code.
 
-When a stream is attached, the session starts or accepts it immediately and
-keeps its receive pump active. One `WireMessage` can carry control for several
-actions and fragments for several input or output nodes. This multiplexing lets
-many logical streams share limited physical connections. A session may also
-own several `WireStream`s, while per-stream and session-wide limits keep queued
-messages and bytes bounded. The [Session lifecycle](../lifecycles/session.md)
-defines routing, backpressure, and shutdown in detail.
+The registry remains live for the connection, allowing clients to discover and
+call operations available to that session.
 
 ## Using Session and Service
 
@@ -56,9 +70,16 @@ async def run_server():
 pull-based message reception for applications managing custom event loops or
 multiplexed transports:
 
+Pull reception replaces the default action and node dispatcher. Code that
+still needs normal routing passes each received message to
+`dispatch_wire_message()` after inspection or proxying.
+
 ::: a11.service.session.SessionWithRecv
 
 ::: a11.service.session.SessionOptions
+
+Configured telemetry records an `a11.session` span from session creation
+through full completion. See [observability](observability.md#emitted-spans).
 
 ## Service
 

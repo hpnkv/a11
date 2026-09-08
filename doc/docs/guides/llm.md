@@ -7,8 +7,8 @@ completed interaction for the next turn.
 
 Provider SDKs commonly expose one event stream containing text deltas,
 reasoning, tool-call arguments, usage, and completion events. A11 separates
-those concerns into named output ports. A chat UI can consume `text_output`, an
-observability view can consume `thoughts` or `event_stream`, and conversation
+those concerns into named output ports. A chat UI can read `text_output`, an
+observability view can read `thoughts` or `event_stream`, and conversation
 storage can retain `new_interactions`. None has to inspect the others' events.
 
 Alongside `import a11` this page needs a few names from the SDK, which is where
@@ -101,7 +101,7 @@ A11 actions as function tools, and accepts structured-output options through
 `CreateChatCompletionConfig`.
 
 Set the provider to `codex` to use the locally installed Codex CLI and its
-existing login. The handler consumes `codex exec --json` events, records the
+existing login. The handler reads `codex exec --json` events, records the
 thread id on assistant interactions, and resumes that thread on the next
 turn. `CreateCodexSessionConfig` controls its workspace, sandbox, reasoning
 effort, and final output schema. Registry actions use a schema-guided tool loop

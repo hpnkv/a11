@@ -185,6 +185,7 @@ nav:
   - Python reference:
       - Nodes: api/nodes.md
       - Actions: api/actions.md
+      - Authorization: api/authorization.md
       - Stores: api/stores.md
       - Redis client: api/redis.md
       - SQLite store: api/sqlite.md

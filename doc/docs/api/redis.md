@@ -32,6 +32,23 @@ from the environment and can be replaced for dependency injection with
 retain the client they were constructed with; replacing the global affects
 only subsequently created stores.
 
+## Shared node identity
+
+`AsyncNode` objects remain local to their processes. Two nodes share Redis
+data when their `RedisChunkStore` instances resolve to the same node ID and key
+prefix in the same Redis deployment. One process can append while another
+follows or replays the ordered records.
+
+Finality and closure are stored state. Finalizing a Redis-backed node seals
+that named stream for every process, including readers that attach later. Use a
+new node ID or key prefix for an independent run.
+
+Redis supplies persistence and cross-process cursors; it does not provide
+action discovery or connection-scoped dispatch. Use a [session](service.md)
+when peers need to discover and call actions over a live transport. Use
+Redis-backed nodes when named streams must outlive a process or accept records
+before a reader starts.
+
 ## Configuration
 
 `A11_REDIS_URL` takes precedence over all individual connection variables. Its

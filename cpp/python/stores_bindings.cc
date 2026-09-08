@@ -373,7 +373,7 @@ Examples:
             return StoreFuture(self->Next(*converted, limit));
           },
           "Await up to `limit` of the next available fragments as a stream. "
-          "This is the primary way an agent consumes chunks as they are "
+          "This is the primary way an agent reads chunks as they are "
           "produced: the future resolves with whatever is ready before the "
           "optional deadline, and slots may be None when a fragment is "
           "missing. Loop over successive calls to follow a growing store.",
@@ -940,7 +940,7 @@ Examples:
            }),
            "Create a streaming reader over a ChunkStore. The reader runs a "
            "background pump that prefetches fragments per the given options, "
-           "so an agent can consume a store as an async stream via `next` "
+           "so an agent can iterate over a store via `next` "
            "without managing sequence numbers itself. The reader keeps the "
            "store alive for its lifetime.",
            py::arg("store"),
@@ -990,8 +990,8 @@ Examples:
                 WithoutGil([&] { return self->Next(*converted); }));
           },
           "Await the next buffered fragment, or None when the stream ends "
-          "or the optional timeout elapses. This is the main consumption "
-          "loop for an agent: repeatedly await `next` to pull chunks as the "
+          "or the optional timeout elapses. This is the main read loop for "
+          "an agent: repeatedly await `next` to pull chunks as the "
           "background pump makes them available. Pass None to wait "
           "indefinitely.",
           py::arg("timeout") = py::none())

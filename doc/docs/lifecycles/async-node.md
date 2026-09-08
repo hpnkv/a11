@@ -212,7 +212,7 @@ idle / yielding / end -- reset_reader --> idle at a configured offset
 A `ChunkStoreReader` owns its cursor and buffering policy. Ordered mode waits for
 sequence gaps to fill; arrival-order mode exposes ingestion order. Options can
 start at an offset, cap the number of chunks, retain a sticky mimetype, or clear
-payloads after consumption.
+payloads after reading.
 
 Choose a read shape that matches the port contract:
 

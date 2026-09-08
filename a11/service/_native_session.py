@@ -116,7 +116,7 @@ class _SessionProtocol:
 
 
 class _SessionWithRecvProtocol:
-    """Adds coroutine ``receive`` methods for pull-style session consumption."""
+    """Adds coroutine ``receive`` methods for pull-style session reads."""
 
     async def receive(self, deadline=None):
         """Await the next inbound message, or ``None`` when the session ends.

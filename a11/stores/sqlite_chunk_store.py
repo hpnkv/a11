@@ -205,7 +205,7 @@ class _SQLiteChunkStoreProtocol:
         The cursor lives in the database, so it survives a restart and is
         shared by every store open on this node. It advances through sequence
         numbers and waits at gaps; ``None`` marks clean end-of-stream. Prefer
-        `ChunkStoreReader` for ordinary consumption.
+        `ChunkStoreReader` for ordinary reads.
         """
         converted_limit = _unsigned(limit, "limit", _MAX_UINT64)
         if converted_limit == 0:

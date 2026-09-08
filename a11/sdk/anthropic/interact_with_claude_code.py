@@ -17,7 +17,7 @@
 The credential is the one the `claude` CLI holds, so this provider reads no API
 key. `claude_agent_sdk` owns the agent loop, which inverts the arrangement the
 other providers use: A11 registry actions are published to the SDK as an
-in-process MCP server and the handler consumes the resulting message stream
+in-process MCP server and the handler reads the resulting message stream
 rather than running tool calls between rounds itself.
 """
 

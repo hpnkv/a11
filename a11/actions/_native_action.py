@@ -290,7 +290,7 @@ class _ActionProtocol:
 
         A nested action forwards unclaimed logs through its parent. A root
         action sends them to A11's logger (see [a11.logging][]). Call
-        `get_log_node` before the action runs to consume its chunks directly
+        `get_log_node` before the action runs to iterate over its chunks
         and suppress the default route.
 
         Args:

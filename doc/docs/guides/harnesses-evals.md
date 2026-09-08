@@ -29,7 +29,7 @@ together. A product with a narrower job can use A11 at a lower level:
 - a `Session` carries the same action calls to a browser, service, or another
   machine;
 - separate output ports carry text, reasoning, logs, and completed interaction
-  state to the consumers that need them.
+  state to the readers that need them.
 
 For example, a support application may need durable customer conversations,
 three approved business tools, and a streamed web interface. It can build those
@@ -84,7 +84,7 @@ same topology as production:
 
 An evaluation can then invoke the production actions. It does not need a second
 implementation of tool dispatch or streaming accumulation, and a verifier can
-consume the same typed outputs that an application client receives.
+read the same typed outputs that an application client receives.
 
 For example, a compact evaluation flow can reuse the production model action
 and verifier, limit concurrent trials, and stream scores as they finish:

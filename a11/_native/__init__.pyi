@@ -610,7 +610,7 @@ class Action:
 
         A nested action forwards unclaimed logs through its parent. A root
         action sends them to A11's logger (see [a11.logging][]). Call
-        `get_log_node` before the action runs to consume its chunks directly
+        `get_log_node` before the action runs to iterate over its chunks
         and suppress the default route.
 
         Args:
@@ -1561,7 +1561,7 @@ class AsyncNode:
 
     def abort_with_status(self, status: Status) -> asyncio.Future[None]:
         """
-        Aborts the stream with the given error status and returns a future that resolves once the abort has propagated. Consumers then observe the error rather than a normal end-of-stream.
+        Aborts the stream with the given error status and returns a future that resolves once the abort has propagated. Readers then observe the error rather than a normal end-of-stream.
         """
 
     def attach_stream(self, stream: WireStream) -> None:
@@ -1576,7 +1576,7 @@ class AsyncNode:
 
     def cancel_reader(self) -> None:
         """
-        Cancels the node's reader, unblocking any pending next-chunk or next-fragment awaits on the consuming side of the stream.
+        Cancels the node's reader, unblocking any pending next-chunk or next-fragment awaits on the read side of the stream.
         """
 
     def cancel_writer(self) -> None:
@@ -1748,7 +1748,7 @@ class AsyncNode:
 
     def get_reader_status(self) -> Status:
         """
-        Returns the current status of the node's reader. Check it to tell whether the consuming end of the stream is healthy, has completed, or has failed while streaming.
+        Returns the current status of the node's reader. Check it to tell whether the read end of the stream is healthy, has completed, or has failed while streaming.
         """
 
     def get_writer_abort_status(self) -> Status | None:
@@ -1800,7 +1800,7 @@ class AsyncNode:
         about a value. This asks for `ITER_BATCH` fragments at a time, exactly
         as `iter_fragments` does, and deserializes each.
 
-        Prefer this whenever the whole stream is being consumed here. Keep
+        Prefer this when the reader will iterate to the end. Keep
         `async for` when something else may read the same node: fragments in
         this iterator's batch have already left the reader, so abandoning it
         part way through a batch abandons them -- the same hazard
@@ -1961,7 +1961,7 @@ class AsyncNode:
 
     def wait_for_buffer_to_drain(self) -> asyncio.Future[None]:
         """
-        Returns a future that resolves once the write buffer has drained. Await it to apply backpressure from a fast producer, letting consumers catch up before you push more chunks.
+        Returns a future that resolves once the write buffer has drained. Await it to apply backpressure from a fast producer, letting readers catch up before you push more chunks.
         """
 
     @property
@@ -2972,7 +2972,7 @@ class ChunkStore:
         limit: typing.SupportsInt | typing.SupportsIndex = 1,
     ) -> asyncio.Future[list[NodeFragment | None]]:
         """
-        Await up to `limit` of the next available fragments as a stream. This is the primary way an agent consumes chunks as they are produced: the future resolves with whatever is ready before the optional deadline, and slots may be None when a fragment is missing. Loop over successive calls to follow a growing store.
+        Await up to `limit` of the next available fragments as a stream. This is the primary way an agent reads chunks as they are produced: the future resolves with whatever is ready before the optional deadline, and slots may be None when a fragment is missing. Loop over successive calls to follow a growing store.
         """
 
     def put(self, fragment: NodeFragment) -> asyncio.Future[int]:
@@ -3899,7 +3899,7 @@ class Http2Options:
     @property
     def enable_push(self) -> bool:
         """
-        Client: accept HTTP/2 server pushes. Off by default, and advertised as off, so a peer cannot spend this side's streams on responses nobody asked for. A client that enables it must read Http2ResponseStream.next_push and either consume or cancel each pushed response.
+        Client: accept HTTP/2 server pushes. Off by default, and advertised as off, so a peer cannot spend this side's streams on responses nobody asked for. A client that enables it must read Http2ResponseStream.next_push and either read or cancel each pushed response.
         """
     @enable_push.setter
     def enable_push(self, arg0: bool) -> None: ...
@@ -5250,7 +5250,7 @@ class RedisChunkStore(ChunkStore):
 
         The cursor advances through sequence numbers and waits at gaps;
         ``None`` marks clean end-of-stream. Use `get_by_arrival_order` for
-        ingestion order. Prefer `ChunkStoreReader` for normal node consumption;
+        ingestion order. Prefer `ChunkStoreReader` for normal node reads;
         it adds buffering, offsets, and final-sequence handling above this
         primitive.
         """
@@ -5901,7 +5901,7 @@ class SQLiteChunkStore(ChunkStore):
         The cursor lives in the database, so it survives a restart and is
         shared by every store open on this node. It advances through sequence
         numbers and waits at gaps; ``None`` marks clean end-of-stream. Prefer
-        `ChunkStoreReader` for ordinary consumption.
+        `ChunkStoreReader` for ordinary reads.
         """
 
     async def put(self, fragment: NodeFragment) -> int:

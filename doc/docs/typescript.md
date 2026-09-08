@@ -16,10 +16,4 @@ npm install a11@npm:@curiositystack/a11
 import { Action, Session } from 'a11';
 ```
 
-The identical distribution is also published as `aeleven`. To select that
-registry package while retaining the same import name, use
-`npm install a11@npm:aeleven`. npm aliases are recorded in the consuming
-application's `package.json`; npm does not provide server-side aliases between
-package records.
-
 For a complete browser example, continue with [Browser clients](guides/browser-clients.md).

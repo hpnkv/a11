@@ -51,7 +51,7 @@ class LocalChunkStore(_native.ChunkStore):
         """Wait for and return the fragment at sequence number ``seq``.
 
         Use a [ChunkStoreReader][a11.stores.chunk_store_reader.ChunkStoreReader]
-        for ordinary sequential consumption; direct lookup is useful for
+        for ordinary sequential reads; direct lookup is useful for
         replay, inspection, and custom retention logic.
         """
         return await self._impl.get(seq, deadline)

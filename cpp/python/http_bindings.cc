@@ -508,7 +508,7 @@ void BindHttp(py::module_& module) {
                      "advertised as off, so a peer cannot spend this side's "
                      "streams on responses nobody asked for. A client that "
                      "enables it must read Http2ResponseStream.next_push and "
-                     "either consume or cancel each pushed response.")
+                     "either read or cancel each pushed response.")
       .def_readwrite("client_preference", &net::Http2Options::client_preference,
                      "Client protocol preference and cleartext attempt order.")
       .def_readwrite("client_allow_downgrade",

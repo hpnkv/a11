@@ -858,7 +858,7 @@ class _AsyncNodeProtocol:
         about a value. This asks for `ITER_BATCH` fragments at a time, exactly
         as `iter_fragments` does, and deserializes each.
 
-        Prefer this whenever the whole stream is being consumed here. Keep
+        Prefer this when the reader will iterate to the end. Keep
         `async for` when something else may read the same node: fragments in
         this iterator's batch have already left the reader, so abandoning it
         part way through a batch abandons them -- the same hazard

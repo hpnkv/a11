@@ -10,6 +10,22 @@ This keeps one contract at four boundaries: direct application calls, model
 function calling, remote action discovery, and Flow composition. Adding a tool
 does not require a provider-specific wrapper around the underlying operation.
 
+## Tool controls
+
+Three independent inputs govern a model tool call:
+
+| Control | Role |
+| --- | --- |
+| Action schema and descriptions | Define the arguments and tell the model when the tool applies |
+| Allowed-action header | Authorize the action for the current model turn |
+| Action registry | Supply the handler that executes the requested name |
+
+A schema does not grant permission, and an allow-list does not supply an
+implementation. `interact_with_*` combines all three when it builds provider
+tool definitions and dispatches requested calls. See
+[Provide tools to `interact_with_*`](interact-actions.md) for the complete turn
+lifecycle.
+
 ## Define the action
 
 ```python

@@ -83,9 +83,9 @@ Bob swaps those roles.
 
 ## 4. Listen without blocking the sender
 
-The listener consumes the other party's node with `async for`. When that node
-receives its final marker, iteration ends and the listener announces that its
-owner has left:
+The listener iterates over the other party's node with `async for`. When that
+node receives its final marker, iteration ends and the listener announces that
+its owner has left:
 
 ```python
 async def listen(incoming: a11.AsyncNode, sender: str) -> None:

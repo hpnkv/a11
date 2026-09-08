@@ -96,11 +96,12 @@ The reserved port is created only when used and requires no schema declaration.
 Only a running action may log; logging before `run` or from the calling side of
 `call` has no active writer or reader.
 
-What is consumed in this process becomes a record on the `a11.action` logger, so
-`setLevel`, `dictConfig`, and existing handlers apply. The chunk's whole
-description travels with it as record attributes -- `a11_action`, `a11_channel`,
-`a11_internal`, `a11_mimetype`, `a11_data` -- so a handler can filter on the
-channel or drop A11's internal lines without parsing the message back apart.
+An action log handled in this process becomes a record on the `a11.action`
+logger, so `setLevel`, `dictConfig`, and existing handlers apply. The chunk's
+whole description travels with it as record attributes -- `a11_action`,
+`a11_channel`, `a11_internal`, `a11_mimetype`, `a11_data` -- so a handler can
+filter on the channel or drop A11's internal lines without parsing the message
+back apart.
 
 `A11_ACTION_LOG=0` leaves them on the native log instead.
 [set_action_log_sink][a11.logging.set_action_log_sink] takes them somewhere else

@@ -717,7 +717,7 @@ Examples:
                 WithoutGil([&] { return self->Receive(*converted); }));
           },
           "Return an awaitable that resolves to the next inbound message, or "
-          "None once the session is done. Await this in a loop to consume the "
+          "None once the session is done. Await this in a loop to read the "
           "session's message stream without registering callbacks.",
           py::arg("deadline") = py::none());
 

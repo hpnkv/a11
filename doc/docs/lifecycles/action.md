@@ -3,7 +3,7 @@
 An `Action` is one schema-described unit of agent work. Its input and output
 ports are AsyncNodes, so the same lifecycle covers a local coroutine, a remote
 RPC-like call, and a streaming tool invocation whose outputs begin before its
-inputs are fully consumed.
+inputs are fully read.
 
 An Action is **one-shot**. Configure it first, then choose either local `run` or
 remote `call`. Reusing the object for another invocation would mix ids, port
@@ -86,7 +86,7 @@ stream a large input while the remote handler is already running and lets
 outputs return incrementally.
 
 Required ports must map to valid nodes. Unary is a contract about how the
-handler should consume a port; it does not turn the underlying node into a
+handler reads a port; it does not turn the underlying node into a
 different data structure.
 
 ## Local run
@@ -128,7 +128,7 @@ operations—for example, read a user turn, start a model request, and emit toke
 as they arrive.
 
 The handler owns the semantic data contract of every output. In particular, it
-must mark the logical end of one when a consumer needs a complete logical
+must mark the logical end of one when a reader needs a complete logical
 result, which is what `finalize()` does:
 
 ```python
@@ -185,7 +185,7 @@ The peer reports dispatch through the reserved dispatch-status output node.
 Dispatch success does not imply that the handler will finish successfully; it
 reports only that the work entered the queue.
 
-### 5. Consume outputs while the peer runs
+### 5. Read outputs while the peer runs
 
 Output nodes are ordinary AsyncNodes, so a caller can begin reading before the
 completion status arrives.

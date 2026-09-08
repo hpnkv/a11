@@ -2,7 +2,7 @@
 
 A model that calls tools one at a time must read each intermediate result and
 include it in a later request. Large pages, transcripts, and file listings then
-consume the context window, add input tokens, and require the model to copy
+occupy the context window, add input tokens, and require the model to copy
 values between calls.
 
 [`a11.sdk.flow_tools`][a11.sdk.flow_tools] offers the alternative as three
@@ -127,7 +127,7 @@ schema)` per action.
 
 ## Client-side streaming with `flow_run`
 
-Models typically consume the collected object result. Application clients can
+Models typically use the collected object result. Application clients can
 instead stream inputs into a running flow and receive incremental outputs:
 
 ```python

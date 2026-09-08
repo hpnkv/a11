@@ -7,7 +7,7 @@ display either one without decoding a mixed event stream.
 
 The same port structure supports video previews and completed assets, speech
 frames and alignment records, or image masks and rendered output. Each
-consumer subscribes only to its required result.
+reader subscribes only to its required result.
 
 !!! note "Before you start"
 

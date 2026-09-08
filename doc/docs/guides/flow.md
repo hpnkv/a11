@@ -102,7 +102,7 @@ it.
 
 ```a11flow
   mic = call capture_audio(options: device) timeout 600s
-  skip mic.events  # <- we never read them, so declare as skipped
+  skip mic.events
 ```
 
 `run` executes a handler registered with the process running the flow. `call`
@@ -120,11 +120,11 @@ failure.
 ## Recognising what was said
 
 ```a11flow
-  nodes scratch  # local nodes that are never sent to the client
+  nodes scratch
 
   transcribe = run transcribe_audio(
     asr_options: asr, audio: mic.audio | packb
-  ) via scratch  # <- never send transcription outputs to the client directly
+  ) via scratch
   skip transcribe.events
 ```
 
@@ -175,10 +175,9 @@ stream gets two readers: reading one stream twice would hand each reader half of
 it, because a node has one cursor. It is `in scratch`, so the only copy that
 crosses the wire is the one on `sentence`.
 
-## Stopping, once there is something to answer
+## Stop capture after the sentence
 
 ```a11flow
-  # Wait for a sentence before stopping audio capture.
   {"command": "stop"} -> mic.control_events after said
 ```
 
@@ -213,7 +212,7 @@ resolve dotted tags, while a flow cannot import modules.
 `asked` is its own node for the same reason `said` was: both the model and the
 client's history want it.
 
-## Asking, and answering
+## Generate and return the answer
 
 ```a11flow
   interact = run interact_with_llm(
@@ -239,11 +238,10 @@ preserves conversation order.
 needs them. The caller selects the model and provider without changing the
 composition.
 
-`interact.text_output -> reply` is the answer, streamed to the client token by
-token as the model writes it. And `turn` hands back what to remember: the
-question, then the answer and any tool interactions the model made on the way to
-it. The client appends those to the conversation and hands its node back as
-`history` next time round.
+`interact.text_output -> reply` streams the answer to the client as the model
+writes it. `turn` returns the question, answer, and tool interactions for
+conversation state. The client appends them to the conversation and passes its
+node back as `history` on the next turn.
 
 ## The complete flow
 
@@ -290,7 +288,7 @@ python scripts/flow_playground.py   # --check_only compiles without a microphone
 The gateway already serves these actions; the composition arrives as an
 argument.
 
-## ...including by a model
+## Model-authored compositions
 
 [`a11.sdk.flow_tools`](../llm-sdk/flow-skill.md) exposes three tools to a model:
 `flow_actions` lists composable actions and their ports, `flow_check` compiles a
@@ -301,29 +299,27 @@ or high-rate values such as audio buffers, fetched pages, and transcript
 fragments stay out of the model context. In this example, the model receives one
 completed sentence and the caller receives the streamed answer.
 
-## Four common composition patterns
+## Common composition patterns
 
 The following patterns cover common extensions to a composition.
 
-**Work on several values at once.** A `map` whose expression is expensive — a
-coercion, a round trip through the host — may say how many values it may have in
-hand. Downstream stages still receive results in input order:
+**Work on several values at once.** A `map` that performs a coercion or host
+round trip may bound its concurrent values. Downstream stages still receive
+results in input order:
 
 ```a11flow
 urls | map fetch_page(it) parallel 8 -> bodies
 ```
 
-**One bad value out of a thousand.** `try` on a stage says a value the stage
-cannot do is not a reason to abandon the stream, and `into` says where those go
-as status records:
+**Handle per-value failures.** `try` on a stage drops values the stage cannot
+process, and `into` sends their status records to a destination:
 
 ```a11flow
 docs | try map it as Order into rejected -> orders
 ```
 
-**Two streams, whichever arrives.** `interleave` reads several at once and gives
-each value as it comes, so a slow source does not hold up a fast one — which is
-what a flow watching a model and a tool at the same time wants:
+**Merge by arrival.** `interleave` reads several streams concurrently and emits
+each value on arrival. A slow source does not block a fast one:
 
 ```a11flow
 interleave(llm.text_output, tool.progress) -> shown
@@ -362,7 +358,7 @@ that spans a group boundary.
 `| timeout 30s` limits gaps between values, and `| pace 100ms` enforces a minimum
 interval between emitted values.
 
-## Where to go from here
+## Related references
 
 The rest of the language — durations and arithmetic, `repeat`, `for`, `if`,
 `try`/`wait`/`fail`, `log`/`logf`, `match`, `strformat`, and sandbox limits
@@ -378,7 +374,6 @@ three — `assistant.flow`, `ops.flow` and `dictate.flow` — compose what a rea
 For writing flows: editor support is in
 [`editors/`](https://github.com/hpnkv/a11/tree/main/editors), and the
 [A11 plugin for JetBrains IDEs](https://github.com/hpnkv/a11/tree/main/intellij-plugin)
-highlights `.flow` files *and* flows written inside a string literal, which is
-where most of them live. [Checking flows from a toolchain](flow-tooling.md) is the
-same language as a set of machine-readable answers, for CI and for editors of your
-own.
+highlights `.flow` files and Flow source inside string literals. [Checking flows
+from a toolchain](flow-tooling.md) documents machine-readable responses for CI
+and editor integrations.

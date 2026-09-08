@@ -2,7 +2,7 @@
 
 A [`Session`][a11.service.session.Session] is A11's connection-scoped runtime:
 hand it a [`WireStream`][a11.net.wire_stream.WireStream] transport and it
-multiplexes streams and routes messages for you. This page stands up a WebSocket
+multiplexes streams and routes messages. This guide starts a WebSocket
 server that echoes every message, then connects a client to it — all with
 
 ```python

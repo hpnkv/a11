@@ -5,8 +5,8 @@ actions, and node mirroring. The transport may be in-process, WebSocket, HTTP
 SSE, WebRTC, or an application implementation; the lifecycle above it is the
 same.
 
-The important mental model is **two independently closing directions**. Your
-endpoint can stop sending and continue receiving, and the peer can do the same.
+Each direction closes independently. An endpoint can stop sending and continue
+receiving, and the peer can do the same.
 The stream is fully done only when both directions have ended, or when an error
 aborts the exchange.
 
@@ -38,9 +38,8 @@ done
 created / active / half-closed -- abort, deadline, transport error --> failed
 ```
 
-The drawing shows one common order. The peer may half-close first, in which case
-your message callback observes the end of inbound data while your outbound side
-remains writable.
+The drawing shows one common order. If the peer half-closes first, the message
+callback observes the end of inbound data while local output remains writable.
 
 | State | What the endpoint may do | What moves it forward |
 | --- | --- | --- |
@@ -69,8 +68,8 @@ that endpoint, so a slow consumer applies backpressure.
 `start` and `accept` are startup barriers, not completion barriers. In the C++
 runtime they resolve after the channel handshake; TypeScript follows the same
 model and provides `wait()` for terminal completion. In callback-based
-Python/C++ code, signal your own event from `on_done` when a caller must await
-the complete stream.
+Python/C++ code, signal an application event from `on_done` when a caller must
+await the complete stream.
 
 ## 2. Sending is admission, not delivery
 
@@ -111,14 +110,12 @@ After half-close, await `drain_outgoing_messages`
 half-close, including the terminal marker, have been handed through the
 transport's buffered output path.
 
-Draining has a precondition: the endpoint must already be half-closed. It does
-not decide that sending is finished for you. In Python, the WireStream async
+Draining requires a half-closed endpoint. In Python, the WireStream async
 context manager calls the drain method on exit, so call `half_close()` inside
 the block first.
 
-This is a local delivery barrier, not full exchange completion. The peer may
-still be producing data, and its callbacks may continue after your drain
-finishes.
+This is a local delivery barrier. The peer may still produce data, and its
+callbacks may continue after the local drain finishes.
 
 ## 5. Observe peer closure and full completion
 
@@ -128,7 +125,7 @@ that point the endpoint can inspect the peer's trailers, but full completion
 still waits for its own outbound direction to finish too.
 
 Once both directions have ended, the done callback runs. TypeScript callers may
-also await `wait()`. That terminal barrier is the right time to:
+also await `wait()`. After this terminal barrier, callers can:
 
 - inspect `get_status` / `getStatus`;
 - read peer trailers;
@@ -149,7 +146,7 @@ status and is propagated to the peer when the transport can still communicate.
 The done callback still runs, allowing session bookkeeping to release the
 stream.
 
-## What should I await?
+## Completion barriers
 
 | Operation | What completion means |
 | --- | --- |

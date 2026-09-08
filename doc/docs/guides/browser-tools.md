@@ -233,11 +233,12 @@ the handler and streams the outputs to the model.
 
 ## 6. Choose what the model can observe
 
-`describe_scene` returns one `{id, x, y, z, radius, color}` object per blob in world units, giving the model the state
-needed by the mutation tools — and world units rather than screen pixels because that is what the scene itself uses, so
-the model is never reasoning about a projection that the reader can rotate out from under it. Image inputs belong in
-model message content, while tool results are JSON values. An application that needs visual reasoning can send a
-rendered frame as message content and keep tool results for structured state and operation outcomes.
+`describe_scene` returns one `{id, x, y, z, radius, color}` object per blob in
+world units, giving mutation tools the scene's authoritative coordinates.
+Screen coordinates would depend on the reader's current projection. Image
+inputs belong in model message content, while tool results are JSON values. An
+application that needs visual reasoning can send a rendered frame as message
+content and retain tool results for structured state and operation outcomes.
 
 Use browser-hosted actions when the capability or authoritative state belongs
 in the page, such as an editor selection, scene, or local document. For tools

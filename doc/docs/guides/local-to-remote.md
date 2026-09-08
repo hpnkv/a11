@@ -120,8 +120,8 @@ ends the caller's read even though it never marked a fragment final — see
 
 ## Putting it together
 
-Do the setup — registering the handler, creating the sessions — **inside your
-async entrypoint** (under a running event loop), then run the action both ways:
+Register the handler and create the sessions **inside the async entrypoint**
+under its running event loop, then run the action both ways:
 
 ```python
 import asyncio
@@ -196,8 +196,8 @@ The two paths differ only in the last mile:
 | `a11.Action(SHOUT).bind_handler(shout)` | `registry.make_action("shout", stream=..., session=...)` |
 | `.run()` — handler runs here | `.call()` — handler runs on the peer |
 
-The handler, schema, and port I/O are identical. That is why
-`interact_with_llm` moves server-side with no change to how you feed
-`interactions`/`config`/`tools` or read `text_output`/`new_interactions` — set
-its provider/model/key headers on the action you `make_action`, and `.call()`
-it. Next, let the model [call an action of yours back](agent-tool.md).
+The handler, schema, and port I/O are identical. `interact_with_llm` therefore
+moves server-side without changing its `interactions`, `config`, `tools`,
+`text_output`, or `new_interactions` ports. Set provider, model, and key headers
+on the action returned by `make_action`, then call `.call()`. Next, let the model
+[call an application action](agent-tool.md).

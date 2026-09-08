@@ -26,8 +26,8 @@ from a11.sdk.llm import Interaction, LlmHeaders, Role
 ## Build and start the action
 
 Construct the action from its schema, bind the handler, and set the provider /
-model / key as headers. `.run()` starts it in the background and hands back the
-running action, whose ports you now read and write:
+model / key as headers. `.run()` starts it in the background and returns the
+running action and its ports:
 
 ```python
 import os
@@ -42,9 +42,9 @@ interact = (
 )
 ```
 
-Ports are async nodes, reached with `interact["<port>"]` — the same
-[`AsyncNode`][a11.nodes.async_node.AsyncNode] you met in
-[streaming](streaming.md).
+Ports are [`AsyncNode`][a11.nodes.async_node.AsyncNode] instances, reached with
+`interact["<port>"]`; [Stream data through an AsyncNode](streaming.md) covers
+their lifecycle.
 
 ### Run on a Claude Code subscription
 
@@ -85,8 +85,8 @@ await interact["config"].finalize(
 
 Enabling a tool also permits it: a session driven through A11 answers no
 permission prompt, so there is no approval step between the model asking and
-the tool running. Name the tools the turn should be able to use rather than
-passing `True`, and use `disallowed_tools` for a scoped rule such as
+the tool running. Name the tools available to the turn. Use `disallowed_tools`
+for a scoped rule such as
 `Bash(rm *)`, which is refused in every permission mode.
 
 Set the `x-a11-claude-code-system-preset` header to `claude_code` to keep
@@ -132,7 +132,7 @@ The input side takes three ports:
 
 - `interactions` — the conversation so far, ending with the new user turn;
 - `config` — model settings; close it empty to use backend defaults;
-- `tools` — tool definitions; here there are none, so we close it empty.
+- `tools` — tool definitions; this example closes the port empty.
 
 An `Interaction` is a role plus content chunks:
 
@@ -232,6 +232,6 @@ be reconstructed from the other.
 
 The full multi-turn, multi-provider version is `examples/002-llm-interactions`.
 
-Next: the model call above ran **in your process**. See how to move it behind a
-server you [call over the network](local-to-remote.md), then give the model a
+The model call above ran **in the local process**. Move it behind a
+[remote server](local-to-remote.md), then give the model a
 [tool it can call back into](agent-tool.md).

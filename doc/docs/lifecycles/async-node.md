@@ -162,8 +162,7 @@ the writer's terminal status; like a failed data tee, it cannot revoke
 confirmations already returned. An aborting action fans its status out over its
 own stream instead.
 
-Closing does **not** append a final fragment, which is why `close()` is the
-narrow call. Reach for it in two situations:
+Closing does **not** append a final fragment. Use `close()` in two situations:
 
 - the last write already carried `final=true`, so finality is recorded and only
   the store lifecycle is left;
@@ -252,7 +251,7 @@ Cancelling one local wait is different from aborting the node. A timed-out or
 cancelled reader may stop waiting while the producer and other readers continue.
 Abort only when the shared stream itself has failed.
 
-## How this fits an Action
+## Action integration
 
 An [Action lifecycle](action.md) maps each schema port to an AsyncNode. The
 handler calls `finalize()` when the last token or object is complete. Action

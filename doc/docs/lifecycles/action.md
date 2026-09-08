@@ -62,7 +62,7 @@ sharing stream data accidentally.
 
 Before starting, bind the collaborators appropriate to the execution mode:
 
-| Binding | Why the Action needs it |
+| Binding | Role |
 | --- | --- |
 | Handler | Local implementation invoked by `run` |
 | NodeMap | Shared namespace that owns port nodes |
@@ -255,7 +255,7 @@ When local execution fails, output nodes are aborted and the completion status
 is still communicated when possible. When a remote status is non-OK, readers
 and `wait()` observe that status as the failure.
 
-## What should I await?
+## Completion barriers
 
 | Operation | What completion means |
 | --- | --- |

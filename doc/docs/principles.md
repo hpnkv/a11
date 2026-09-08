@@ -1,4 +1,4 @@
-# Why A11
+# A11 design
 
 A research agent can stream its plan, investigate several briefs concurrently,
 keep intermediate evidence on the backend, and synthesize one report for its

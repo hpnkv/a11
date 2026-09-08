@@ -108,8 +108,8 @@ Replacement credentials come from a throwaway claim, and only its
 `ice_servers` are kept. TURN credentials are bearer credentials -- the relay
 checks the HMAC in `credential` against the expiry in `username` and knows
 nothing about a11x identities -- so they serve the identity already in use.
-An endpoint holding lapsed credentials gathers no relay candidates at all,
-which is why the room replaces them rather than waiting to find out.
+An endpoint holding lapsed credentials gathers no relay candidates. The room
+replaces credentials before expiry.
 
 A signalling connection outlives the claim that opened it for a while, and
 a *new* one under a lapsed claim is refused with HTTP 400. So an anonymous
@@ -117,8 +117,8 @@ identity is reachable for about ten minutes. After that:
 
 - Peers already connected keep talking. A WebRTC data channel needs no
   signalling once it is up.
-- Nobody new can join, and the host says so rather than retrying a
-  rejection for ever.
+- Nobody new can join, and the host reports the expired identity without
+  retrying the rejection.
 - A peer that needs a new connection claims a fresh identity and rejoins
   under it, recording the identity it left behind as departed.
 
@@ -218,8 +218,7 @@ that is still open, so the other side ends the session, cancels the actions
 in flight, and broadcasts the leave event.
 
 Both ends race `Session.done()` against `WireStream.wait()`, so a channel
-that dies without a marker removes the peer as soon as the stream reports
-it, rather than on a session timeout.
+that dies without a marker removes the peer as soon as the stream reports it.
 
 Peers ping their host every three seconds with the `__ping` builtin, which
 every `ActionRegistry` answers without a registration. The ping and its
@@ -243,8 +242,8 @@ After a 1-second convergence delay:
   `RECONNECT_DEADLINE_MS`, then call `replicate` to resume receiving events.
   Their share URL follows the new host.
 - A candidate that never answers is recorded as departed too, and the
-  election runs again over what is left. Peers apply that rule in the same
-  order, so they converge on one host rather than several.
+  election runs again over what is left. Peers apply the rule in the same order
+  and converge on one host.
 
 Replicated events carry an identity — type, peer, timestamp and payload — so
 the new host's log replays into a peer that already holds part of it without

@@ -61,7 +61,7 @@ async with mcp.connect(
     ...
 ```
 
-## What a tool becomes
+## Derived action schema
 
 Take a tool whose arguments are `{"query": string, "fields": string[]}` and whose
 result is described by an output schema. The derived Action has:
@@ -136,7 +136,7 @@ python scripts/mcp_playground.py --command 'uvx mcp-server-fetch' \
 It prints each tool's derived schema and the tool definition a model would be
 shown, then calls one and streams everything it writes.
 
-## Serving, rather than calling
+## Serving A11 actions through MCP
 
 The same module serves the reverse direction: `a11.sdk.mcp.server` publishes an
 `ActionRegistry` as an MCP server, and `a11 serve --mcp` does it from the

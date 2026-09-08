@@ -12,7 +12,7 @@ is useful application plumbing even when no model or agent participates.
 | `make_http_request` | HTTP with nothing hidden: a port per protocol concern |
 | `web-fetch` | the `fetch()`-shaped adapter, for a caller that wants a document |
 
-## Why HTTP uses an Action
+## HTTP as an Action
 
 An ordinary HTTP client returns one `Response` object after receiving headers,
 body, and trailers. A11 exposes these fields on separate streaming ports. This
@@ -54,7 +54,7 @@ One per concern, in the order they become readable.
 | `pushes` | JSON | stream | one record per pushed response — see below |
 | `connection` | JSON | one | `{url, http_version, secure, reused}` |
 
-`headers` and `fields` are the same data twice, on purpose. A joined map is what
+`headers` and `fields` expose the same data in two forms. A joined map is what
 `resp.headers["content-type"]` needs; a joined map also destroys repeated fields,
 which is precisely the detail this action exists to preserve.
 
@@ -84,8 +84,8 @@ node, and the record on `pushes` carries that node's ID.
 
 Read it with `node(rec.body)` in Flow, or `action.get_node_map().get(rec["body"])`
 in Python. Needs `options.accept_pushes`; without it nothing is ever pushed,
-because the connection advertises `SETTINGS_ENABLE_PUSH: 0` and a peer cannot
-spend your streams on responses you did not ask for.
+because the connection advertises `SETTINGS_ENABLE_PUSH: 0` and prevents a peer
+from allocating streams to unsolicited responses.
 
 ### Options
 
@@ -142,7 +142,7 @@ request finishes, the connection **closes**; A11 does not retain idle pooled
 connections.
 
 HTTP/1.1 is not shared, because A11's HTTP/1.1 connection carries one request by
-design. `connection.http_version` says which you got.
+design. `connection.http_version` reports the negotiated version.
 
 ## Registering them
 

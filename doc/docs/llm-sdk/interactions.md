@@ -1,4 +1,4 @@
-# Understanding interactions
+# Interactions
 
 An `Interaction` is one durable step in a model
 conversation. It can represent a user message, an assistant response, a set of
@@ -71,6 +71,6 @@ payload = interaction.model_dump_json()
 restored = Interaction.model_validate_json(payload)
 ```
 
-An interaction is the record of a step, not a live model connection. Streaming
-tokens still travel through action output nodes; the completed interaction is
-what you retain for the next step, auditing, or replay.
+An interaction records one step; it is not a live model connection. Streaming
+tokens travel through action output nodes. The completed interaction supports
+the next step, auditing, and replay.

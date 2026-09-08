@@ -35,8 +35,7 @@ confirmation = await node.put("A11")
 sequence = await confirmation
 ```
 
-When you are the *authoritative* writer — the one who decides the stream is done
-— end it with **`finalize()`**:
+The authoritative writer ends the stream with **`finalize()`**:
 
 ```python
 await node.put("A11")
@@ -44,7 +43,7 @@ await node.put("streams")
 await node.finalize("everything")  # mark where the data ends, and seal
 ```
 
-One call, because a writer almost always wants the two things it does:
+`finalize()` performs two operations:
 
 - it marks the **end of the data**, so a reader knows the last value is whole.
   `finalize(value)` writes that value as the final one; `finalize()` with no
@@ -78,7 +77,7 @@ action result — use `consume()`:
 result = await node.consume()
 ```
 
-## When the end is not a value
+## Valueless final markers
 
 A streaming producer usually does not know which token was the last one until it
 has already sent it. Then the terminator carries no value of its own:

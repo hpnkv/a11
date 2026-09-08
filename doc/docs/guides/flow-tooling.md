@@ -10,13 +10,13 @@ a11 flow check my.flow --format json         # for a tool
 a11 flow check my.flow --format sarif        # for a code scanner
 a11 flow fmt my.flow -i                      # format it in place
 a11 flow fmt --check my.flow                 # for CI, or a pre-commit hook
-a11 flow parse my.flow --format json         # the syntax tree, and what broke
+a11 flow parse my.flow --format json         # syntax tree and diagnostics
 a11 flow describe my.flow --format json      # the resolved plan
-a11 flow highlight my.flow --format json     # what each token means
-a11 flow complete my.flow --line 7 --column 12   # what may be written there
-a11 flow run my.flow --input question=why    # run it here, print its ports
+a11 flow highlight my.flow --format json     # semantic token roles
+a11 flow complete my.flow --line 7 --column 12   # completion at a position
+a11 flow run my.flow --input question=why    # local run and port output
 a11 flow scan a11 cpp js                     # the actions the project declares
-a11 flow codes                               # every code, and what it means
+a11 flow codes                               # diagnostic-code catalogue
 a11 flow syntax --generate                   # write the editor definitions
 a11 flow serve                               # answer requests on stdin
 ```
@@ -96,7 +96,7 @@ types available outside the document; see `flow.catalogue/v1`.
 `a11 flow serve` speaks the identical protocol through the Python bindings, for a
 host that already has A11 installed.
 
-### Which units the offsets are in
+### Offset units
 
 Offsets are **byte offsets** by default. JVM and JavaScript editor APIs usually
 index strings in UTF-16 code units, where `§` occupies one unit and two UTF-8
@@ -161,9 +161,9 @@ The envelope remains usable without the source text:
 
 ### `flow.codes/v1`
 
-The published table of every code the language can produce, its family, its
-default severity and one line on what it means. A toolchain may match on a code:
-codes are stable, and the wording of a message is not. The table is generated
+The published table contains every diagnostic code, its family, default
+severity, and summary. A toolchain may match on a code: codes are stable, while
+message wording may change. The table is generated
 from the C++ source of truth into `testdata/flow/codes.json`, which every
 language reads.
 
@@ -281,7 +281,7 @@ What `a11 flow fmt --format json` gives:
 fold disruption. A file with an **error** is returned unchanged with
 `changed: false` and an explanatory diagnostic.
 
-#### What the formatter decides, and what it does not
+#### Formatter scope
 
 It decides indentation (two spaces a level), the spaces between tokens, how far a
 continued line is indented, how many blank lines are allowed and where, the columns
@@ -300,10 +300,9 @@ Two invariants, tested over every flow in the repository:
 
 ### `flow.plan/v1`
 
-What `a11 flow describe --format json` gives: the resolved plan — each flow's
-ports with their types, its headers, its node maps, and the steps the runtime will
-run. This is what a caller sees of a flow, so it is also what you diff when you
-want to know whether a change to a flow changed its interface.
+`a11 flow describe --format json` returns the resolved plan: each flow's typed
+ports, headers, node maps, and runtime steps. Diff this response to detect an
+interface change.
 
 ### `flow.completions/v1`
 
@@ -520,7 +519,7 @@ Azure DevOps and most annotators already read. Every rule the log can reference 
 described in it, because the rule list *is* the published code table. SARIF has
 three levels, so both shades of "this does nothing" (`weak-warning`,
 `information`) become `note`; the `severity` in the JSON envelope keeps the
-distinction if you want it.
+distinction when required.
 
 ## Severities and families
 

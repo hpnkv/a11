@@ -152,7 +152,7 @@ await words.finalize()
 Finalize or close every port named in `input_streams` so the receiving action can
 observe the end of input.
 
-## What the model is not allowed to compose
+## Composition policy
 
 A flow dispatches through the registry, underneath the layer that decides which
 actions a model may call. So `flow_run` and `flow_check` make that decision
@@ -182,7 +182,7 @@ The text embeds `a11.flow.REFERENCE`, the compact
 in, for a host that loads skills from disk; a test fails when the file and the
 code disagree.
 
-## What a composed step looks like
+## Composed step
 
 Given `web-search`, `web-fetch` and `summarize`, a model asked a research
 question can send this as one `flow_run` call:

@@ -72,7 +72,7 @@ const need = <T>(value: T | Status): T => {
 
 There is no session and no transport. Create the action from its schema, bind
 the handler, and `run()` it. `run()` starts the handler on the same node map, so
-the ports you open next are the very ones the handler reads and writes.
+the ports opened next are the ones the handler reads and writes.
 
 ```ts
 const registry = new ActionRegistry();
@@ -125,7 +125,7 @@ while (true) {
     const token = need(await output.next({timeoutMs: 120_000}));
     if (token === null) break;
     reply += token;
-    render(reply); // append to your chat bubble
+    render(reply);
 }
 ```
 

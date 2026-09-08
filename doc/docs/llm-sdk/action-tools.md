@@ -39,7 +39,7 @@ LOOK_UP_ORDER = a11.ActionSchema(
 
 async def look_up_order(action: a11.Action) -> None:
     order_id = await action["order_id"].consume()
-    result = await orders.fetch_status(order_id)  # Your application service.
+    result = await orders.fetch_status(order_id)
     await action["status"].finalize(result)
 ```
 

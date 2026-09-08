@@ -124,7 +124,7 @@ async for chunk in interact["text_output"]:
 await interact.wait()
 ```
 
-## How the tool call is handled
+## Tool-call lifecycle
 
 The model requests a tool call, the registered action runs, and its output
 returns to the model before the model answers. Because the tool is an ordinary

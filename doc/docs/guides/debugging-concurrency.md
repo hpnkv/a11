@@ -73,8 +73,8 @@ A lifecycle signal is not a substitute:
 - **`SIGTERM`** means "exit". A handler that reports and continues makes the
   process look like it is ignoring termination, and `systemd`, Kubernetes,
   `docker stop` and CI runners follow up with `SIGKILL` after their grace
-  period. Reporting and *then* exiting would give one dump, at the moment you
-  are trying to stop the process, which is not when a hang needs reading.
+  period. Reporting before exit captures one dump during termination. A hang
+  report needs the state before termination starts.
 - **`SIGQUIT`** dumps core by default, and `scripts/a11_fibers.py` reads those
   core files. Handling it would remove the artefact the post-mortem path uses.
 - **`SIGSEGV` and `SIGABRT`** are handled by Abseil's failure signal handler
@@ -111,7 +111,7 @@ LLDB, once, in `~/.lldbinit`:
 settings set target.load-cwd-lldbinit true
 ```
 
-Until you add it, `lldb` warns that the file exists and was skipped;
+Without this setting, `lldb` warns that the file exists and was skipped;
 `settings set target.load-cwd-lldbinit false` silences the warning instead.
 
 GDB declines the file and prints the line to add to `~/.gdbinit`:
@@ -136,9 +136,8 @@ a11-fibers
 ```
 
 For every session, put that import line in CLion's debugger startup commands
-(**Settings → Build, Execution, Deployment → Debugger**). That path needs no
-opt-in, because CLion runs the commands itself rather than having the debugger
-read a directory-local file.
+(**Settings → Build, Execution, Deployment → Debugger**). CLion runs these
+commands directly, so directory-local debugger opt-in does not apply.
 
 Frames print as `symbol at file:line`, the same shape LLDB prints, so the
 console resolves them against the project index. IntelliJ IDEA without the C/C++
@@ -146,9 +145,8 @@ plugin cannot debug native code and has no path to this at all.
 
 The script needs no cooperation from the target. It walks the fiber registry
 and unwinds the parked stacks with the debugger's own memory reads, resolving
-symbols to `file:line`. Field offsets come from the `a11_fiber_layout` symbol
-rather than a compiled-in copy of the struct, so it keeps working when a field
-is added.
+symbols to `file:line`. Field offsets come from the `a11_fiber_layout` symbol,
+which keeps the script compatible when the struct gains a field.
 
 ## Reading a report
 
@@ -171,8 +169,8 @@ F#2 "cycle-right"  parent=F#0  created-at thread::internal::CreateTree()
 - **`census`** counts fibers by wait kind: `running`, `condvar`, `mutex`,
   `select`, `sleep`, `join`, `os-thread`. `os-thread` is the placeholder A11
   keeps for a thread that reached it without being a fiber.
-- **A wait cycle is a deadlock.** Only mutex ownership and joins produce an edge
-  whose other end is known, so a cycle is proof rather than a suspicion.
+- **A wait cycle is a deadlock.** Mutex ownership and joins identify both ends
+  of an edge, so a cycle is conclusive.
 - **Condition variables have no discoverable signaller**, so they produce no
   cycle. The report instead prefixes waiters that share a wait object with
   `[N fibers wait on 0x...]`. Three readers on one channel with no writer left
@@ -183,8 +181,7 @@ F#2 "cycle-right"  parent=F#0  created-at thread::internal::CreateTree()
   the frame that recorded the frame pointer. How many intermediate frames appear
   depends on inlining.
 - **`(woke while its stack was read; frames discarded)`** means the fiber
-  resumed mid-walk, so the frames were dropped rather than reported. Take
-  another report.
+  resumed mid-walk and invalidated the captured frames. Take another report.
 
 Name the fibers that own a subsystem, and reports become readable without
 symbolizing anything:
@@ -243,10 +240,9 @@ unwound stack. `thread::FindWaitCycles()` returns the cycles. In Python,
 equal readings a second apart mean nothing moved, which separates a hang from
 slow progress.
 
-Most of A11's data path runs on stackless callback pumps rather than fibers
-(`ChunkStoreReader`, `ChunkStoreWriter`), so a snapshot of an idle process is
-often empty. Fibers appear where A11 offers a synchronous-looking API and in the
-flow runtime, which is where a report has something to say.
+Most of A11's data path uses stackless callback pumps (`ChunkStoreReader`,
+`ChunkStoreWriter`), so an idle process often has an empty fiber snapshot.
+Fibers back synchronous-looking APIs and the Flow runtime.
 
 ## Environment dials
 
@@ -260,7 +256,7 @@ flow runtime, which is where a report has something to say.
 | `A11_POOL_STATS=1` | Worker-pool counters, reported at exit |
 | `A11_POOL_PIN=<spec>` | Pin pool workers to CPUs |
 
-## What it costs
+## Runtime overhead
 
 Recording a frame pointer is one register read, and everything except mutex
 holder tracking sits on a path that already pays a context switch. Measured with
@@ -293,8 +289,8 @@ intact, and truncates the stacks.
 
 On an architecture with no frame-record layout in
 `thread/internal/stack_walk.cc`, the report says
-`(frame-pointer walk unsupported on this architecture)` rather than presenting
-an empty stack as a fact. AArch64 and x86-64 are supported.
+`(frame-pointer walk unsupported on this architecture)`. AArch64 and x86-64 are
+supported.
 
 ## Trying it
 

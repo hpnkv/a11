@@ -1,4 +1,4 @@
-# Getting the faster allocator
+# Native allocator
 
 Replacing the C library's `malloc` improved A11's native server throughput by
 about **25%** on the reference Linux benchmark: from 15.7k to 19.8k operations
@@ -42,11 +42,11 @@ allocators. Configure it when launching the process:
         python myserver.py
     ```
 
-`python -m a11.allocator` prints the exact line for your platform, along with
-whether it is currently active.
+`python -m a11.allocator` prints the platform-specific launch command and
+reports whether the allocator is active.
 
-If you spawn worker processes yourself, build their environment instead of
-writing the variable by hand:
+For application-managed worker processes, build the child environment with the
+helper:
 
 ```python
 import subprocess
@@ -75,12 +75,12 @@ the allocator was not loaded.
 
 **macOS System Integrity Protection strips `DYLD_INSERT_LIBRARIES`** from signed
 interpreters. A Homebrew or `uv`-managed Python normally keeps it; the system
-`/usr/bin/python3` will not, and it fails silently. `is_active()` is how you tell.
+`/usr/bin/python3` strips it without an error. Use `is_active()` to verify the
+result.
 
-**It is a native-throughput win.** What gets replaced is the allocator A11's C++
-uses, not CPython's own object allocator. A workload that spends its time in
-Python will see little of it; one that pushes data through sessions, nodes and
-stores will see most of it.
+**The change applies to native allocations.** It replaces the allocator used by
+A11's C++ runtime, while CPython retains its object allocator. The effect depends
+on how much work occurs in sessions, nodes, and stores.
 
 **It is disabled under sanitizers.** ASan and TSan supply their own
 allocators to track memory errors and thread safety issues.

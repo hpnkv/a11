@@ -49,7 +49,7 @@ open
 Await `done` / `wait_done`, not merely `is_closed`, before destroying resources
 that callbacks or stream pumps may still use.
 
-## What a Session owns
+## Session ownership
 
 | Resource | Role in an agent application |
 | --- | --- |
@@ -61,11 +61,11 @@ that callbacks or stream pumps may still use.
 | Buffer limits | Bound messages and bytes per stream and across the connection |
 | Timers | Enforce the absolute deadline and the no-stream grace period |
 
-You may inject a NodeMap or ActionRegistry before work starts. The setters also
-rebind active actions, but they do not migrate fragments already stored in the
-old NodeMap, and a registry change can make different phases resolve different
-registrations. Configure both before attaching streams or starting actions
-when possible; changing either mid-flight can split the connection's state.
+An application may inject a NodeMap or ActionRegistry before work starts. The
+setters also rebind active actions, but they do not migrate fragments already
+stored in the old NodeMap. A registry change can make different phases resolve
+different registrations. Configure both before attaching streams or starting
+actions; a mid-flight change can split the connection's state.
 
 ## 1. Create the open session
 
@@ -226,7 +226,7 @@ inspect, proxy, or explicitly pass each result to `dispatch_wire_message` /
 `dispatchWireMessage`. This makes ownership visible and avoids applying the
 same action or node fragment twice.
 
-## What should I await?
+## Completion barriers
 
 | Operation | What completion means |
 | --- | --- |

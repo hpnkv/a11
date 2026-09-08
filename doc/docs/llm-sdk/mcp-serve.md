@@ -65,7 +65,7 @@ To see the declarations without starting a server:
 python scripts/mcp_playground.py --declare mypkg.actions
 ```
 
-## What an action becomes
+## Derived MCP tool schema
 
 Take `counted`, which takes a line and writes two outputs — one word at a time,
 and their number:
@@ -78,8 +78,7 @@ and their number:
 | `words` output, streaming | `outputSchema.properties.words`, an array |
 | `total` output, unary | `outputSchema.properties.total` |
 
-A result comes back three ways at once, which is what MCP asks of a server that
-declares an output schema:
+A server with an MCP output schema returns three result forms:
 
 * `structuredContent` — the object the outputs decode to, the same value
   `decode_action_output_fragments` gives a model for the same run.
@@ -94,7 +93,7 @@ declares an output schema:
 maps one port to the whole result (`output_to_json_field`) and returns a string
 answers in text alone.
 
-### Streaming, and what MCP can carry
+### MCP streaming boundary
 
 A `tools/call` is one request and one response, so a client reads the result
 when the action finishes. What arrives during the run is narration: anything the
@@ -137,11 +136,10 @@ there is no tool result to report.
 
 ## Two A11 peers over MCP
 
-Each tool carries its action's `a11.actions/v1` document in the tool's `_meta`,
-under `to.a11/action`. Any client ignores it and sees an ordinary MCP tool. An
-A11 client reads it and rebuilds the action as it was declared — port names,
-which ports stream, header schemas — rather than deriving an approximation from
-JSON Schema, and the result lands on the action's own output ports:
+Each tool carries its action's `a11.actions/v1` document in `_meta` under
+`to.a11/action`. Other clients ignore it and see an ordinary MCP tool. An A11
+client uses it to restore the declared port names, streaming flags, and header
+schemas. Results then use the action's own output ports:
 
 ```python
 async with mcp.connect("http://127.0.0.1:8013/mcp") as toolset:

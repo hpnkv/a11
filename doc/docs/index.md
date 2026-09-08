@@ -157,7 +157,7 @@ They also cover APIs and pipelines that contain no agent:
 
 ## Understand the design
 
-[Why A11](principles.md) explains the streaming model, local and remote
+[A11 design](principles.md) explains the streaming model, local and remote
 execution, storage choices, and lifecycle boundaries. The lifecycle articles
 then show exactly when a [node](lifecycles/async-node.md),
 [action](lifecycles/action.md), [session](lifecycles/session.md), or

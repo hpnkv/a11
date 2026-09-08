@@ -44,8 +44,8 @@ I0810 11:05:21.115550 8533073600 shell.py:64] opened shell 1
 I0810 11:05:21.115635 8533073600 http2.cc:1691] HTTP/2 listener error
 ```
 
-Under an application that has already configured logging, A11 installs nothing
-and its records — native ones included — flow into the handlers you set up.
+Under an application that has already configured logging, A11 installs nothing.
+All A11 records, including native records, flow into configured handlers.
 
 [`set_level`][a11.logging.set_level] moves the `a11` logger, `absl.logging`'s
 verbosity, and the native `VLOG` threshold together;
@@ -80,7 +80,7 @@ a11.logging.sync()
 A11 follows absl-py's convention: a standard level under `DEBUG` selects an
 Abseil `VLOG` tier, so `logging.DEBUG - 1` enables `VLOG(2)`.
 
-## What actions log
+## Action log records
 
 `Action.log` and `Action.logf` report action progress, while the logging bridge
 reports runtime events. Action logs travel as chunks on a reserved port, so a
@@ -97,7 +97,7 @@ Only a running action may log; logging before `run` or from the calling side of
 `call` has no active writer or reader.
 
 What is consumed in this process becomes a record on the `a11.action` logger, so
-`setLevel`, `dictConfig` and your existing handlers apply. The chunk's whole
+`setLevel`, `dictConfig`, and existing handlers apply. The chunk's whole
 description travels with it as record attributes -- `a11_action`, `a11_channel`,
 `a11_internal`, `a11_mimetype`, `a11_data` -- so a handler can filter on the
 channel or drop A11's internal lines without parsing the message back apart.

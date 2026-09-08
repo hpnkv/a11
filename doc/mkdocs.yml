@@ -153,14 +153,14 @@ nav:
           - Session lifecycle: lifecycles/session.md
           - Action lifecycle: lifecycles/action.md
       - LLM SDK:
-          - Understanding interactions: llm-sdk/interactions.md
+          - Interactions: llm-sdk/interactions.md
           - Actions as LLM tools: llm-sdk/action-tools.md
           - MCP servers as Actions: llm-sdk/mcp-tools.md
           - Actions as an MCP server: llm-sdk/mcp-serve.md
           - Running tool calls: llm-sdk/tool-runner.md
           - Tools with interact_with_*: llm-sdk/interact-actions.md
           - Composing tools into a flow: llm-sdk/flow-skill.md
-  - Why A11: principles.md
+  - A11 design: principles.md
   - Examples:
       - All examples: examples.md
       - Stream data through an AsyncNode: guides/streaming.md

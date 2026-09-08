@@ -152,7 +152,7 @@ on unchanged, which is the way to see into a pipeline without changing it.
 
 The action names below are examples — use the ones `flow_actions` gives you.
 
-```
+```a11flow
 flow answer-from-the-web {{
   describe "Search, read the best hits, and answer from them."
 

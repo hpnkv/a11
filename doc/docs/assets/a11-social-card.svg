@@ -1,25 +1,48 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640">
-  <defs>
-    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#eef2ff"/>
-      <stop offset="1" stop-color="#ecfeff"/>
-    </linearGradient>
-  </defs>
-  <rect width="1280" height="640" rx="28" fill="url(#background)"/>
-  <circle cx="129" cy="142" r="45" fill="none" stroke="#6c63ff"
-          stroke-width="20"/>
-  <circle cx="310" cy="318" r="45" fill="none" stroke="#6c63ff"
-          stroke-width="20"/>
-  <path d="M129 202v47c0 38 31 69 69 69h74" fill="none"
-        stroke="#0f766e" stroke-width="20" stroke-linecap="round"/>
-  <path d="m235 281 48 37-48 38" fill="none" stroke="#0f766e"
-        stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>
-  <text x="390" y="235" fill="#111827" font-family="Inter,Arial,sans-serif"
-        font-size="126" font-weight="750" letter-spacing="-5">A11</text>
-  <text x="394" y="325" fill="#1f2937" font-family="Inter,Arial,sans-serif"
-        font-size="45" font-weight="600">Streaming actions for agents</text>
-  <text x="394" y="388" fill="#1f2937" font-family="Inter,Arial,sans-serif"
-        font-size="45" font-weight="600">and generative-model services</text>
-  <text x="394" y="486" fill="#475569" font-family="Inter,Arial,sans-serif"
-        font-size="29">Named streams · local or remote · checked Flow</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630">
+  <rect width="1200" height="630" fill="#f6f8fa"/>
+
+  <g transform="translate(76 66)">
+    <circle cx="17" cy="18" r="9" fill="none" stroke="#6c63ff"
+            stroke-width="5.25"/>
+    <circle cx="55" cy="54" r="9" fill="none" stroke="#6c63ff"
+            stroke-width="5.25"/>
+    <path d="M17 30v10c0 7 6 13 14 13h16" fill="none"
+          stroke="#0f766e" stroke-width="5.25" stroke-linecap="round"/>
+    <path d="m39 45 10 8-10 9" fill="none" stroke="#0f766e"
+          stroke-width="5.25" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <text x="170" y="119" fill="#1f2328"
+        font-family="Noto Sans,Arial,sans-serif" font-size="42"
+        font-weight="800" letter-spacing="-1">A11</text>
+
+  <g transform="translate(820 95) scale(.83)">
+    <path d="M74 88v78c0 38 31 69 69 69h120c38 0 69 31 69 69v84"
+          fill="none" stroke="#d0d7de" stroke-width="3"/>
+    <path d="M74 88v78c0 38 31 69 69 69h120c38 0 69 31 69 69v84"
+          fill="none" stroke="#218bff" stroke-width="8"
+          stroke-linecap="round" stroke-dasharray="1 20"/>
+    <circle cx="74" cy="72" r="26" fill="#fff" stroke="#0969da"
+            stroke-width="7"/>
+    <circle cx="332" cy="412" r="26" fill="#fff" stroke="#0f766e"
+            stroke-width="7"/>
+    <circle cx="203" cy="235" r="13" fill="#fff" stroke="#8c959f"
+            stroke-width="5"/>
+  </g>
+
+  <text x="76" y="263" fill="#1f2328"
+        font-family="Noto Sans,Arial,sans-serif" font-size="64"
+        font-weight="800" letter-spacing="-2.7">
+    <tspan x="76">Streaming runtime for</tspan>
+    <tspan x="76" dy="69">agents and multimodal</tspan>
+    <tspan x="76" dy="69">APIs</tspan>
+  </text>
+  <text x="76" y="469" fill="#57606a"
+        font-family="Noto Sans,Arial,sans-serif" font-size="26">
+    Typed actions. Native streams. One protocol.
+  </text>
+
+  <circle cx="80.5" cy="555.5" r="4.5" fill="#2da44e"/>
+  <text x="99" y="562" fill="#57606a"
+        font-family="JetBrains Mono,Menlo,monospace" font-size="19"
+        letter-spacing=".2">Open source · Python · TypeScript · C++</text>
 </svg>

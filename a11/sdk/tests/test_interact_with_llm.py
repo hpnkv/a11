@@ -24,6 +24,7 @@ import types
 import pytest
 
 import a11
+from a11 import _native
 from a11.sdk import interact_with_llm as illm
 from a11.sdk.interact_with_llm import (
     INTERACT_WITH_LLM_SCHEMA,
@@ -46,6 +47,7 @@ async def _run(headers: dict[str, str], read: str = "new_interactions"):
     )
     for key, value in headers.items():
         action.set_header(key, value.encode())
+    log_node = action.get_log_node() if read == "log" else None
     action = action.run()
 
     await action["interactions"].finalize(_user_message())
@@ -53,6 +55,12 @@ async def _run(headers: dict[str, str], read: str = "new_interactions"):
     await action["tools"].finalize()
 
     collected = []
+    if log_node is not None:
+        async for chunk in log_node.iter_chunks():
+            if not chunk.is_null() and not _native.is_status_chunk(chunk):
+                collected.append(chunk)
+        await action.wait()
+        return collected
     async for value in action[read]:
         collected.append(value)
     return collected
@@ -276,3 +284,42 @@ async def test_text_output_and_thoughts_stream_through_router(monkeypatch):
     )
     assert "".join(text) == "Hello world"
     assert "".join(thoughts) == "pondering"
+
+
+@pytest.mark.asyncio
+async def test_provider_logs_are_claimed_and_forwarded(monkeypatch):
+    async def fake_handler(action):
+        await action.log(
+            {"model": "small", "messages": 3},
+            level="warning",
+            channel="model",
+        )
+        await action["new_interactions"].put(Interaction(model="fake"))
+        for name in ("event_stream", "text_output", "thoughts"):
+            await action[name].finalize()
+        await action["new_interactions"].finalize()
+
+    module = types.ModuleType("a11.sdk._fake_logging")
+    module.fake_handler = fake_handler
+    monkeypatch.setitem(sys.modules, "a11.sdk._fake_logging", module)
+    monkeypatch.setitem(
+        illm._PROVIDERS,
+        "ollama",
+        illm._Provider("a11.sdk._fake_logging", "fake_handler", "ollama"),
+    )
+
+    chunks = await _run(
+        {LlmHeaders.PROVIDER.value: "ollama"}, read="log"
+    )
+    forwarded = next(
+        chunk
+        for chunk in chunks
+        if a11.from_chunk(chunk) == {"model": "small", "messages": 3}
+    )
+    record = _native.log_record_from_chunk(forwarded)
+
+    assert record["level"] == "warning"
+    assert record["channel"] == "model"
+    assert (
+        forwarded.metadata.attributes["a11-child-action"] == b"fake_handler"
+    )

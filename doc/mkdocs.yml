@@ -43,6 +43,9 @@ watch:
 theme:
   name: material
   custom_dir: overrides
+  font:
+    text: Noto Sans
+    code: JetBrains Mono
   logo: assets/a11-mark-header.svg
   favicon: assets/a11-mark.svg
   palette:
@@ -100,6 +103,9 @@ hooks:
 
 extra_javascript:
   - assets/analytics.js
+
+extra_css:
+  - assets/typography.css
 
 extra:
   analytics_endpoint: !ENV [A11_ANALYTICS_ENDPOINT, ""]

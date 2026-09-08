@@ -14,17 +14,15 @@
 
 """Provider-agnostic entry point that routes to a concrete `interact_with_*`.
 
-`interact_with_llm` is a thin dispatcher: it inspects the action's headers to
-decide which backend should serve the turn, imports that provider lazily, and
-then runs the provider's handler **inline on the same action**. Because this
-action's schema is the union of the provider schemas, the downstream handler
-reads the very same input nodes and writes the very same output nodes — no new
-action object is created, and no data is copied between node sets.
+`interact_with_llm` inspects the action's headers, imports the selected provider
+lazily, and runs its handler as a nested action. Fragment pumps connect the
+router's ports to the backend's matching ports. The child retains the session,
+registry, headers, and nested tool-call context.
 
-Running inline (rather than spawning a nested action) is what keeps a
-backend's inline tool-calling working: the provider handler calls
-`action.make_nested(...)`, which requires the real, running `Action` it was
-handed.
+The router claims the backend action's log and relays each record with its
+level, channel, source location, and structured value intact. A caller therefore
+sees provider narration on the `interact_with_llm` log alongside the router's
+own selection and completion entries.
 
 Failures are surfaced the ordinary A11 way. An unknown/absent provider raises
 `INVALID_ARGUMENT`; a provider whose SDK is not installed raises
@@ -37,11 +35,15 @@ rather learn about a missing SDK before the first turn can call
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import importlib
 from typing import Awaitable, Callable
 
+from absl import logging
+
 import a11
+from a11 import _native
 from a11.sdk.llm import Interaction, LlmHeaders
 from a11.status import Status, StatusCode
 
@@ -254,6 +256,84 @@ def _load_handler(provider: str) -> Handler:
     return getattr(module, spec.handler)
 
 
+def _backend_schema(provider: str) -> a11.ActionSchema:
+    """Give the nested backend its implementation name and the router ports."""
+    return a11.ActionSchema(
+        name=_PROVIDERS[provider].handler,
+        description=f"Run one interaction with the {provider} backend.",
+        inputs=INTERACT_WITH_LLM_SCHEMA.inputs,
+        outputs=INTERACT_WITH_LLM_SCHEMA.outputs,
+        headers=INTERACT_WITH_LLM_SCHEMA.headers,
+    )
+
+
+async def _pump_fragments(source: a11.AsyncNode, target: a11.AsyncNode) -> None:
+    """Copy one router port to its backend counterpart."""
+    while True:
+        fragment = await source.next_fragment()
+        if fragment is None:
+            break
+        await target.put_fragment(fragment)
+    await target.close()
+
+
+async def _forward_logs(
+    source: a11.AsyncNode, parent: a11.Action, child: a11.Action
+) -> None:
+    """Relay the claimed backend log through the router action."""
+    async for chunk in source.iter_chunks():
+        if chunk.is_null() or _native.is_status_chunk(chunk):
+            continue
+        try:
+            record = _native.log_record_from_chunk(chunk)
+            await parent.log(
+                chunk,
+                level=record["level"],
+                channel=record["channel"] or None,
+                internal=record["internal"],
+                file=record["file"],
+                lineno=record["lineno"],
+                metadata={
+                    "a11-child-action": child.schema.name,
+                    "a11-child-call-id": child.id,
+                },
+            )
+        except Exception:
+            logging.warning("failed to forward a provider log", exc_info=True)
+
+
+async def _run_backend(
+    action: a11.Action, provider: str, handler: Handler
+) -> None:
+    """Run the selected backend and connect all of its ports to the router."""
+    backend = action.make_nested(_backend_schema(provider))
+    backend.bind_stream(None)
+    backend.bind_handler(handler)
+    logs = backend.get_log_node()
+
+    pumps = [
+        asyncio.create_task(_pump_fragments(action[name], backend[name]))
+        for name in INTERACT_WITH_LLM_SCHEMA.inputs
+    ]
+    pumps.extend(
+        asyncio.create_task(_pump_fragments(backend[name], action[name]))
+        for name in INTERACT_WITH_LLM_SCHEMA.outputs
+    )
+    pumps.append(asyncio.create_task(_forward_logs(logs, action, backend)))
+
+    backend.run()
+    waiter = asyncio.ensure_future(backend.wait())
+    tasks = [waiter, *pumps]
+    try:
+        await asyncio.gather(*tasks)
+    except BaseException:
+        backend.cancel()
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
+
+
 def load_provider(provider: str) -> None:
     """Import ``provider``'s backend now, so a later turn cannot fail on it.
 
@@ -282,10 +362,14 @@ def load_provider(provider: str) -> None:
 
 
 async def interact_with_llm(action: a11.Action) -> None:
-    """Route the interaction to the header-selected backend, run it inline."""
+    """Route the interaction through a nested provider action."""
     provider = _resolve_provider(action)
     handler = _load_handler(provider)
-    await handler(action)
+    await action.logf("Selected the %s provider.", provider, channel="routing")
+    await _run_backend(action, provider, handler)
+    await action.logf(
+        "The %s interaction completed.", provider, channel="routing"
+    )
 
 
 __all__ = [

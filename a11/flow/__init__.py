@@ -24,7 +24,7 @@ Flows are text. That is the point: a gateway, a client, or a model can be handed
 a composition of actions it has never seen before and run it, with no repository
 change and no redeploy.
 
-```
+```a11flow
 flow shout {
   in  words:   string stream
   out loudest: string
@@ -133,7 +133,7 @@ Flow provides syntax for these A11 operations:
 
 Use `try` with either verb when the flow will handle a failure:
 
-```
+```a11flow
 page = try run web-fetch(url: url)
 outcome = wait page                       # wait and read the status
 if not outcome.ok {
@@ -158,7 +158,7 @@ named flows while keeping one source document and entry point.
 Ports are checked between them at compile time, exactly as they are against a
 registered action, so an incompatible rename is reported before execution.
 
-```
+```a11flow
 flow ask {                        # the piece, reusable on its own
   in  question: string
   out answer:   string stream
@@ -278,7 +278,7 @@ and run.
 A description is prose, and prose does not fit on the line of the declaration it
 belongs to. Two spellings deal with that, and they compose:
 
-```
+```a11flow
 flow documented {
   describe """
     What this flow is for, at the length that actually takes.
@@ -306,7 +306,7 @@ line holding nothing but a string is not a statement in this language.
 A type is also something a value can be *made into*, which is how a flow feeds a
 port that wants a real type rather than a bag of keys:
 
-```
+```a11flow
 a11.sdk.Interaction{                          # or: {...} as a11.sdk.Interaction
   role: "user",
   content: [to_chunk({"type": "text", "text": said})]

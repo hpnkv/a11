@@ -151,7 +151,7 @@ columns of a run of declarations around it.
 A flow can construct a registered type such as `Interaction` or `AudioBuffer`
 from fields with `TYPE{...}`:
 
-```
+```a11flow
 a11.sdk.Interaction{
   role: "user",
   content: [to_chunk({"role": "user", "content": [{"type": "text", "text": said}]})]
@@ -461,7 +461,7 @@ instant.
 `duration(x)` and `time(x)` are the way back in, and they read exactly what the
 formatting writes:
 
-```
+```a11flow
 deadline = time(header-deadline)          # "2026-08-11T09:14:22Z"
 budget   = duration(header-budget)        # "1m30s", or a number of seconds
 if now() + budget > deadline { fail deadline_exceeded "not enough time left" }

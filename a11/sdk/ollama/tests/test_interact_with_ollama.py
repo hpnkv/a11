@@ -23,6 +23,7 @@ import asyncio
 import pytest
 
 import a11
+from a11 import _native
 from a11.sdk.llm import Interaction, LlmHeaders, Role
 from a11.status import StatusException
 
@@ -117,7 +118,9 @@ _TOOL_DEF = {
 }
 
 
-async def _run(rounds, monkeypatch, *, read="text_output"):
+async def _run(
+    rounds, monkeypatch, *, read="text_output", read_logs=False, observe=None
+):
     """Run one chat turn against ``rounds`` and read values from ``read``.
 
     Mirrors how the CLI drives the action: a text_output reader runs
@@ -137,15 +140,27 @@ async def _run(rounds, monkeypatch, *, read="text_output"):
         .set_header(LlmHeaders.MODEL.value, b"fake")
         .set_header(LlmHeaders.ALLOWED_LLM_ACTIONS.value, b"get_info")
     )
+    if observe is not None:
+        observe(action)
+    log_node = action.get_log_node() if read_logs else None
     action = action.run()
 
     collected: list = []
+    logs: list[str] = []
 
     async def pump():
         async for value in action[read]:
             collected.append(value)
 
     reader = asyncio.create_task(pump())
+
+    async def pump_logs():
+        assert log_node is not None
+        async for chunk in log_node.iter_chunks():
+            if not chunk.is_null() and not _native.is_status_chunk(chunk):
+                logs.append(_native.log_record_from_chunk(chunk)["text"])
+
+    log_reader = asyncio.create_task(pump_logs()) if read_logs else None
 
     await action["interactions"].finalize(
         Interaction(
@@ -163,7 +178,11 @@ async def _run(rounds, monkeypatch, *, read="text_output"):
         new_interactions.append(interaction)
 
     await reader
+    if log_reader is not None:
+        await log_reader
     await action.wait()
+    if read_logs:
+        return collected, new_interactions, logs
     return collected, new_interactions
 
 
@@ -274,6 +293,56 @@ async def test_thoughts_stream_separately_from_text(monkeypatch):
 
     text, _ = await _run(rounds, monkeypatch, read="text_output")
     assert "".join(text) == "Hello."
+
+
+@pytest.mark.asyncio
+async def test_thoughts_flush_once_before_first_text(monkeypatch):
+    rounds = [
+        [
+            _chunk(_message(thinking="pondering ")),
+            _chunk(_message(content="First.")),
+            _chunk(_message(tool_calls=[("get_info", {"path": "~"})])),
+            _chunk(done=True),
+        ],
+        [_chunk(_message(content=" Second.")), _chunk(done=True)],
+    ]
+    events = []
+
+    def observe(action):
+        thoughts = action["thoughts"]
+        flush = thoughts.writer.flush
+
+        def record_flush():
+            events.append("flush")
+            flush()
+
+        thoughts.writer.flush = record_flush
+
+        text_output = action["text_output"]
+        put = text_output.put
+
+        async def record_text(value):
+            events.append(value)
+            await put(value)
+
+        text_output.put = record_text
+
+    text, _ = await _run(rounds, monkeypatch, observe=observe)
+
+    assert "".join(text) == "First. Second."
+    assert events == ["flush", "First.", " Second."]
+
+
+@pytest.mark.asyncio
+async def test_logs_round_shape_and_token_usage(monkeypatch):
+    rounds = [[_chunk(_message(content="Hello.")), _chunk(done=True)]]
+
+    _, _, logs = await _run(rounds, monkeypatch, read_logs=True)
+
+    assert logs == [
+        "Ollama round 1 sends 1 message to fake; 1 tool is available.",
+        "Ollama completed round 1: 1 input token, 1 output token.",
+    ]
 
 
 def test_raw_image_chunks_reach_ollama_images():

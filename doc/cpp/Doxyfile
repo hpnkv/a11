@@ -64,7 +64,8 @@ HTML_COLORSTYLE        = AUTO_LIGHT
 HTML_COLORSTYLE_HUE    = 232
 HTML_COLORSTYLE_SAT    = 60
 HTML_COLORSTYLE_GAMMA  = 90
-HTML_EXTRA_STYLESHEET  = doxygen-awesome-css/doxygen-awesome.css
+HTML_EXTRA_STYLESHEET  = doxygen-awesome-css/doxygen-awesome.css \
+                         typography.css
 
 # Class diagrams when Graphviz is available (installed in CI).
 HAVE_DOT               = YES

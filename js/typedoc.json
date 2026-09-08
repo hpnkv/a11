@@ -4,6 +4,7 @@
   "out": "../doc/site/typescript",
   "name": "A11 TypeScript API",
   "readme": "none",
+  "customCss": "typedoc.css",
   "includeVersion": true,
   "excludePrivate": true,
   "excludeProtected": true,

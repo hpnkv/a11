@@ -52,10 +52,16 @@ class DiffusionRequest(BaseModel):
 
     prompt: str = Field(description="What the image should show.")
     num_inference_steps: int = Field(
-        default=20, ge=1, le=100, description="How many denoising steps."
+        default=20, description="How many denoising steps, from 10 to 50."
     )
-    height: int = Field(default=512, ge=64, le=1024)
-    width: int = Field(default=512, ge=64, le=1024)
+    height: int = Field(
+        default=512,
+        description="Image height from 512 to 1024, divisible by 8.",
+    )
+    width: int = Field(
+        default=512,
+        description="Image width from 512 to 1024, divisible by 8.",
+    )
     seed: int | None = Field(
         default=None, description="Fix the seed to get the same image twice."
     )
@@ -186,6 +192,33 @@ def _png_chunk(png: bytes) -> a11.Chunk:
     return a11.Chunk(data=png, metadata=a11.ChunkMetadata(mimetype="image/png"))
 
 
+def _validate_request(request: DiffusionRequest) -> None:
+    if not 10 <= request.num_inference_steps <= 50:
+        raise Status(
+            code=StatusCode.INVALID_ARGUMENT,
+            message=(
+                "`num_inference_steps` must be between 10 and 50 inclusive;"
+                f" received {request.num_inference_steps}."
+            ),
+        ).to_exception()
+
+    for name in ("height", "width"):
+        value = getattr(request, name)
+        if not 512 <= value <= 1024:
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT,
+                message=(
+                    f"`{name}` must be between 512 and 1024 inclusive;"
+                    f" received {value}."
+                ),
+            ).to_exception()
+        if value % 8 != 0:
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT,
+                message=f"`{name}` must be divisible by 8; received {value}.",
+            ).to_exception()
+
+
 async def text_to_image(action: a11.Action) -> None:
     """Draw `request.prompt`, streaming a step counter while it works."""
 
@@ -193,15 +226,22 @@ async def text_to_image(action: a11.Action) -> None:
     image_out = action["image"]
     try:
         request = await action["request"].consume(DiffusionRequest)
+        _validate_request(request)
         await action.logf(
-            "text_to_image %s: %r (%d steps, %dx%d)",
-            action.get_id(),
+            "Drawing %r in %d steps at %dx%d.",
             request.prompt,
             request.num_inference_steps,
             request.width,
             request.height,
+            channel="request",
         )
 
+        await action.log(
+            "Loading the diffusion pipeline."
+            if _PIPELINE is None
+            else "Using the loaded diffusion pipeline.",
+            channel="model",
+        )
         pipeline = await _pipeline()
 
         # The diffusers callback runs on the worker thread, so it hands the
@@ -223,10 +263,18 @@ async def text_to_image(action: a11.Action) -> None:
 
         import torch
 
+        random_seed = request.seed is None
         seed = (
             request.seed
             if request.seed is not None
             else secrets.randbits(63)
+        )
+        await action.logf(
+            "Using %s seed %d on %s.",
+            "random" if random_seed else "requested",
+            seed,
+            pipeline.device,
+            channel="model",
         )
         generator = torch.Generator(pipeline.device).manual_seed(seed)
 
@@ -244,7 +292,7 @@ async def text_to_image(action: a11.Action) -> None:
         png = await asyncio.to_thread(_png_bytes, result.images[0])
         await image_out.put_chunk(_png_chunk(png), final=True)
         await action.logf(
-            "text_to_image %s: %d bytes of PNG", action.get_id(), len(png)
+            "Finished a %d-byte PNG.", len(png), channel="result"
         )
     finally:
         # A caller reading either port must see it end, however this went.

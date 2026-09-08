@@ -1,0 +1,27 @@
+@import url("https://fonts.googleapis.com/css?family=Noto+Sans:300,300i,400,400i,700,700i%7CJetBrains+Mono:400,400i,700,700i&display=fallback");
+
+:root {
+  --font-family: "Noto Sans", sans-serif;
+  --font-family-monospace: "JetBrains Mono", monospace;
+}
+
+html,
+body,
+button,
+input,
+select,
+table,
+textarea {
+  font-family: "Noto Sans", sans-serif;
+}
+
+code,
+kbd,
+pre,
+samp,
+.fragment,
+.line {
+  font-family: "JetBrains Mono", monospace;
+  font-variant-ligatures: common-ligatures contextual;
+  font-feature-settings: "liga" 1, "calt" 1;
+}

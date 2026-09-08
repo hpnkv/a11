@@ -690,9 +690,13 @@ async def interact_with_ollama(action: a11.Action):
     # next user message from colliding with this turn's calls.
     call_id_prefix = f"call_{uuid.uuid4().hex[:12]}"
     next_tool_call_id = 0
+    round_number = 0
+    thoughts = action["thoughts"]
+    thoughts_flushed = False
     try:
         failed_rounds = llm.FailedToolRounds()
         while True:
+            round_number += 1
             messages: list[dict[str, Any]] = []
             if conversation.system_prompt:
                 messages.append({
@@ -700,6 +704,16 @@ async def interact_with_ollama(action: a11.Action):
                     "content": conversation.system_prompt,
                 })
             messages.extend(conversation.messages)
+            await action.logf(
+                "Ollama round %d sends %d %s to %s; %d %s available.",
+                round_number,
+                len(messages),
+                "message" if len(messages) == 1 else "messages",
+                model,
+                len(ollama_tools),
+                "tool is" if len(ollama_tools) == 1 else "tools are",
+                channel="model",
+            )
 
             try:
                 with _serializing_a_raw_tool_schema():
@@ -728,9 +742,12 @@ async def interact_with_ollama(action: a11.Action):
                 if message is not None:
                     accumulator.add(message)
                     if message.content:
+                        if not thoughts_flushed:
+                            thoughts.writer.flush()
+                            thoughts_flushed = True
                         await action["text_output"].put(message.content)
                     if message.thinking:
-                        await action["thoughts"].put(message.thinking)
+                        await thoughts.put(message.thinking)
 
                 if getattr(chunk, "done", False):
                     snapshot = chunk
@@ -738,6 +755,7 @@ async def interact_with_ollama(action: a11.Action):
             tool_calls = accumulator.tool_calls
             next_tool_call_id += len(tool_calls)
             message_dict = accumulator.message_dict()
+            usage = _build_usage_metadata(snapshot)
 
             snapshot_model = (
                 str(snapshot.model)
@@ -753,7 +771,7 @@ async def interact_with_ollama(action: a11.Action):
                 backend_specific_metadata=_build_backend_specific_metadata(
                     snapshot
                 ),
-                usage_metadata=_build_usage_metadata(snapshot),
+                usage_metadata=usage,
             )
             previous_interaction_id = interaction.id
             rejected = await llm.add_tool_calls_to_interaction(
@@ -764,6 +782,24 @@ async def interact_with_ollama(action: a11.Action):
 
             await action["new_interactions"].put(interaction)
             if not interaction.action_calls and not rejected:
+                usage_parts = []
+                if usage is not None and usage.input_tokens is not None:
+                    suffix = "" if usage.input_tokens == 1 else "s"
+                    usage_parts.append(
+                        f"{usage.input_tokens} input token{suffix}"
+                    )
+                if usage is not None and usage.output_tokens is not None:
+                    suffix = "" if usage.output_tokens == 1 else "s"
+                    usage_parts.append(
+                        f"{usage.output_tokens} output token{suffix}"
+                    )
+                detail = ", ".join(usage_parts) or "token counts unavailable"
+                await action.logf(
+                    "Ollama completed round %d: %s.",
+                    round_number,
+                    detail,
+                    channel="model",
+                )
                 if action.trace_id:
                     try:
                         action.set_span_output(message_dict)
@@ -773,6 +809,13 @@ async def interact_with_ollama(action: a11.Action):
                         )
                 break
 
+            names = ", ".join(call.name for call in tool_calls)
+            await action.logf(
+                "Ollama round %d requested tools: %s.",
+                round_number,
+                names,
+                channel="tools",
+            )
             executed = await runner.execute_actions_from_interaction(
                 interaction, action, action.get_registry(), rejected=rejected
             )

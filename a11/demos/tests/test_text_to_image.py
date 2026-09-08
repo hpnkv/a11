@@ -152,19 +152,19 @@ async def test_progress_arrives_per_step_and_the_image_at_the_end(
     progress, image = await _run(
         {
             "prompt": "a lighthouse",
-            "num_inference_steps": 4,
+            "num_inference_steps": 10,
         }
     )
 
-    assert [value["step"] for value in progress] == [1, 2, 3, 4]
-    assert {value["steps"] for value in progress} == {4}
+    assert [value["step"] for value in progress] == list(range(1, 11))
+    assert {value["steps"] for value in progress} == {10}
     assert image is not None
     assert image.get_mimetype() == "image/png"
     assert bytes(image.data).startswith(b"\x89PNG")
     assert pipeline.calls == [
         {
             "prompt": "a lighthouse",
-            "num_inference_steps": 4,
+            "num_inference_steps": 10,
             "height": 512,
             "width": 512,
         }
@@ -193,7 +193,7 @@ async def test_a_seed_reaches_the_generator(stub_torch, pipeline, monkeypatch):
             return super().__call__(*args, **kwargs)
 
     monkeypatch.setattr(t2i, "_PIPELINE", _Recording())
-    await _run({"prompt": "a comet", "num_inference_steps": 2, "seed": 7})
+    await _run({"prompt": "a comet", "num_inference_steps": 10, "seed": 7})
 
     assert seen == [7]
 
@@ -210,20 +210,68 @@ async def test_a_missing_seed_rolls_a_random_seed(stub_torch, monkeypatch):
 
     monkeypatch.setattr(t2i, "_PIPELINE", _Recording())
     monkeypatch.setattr(t2i.secrets, "randbits", lambda bits: 123456789)
-    await _run({"prompt": "a comet", "num_inference_steps": 2})
+    await _run({"prompt": "a comet", "num_inference_steps": 10})
 
     assert seen == [123456789]
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        (
+            "num_inference_steps",
+            9,
+            "`num_inference_steps` must be between 10 and 50 inclusive;"
+            " received 9.",
+        ),
+        (
+            "num_inference_steps",
+            51,
+            "`num_inference_steps` must be between 10 and 50 inclusive;"
+            " received 51.",
+        ),
+        (
+            "height",
+            511,
+            "`height` must be between 512 and 1024 inclusive; received 511.",
+        ),
+        (
+            "height",
+            513,
+            "`height` must be divisible by 8; received 513.",
+        ),
+        (
+            "height",
+            1025,
+            "`height` must be between 512 and 1024 inclusive; received 1025.",
+        ),
+        (
+            "width",
+            511,
+            "`width` must be between 512 and 1024 inclusive; received 511.",
+        ),
+        (
+            "width",
+            513,
+            "`width` must be divisible by 8; received 513.",
+        ),
+        (
+            "width",
+            1025,
+            "`width` must be between 512 and 1024 inclusive; received 1025.",
+        ),
+    ],
+)
 @pytest.mark.asyncio
-async def test_a_request_the_model_would_refuse_is_refused_here(
-    stub_torch, pipeline
+async def test_invalid_generation_settings_are_status_errors(
+    pipeline, field, value, message
 ):
-    """Invalid input is rejected before pipeline invocation."""
+    request = {"prompt": "invalid settings", field: value}
     with pytest.raises(StatusException) as refused:
-        await _run({"prompt": "too many steps", "num_inference_steps": 1000})
+        await _run(request)
 
-    assert refused.value.status.code != StatusCode.OK
+    assert refused.value.status.code == StatusCode.INVALID_ARGUMENT
+    assert refused.value.status.message == message
     assert pipeline.calls == []
 
 

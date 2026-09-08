@@ -1,0 +1,7 @@
+code,
+kbd,
+pre,
+samp {
+  font-variant-ligatures: common-ligatures contextual;
+  font-feature-settings: "liga" 1, "calt" 1;
+}

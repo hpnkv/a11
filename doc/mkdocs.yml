@@ -147,11 +147,20 @@ nav:
   - Documentation:
       - Overview: index.md
       - Analytics and privacy: privacy.md
-      - State machines:
-          - WireStream lifecycle: lifecycles/wire-stream.md
-          - AsyncNode lifecycle: lifecycles/async-node.md
-          - Session lifecycle: lifecycles/session.md
-          - Action lifecycle: lifecycles/action.md
+      - Reference:
+          - Nodes: api/nodes.md
+          - Actions: api/actions.md
+          - Authorization: api/authorization.md
+          - Stores: api/stores.md
+          - Redis client: api/redis.md
+          - SQLite store: api/sqlite.md
+          - Transports: api/net.md
+          - HTTP actions: api/http-actions.md
+          - Sessions: api/service.md
+          - Data & serialization: api/data.md
+          - Logging: api/logging.md
+          - Observability: api/observability.md
+          - Status & timing: api/status-timing.md
       - LLM SDK:
           - Interactions: llm-sdk/interactions.md
           - Actions as LLM tools: llm-sdk/action-tools.md
@@ -160,6 +169,11 @@ nav:
           - Running tool calls: llm-sdk/tool-runner.md
           - Tools with interact_with_*: llm-sdk/interact-actions.md
           - Composing tools into a flow: llm-sdk/flow-skill.md
+      - Lifecycles:
+          - WireStream lifecycle: lifecycles/wire-stream.md
+          - AsyncNode lifecycle: lifecycles/async-node.md
+          - Session lifecycle: lifecycles/session.md
+          - Action lifecycle: lifecycles/action.md
   - A11 design: principles.md
   - Examples:
       - All examples: examples.md

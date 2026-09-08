@@ -3,6 +3,48 @@
 :root {
   --font-family: "Noto Sans", sans-serif;
   --font-family-monospace: "JetBrains Mono", monospace;
+  /* Material/Pygments palette used by Flow code blocks. */
+  --cpp-keyword-color: #3f6ec6;
+  --cpp-namespace-color: #a846b9;
+  --cpp-type-color: #3f6ec6;
+  --cpp-function-color: #a846b9;
+  --cpp-parameter-color: #0000008a;
+  --cpp-string-color: #1c7d4d;
+  --cpp-number-color: #d52a2a;
+  --cpp-constant-color: #6e59d9;
+  --cpp-comment-color: #0000008a;
+  --cpp-operator-color: #0000008a;
+  --cpp-preprocessor-color: #0000008a;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --cpp-keyword-color: #6791e0;
+    --cpp-namespace-color: #c973d9;
+    --cpp-type-color: #6791e0;
+    --cpp-function-color: #c973d9;
+    --cpp-parameter-color: hsla(225deg, 15%, 90%, 0.56);
+    --cpp-string-color: #2fb170;
+    --cpp-number-color: #e6695b;
+    --cpp-constant-color: #9383e2;
+    --cpp-comment-color: hsla(225deg, 15%, 90%, 0.56);
+    --cpp-operator-color: hsla(225deg, 15%, 90%, 0.56);
+    --cpp-preprocessor-color: hsla(225deg, 15%, 90%, 0.56);
+  }
+}
+
+html.dark-mode {
+  --cpp-keyword-color: #6791e0;
+  --cpp-namespace-color: #c973d9;
+  --cpp-type-color: #6791e0;
+  --cpp-function-color: #c973d9;
+  --cpp-parameter-color: hsla(225deg, 15%, 90%, 0.56);
+  --cpp-string-color: #2fb170;
+  --cpp-number-color: #e6695b;
+  --cpp-constant-color: #9383e2;
+  --cpp-comment-color: hsla(225deg, 15%, 90%, 0.56);
+  --cpp-operator-color: hsla(225deg, 15%, 90%, 0.56);
+  --cpp-preprocessor-color: hsla(225deg, 15%, 90%, 0.56);
 }
 
 html,
@@ -24,4 +66,65 @@ samp,
   font-family: "JetBrains Mono", monospace;
   font-variant-ligatures: common-ligatures contextual;
   font-feature-settings: "liga" 1, "calt" 1;
+}
+
+.memproto .cpp-keyword,
+.fragment .keyword,
+.fragment .keywordflow {
+  color: var(--cpp-keyword-color);
+}
+
+.memproto .cpp-namespace {
+  color: var(--cpp-namespace-color);
+}
+
+.memproto .cpp-type,
+.fragment .keywordtype,
+.fragment .type {
+  color: var(--cpp-type-color);
+}
+
+.memproto .cpp-function {
+  color: var(--cpp-function-color);
+  font-weight: 700;
+}
+
+.memproto .paramname em {
+  color: var(--cpp-parameter-color);
+  font-style: normal;
+  font-weight: 600;
+}
+
+.memproto .cpp-string,
+.fragment .stringliteral,
+.fragment .charliteral {
+  color: var(--cpp-string-color);
+}
+
+.memproto .cpp-number,
+.fragment .number {
+  color: var(--cpp-number-color);
+}
+
+.memproto .cpp-constant {
+  color: var(--cpp-constant-color);
+}
+
+.memproto .cpp-operator,
+.fragment .operator {
+  color: var(--cpp-operator-color);
+}
+
+.memproto .cpp-comment,
+.fragment .comment {
+  color: var(--cpp-comment-color);
+}
+
+.fragment .preprocessor {
+  color: var(--cpp-preprocessor-color);
+}
+
+.memproto td.paramparen {
+  padding-right: 0.35em;
+  text-align: left;
 }

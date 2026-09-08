@@ -177,13 +177,105 @@ target_compile_features(my_agent PRIVATE cxx_std_20)
 ```
 
 ```cpp
-#include "a11/nodes/node_map.h"
+#include <cstddef>
+#include <iostream>
+#include <memory>
+#include <optional>
+#include <string>
+#include <vector>
+
+#include <absl/log/log.h>
+#include <absl/status/status.h>
+#include <absl/status/status_macros.h>
+#include <absl/strings/str_split.h>
+
+#include "a11/actions/registry.h"
+#include "a11/nodes/async_node.h"
+
+namespace {
+
+using a11::actions::Action;
+using a11::actions::ActionPortSchema;
+using a11::actions::ActionRegistry;
+using a11::actions::ActionSchema;
+using a11::nodes::AsyncNode;
+
+ActionSchema SplitWordsSchema() {
+  return ActionSchema{
+      .name = "split-words",
+      .inputs = {{"text", ActionPortSchema{
+                             .name = "text", .type = "text/plain"}}},
+      .outputs = {{"words", ActionPortSchema{
+                               .name = "words", .type = "text/plain"}}},
+  };
+}
+
+absl::Status SplitWords(std::shared_ptr<Action> action) {
+  ABSL_ASSIGN_OR_RETURN(std::shared_ptr<AsyncNode> input,
+                        action->GetInput("text"));
+  ABSL_ASSIGN_OR_RETURN(
+      std::optional<std::string> text,
+      input->NextObject<std::string>().Await());
+  if (!text.has_value()) {
+    return absl::FailedPreconditionError("text input ended before a value");
+  }
+
+  ABSL_ASSIGN_OR_RETURN(std::shared_ptr<AsyncNode> output,
+                        action->GetOutput("words"));
+  std::vector<std::string> words =
+      absl::StrSplit(*text, absl::ByAnyChar(" \t\n"), absl::SkipWhitespace());
+  if (words.empty()) {
+    return output->Finalize({.wait = true}).Await().status();
+  }
+  for (size_t index = 0; index + 1 < words.size(); ++index) {
+    ABSL_RETURN_IF_ERROR(output->Put(words[index]).Await().status());
+  }
+  return output->Finalize(words.back(), {.wait = true}).Await().status();
+}
+
+absl::Status RunExample() {
+  auto registry = std::make_shared<ActionRegistry>();
+  ABSL_RETURN_IF_ERROR(registry->RegisterSync(
+      "split-words", SplitWordsSchema(), SplitWords));
+  ABSL_ASSIGN_OR_RETURN(std::shared_ptr<Action> action,
+                        registry->MakeAction("split-words"));
+
+  ABSL_ASSIGN_OR_RETURN(std::shared_ptr<AsyncNode> input,
+                        action->GetInput("text"));
+  ABSL_RETURN_IF_ERROR(
+      input->Finalize(std::string("named streams arrive early"),
+                      {.wait = true})
+          .Await()
+          .status());
+  ABSL_RETURN_IF_ERROR(action->Run().status());
+
+  ABSL_ASSIGN_OR_RETURN(std::shared_ptr<AsyncNode> output,
+                        action->GetOutput("words"));
+  while (true) {
+    ABSL_ASSIGN_OR_RETURN(std::optional<std::string> word,
+                          output->NextObject<std::string>().Await());
+    if (!word.has_value()) break;
+    std::cout << *word << '\n';
+  }
+  return action->Wait().Await().status();
+}
+
+}  // namespace
 
 int main() {
-  auto node_map = a11::nodes::NodeMap::Create();
-  return node_map.ok() ? 0 : 1;
+  const absl::Status status = RunExample();
+  if (!status.ok()) {
+    LOG(ERROR) << status;
+    return 1;
+  }
+  return 0;
 }
 ```
+
+This is the same `split-words` action as the Python quickstart: the registry
+owns its schema and handler, the input carries one complete value, and the
+output emits words as a stream. Reading the output before `Wait()` drains it
+while the handler is running and preserves backpressure.
 
 Configure your project with `-DCMAKE_PREFIX_PATH=/path/to/install` so
 `find_package` locates it. The generated C++ API reference is published

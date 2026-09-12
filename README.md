@@ -5,12 +5,16 @@
 
 # A11
 
-**A streaming action runtime for AI agents, model serving, and multimodal
-APIs.**
+**Build AI applications like normal software.**
 
-A11 gives ordinary asynchronous code a stable boundary for tools, model calls,
-pipelines, and services. Its Python API runs on a native C++20 runtime, with
-TypeScript, Kotlin, C++, and Flow interfaces for the boundaries that need them.
+A11 is the open-source runtime for connecting models, tools and interfaces
+while keeping your architecture. It gives ordinary asynchronous code named
+streams, concurrency, tools and local-to-remote execution, and exposes the
+running application to Studio.
+
+The Python API runs on a native C++20 runtime. TypeScript, Kotlin, C++ and Flow
+use the same action boundary where an application needs another language or
+process.
 
 - **Named streams instead of mixed provider events.** Read model text,
   reasoning, tool activity, progress, and durable interaction state from
@@ -21,7 +25,7 @@ TypeScript, Kotlin, C++, and Flow interfaces for the boundaries that need them.
   at runtime with defined concurrency, draining, deadlines, cancellation, and
   error propagation.
 
-**[Install in five minutes](#five-minute-quickstart)** ·
+**[Run the first action](#run-your-first-streaming-action)** ·
 **[Try the live research agent][live-demo]** ·
 **[Read the documentation](https://docs.a11.to/)** ·
 **[Star A11](https://github.com/hpnkv/a11)**
@@ -32,10 +36,11 @@ TypeScript, Kotlin, C++, and Flow interfaces for the boundaries that need them.
 
 The hosted [parallel research
 agent](https://docs.a11.to/guides/deep-research.html#try-the-deployed-agent)
-plans a topic, runs several investigations concurrently, and streams one report
-to the browser. Its default Ollama backend needs no account or API key.
+plans a topic, searches the web for each brief, reviews the returned evidence
+concurrently, and streams a cited report to the browser. Its default model and
+search backends need no visitor account or API key.
 
-## Five-minute quickstart
+## Run your first streaming action
 
 Install the core runtime on Python 3.11 or later:
 
@@ -96,7 +101,68 @@ pip install "a11-kit[llm]"
 a11 chat --provider ollama --no-voice --no-shell-tools
 ```
 
-## Continue from a working example
+## Add capabilities incrementally
+
+**Streaming.** An asynchronous iterator yields values before it finishes.
+Named outputs give model text, reasoning, progress and structured values their
+own interfaces. The caller reads those streams and checks the action's final
+status separately.
+
+**Concurrency.** Use ordinary Python tasks or C++ runtime primitives for
+independent work. Use nested A11 actions when the runtime should understand a
+parent/child relationship and propagate cancellation.
+
+**Tools.** Expose registered actions to model calls through the SDK, or serve
+the same registry through MCP. The application still owns validation,
+authorization and policy.
+
+**Remote execution.** Serve a registry from another process or machine. The
+caller configures a connection and calls the action; the handler's input and
+output contract stays stable.
+
+Flow is available when an application needs a composition expressed as data.
+It is optional: model APIs, MCP, LangGraph and existing application code can
+remain part of the stack.
+
+## Inspect the work with Studio
+
+[Open Studio](https://a11.to/studio) to explore an endpoint's action schemas,
+run calls and inspect streamed outputs, logs, timings, failures and
+cancellation.
+
+![A11 Studio showing an action and streamed results](https://a11.to/examples/studio-poster.jpg)
+
+## Explore complete applications
+
+- [Deep research](https://docs.a11.to/guides/deep-research.html) plans a topic,
+  searches the web in parallel and streams a cited synthesis.
+- [Model interactions](https://docs.a11.to/guides/llm.html) present one
+  streaming interface across Claude, Gemini, Ollama and OpenAI-compatible
+  providers.
+- The `a11 chat --voice-model ...` path keeps audio capture, transcription and
+  model interaction on separate streams.
+- [Generative media](https://docs.a11.to/guides/generative-media.html) streams
+  progress independently from generated image bytes.
+- [Browser tools](https://docs.a11.to/guides/browser-tools.html) let a model
+  call typed actions implemented inside an existing page.
+
+Each guide names its provider, model and hardware prerequisites. Local actions
+and remote transports do not require a model.
+
+## Install only what the application needs
+
+The Python distribution is `a11-kit`, imported as `a11`. Provider integrations
+are optional extras such as `a11-kit[ollama]`, `a11-kit[claude]` and
+`a11-kit[openai]`. Browser and TypeScript applications use:
+
+```sh
+npm install @curiositystack/a11
+```
+
+The standalone C++20 runtime needs no Python installation. Build and link it
+through its exported CMake targets using the instructions below.
+
+## Go deeper
 
 - [Build a parallel research agent in
   Python](https://docs.a11.to/guides/deep-research.html).

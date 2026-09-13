@@ -103,11 +103,10 @@ directory, read-only, no processes, no network.
 
 ## Three things these examples are shaped by
 
-**`skip` is not `omit`.** `skip` reads a port and keeps nothing — the action
-still produced the value. `options.omit` closes the port before anything is
-written to it. `copy.flow` needs the second: `read_file`'s `text` and `lines`
-ports cannot be produced at all for a binary file, because they are text and a
-file is bytes.
+**Automatic draining and `omit`.** An unbound output is still produced and
+drained. `options.omit` closes the port before anything is written to it.
+`copy.flow` needs omission: `read_file`'s `text` and `lines` ports cannot be
+produced for a binary file, because they are text and a file is bytes.
 
 **A pipeline off a node fans out; two conditions reading it do not.** In
 `grep.flow` the match count feeds two pipelines and both see it. Two `if`s

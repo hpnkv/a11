@@ -21,6 +21,8 @@ schema that nominates one output as the whole result, and it reports a call it
 could not even record as that call's own failure.
 """
 
+import json
+
 import pytest
 
 import a11
@@ -34,10 +36,11 @@ from a11.sdk.llm import (
     LlmHeaders,
     Role,
     TOOL_LOGS_METADATA_KEY,
+    TOOL_STATUSES_METADATA_KEY,
     ToolCall,
     decode_action_output_fragments,
 )
-from a11.status import Status, StatusCode
+from a11.status import Status, StatusCode, StatusException
 from a11.sdk.llm_tools import runner
 
 _ECHO_SCHEMA = ActionSchema(
@@ -120,12 +123,13 @@ async def test_narration_is_taken_out_of_the_tool_result():
     metadata = executed.log_metadata()
     assert TOOL_LOGS_METADATA_KEY in metadata
     assert b"Echoed" in metadata[TOOL_LOGS_METADATA_KEY]
+    statuses = json.loads(metadata[TOOL_STATUSES_METADATA_KEY])
+    assert statuses["call-1"]["code"] == StatusCode.OK
 
 
 @pytest.mark.asyncio
 async def test_structured_child_log_reaches_parent_before_child_finishes():
     import asyncio
-    import json
 
     logged = asyncio.Event()
     release = asyncio.Event()
@@ -233,6 +237,50 @@ async def test_an_output_mapped_to_the_whole_result_is_not_wrapped():
 
 
 @pytest.mark.asyncio
+async def test_an_oversized_tool_result_is_not_sent_to_the_model():
+    schema = ActionSchema(
+        name="large_tool",
+        outputs={
+            "text": ActionPortSchema(
+                "text", "text/plain", unary=True, required=True
+            )
+        },
+    )
+
+    async def handler(action: a11.Action) -> None:
+        await action["text"].finalize(
+            "x" * (runner.MAX_MODEL_TOOL_OUTPUT_BYTES + 1)
+        )
+
+    registry = ActionRegistry()
+    registry.register(schema.name, schema, handler)
+    executed: list[runner.ExecutedActions] = []
+
+    async def host_handler(action: a11.Action) -> None:
+        interaction = Interaction(
+            action_calls=[a11.ActionMessage(id="call-1", name=schema.name)]
+        )
+        executed.append(
+            await runner.execute_actions_from_interaction(
+                interaction, action, registry
+            )
+        )
+
+    registry.register(
+        INTERACT_WITH_LLM_SCHEMA.name, INTERACT_WITH_LLM_SCHEMA, host_handler
+    )
+    host = registry.make_action(INTERACT_WITH_LLM_SCHEMA.name)
+    host.set_header(LlmHeaders.ALLOWED_LLM_ACTIONS.value, b"large_tool")
+    host.run()
+    await host.wait()
+
+    assert executed[0].outputs["call-1"] == []
+    error = executed[0].errors["call-1"]
+    assert error.code == StatusCode.RESOURCE_EXHAUSTED
+    assert "narrower query, filter, or Flow projection" in error.message
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "patterns,expected",
     [
@@ -261,11 +309,13 @@ async def test_collect_tools_adds_the_registered_actions_the_caller_allows(
     host.set_header(LlmHeaders.ALLOWED_LLM_ACTIONS.value, patterns)
     host.run()
 
-    await host["tools"].finalize({
-        "name": "caller_tool",
-        "description": "A tool the caller serves itself.",
-        "input_schema": {"type": "object", "properties": {}},
-    })
+    await host["tools"].finalize(
+        {
+            "name": "caller_tool",
+            "description": "A tool the caller serves itself.",
+            "input_schema": {"type": "object", "properties": {}},
+        }
+    )
     await host["interactions"].finalize()
     await host["config"].finalize()
     await host.wait()
@@ -450,6 +500,19 @@ def test_a_round_with_no_calls_at_all_counts_as_no_failure():
     assert rounds.rounds == 0
 
 
+def test_successful_tool_rounds_end_with_an_explicit_safety_status():
+    rounds = FailedToolRounds(total_limit=3)
+    worked = runner.ExecutedActions(outputs={"call-1": []}, errors={})
+
+    assert rounds.record(worked)
+    assert rounds.record(worked)
+    with pytest.raises(StatusException) as raised:
+        rounds.record(worked)
+
+    assert raised.value.status.code == StatusCode.RESOURCE_EXHAUSTED
+    assert raised.value.status.details == [{"tool_rounds": 3}]
+
+
 _TYPED_SCHEMA = ActionSchema(
     name="typed_tool",
     description="Take one structured request.",
@@ -461,7 +524,9 @@ _TYPED_SCHEMA = ActionSchema(
             unary=True,
             required=True,
         ),
-        "note": ActionPortSchema("note", "text/plain", typeinfo=str, unary=True),
+        "note": ActionPortSchema(
+            "note", "text/plain", typeinfo=str, unary=True
+        ),
     },
     outputs={"done": ActionPortSchema("done", "text/plain", required=True)},
 )
@@ -510,3 +575,24 @@ async def test_a_string_that_is_not_json_reaches_its_port_unchanged():
         if fragment is not None
     ]
     assert chunks[0].metadata.mimetype == "text/plain"
+
+
+@pytest.mark.asyncio
+async def test_a_json_array_is_one_value_on_a_unary_port():
+    call = ToolCall(
+        name="typed_tool",
+        id="call-1",
+        params={"request": [{"label": "one"}, {"label": "two"}]},
+    )
+    adapter = ActionCallAdapter.create(call, _TYPED_SCHEMA)
+    fragments = [
+        fragment
+        for fragment in await adapter.get_action_inputs()
+        if fragment is not None
+    ]
+
+    assert len(fragments) == 1
+    assert a11.from_chunk(fragments[0].get_chunk()) == [
+        {"label": "one"},
+        {"label": "two"},
+    ]

@@ -201,12 +201,10 @@ flow answer-from-the-web {
       page = try run web-fetch(url: hit.url)
       hit.url -> sources
       page.text | truncate 2000 -> brief.pages
-      skip page.bytes
     }
   }
 
   brief.summary -> answer
-  skip search.debug
 }
 ```
 

@@ -1,0 +1,13 @@
+flow repo_search {
+  in QUERY: string required
+  out python: string stream
+  out native: string stream
+  out docs: string stream
+
+  step = run search_text(query: QUERY, path: "a11", limit: 25)
+  step.result.matches | flatten | first 25 | truncate 240 -> python
+  step2 = run search_text(query: QUERY, path: "cpp", limit: 25)
+  step2.result.matches | flatten | first 25 | truncate 240 -> native
+  step3 = run search_text(query: QUERY, path: "doc", limit: 15)
+  step3.result.matches | flatten | first 15 | truncate 240 -> docs
+}

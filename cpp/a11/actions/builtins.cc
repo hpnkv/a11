@@ -159,10 +159,50 @@ ActionSchema ListActionsSchema() {
       "'names' (full-match patterns), 'exact' (names), 'ports' (\"callable\" "
       "or "
       "\"all\"), 'include_reserved', and 'runnable_only'.";
-  schema.inputs.emplace(
-      "request", Port("request", std::string(data::kJsonMimetype),
-                      "Which actions to describe. Absent means all of them.",
-                      /*required=*/false, /*unary=*/true));
+  ActionPortSchema request =
+      Port("request", std::string(data::kJsonMimetype),
+           "Action selection and port visibility filters. Absent means all "
+           "non-reserved actions.",
+           /*required=*/false, /*unary=*/true);
+  request.json_schema = R"json({
+    "oneOf": [
+      {
+        "type": "object",
+        "properties": {
+          "names": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Full-match regular expressions for action names."
+          },
+          "exact": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Exact action names, including reserved names."
+          },
+          "ports": {
+            "type": "string",
+            "enum": ["callable", "all"],
+            "description": "Return callable inputs only, or every port."
+          },
+          "include_reserved": {
+            "type": "boolean",
+            "description": "Include double-underscored framework actions."
+          },
+          "runnable_only": {
+            "type": "boolean",
+            "description": "Include only actions with a local handler."
+          }
+        },
+        "additionalProperties": false
+      },
+      {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "Shorthand list of full-match name patterns."
+      }
+    ]
+  })json";
+  schema.inputs.emplace("request", std::move(request));
   schema.outputs.emplace(
       "actions", Port("actions", std::string(data::kJsonMimetype),
                       "The a11.actions/v1 document, whole.", /*required=*/true,

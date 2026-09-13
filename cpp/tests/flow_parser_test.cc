@@ -331,92 +331,12 @@ TEST(FlowParser, UnderscoreOnItsOwnIsTheDiscardAndNotAName) {
   EXPECT_EQ(As<syntax::Name>(piped->targets[0].get())->name, "b_c");
 }
 
-TEST(FlowParser, SkipTakesSeveralSubjectsAndACallsOutputsByName) {
-  const ParseResult result = Parse(
-      "flow f {\n"
-      "  in  our_input: string\n"
-      "  act1 = run action1(text: our_input)\n"
-      "  act2 = run action2(text: our_input)\n"
-      "  act3 = run action3(text: our_input)\n"
-      "  act4 = run action4(text: our_input)\n"
-      "  skip our_input,\n"
-      "    act1,\n"
-      "    (o1, o2) of act2,\n"
-      "    (o1, o2 of act3),\n"
-      "    act4.o1, act4.o2\n"
-      "}\n");
-  ASSERT_TRUE(result.diagnostics.empty())
-      << absl::StrJoin(Messages(result), "; ");
-  ASSERT_EQ(result.flows.size(), 1u);
-  const syntax::FlowDeclaration& flow = *result.flows.front();
-  ASSERT_EQ(flow.body.size(), 5u);
-  const auto* skip = As<syntax::Skip>(flow.body.back().get());
-  ASSERT_NE(skip, nullptr);
-  ASSERT_EQ(skip->targets.size(), 6u);
-
-  // `our_input`: an ordinary pipeline target.
-  EXPECT_NE(skip->targets[0].pipeline, nullptr);
-  EXPECT_TRUE(skip->targets[0].call.Empty());
-
-  // `act1`: a bare call name, which the parser leaves as an ordinary
-  // pipeline -- only the resolver knows it names a call.
-  EXPECT_NE(skip->targets[1].pipeline, nullptr);
-  EXPECT_EQ(As<syntax::Name>(skip->targets[1].pipeline->source.get())->name,
-            "act1");
-
-  // `(o1, o2) of act2`.
-  EXPECT_EQ(skip->targets[2].pipeline, nullptr);
-  EXPECT_EQ(skip->targets[2].call.text, "act2");
-  ASSERT_EQ(skip->targets[2].outputs.size(), 2u);
-  EXPECT_EQ(skip->targets[2].outputs[0].text, "o1");
-  EXPECT_EQ(skip->targets[2].outputs[1].text, "o2");
-
-  // `(o1, o2 of act3)`.
-  EXPECT_EQ(skip->targets[3].pipeline, nullptr);
-  EXPECT_EQ(skip->targets[3].call.text, "act3");
-  ASSERT_EQ(skip->targets[3].outputs.size(), 2u);
-  EXPECT_EQ(skip->targets[3].outputs[0].text, "o1");
-  EXPECT_EQ(skip->targets[3].outputs[1].text, "o2");
-
-  // `act4.o1`, `act4.o2`: ordinary dotted references.
-  EXPECT_NE(skip->targets[4].pipeline, nullptr);
-  EXPECT_EQ(skip->targets[4].pipeline->source->kind, NodeKind::kAttr);
-  EXPECT_NE(skip->targets[5].pipeline, nullptr);
-  EXPECT_EQ(skip->targets[5].pipeline->source->kind, NodeKind::kAttr);
-}
-
-TEST(FlowParser,
-     SkipNamesAWholeOutputGroupWithNoParenthesesOnlyAsTheWholeStatement) {
-  const ParseResult result = Parse(
-      "flow f {\n"
-      "  act = run action(text: \"x\")\n"
-      "  skip o1, o2 of act\n"
-      "}\n");
-  ASSERT_TRUE(result.diagnostics.empty())
-      << absl::StrJoin(Messages(result), "; ");
-  const auto* skip = As<syntax::Skip>(result.flows[0]->body.back().get());
-  ASSERT_NE(skip, nullptr);
-  ASSERT_EQ(skip->targets.size(), 1u);
-  EXPECT_EQ(skip->targets[0].call.text, "act");
-  ASSERT_EQ(skip->targets[0].outputs.size(), 2u);
-  EXPECT_EQ(skip->targets[0].outputs[0].text, "o1");
-  EXPECT_EQ(skip->targets[0].outputs[1].text, "o2");
-}
-
-TEST(FlowParser, SkipStillReadsAParenthesizedPipelineAsAPlainTarget) {
-  const ParseResult result = Parse(
-      "flow f {\n"
-      "  in  rows: string stream\n"
-      "  skip (rows | count)\n"
-      "}\n");
-  ASSERT_TRUE(result.diagnostics.empty())
-      << absl::StrJoin(Messages(result), "; ");
-  const auto* skip = As<syntax::Skip>(result.flows[0]->body.back().get());
-  ASSERT_NE(skip, nullptr);
-  ASSERT_EQ(skip->targets.size(), 1u);
-  ASSERT_NE(skip->targets[0].pipeline, nullptr);
-  EXPECT_TRUE(skip->targets[0].call.Empty());
-  EXPECT_EQ(skip->targets[0].pipeline->source->kind, NodeKind::kPipelineValue);
+TEST(FlowParser, UncountedSkipExplainsThatUnusedOutputsAreAutomatic) {
+  const ParseResult result = Parse("flow f { skip call.output }");
+  ASSERT_EQ(result.diagnostics.size(), 1u);
+  EXPECT_EQ(result.diagnostics[0].code, "flow.syntax.unexpected");
+  EXPECT_NE(result.diagnostics[0].message.find("drained automatically"),
+            std::string::npos);
 }
 
 TEST(FlowParser, SkipStillTakesACountedSingleReference) {
@@ -432,6 +352,7 @@ TEST(FlowParser, SkipStillTakesACountedSingleReference) {
   ASSERT_EQ(skip->count, 1);
   ASSERT_EQ(skip->targets.size(), 1u);
   ASSERT_NE(skip->targets[0].pipeline, nullptr);
+  EXPECT_EQ(skip->targets[0].pipeline->source->kind, NodeKind::kName);
 }
 
 TEST(FlowParser, ANoteAboutTheOnlyPlaceAWordMeansTwoThings) {
@@ -494,7 +415,7 @@ TEST(FlowParser, TryFrontsThreeDifferentThingsToldApartByWhatFollows) {
   };
 
   for (const Case& one : {
-           Case{"  x = try run t(p: a)\n  skip x\n", syntax::NodeKind::kBind},
+           Case{"  try run t(p: a)\n", syntax::NodeKind::kCallStatement},
            Case{"  try run t(p: a)\n", syntax::NodeKind::kCallStatement},
            Case{"  try call t(p: a)\n", syntax::NodeKind::kCallStatement},
            Case{"  try a -> o\n", syntax::NodeKind::kPipe},
@@ -520,7 +441,7 @@ TEST(FlowParser, ALoopMayBeNamedAndMayCarryAnAfter) {
       "flow f {\n  in w: string stream\n  out o: string stream\n"
       "  taken = node()\n  first = run t()\n"
       "  done = for x in w { x -> taken } after first\n"
-      "  drain taken after done\n  taken -> o\n  skip first\n}\n");
+      "  drain taken after done\n  taken -> o\n}\n");
   ASSERT_TRUE(result.diagnostics.empty())
       << absl::StrJoin(Messages(result), "; ");
   ASSERT_EQ(result.flows.size(), 1u);
@@ -532,6 +453,27 @@ TEST(FlowParser, ALoopMayBeNamedAndMayCarryAnAfter) {
   const auto* loop = syntax::As<syntax::ForEach>(bind->value.get());
   ASSERT_EQ(loop->after.size(), 1u);
   EXPECT_EQ(loop->after.front().text, "first");
+}
+
+TEST(FlowParser, AfterTakesACommaSeparatedList) {
+  const ParseResult result = Parse(
+      "flow f {\n"
+      "  first = run a()\n"
+      "  second = run b()\n"
+      "  run c() after first,\n"
+      "    second\n"
+      "  drain done after first, second\n"
+      "}\n");
+  ASSERT_TRUE(result.diagnostics.empty())
+      << absl::StrJoin(Messages(result), "; ");
+  const auto* call = As<syntax::CallStatement>(result.flows[0]->body[2].get());
+  ASSERT_NE(call, nullptr);
+  ASSERT_EQ(call->call->modifiers->after.size(), 2u);
+  EXPECT_EQ(call->call->modifiers->after[0].text, "first");
+  EXPECT_EQ(call->call->modifiers->after[1].text, "second");
+  const auto* drain = As<syntax::Drain>(result.flows[0]->body[3].get());
+  ASSERT_NE(drain, nullptr);
+  ASSERT_EQ(drain->after.size(), 2u);
 }
 
 TEST(FlowParser, InsideBracketsALineBreakIsWhitespace) {
@@ -1124,8 +1066,8 @@ TEST(FlowParser, TellsABlockFromARecordAtTheHeadOfAStatement) {
   // not a record, because no `:` follows.
   EXPECT_STREQ(kind("flow f {\n  out o: string\n  { \"one\" -> o }\n}\n"),
                "block");
-  EXPECT_STREQ(kind("flow f {\n  out o: string\n  { skip o }\n}\n"), "block");
-  EXPECT_STREQ(kind("flow f {\n  out o: string\n  try { skip o }\n}\n"),
+  EXPECT_STREQ(kind("flow f {\n  out o: string\n  { skip 1 o }\n}\n"), "block");
+  EXPECT_STREQ(kind("flow f {\n  out o: string\n  try { skip 1 o }\n}\n"),
                "block");
 }
 

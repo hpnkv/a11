@@ -38,31 +38,38 @@ import pathlib
 
 from absl import logging
 
-from a11 import net
+from a11 import net, timing
 from a11.cli import console as console_module
 from a11.cli.app import Command
 from a11.cli.signals import stop_on_signals
 from a11.gateway import config, conversations, daemon
+from a11.status import Status, StatusCode
 
 
-def _add_serving_flags(parser: argparse.ArgumentParser) -> None:
+def _add_serving_flags(
+    parser: argparse.ArgumentParser, *, inherit_defaults: bool = False
+) -> None:
     """Flags shared by the bare command, ``run`` and ``start``."""
     parser.add_argument(
         "--host",
         type=str,
-        default=config.DEFAULT_HOST,
+        default=(
+            argparse.SUPPRESS if inherit_defaults else config.DEFAULT_HOST
+        ),
         help="Host address to bind the service to.",
     )
     parser.add_argument(
         "--a11-port",
         type=int,
-        default=config.DEFAULT_A11_PORT,
+        default=(
+            argparse.SUPPRESS if inherit_defaults else config.DEFAULT_A11_PORT
+        ),
         help="Port for the A11 protocol (WebSockets).",
     )
     parser.add_argument(
         "--listen",
         action="append",
-        default=None,
+        default=argparse.SUPPRESS if inherit_defaults else None,
         metavar="URL",
         help=(
             "Additional endpoint to serve the same service on; repeatable."
@@ -73,25 +80,69 @@ def _add_serving_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--conversation-store-root",
         type=pathlib.Path,
-        default=conversations.default_root(),
+        default=(
+            argparse.SUPPRESS
+            if inherit_defaults
+            else conversations.default_root()
+        ),
         help="Where to store conversation data.",
     )
     parser.add_argument(
-        "--no-shell-tools", action="store_true", help="Disable shell tools."
+        "--no-shell-tools",
+        "--no-command-tools",
+        dest="no_shell_tools",
+        action="store_true",
+        default=argparse.SUPPRESS if inherit_defaults else False,
+        help="Disable command execution tools.",
+    )
+    parser.add_argument(
+        "--no-coding-tools",
+        action="store_true",
+        default=argparse.SUPPRESS if inherit_defaults else False,
+        help="Disable coding workspace and agent actions.",
+    )
+    parser.add_argument(
+        "--coding-cwd",
+        default=argparse.SUPPRESS if inherit_defaults else ".",
+        help="Workspace served by coding actions (default: current directory).",
+    )
+    parser.add_argument(
+        "--coding-add-dir",
+        action="append",
+        default=argparse.SUPPRESS if inherit_defaults else [],
+        metavar="PATH",
+        help="Additional sandboxed workspace root; repeatable.",
+    )
+    parser.add_argument(
+        "--coding-approval",
+        choices=("ask", "suggest", "auto"),
+        default=argparse.SUPPRESS if inherit_defaults else "auto",
+        help=(
+            "Coding action policy (default: auto within the workspace sandbox)."
+        ),
+    )
+    parser.add_argument(
+        "--coding-sandbox",
+        choices=("read-only", "workspace-write"),
+        default=argparse.SUPPRESS if inherit_defaults else "workspace-write",
+        help="A11 native sandbox mode for coding actions.",
     )
     parser.add_argument(
         "--no-audio-capture",
         action="store_true",
+        default=argparse.SUPPRESS if inherit_defaults else False,
         help="Disable audio capture actions.",
     )
     parser.add_argument(
         "--no-speech-recognition",
         action="store_true",
+        default=argparse.SUPPRESS if inherit_defaults else False,
         help="Disable transcription actions.",
     )
     parser.add_argument(
         "--no-flow-tools",
         action="store_true",
+        default=argparse.SUPPRESS if inherit_defaults else False,
         help="Disable the flow tools (flow_actions, flow_check, flow_run).",
     )
 
@@ -107,11 +158,11 @@ def _configure(parser: argparse.ArgumentParser) -> None:
     )
 
     run = sub.add_parser("run", help="Serve in the foreground.")
-    _add_serving_flags(run)
+    _add_serving_flags(run, inherit_defaults=True)
     console_module.add_plain_flag(run)
 
     start = sub.add_parser("start", help="Serve, optionally detached.")
-    _add_serving_flags(start)
+    _add_serving_flags(start, inherit_defaults=True)
     console_module.add_plain_flag(start)
     start.add_argument(
         "--detach",
@@ -196,15 +247,19 @@ def _endpoints(args: argparse.Namespace) -> list[str]:
 
 async def _serve(args: argparse.Namespace) -> int:
     """Run the gateway in the foreground until signalled."""
+    from a11 import logging as a11_logging
     from a11.gateway import app
     from a11.service.serving import serving, websocket
 
+    a11_logging.enable("info")
     settings = config.GatewayConfig.from_args(args)
     gateway = app.init_app(settings)
     listeners = [_websocket_options(url) for url in _endpoints(args)]
 
     async with serving(
-        gateway.service, *[websocket(options) for options in listeners]
+        gateway.service,
+        *[websocket(options) for options in listeners],
+        drain_timeout=timing.Duration.seconds(3),
     ) as live:
         # Read back from the live listeners rather than from the options, so a
         # requested port of 0 reports the port actually chosen.
@@ -215,8 +270,9 @@ async def _serve(args: argparse.Namespace) -> int:
         for url in served:
             logging.info("[gateway] listening on %s", url)
         logging.info(
-            "[gateway] shell tools %s, audio capture %s, speech recognition"
-            " %s, flow tools %s",
+            "[gateway] coding tools %s, command tools %s, audio capture %s,"
+            " speech recognition %s, flow tools %s",
+            "on" if settings.coding_tools else "off",
             "on" if settings.shell_tools else "off",
             "on" if settings.audio_capture else "off",
             "on" if settings.speech_recognition else "off",
@@ -228,6 +284,16 @@ async def _serve(args: argparse.Namespace) -> int:
         with daemon.recorded(settings, served), stop_on_signals() as stop:
             await stop.wait()
         logging.info("[gateway] stopping")
+        # An interactive stop must not wait for long-lived WebSocket clients to
+        # disconnect. Abort closes every session and stops admission in one
+        # operation; the serving context then closes the listeners and observes
+        # an already-drained service.
+        gateway.service.abort(
+            Status(
+                code=StatusCode.CANCELLED,
+                message="Gateway shutdown cancelled the active session.",
+            )
+        )
     return 0
 
 
@@ -246,12 +312,23 @@ def _detach(args: argparse.Namespace) -> int:
         passthrough += ["--listen", extra]
     for flag in (
         "no_shell_tools",
+        "no_coding_tools",
         "no_audio_capture",
         "no_speech_recognition",
         "no_flow_tools",
     ):
         if getattr(args, flag, False):
             passthrough.append("--" + flag.replace("_", "-"))
+    passthrough += [
+        "--coding-cwd",
+        args.coding_cwd,
+        "--coding-approval",
+        args.coding_approval,
+        "--coding-sandbox",
+        args.coding_sandbox,
+    ]
+    for extra in args.coding_add_dir:
+        passthrough += ["--coding-add-dir", extra]
 
     try:
         started = daemon.spawn(passthrough)
@@ -284,7 +361,9 @@ async def _status(args: argparse.Namespace) -> int:
         if getattr(args, "probe", False)
         else daemon.status()
     )
-    console_module.print_fields(current.as_fields(), title="gateway", target=out)
+    console_module.print_fields(
+        current.as_fields(), title="gateway", target=out
+    )
     if current.stale:
         out.print(
             "note: a stale record was removed", style="yellow", markup=False

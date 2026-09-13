@@ -26,7 +26,7 @@ The engine provides three behaviours required by streaming compositions:
 
 * **Every output is drained.** An output port of a called action that the flow
   does not read is read and discarded anyway, because an unread output stalls
-  the action producing it. `skip` is the explicit spelling of the same thing.
+  the action producing it.
 * **A `run` step keeps its nodes off the wire.** A step that runs in this
   process is bound to no stream unless it asks for `tee`, so the intermediate
   streams between two steps of a composition are never replicated to the peer

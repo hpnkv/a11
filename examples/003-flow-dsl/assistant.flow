@@ -37,7 +37,6 @@ flow ask-the-pages {
   header "x-a11-llm-base-url" as base_url
 
   search = run web-search(query: question, limit: 3)
-  skip search.debug
 
   # The pages, gathered where one reader can see all of them. A node, because
   # every pass of the loop below writes it and one pipeline reads it.
@@ -46,7 +45,6 @@ flow ask-the-pages {
   nodes fetched {
     for hit in search.hits parallel 3 {
       page = run web-fetch(url: hit.url)
-      skip page.bytes
 
       hit.url -> cited
       page.text | truncate 400 -> pages
@@ -84,9 +82,6 @@ flow ask-the-pages {
       with "x-a11-llm-base-url": base_url
 
   llm.text_output | join "" -> answer
-  skip llm.thoughts
-  skip llm.event_stream
-  skip llm.new_interactions
 }
 
 # A conversation, one turn at a time.
@@ -125,9 +120,6 @@ flow chat-turn {
 
   # The same ordering again, for what the caller will feed back in next time.
   asked | then llm.new_interactions -> turn
-
-  skip llm.thoughts
-  skip llm.event_stream
 }
 
 # The same retrieval, answered without a model at all -- for the times a
@@ -141,11 +133,9 @@ flow quote-the-pages {
   out cited:    string stream
 
   search = run web-search(query: question, limit: 1)
-  skip search.debug
 
   for hit in search.hits {
     page = run web-fetch(url: hit.url)
-    skip page.bytes
 
     hit.url -> cited
     page.text | map join(split(it, "."), ".") | truncate 160 -> answer

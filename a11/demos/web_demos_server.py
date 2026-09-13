@@ -99,6 +99,9 @@ from a11.gateway.tool_bridge import RemoteToolBridge
 from a11.sdk.interact_with_llm import interact_with_llm
 from a11.sdk.interact_with_llm_schema import INTERACT_WITH_LLM_SCHEMA
 from a11.sdk.llm import LlmHeaders
+from a11.sdk.ollama.interact_with_ollama_schema import (
+    MAX_OUTPUT_TOKENS_HEADER,
+)
 from a11.service.service import Service, ServiceOptions
 from a11.service.session import Session
 from a11.status import Status, StatusCode
@@ -165,8 +168,7 @@ RESEARCH_HEADERS = a11.DEFAULT_ACTION_HEADERS | {
     ),
     LlmHeaders.MODEL: a11.ActionHeaderSchema(
         LlmHeaders.MODEL,
-        "The model to ask. Defaults to"
-        f" {OLLAMA_DEFAULTS[LlmHeaders.MODEL]}.",
+        f"The model to ask. Defaults to {OLLAMA_DEFAULTS[LlmHeaders.MODEL]}.",
         default=OLLAMA_DEFAULTS[LlmHeaders.MODEL].encode(),
     ),
     LlmHeaders.BASE_URL: a11.ActionHeaderSchema(
@@ -228,6 +230,18 @@ DEMO_ALLOWED_MODEL = "glm-5.3-flash:cloud"
 #: Hard server-side timeout for every LLM-enabled demo action.
 _LLM_TIMEOUT = a11.Duration.seconds(120)
 
+#: Long enough for a short answer with visible reasoning, while keeping the
+#: public demo's provider spend bounded.
+DEMO_MAX_OUTPUT_TOKENS = 1024
+
+#: The public input is deliberately a prompt, not an unbounded chat surface.
+DEMO_MAX_INPUT_CHARACTERS = 180
+
+#: Marks a composition after its public entry point has consumed one quota
+#: token. A11 forwards x-a11 headers to nested actions, so internal model calls
+#: can inherit the ceiling without each charging the caller again.
+DEMO_QUOTA_CHARGED_HEADER = "x-a11-demo-quota-charged"
+
 
 def _ip_identity(ip: str) -> str:
     """A hashed identity key for the IP-only rate-limit pool."""
@@ -238,6 +252,142 @@ def _device_identity(ip: str, fingerprint: str) -> str:
     """A hashed identity key for the per-device rate-limit pool."""
     raw = f"dev:{ip}|{fingerprint}"
     return hashlib.sha256(raw.encode()).hexdigest()[:32]
+
+
+async def _pump_fragments(source: a11.AsyncNode, target: a11.AsyncNode) -> None:
+    """Copy one demo action port without changing its representation."""
+    while (fragment := await source.next_fragment()) is not None:
+        await target.put_fragment(fragment)
+    await target.close()
+
+
+async def _pump_bounded_interactions(
+    source: a11.AsyncNode, target: a11.AsyncNode
+) -> None:
+    """Copy interactions while bounding every user-authored message."""
+    async for interaction in source:
+        if interaction.role == a11.sdk.llm.Role.USER:
+            normalized = a11.sdk.llm.normalize_interaction(interaction)
+            text = "".join(
+                part.text or ""
+                for part in normalized.parts
+                if part.type == a11.sdk.llm.NormalizedContentType.TEXT
+            )
+            if len(text) > DEMO_MAX_INPUT_CHARACTERS:
+                raise Status(
+                    code=StatusCode.INVALID_ARGUMENT,
+                    message=(
+                        "Demo prompts are limited to"
+                        f" {DEMO_MAX_INPUT_CHARACTERS} characters."
+                    ),
+                ).to_exception()
+        await target.put(interaction)
+    await target.close()
+
+
+async def _pump_bounded_text(
+    source: a11.AsyncNode, target: a11.AsyncNode
+) -> None:
+    """Copy a public text input with one limit across all of its values."""
+    characters = 0
+    async for value in source:
+        text = str(value)
+        characters += len(text)
+        if characters > DEMO_MAX_INPUT_CHARACTERS:
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT,
+                message=(
+                    "Demo inputs are limited to"
+                    f" {DEMO_MAX_INPUT_CHARACTERS} characters."
+                ),
+            ).to_exception()
+        await target.put(value)
+    await target.close()
+
+
+async def _put_bounded_config(
+    source: a11.AsyncNode, target: a11.AsyncNode
+) -> None:
+    """Forward provider config with a server-enforced generation ceiling."""
+    value = await source.consume(dict, allow_none=True)
+    config = dict(value or {})
+    requested = config.get("num_predict", -1)
+    if not isinstance(requested, int) or requested < 0:
+        config["num_predict"] = DEMO_MAX_OUTPUT_TOKENS
+    else:
+        config["num_predict"] = min(requested, DEMO_MAX_OUTPUT_TOKENS)
+    await target.finalize(config)
+
+
+async def _run_handler_with_pumps(
+    action: a11.Action,
+    handler: a11.ActionHandler,
+    input_pumps: dict[str, Any],
+) -> None:
+    """Run a handler behind server-owned inputs and forwarded outputs."""
+    bounded = action.make_nested(action.get_schema())
+    # Run the original handler locally while retaining the parent session. The
+    # session owns the reverse tool bridge used when a model calls an action
+    # served by the browser.
+    bounded.bind_stream(None)
+    bounded.bind_handler(handler)
+
+    pumps = [
+        asyncio.create_task(pump(action[name], bounded[name]))
+        for name, pump in input_pumps.items()
+    ]
+    pumps.extend(
+        asyncio.create_task(_pump_fragments(bounded[name], action[name]))
+        for name in action.get_schema().outputs
+    )
+
+    bounded.run()
+    waiter = asyncio.ensure_future(bounded.wait())
+    tasks = [waiter, *pumps]
+    try:
+        await asyncio.gather(*tasks)
+    except BaseException:
+        bounded.cancel()
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
+
+
+async def _run_bounded_llm_handler(
+    action: a11.Action,
+    handler: a11.ActionHandler,
+    *,
+    validate_input: bool,
+) -> None:
+    """Run an LLM handler with a generation cap and optional prompt limit."""
+    await _run_handler_with_pumps(
+        action,
+        handler,
+        {
+            "interactions": (
+                _pump_bounded_interactions
+                if validate_input
+                else _pump_fragments
+            ),
+            "config": _put_bounded_config,
+            "tools": _pump_fragments,
+        },
+    )
+
+
+async def _run_bounded_composition(
+    action: a11.Action, handler: a11.ActionHandler
+) -> None:
+    """Run a public composition while bounding its caller-owned text."""
+    await _run_handler_with_pumps(
+        action,
+        handler,
+        {
+            name: _pump_bounded_text if port.type == "str" else _pump_fragments
+            for name, port in action.get_schema().inputs.items()
+        },
+    )
 
 
 def _extract_ip(stream: net.WireStream) -> str:
@@ -293,8 +443,10 @@ def _wrap_llm_handler(
             # Only the designated model is available with the demo key.
             model = (
                 action.get_header(
-                    LlmHeaders.MODEL.value, decode=True,
-                ) or ""
+                    LlmHeaders.MODEL.value,
+                    decode=True,
+                )
+                or ""
             )
             if model and model != DEMO_ALLOWED_MODEL:
                 raise Status(
@@ -306,16 +458,35 @@ def _wrap_llm_handler(
                     ),
                 ).to_exception()
 
-            ip_key = _ip_identity(ip)
-            dev_key = _device_identity(ip, fingerprint)
-            decision = _RATE_LIMITER.check(ip_key, dev_key)
-            if not decision.allowed:
-                raise Status(
-                    code=StatusCode.RESOURCE_EXHAUSTED,
-                    message=decision.reason,
-                ).to_exception()
+            quota_charged = (
+                action.get_header(DEMO_QUOTA_CHARGED_HEADER, decode=True) == "1"
+            )
+            if not quota_charged:
+                authorization = a11.get_verified_authorization(action)
+                stable_fingerprint = (
+                    authorization.fingerprint if authorization else fingerprint
+                )
+                ip_key = _ip_identity(ip)
+                dev_key = _device_identity(ip, stable_fingerprint)
+                decision = _RATE_LIMITER.check(ip_key, dev_key)
+                if not decision.allowed:
+                    raise Status(
+                        code=StatusCode.RESOURCE_EXHAUSTED,
+                        message=decision.reason,
+                    ).to_exception()
+                action.set_header(DEMO_QUOTA_CHARGED_HEADER, "1")
 
             action.set_header(LlmHeaders.API_KEY.value, real_key)
+            action.set_header(
+                MAX_OUTPUT_TOKENS_HEADER, str(DEMO_MAX_OUTPUT_TOKENS)
+            )
+            if action.get_schema().name in deep_research_program().names:
+                return await _run_bounded_composition(action, handler)
+            return await _run_bounded_llm_handler(
+                action,
+                handler,
+                validate_input=not quota_charged,
+            )
 
         return await handler(action)
 
@@ -484,7 +655,7 @@ def make_service(registry: a11.ActionRegistry) -> Service:
         fingerprint = _extract_fingerprint(stream)
         for action_name in _LLM_ACTION_NAMES:
             handler = per_connection.get_handler(action_name)
-            if handler is not None and callable(handler):
+            if handler is not None:
                 schema = per_connection.get_schema(action_name)
                 per_connection.register(
                     action_name,

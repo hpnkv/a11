@@ -36,21 +36,21 @@ test('an ordinary line inside a block keeps the block\'s own indent', () => {
 });
 
 test('a trailing comma indents one level deeper', () => {
-  assert.equal(indentAfter('flow f {\n  skip a,', unit), '    ');
+  assert.equal(indentAfter('flow f {\n  run work() after a,', unit), '    ');
 });
 
 test('a running continuation keeps its own width rather than adding another level', () => {
-  const before = 'flow f {\n  skip a,\n    b,';
+  const before = 'flow f {\n  run work() after a,\n    b,';
   assert.equal(indentAfter(before, unit), '    ');
 });
 
 test('a manually deeper continuation is followed rather than reset', () => {
-  const before = 'flow f {\n  skip a,\n      b,';
+  const before = 'flow f {\n  run work() after a,\n      b,';
   assert.equal(indentAfter(before, unit), '      ');
 });
 
 test('the line after a continuation ends snaps back to the block', () => {
-  const before = 'flow f {\n  skip a,\n    b\n  "x" -> out';
+  const before = 'flow f {\n  run work() after a,\n    b\n  "x" -> out';
   assert.equal(indentAfter(before, unit), '  ');
 });
 
@@ -64,11 +64,11 @@ test('an arrow left open continues onto its target', () => {
 });
 
 test('an open parenthesis continues until it closes', () => {
-  assert.equal(indentAfter('flow f {\n  skip (o1, o2', unit), '    ');
+  assert.equal(indentAfter('flow f {\n  run work(o1: a, o2: b', unit), '    ');
 });
 
 test('closing the parenthesis on its own line still continues if a comma follows', () => {
-  const before = 'flow f {\n  skip (o1, o2) of act,';
+  const before = 'flow f {\n  run work(o1: a, o2: b) after act,';
   assert.equal(indentAfter(before, unit), '    ');
 });
 
@@ -99,13 +99,13 @@ test('a closed triple-quoted string is an ordinary line again', () => {
   assert.equal(indentAfter(before, unit), '  ');
 });
 
-test('the request\'s own combined example', () => {
+test('a multi-line after list keeps its continuation indent', () => {
   const before = [
     'flow f {',
     '  act1 = run action1(text: our_input)',
-    '  skip our_input,',
+    '  run action2(text: our_input) after act1,',
     '    act1,',
-    '    (o1, o2) of act2,',
+    '    act2,',
   ].join('\n');
   assert.equal(indentAfter(before, unit), '    ');
 });

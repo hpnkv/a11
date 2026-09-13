@@ -38,7 +38,7 @@ from __future__ import annotations
 
 import atexit
 import uuid
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 
 import a11
@@ -57,6 +57,8 @@ GLOBAL_SCOPE = "global"
 
 #: Validates (and may rewrite) a command before it runs, or raises to reject it.
 InputValidator = Callable[[str], str]
+#: Authorizes a validated command immediately before a shell runs it.
+CommandApprover = Callable[[str], Awaitable[None]]
 #: Wraps a stream of output lines, yielding a possibly-transformed stream.
 OutputProcessor = Callable[[AsyncIterator[str]], AsyncIterator[str]]
 
@@ -73,8 +75,13 @@ class _ShellEntry:
 class ShellManager:
     """Owns running shells, enforces scope caps, and runs commands in them."""
 
-    def __init__(self, shell_factory: ShellFactory = BashShell) -> None:
+    def __init__(
+        self,
+        shell_factory: ShellFactory = BashShell,
+        command_approver: CommandApprover | None = None,
+    ) -> None:
         self._shell_factory = shell_factory
+        self._command_approver = command_approver
         self._shells: dict[str, _ShellEntry] = {}
         #: Scopes for which a session done-callback is already registered.
         self._reaped_scopes: set[str] = set()
@@ -272,6 +279,8 @@ class ShellManager:
                 validator or the shell raises.
         """
         command = self.validate_command(command)
+        if self._command_approver is not None:
+            await self._command_approver(command)
         timeout = self._effective_timeout(parameters, action)
 
         transient: BashShell | None = None
@@ -285,12 +294,31 @@ class ShellManager:
             action.add_done_callback(lambda _action, sh=transient: sh.close())
             shell = transient
 
+        raw_output = shell.execute(command, timeout=timeout)
+        processed_output = self._process_output(raw_output)
+        output_lines = 0
+        output_bytes = 0
+        marker_reserve = 256
+        content_budget = max(parameters.max_output_bytes - marker_reserve, 0)
         try:
-            async for line in self._process_output(
-                shell.execute(command, timeout=timeout)
-            ):
+            async for line in processed_output:
+                line_bytes = len(line.encode("utf-8")) + 1
+                if (
+                    output_lines >= parameters.max_output_lines
+                    or output_bytes + line_bytes > content_budget
+                ):
+                    yield (
+                        "[output truncated after "
+                        f"{output_lines} lines and {output_bytes} UTF-8 bytes; "
+                        "refine the command or filter its output]"
+                    )
+                    break
+                output_lines += 1
+                output_bytes += line_bytes
                 yield line
         finally:
+            await processed_output.aclose()
+            await raw_output.aclose()
             if transient is not None:
                 await transient.close()
 

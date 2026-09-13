@@ -124,6 +124,14 @@ TEST(FlowComplete, ACallNamesASiblingFlowThenItsPorts) {
   EXPECT_EQ(question->type, "string");
 }
 
+TEST(FlowComplete, AfterOffersAnotherSubjectAfterAComma) {
+  const std::vector<std::string> offered =
+      Names(InOuter("  first = run inner(question: q)\n"
+                    "  run inner(question: q) after first, |CARET|"));
+  EXPECT_TRUE(Offers(offered, "first"));
+  EXPECT_TRUE(Offers(offered, "q"));
+}
+
 TEST(FlowComplete, WhatAProposalReplacesIsThePartialWordAndNothingElse) {
   // `[prefix_start, caret)` is what a frontend replaces with what it inserts,
   // so with nothing typed yet it has to be *empty*.

@@ -53,7 +53,16 @@ import { runAction, type ActionDescriptor } from './bridge.js';
 const READ_TIMEOUT_MS = 5_000;
 
 /** Notified when a tool runs, with the run log it produced (if any). */
-export type ToolRunSink = (run: { tool: string; log: string | null }) => void;
+export interface ToolActivity {
+  id: string;
+  tool: string;
+  log?: string | null;
+  status?: Status;
+  arguments?: Record<string, unknown>;
+  phase: 'started' | 'finished';
+}
+
+export type ToolRunSink = (run: ToolActivity) => void;
 
 /**
  * The key a tool's result map carries its narration under.
@@ -192,13 +201,15 @@ async function writeOutputs(
 function handlerFor(descriptor: ActionDescriptor, onRun?: ToolRunSink) {
   const name = descriptor.name;
   return async (action: Action): Promise<Status> => {
+    onRun?.({ id: action.getId(), tool: name, phase: 'started' });
     const inputs = await readInputs(action, descriptor);
     let outputs: unknown;
     try {
       outputs = await runAction(name, inputs);
     } catch (error) {
-      onRun?.({ tool: name, log: `Failed: ${error instanceof Error ? error.message : String(error)}` });
-      return statusFromUnknown(error, `IDE tool '${name}' failed.`);
+      const status = statusFromUnknown(error, `IDE tool '${name}' failed.`);
+      onRun?.({ id: action.getId(), tool: name, log: status.message, status, phase: 'finished' });
+      return status;
     }
     if (typeof outputs !== 'object' || outputs === null) {
       return statusFromUnknown(
@@ -213,7 +224,7 @@ function handlerFor(descriptor: ActionDescriptor, onRun?: ToolRunSink) {
     // the top of this file.
     const narration = produced[RUN_LOG_KEY];
     const log = asLogText(narration);
-    onRun?.({ tool: name, log });
+    onRun?.({ id: action.getId(), tool: name, log, phase: 'finished' });
     if (log !== null) await action.log(log);
     return writeOutputs(action, descriptor, produced);
   };

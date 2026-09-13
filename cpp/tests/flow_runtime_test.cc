@@ -360,43 +360,12 @@ flow keep {
   EXPECT_EQ(outcome.outputs.at("all"), Values({"[\"a\", \"b\"]"}));
 }
 
-TEST(FlowRuntimeTest, SkipDrainsAnOutputNobodyWants) {
+TEST(FlowRuntimeTest, UnboundOutputsAreDrainedAutomatically) {
   const Outcome outcome = RunFlow(R"(
 flow ignore {
   in  words: string stream
   out done:  string
   say = run twice(text: words)
-  skip say.out
-  "finished" -> done
-}
-)",
-                                  "ignore", {{"words", {"\"a\""}}});
-  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
-  EXPECT_EQ(outcome.outputs.at("done"), Values({"\"finished\""}));
-}
-
-TEST(FlowRuntimeTest, SkipACallDrainsEveryOutputOfIt) {
-  const Outcome outcome = RunFlow(R"(
-flow ignore {
-  in  words: string stream
-  out done:  string
-  say = run twice(text: words)
-  skip say
-  "finished" -> done
-}
-)",
-                                  "ignore", {{"words", {"\"a\""}}});
-  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
-  EXPECT_EQ(outcome.outputs.at("done"), Values({"\"finished\""}));
-}
-
-TEST(FlowRuntimeTest, SkipNamesSeveralOutputsOfOneCallTogether) {
-  const Outcome outcome = RunFlow(R"(
-flow ignore {
-  in  words: string stream
-  out done:  string
-  say = run twice(text: words)
-  skip (out, quiet) of say
   "finished" -> done
 }
 )",
@@ -970,7 +939,6 @@ flow tidy {
   ended = drain taken after done
   status done | map it.ok -> over
   taken -> seen
-  skip ended
 }
 )",
                                   "tidy", {{"words", {"a", "stop", "b"}}});
@@ -987,7 +955,6 @@ flow ordered {
   out seen:  string stream
   first = run twice(text: "go")
   for word in words { word -> seen } after first
-  skip first.quiet
 }
 )",
                                   "ordered", {{"words", {"a", "b"}}});

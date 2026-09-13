@@ -119,6 +119,4 @@ flow example {
     }
   }
   strformat("checked: %s", checked.ok) -> notes
-
-  skip search.debug
 }

@@ -27,13 +27,10 @@ flow {
   total = node() in scratch
 
   input = run read_stdin() via scratch
-  skip input.bytes  # `lines` is the half this program wants
-  skip input.is_tty
 
   input.lines | count -> total
 
   out = run write_stdout(
     content: total | map strformat("%d\n", it)
   ) via scratch
-  skip out.bytes_written
 }

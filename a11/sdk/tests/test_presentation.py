@@ -27,6 +27,7 @@ import a11
 from a11.sdk import presentation
 from a11.sdk.llm import (
     TOOL_LOGS_METADATA_KEY,
+    TOOL_STATUSES_METADATA_KEY,
     Interaction,
     NormalizedContentType,
     Role,
@@ -46,18 +47,24 @@ def _text_interaction(text: str, role: Role = Role.USER) -> Interaction:
     """An interaction as a *client* mints one: no backend tag at all."""
     return Interaction(
         role=role,
-        content=[a11.to_chunk({"role": "user", "content": [
-            {"type": "text", "text": text}
-        ]})],
+        content=[
+            a11.to_chunk({
+                "role": "user",
+                "content": [{"type": "text", "text": text}],
+            })
+        ],
     )
 
 
 def _call_interaction(call_id: str, name: str) -> Interaction:
     return Interaction(
         role=Role.ASSISTANT,
-        content=[a11.to_chunk({"role": "model", "content": [
-            {"type": "text", "text": "Let me check."}
-        ]})],
+        content=[
+            a11.to_chunk({
+                "role": "model",
+                "content": [{"type": "text", "text": "Let me check."}],
+            })
+        ],
         action_calls=[a11.ActionMessage(id=call_id, name=name)],
     )
 
@@ -137,6 +144,56 @@ def test_a_tool_call_is_paired_with_a_log_from_a_later_interaction():
     assert run[0].text == "$ pwd\n/home/helena"
 
 
+def test_a_tool_failure_is_attached_to_its_run_during_replay():
+    call = _call_interaction("call-1", "run_command")
+    result = _result_interaction("call-1", "")
+    result.backend_specific_metadata[TOOL_STATUSES_METADATA_KEY] = json.dumps({
+        "call-1": {
+            "code": StatusCode.INVALID_ARGUMENT,
+            "message": "command is required",
+            "details": [],
+        }
+    }).encode()
+
+    run = next(
+        block
+        for turn in present_conversation([call, result])
+        for block in turn.blocks
+        if block.kind == BlockKind.TOOL_RUN
+    )
+    assert run.status is not None
+    assert run.status.code == StatusCode.INVALID_ARGUMENT
+    assert run.status.message == "command is required"
+
+
+def test_a_tool_call_exposes_its_decoded_arguments_to_renderers():
+    interaction = _call_interaction("call-1", "run_command")
+    interaction.action_inputs = {
+        "call-1": [
+            a11.NodeFragment(
+                id="command",
+                data=a11.to_chunk("pytest -q"),
+                continued=False,
+            ),
+            a11.NodeFragment(
+                id="timeout_seconds",
+                data=a11.to_chunk(30),
+                continued=False,
+            ),
+        ]
+    }
+
+    run = next(
+        block
+        for block in present_interaction(interaction).blocks
+        if block.kind == BlockKind.TOOL_RUN
+    )
+    assert run.tool_arguments == {
+        "command": "pytest -q",
+        "timeout_seconds": 30,
+    }
+
+
 def test_replay_orders_text_before_tool_runs():
     """A stored interaction has no timeline, so the order is a stable choice."""
     turn = present_interaction(
@@ -154,9 +211,12 @@ def test_a_result_carrier_is_recognised_only_when_it_has_no_text():
     )
     # An interaction with both results and prose is worth drawing.
     with_text = _result_interaction("call-2", "log")
-    with_text.content = [a11.to_chunk({"role": "user", "content": [
-        {"type": "text", "text": "and also this"}
-    ]})]
+    with_text.content = [
+        a11.to_chunk({
+            "role": "user",
+            "content": [{"type": "text", "text": "and also this"}],
+        })
+    ]
     assert not presentation.is_tool_result_carrier(with_text)
 
 
@@ -252,6 +312,44 @@ def test_the_same_tool_call_is_never_drawn_twice():
     assert len(runs) == 1
 
 
+def test_live_tool_logs_update_one_activity_block():
+    reducer = PresentationReducer()
+    reducer.on_interaction(_call_interaction("call-1", "run_command"))
+
+    reducer.on_tool_log("call-1", "run_command", "first\n")
+    reducer.on_tool_log("call-1", "run_command", "second\n")
+
+    runs = [b for b in reducer.blocks if b.kind == BlockKind.TOOL_RUN]
+    assert len(runs) == 1
+    assert runs[0].text == "first\nsecond\n"
+
+
+def test_tool_lifecycle_opens_immediately_streams_logs_and_then_closes():
+    events: list[tuple[str, str, bool]] = []
+
+    class Recorder:
+        def on_block_opened(self, block):
+            events.append(("open", block.tool_name, block.partial))
+
+        def on_block_appended(self, block, delta):
+            events.append(("append", delta, block.partial))
+
+        def on_block_closed(self, block):
+            events.append(("close", block.tool_name, block.partial))
+
+    reducer = PresentationReducer(Recorder())
+    reducer.on_tool_started("call-1", "run_command")
+    reducer.on_tool_log("call-1", "run_command", "first line\n")
+    reducer.on_tool_finished("call-1", Status())
+
+    assert events == [
+        ("open", "run_command", True),
+        ("append", "first line\n", True),
+        ("close", "run_command", False),
+    ]
+    assert not reducer.blocks[0].partial
+
+
 def test_an_error_closes_the_turn_with_its_status():
     reducer = PresentationReducer()
     reducer.on_text("partial answer")
@@ -291,7 +389,7 @@ def test_a_sink_sees_open_append_and_close():
 
 
 def test_the_reducer_and_present_conversation_agree_on_a_replayed_turn():
-    """One model, two feeders: replay through the reducer matches the pure fn."""
+    """Replay through the reducer matches the pure presentation function."""
     interactions = [
         _call_interaction("call-1", "shell_execute"),
         _result_interaction("call-1", "$ ls"),
@@ -303,7 +401,8 @@ def test_the_reducer_and_present_conversation_agree_on_a_replayed_turn():
     reducer.end_turn()
 
     direct = [
-        block for turn in present_conversation(interactions)
+        block
+        for turn in present_conversation(interactions)
         for block in turn.blocks
     ]
     assert [b.kind for b in reducer.blocks] == [b.kind for b in direct]

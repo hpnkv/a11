@@ -16,20 +16,25 @@
 
 The whole terminal-specific half of presentation: a `match` over `BlockKind` and
 nothing else. Because the blocks come from
-[a11.sdk.presentation][a11.sdk.presentation], the same function draws a live turn
-and a replayed one, and `a11 chat` gets tool-call rendering it never had.
+[a11.sdk.presentation][a11.sdk.presentation], the same function draws a live
+turn and a replayed one, and `a11 chat` gets tool-call rendering it never had.
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 
 from rich.console import Group, RenderableType
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.syntax import Syntax
 from rich.text import Text
 
+from a11.cli.flow_highlighting import register_flow_lexer
 from a11.sdk.presentation import BlockKind, PresentationBlock
+
+register_flow_lexer()
 
 
 def render_block(
@@ -39,8 +44,7 @@ def render_block(
 
     Args:
         block: The block to render.
-        verbose: Draw blocks that are noise in normal use -- thoughts and token
-            usage.
+        verbose: Draw token usage in addition to the normal streamed content.
 
     Returns:
         A `rich` renderable, or ``None`` to omit the block.
@@ -49,9 +53,15 @@ def render_block(
         case BlockKind.TEXT:
             return Markdown(block.text) if block.text else None
         case BlockKind.THOUGHT:
-            if not verbose or not block.text:
+            if not block.text:
                 return None
-            return Text(block.text.strip(), style="dim italic")
+            return Group(
+                Text("• Thinking", style="bold magenta"),
+                _indented_detail(
+                    _bounded_detail(block.text, lines=8, chars=1200),
+                    "dim italic",
+                ),
+            )
         case BlockKind.TOOL_RUN:
             return _tool_panel(block)
         case BlockKind.TOOL_RESULT:
@@ -86,25 +96,218 @@ def render_blocks(
 
 
 def _tool_panel(block: PresentationBlock) -> RenderableType:
-    """A tool run as a titled panel whose body is the tool's own log.
+    """Render a compact action row with bounded, indented detail.
 
-    A run with no log yet is still drawn -- that a tool is running is the thing
-    the reader most wants to know while they wait.
+    The presentation mirrors an agent activity transcript: the operation is
+    scannable on one strong line and detail remains subordinate beneath it.
     """
-    title = block.tool_name or "tool"
+    if block.tool_name == "run_flow":
+        return _flow_panel(block)
+    if block.tool_name == "request_user_input":
+        return _user_input_panel(block)
+    if (
+        block.tool_name == "report_completion"
+        and str(
+            _completion_argument(block.tool_arguments or {}, "summary")
+        ).strip()
+    ):
+        return _completion_panel(block)
     if block.status is not None and not block.status.is_ok():
-        return Panel(
-            Text(block.status.message or "failed", style="red"),
-            title=f"{title} (failed)",
-            title_align="left",
-            border_style="red",
+        return Group(
+            Text(f"× {_tool_summary(block)}", style="bold red"),
+            _indented_detail(block.status.message or "failed", "red"),
         )
-    body: RenderableType = (
-        Text(block.text.rstrip())
-        if block.text
-        else Text("running...", style="dim italic")
+    running = block.partial
+    body: list[RenderableType] = [
+        Text(
+            f"{'◦' if running else '•'} {_tool_summary(block)}",
+            style="bold cyan" if running else "bold green",
+        )
+    ]
+    if block.tool_arguments and not _arguments_are_summarized(block):
+        try:
+            encoded = json.dumps(
+                block.tool_arguments,
+                ensure_ascii=False,
+                indent=2,
+                default=str,
+            )
+        except (TypeError, ValueError):
+            encoded = str(block.tool_arguments)
+        body.append(_indented_detail(_bounded_detail(encoded), "dim"))
+    if block.text:
+        body.append(_indented_detail(_bounded_detail(block.text), "dim"))
+    return Group(*body)
+
+
+def _completion_panel(block: PresentationBlock) -> RenderableType:
+    """Draw the coding agent's structured completion as a final report."""
+    arguments = block.tool_arguments or {}
+    summary = str(_completion_argument(arguments, "summary")).strip()
+    checks = str(_completion_argument(arguments, "checks")).strip()
+    remaining = str(_completion_argument(arguments, "remaining")).strip()
+    failed = block.status is not None and not block.status.is_ok()
+    body: list[RenderableType] = [Markdown(summary)]
+    if checks:
+        body.extend((Text("Verification", style="bold"), Text(checks)))
+    if remaining:
+        body.extend((Text("Remaining", style="bold yellow"), Text(remaining)))
+    if failed:
+        body.extend(
+            (
+                Text("Report error", style="bold red"),
+                Text(block.status.message or "failed", style="red"),
+            )
+        )
+    return Panel(
+        Group(*body),
+        title="Completion report failed" if failed else "✓ Task completed",
+        title_align="left",
+        border_style="red" if failed else "green",
+        padding=(0, 1),
     )
-    return Panel(body, title=title, title_align="left", border_style="dim")
+
+
+def _user_input_panel(block: PresentationBlock) -> RenderableType:
+    arguments = block.tool_arguments or {}
+    question = str(_argument(arguments, "question", "Input requested"))
+    body: list[RenderableType] = [Text(question, style="bold")]
+    options = arguments.get("options", [])
+    if isinstance(options, list):
+        for index, option in enumerate(options, 1):
+            if not isinstance(option, dict):
+                continue
+            label = str(option.get("label", "")).strip()
+            description = str(option.get("description", "")).strip()
+            line = f"[{index}] {label}"
+            if description:
+                line += f" — {description}"
+            body.append(Text(line, style="yellow"))
+    allow_free_text = bool(arguments.get("allow_free_text", True))
+    if block.partial:
+        instruction = "Choose with a number or label"
+        if allow_free_text:
+            instruction += " · free response accepted"
+        body.append(Text(instruction, style="dim"))
+    elif block.status is not None and not block.status.is_ok():
+        body.append(Text(block.status.message or "failed", style="red"))
+    failed = block.status is not None and not block.status.is_ok()
+    return Panel(
+        Group(*body),
+        title=(
+            "Input request failed"
+            if failed
+            else "? Input required" if block.partial else "✓ Input received"
+        ),
+        title_align="left",
+        border_style=(
+            "red" if failed else "yellow" if block.partial else "green"
+        ),
+        padding=(0, 1),
+    )
+
+
+def _flow_panel(block: PresentationBlock) -> RenderableType:
+    """Show the composition and its nested action lifecycle as one activity."""
+    arguments = block.tool_arguments or {}
+    source = _argument(arguments, "source", "")
+    body: list[RenderableType] = [
+        Text(
+            f"{'◦' if block.partial else '•'} Ran A11 Flow",
+            style="bold cyan" if block.partial else "bold green",
+        )
+    ]
+    if source:
+        body.append(
+            Syntax(
+                str(source).strip(),
+                "a11flow",
+                background_color="default",
+                word_wrap=True,
+                padding=(0, 2),
+            )
+        )
+    if block.text:
+        body.append(_indented_detail(_bounded_detail(block.text), "dim"))
+    if block.status is not None and not block.status.is_ok():
+        body.append(_indented_detail(block.status.message or "failed", "red"))
+    return Group(*body)
+
+
+def _tool_summary(block: PresentationBlock) -> str:
+    """Human action summary for common coding tools."""
+    arguments = block.tool_arguments or {}
+    name = block.tool_name or "tool"
+    if name in {"run_command", "shell_execute"}:
+        return f"Ran {_argument(arguments, 'command', name)}"
+    if name == "read_file":
+        return f"Read {_argument(arguments, 'path', 'file')}"
+    if name in {"list_files", "list_directory"}:
+        return f"Explored {_argument(arguments, 'path', '.')}"
+    if name == "search_text":
+        return f"Searched for {_argument(arguments, 'query', 'text')}"
+    if name == "apply_patch":
+        return "Applied patch"
+    if name == "run_flow":
+        return "Ran A11 Flow"
+    return name.replace("_", " ").capitalize()
+
+
+def _argument(arguments: dict[str, object], name: str, default: str) -> object:
+    """Unwrap a named value from direct and object-port action inputs."""
+    value = arguments.get(name)
+    if value is None and len(arguments) == 1:
+        value = next(iter(arguments.values()))
+    if isinstance(value, dict):
+        value = value.get(name, value.get("value", value))
+    return default if value is None else value
+
+
+def _completion_argument(arguments: dict[str, object], name: str) -> object:
+    """Read one report field without treating a different field as its value."""
+    if name in arguments:
+        return arguments[name]
+    if len(arguments) == 1:
+        envelope = next(iter(arguments.values()))
+        if isinstance(envelope, dict):
+            return envelope.get(name, "")
+    return ""
+
+
+def _arguments_are_summarized(block: PresentationBlock) -> bool:
+    return block.tool_name in {
+        "run_command",
+        "shell_execute",
+        "read_file",
+        "list_files",
+        "list_directory",
+        "search_text",
+        "apply_patch",
+        "run_flow",
+    }
+
+
+def _bounded_detail(value: str, *, lines: int = 24, chars: int = 4000) -> str:
+    """Keep an action from taking over the entire terminal transcript."""
+    source = value.rstrip()
+    selected = source.splitlines()[:lines]
+    bounded = "\n".join(selected)
+    truncated = len(selected) < len(source.splitlines()) or len(bounded) > chars
+    if len(bounded) > chars:
+        bounded = bounded[:chars]
+    return f"{bounded}\n… output truncated" if truncated else bounded
+
+
+def _indented_detail(value: str, style: str) -> Text:
+    lines = value.splitlines() or [""]
+    return Text(
+        "\n".join(
+            f"  {'└' if index == 0 else ' '} {line}"
+            for index, line in enumerate(lines)
+        ),
+        style=style,
+        overflow="fold",
+    )
 
 
 def _usage_line(block: PresentationBlock) -> str:

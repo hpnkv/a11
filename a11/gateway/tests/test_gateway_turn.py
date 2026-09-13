@@ -16,7 +16,7 @@
 
 A client session calls ``interact_with_llm`` on a real gateway registry across
 an in-process wire pair, exactly as the IDE plugin does across a WebSocket. The
-provider is a fake Ollama that calls ``shell_execute`` once and then answers, so
+provider is a fake Ollama that calls ``run_command`` once and then answers, so
 the turn goes the whole way: a tool the *caller never described* is offered
 because its allowed-tool patterns admit it, it runs on the gateway, its
 user-facing log is kept out of the model's tool result and recorded in the
@@ -67,7 +67,7 @@ def _chunk(message: ollama.Message, done: bool = False) -> ollama.ChatResponse:
 def _tool_call_round() -> list[ollama.ChatResponse]:
     call = ollama.Message.ToolCall(
         function=ollama.Message.ToolCall.Function(
-            name="shell_execute", arguments={"command": f"echo {_TOKEN}"}
+            name="run_command", arguments={"command": f"echo {_TOKEN}"}
         )
     )
     return [
@@ -138,9 +138,7 @@ async def test_a_turn_runs_a_gateway_tool_and_is_recorded(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ):
     fake = _FakeOllama([_tool_call_round(), _answer_round()])
-    monkeypatch.setattr(
-        ollama_mod, "get_ollama_client", lambda *a, **k: fake
-    )
+    monkeypatch.setattr(ollama_mod, "get_ollama_client", lambda *a, **k: fake)
 
     gateway, store = _gateway(tmp_path)
     server_stream, client_stream = net.create_in_process_wire_stream_pair()
@@ -150,7 +148,8 @@ async def test_a_turn_runs_a_gateway_tool_and_is_recorded(
     await client.add_stream(client_stream, mode="start")
 
     call = (
-        a11.Action(INTERACT_WITH_LLM_SCHEMA)
+        a11
+        .Action(INTERACT_WITH_LLM_SCHEMA)
         .bind_node_map(client.node_map)
         .bind_session(client)
         .bind_stream(client_stream)
@@ -159,8 +158,8 @@ async def test_a_turn_runs_a_gateway_tool_and_is_recorded(
     call.set_header(LlmHeaders.MODEL.value, b"fake")
     # The plugin's header: the IDE's own tools (none here) plus the patterns
     # that let the gateway add its own. Nothing is sent on the `tools` port at
-    # all, so the shell tool can only reach the model by being matched here.
-    call.set_header(LlmHeaders.ALLOWED_LLM_ACTIONS.value, b"shell_.*")
+    # all, so the command tool can only reach the model by being matched here.
+    call.set_header(LlmHeaders.ALLOWED_LLM_ACTIONS.value, b"run_command")
     await call.call()
 
     question = Interaction(
@@ -199,7 +198,7 @@ async def test_a_turn_runs_a_gateway_tool_and_is_recorded(
 
     assert "".join(text) == f"it printed {_TOKEN}"
     # Offered without the caller describing it: the allow-list is the request.
-    assert "shell_execute" in fake.tools_offered
+    assert "run_command" in fake.tools_offered
 
     # The tool result the model was given carries the command's output, and the
     # run log rides in metadata instead -- never in the result.
@@ -220,9 +219,9 @@ async def test_a_turn_runs_a_gateway_tool_and_is_recorded(
     )
     assert len(logs) == 1
     log = next(iter(logs.values()))
-    # The narration names the command and how much came back.
-    assert log.startswith(f"`echo {_TOKEN}` — 1 line of output.")
+    # Streaming output and the final command status are both preserved.
     assert _TOKEN in log
+    assert "Command exited with 0 after 1 output lines." in log
     # And none of it reached the result the model was given. Asserted against
     # the log actually written, so a reworded narration cannot make this pass
     # vacuously.

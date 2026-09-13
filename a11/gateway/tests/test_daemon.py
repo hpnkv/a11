@@ -21,9 +21,15 @@ interpreter and waits for it to bind a port.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import pathlib
+import signal
+import socket
+import subprocess
+import sys
+import time
 
 import pytest
 
@@ -129,17 +135,15 @@ def test_the_status_fields_are_single_line_and_stable():
 def test_a_real_detached_gateway_starts_answers_and_stops(tmp_path):
     """The whole cycle, with an actual child process."""
     store = tmp_path / "conversations"
-    started = daemon.spawn(
-        [
-            "--a11-port",
-            "8097",
-            "--conversation-store-root",
-            str(store),
-            "--no-shell-tools",
-            "--no-audio-capture",
-            "--no-speech-recognition",
-        ]
-    )
+    started = daemon.spawn([
+        "--a11-port",
+        "8097",
+        "--conversation-store-root",
+        str(store),
+        "--no-shell-tools",
+        "--no-audio-capture",
+        "--no-speech-recognition",
+    ])
     try:
         assert started.running
         assert started.pid and started.pid != os.getpid()
@@ -152,3 +156,69 @@ def test_a_real_detached_gateway_starts_answers_and_stops(tmp_path):
     finally:
         daemon.stop()
     assert not daemon.status().running
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="SIGINT process semantics are POSIX-only"
+)
+def test_ctrl_c_immediately_closes_a_gateway_with_a_live_client(tmp_path):
+    """An interactive stop must not drain a long-lived WebSocket session."""
+    from websockets.sync.client import connect
+
+    with socket.socket() as reservation:
+        reservation.bind(("127.0.0.1", 0))
+        port = reservation.getsockname()[1]
+
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "a11.cli",
+            "gateway",
+            "--a11-port",
+            str(port),
+            "--conversation-store-root",
+            str(tmp_path / "conversations"),
+            "--no-coding-tools",
+            "--no-shell-tools",
+            "--no-audio-capture",
+            "--no-speech-recognition",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    connection = None
+    try:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            try:
+                connection = connect(
+                    f"ws://127.0.0.1:{port}/a11", open_timeout=0.2
+                )
+                break
+            except (OSError, TimeoutError):
+                time.sleep(0.05)
+        assert connection is not None, process.communicate(timeout=1)[0]
+
+        # Let the accepted socket become a tracked service session. With the
+        # former graceful-drain path this client forced every Ctrl+C to wait
+        # the complete three-second timeout.
+        time.sleep(0.05)
+        started = time.monotonic()
+        process.send_signal(signal.SIGINT)
+        process.wait(timeout=1.5)
+        assert time.monotonic() - started < 1.5
+        assert process.returncode == 0
+    finally:
+        if connection is not None:
+            with contextlib.suppress(Exception):
+                connection.close()
+        if process.poll() is None:
+            process.terminate()
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                process.wait(timeout=2)
+        if process.poll() is None:
+            process.kill()
+        if process.stdout is not None:
+            process.stdout.close()

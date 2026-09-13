@@ -240,13 +240,13 @@ TEST(FlowInspect, SaysWhenAWaitEndsANodeRatherThanWaitingForIt) {
   EXPECT_EQ(Codes("flow f { in a: string\n out b: string\n"
                   " seen = node()\n"
                   " w = run act(p: a) with \"x-a11-progress-node\": seen.id\n"
-                  " skip w.out\n seen -> b\n wait seen }"),
+                  " seen -> b\n wait seen }"),
             (std::vector<std::string>{"flow.barrier.wait-lends-node"}));
   // Naming the step that fills it is the whole fix, and the documented idiom.
   EXPECT_EQ(Codes("flow f { in a: string\n out b: string\n"
                   " seen = node()\n"
                   " w = run act(p: a) with \"x-a11-progress-node\": seen.id\n"
-                  " skip w.out\n seen -> b\n drain seen after w }"),
+                  " seen -> b\n drain seen after w }"),
             (std::vector<std::string>{}));
   // A node this flow writes is closed by its own last writer, so waiting for
   // it is a wait.

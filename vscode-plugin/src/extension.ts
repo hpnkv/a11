@@ -70,7 +70,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const flow = new FlowSupport(context);
 
   // Continuation-aware indent on Enter, needing no server and no binary: a
-  // `skip` list past a `,`, a pipeline left open after `|`/`->`, an unclosed
+  // `after` list past a `,`, a pipeline left open after `|`/`->`, an unclosed
   // `(`/`[`. See flowIndent.ts for why this never asks the language server.
   context.subscriptions.push(
     vscode.languages.registerOnTypeFormattingEditProvider(

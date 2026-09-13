@@ -44,12 +44,13 @@ import dataclasses
 from collections.abc import Callable, Sequence
 from typing import Any
 
-from a11 import observability, timing
+from a11 import _native, observability, timing
 import a11
 from a11.client.connection import GatewayConnection
 from a11.sdk.interact_with_llm_schema import INTERACT_WITH_LLM_SCHEMA
 from a11.sdk.llm import Interaction, LlmHeaders
 from a11.sdk.presentation import PresentationReducer
+from a11.status import Status
 
 #: Bound on one turn. Long, because a turn with several tool calls legitimately
 #: takes minutes; finite, because the terminal status is the only failure report
@@ -65,6 +66,8 @@ class TurnConfig:
     model: str
     api_key: str = ""
     base_url: str = ""
+    #: Provider-specific request data forwarded to the selected backend.
+    provider_config: Any | None = None
     #: Regex patterns naming the actions this turn may use -- the gateway's own,
     #: and any the gateway discovers on this session. A client that serves its
     #: own tools just registers them and names them here; the gateway asks what
@@ -118,6 +121,7 @@ async def run_turn(
             LlmHeaders.ALLOWED_LLM_ACTIONS.value, config.allowed_actions
         )
     )
+    log_node = call.get_log_node()
     for key, value in config.extra_headers:
         call.set_header(key, value)
     observability.enable_tracing(
@@ -128,7 +132,6 @@ async def run_turn(
     await call.call()
 
     new_interactions: list[Interaction] = []
-
     async def read_thoughts() -> None:
         async for piece in call["thoughts"]:
             reducer.on_thought(piece)
@@ -144,31 +147,78 @@ async def run_turn(
             new_interactions.append(interaction)
             reducer.on_interaction(interaction)
 
+    async def read_tool_logs() -> None:
+        async for chunk in log_node.iter_chunks(timeout=config.timeout):
+            if chunk is None or chunk.is_null():
+                continue
+            try:
+                record = _native.log_record_from_chunk(chunk)
+                metadata = chunk.metadata
+                call_id = metadata.get_attribute("a11-child-call-id").decode()
+                tool_name = metadata.get_attribute("a11-child-action").decode()
+            except Exception:
+                continue
+            if (
+                not call_id
+                or tool_name.startswith("interact_with_")
+                or record["internal"]
+            ):
+                continue
+            if record["channel"] == "lifecycle":
+                reducer.on_tool_started(call_id, tool_name)
+                continue
+            if record["channel"] == "status":
+                try:
+                    status = Status.model_validate_json(record["data"])
+                except (TypeError, ValueError):
+                    continue
+                reducer.on_tool_finished(call_id, status)
+                continue
+            reducer.on_tool_log(call_id, tool_name, record["text"])
+
+    async def read_text() -> None:
+        async for piece in call["text_output"]:
+            reducer.on_text(piece)
+
+    def start_reader(coroutine, name: str) -> asyncio.Task[None]:
+        """Start a port reader whose failure can never become unobserved."""
+        task = asyncio.create_task(coroutine, name=name)
+        task.add_done_callback(
+            lambda finished: (
+                None if finished.cancelled() else finished.exception()
+            )
+        )
+        return task
+
     # Started before the text loop; see the module docstring.
     readers = [
-        asyncio.create_task(read_thoughts()),
-        asyncio.create_task(read_interactions()),
-        asyncio.create_task(read_events()),
+        start_reader(read_thoughts(), "a11-turn-thoughts"),
+        start_reader(read_interactions(), "a11-turn-interactions"),
+        start_reader(read_events(), "a11-turn-events"),
+        start_reader(read_tool_logs(), "a11-turn-tool-logs"),
     ]
+    completed = False
     try:
         interactions = call["interactions"]
         for interaction in history:
             await interactions.put(interaction)
         await interactions.finalize(user_interaction)
-        # `config` is finalized empty, so the backend applies its own default
-        # request configuration.
-        await call["config"].finalize()
+        if config.provider_config is None:
+            await call["config"].finalize()
+        else:
+            await call["config"].finalize(config.provider_config)
         tools = call["tools"]
         for definition in tool_definitions:
             await tools.put(definition)
         await tools.finalize()
 
-        async for piece in call["text_output"]:
-            reducer.on_text(piece)
-
+        readers.append(start_reader(read_text(), "a11-turn-text"))
         await asyncio.gather(*readers)
         await call.wait(config.timeout)
+        completed = True
     finally:
+        if not completed:
+            call.cancel()
         for reader in readers:
             if not reader.done():
                 reader.cancel()

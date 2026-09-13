@@ -61,11 +61,9 @@ flow {
   # bound at all is what `--timeout` is for, and both is better.
   clock = run ticker(options: {"every": "200ms", "count": 20},
     control_events: stopper) via scratch
-  skip count of clock
 
   for tick in clock.ticks {
     look = run stat_path(path: path) via scratch
-    skip look.exists
     # `tick.number` is read so the reading knows which it was, and because the
     # language checks that a loop variable is used for something.
     look.info | map {"n": tick.number, "size": default(it.size, 0)} -> sizes
@@ -92,7 +90,6 @@ flow {
   steps where it.same | first 1 | map 1 -> settled
 
   out = run write_stdout(content: report) via scratch
-  skip out.bytes_written
 
   # Settling is the success. Two pipelines off the node rather than two `if`s,
   # for the reason `grep.flow` gives: each pipeline off a node sees all of it,

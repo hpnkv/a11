@@ -62,6 +62,7 @@ import {
  * from storage is poorer for its absence.
  */
 export const TOOL_LOGS_METADATA_KEY = 'tool_logs';
+export const TOOL_STATUSES_METADATA_KEY = 'tool_statuses';
 
 /** What a block is, and therefore how a client should draw it. */
 export enum BlockKind {
@@ -91,6 +92,8 @@ export interface PresentationBlock {
   text: string;
   /** Registered tool name for a tool block. */
   toolName: string;
+  /** Decoded arguments supplied by the model, keyed by input port. */
+  toolArguments?: Record<string, unknown>;
   /** Failure represented by an error or failed tool block. */
   status?: Status;
   /** Media type for image and binary content. */
@@ -191,6 +194,37 @@ export function toolLogs(interaction: Interaction): Record<string, string> {
   }
 }
 
+/** Native failures for tool calls carried by a result interaction. */
+export function toolStatuses(interaction: Interaction): Record<string, Status> {
+  const raw = interaction.backend_specific_metadata?.[TOOL_STATUSES_METADATA_KEY];
+  if (!raw) return {};
+  try {
+    const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw as Uint8Array);
+    const parsed = JSON.parse(text);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return parsed as Record<string, Status>;
+  } catch {
+    return {};
+  }
+}
+
+async function toolArguments(
+  interaction: Interaction,
+  callId: string,
+): Promise<Record<string, unknown> | undefined> {
+  const grouped: Record<string, unknown[]> = {};
+  for (const fragment of interaction.action_inputs?.[callId] ?? []) {
+    if (!fragment) continue;
+    const value = await fromChunk(fragment.getChunk() as Chunk);
+    if (!isOk(value)) continue;
+    (grouped[fragment.id] ??= []).push(value);
+  }
+  if (Object.keys(grouped).length === 0) return undefined;
+  return Object.fromEntries(
+    Object.entries(grouped).map(([name, values]) => [name, values.length === 1 ? values[0] : values]),
+  );
+}
+
 /** Best-effort human-readable text of an interaction's content. */
 export async function plainText(interaction: Interaction): Promise<string> {
   const parts: string[] = [];
@@ -219,6 +253,7 @@ export async function isToolResultCarrier(interaction: Interaction): Promise<boo
 export async function presentInteraction(
   interaction: Interaction,
   logs: Record<string, string> = {},
+  statuses: Record<string, Status> = {},
 ): Promise<PresentationTurn> {
   const role = String(interaction.role ?? 'model');
   const blocks: PresentationBlock[] = [];
@@ -253,6 +288,8 @@ export async function presentInteraction(
       id,
       toolName: (call as { name?: string }).name ?? '',
       text: logs[id] ?? '',
+      toolArguments: await toolArguments(interaction, id),
+      status: statuses[id],
     });
   }
 
@@ -281,13 +318,17 @@ export async function presentConversation(
   interactions: readonly Interaction[],
 ): Promise<PresentationTurn[]> {
   const logs: Record<string, string> = {};
-  for (const interaction of interactions) Object.assign(logs, toolLogs(interaction));
+  const statuses: Record<string, Status> = {};
+  for (const interaction of interactions) {
+    Object.assign(logs, toolLogs(interaction));
+    Object.assign(statuses, toolStatuses(interaction));
+  }
 
   const turns: PresentationTurn[] = [];
   for (const interaction of interactions) {
     if (String(interaction.role) === 'system') continue;
     if (await isToolResultCarrier(interaction)) continue;
-    const turn = await presentInteraction(interaction, logs);
+    const turn = await presentInteraction(interaction, logs, statuses);
     if (turn.blocks.length > 0) turns.push(turn);
   }
   return turns;
@@ -315,6 +356,7 @@ export class PresentationReducer {
   private open: PresentationBlock | null = null;
   private readonly seenCalls = new Set<string>();
   private readonly logs: Record<string, string> = {};
+  private readonly statuses: Record<string, Status> = {};
   /**
    * Whether prose has arrived as deltas. Only then is the text inside a later
    * interaction a duplicate; text from a *different* interaction is not, which
@@ -352,15 +394,21 @@ export class PresentationReducer {
    */
   async onInteraction(interaction: Interaction): Promise<void> {
     Object.assign(this.logs, toolLogs(interaction));
+    Object.assign(this.statuses, toolStatuses(interaction));
     // A late-arriving log belongs to the run block already drawn for it.
     for (const block of this.collected) {
       if (block.kind === BlockKind.TOOL_RUN && !block.text) {
         block.text = this.logs[block.id] ?? '';
       }
+      if (block.kind === BlockKind.TOOL_RUN && this.statuses[block.id]) {
+        block.status = this.statuses[block.id];
+        block.partial = false;
+        this.sink.onBlockClosed?.(block);
+      }
     }
     if (await isToolResultCarrier(interaction)) return;
 
-    const turn = await presentInteraction(interaction, this.logs);
+    const turn = await presentInteraction(interaction, this.logs, this.statuses);
     for (const block of turn.blocks) {
       if (block.kind === BlockKind.TEXT && this.streamedText) continue;
       if (block.kind === BlockKind.TOOL_RUN) {
@@ -368,9 +416,10 @@ export class PresentationReducer {
         this.seenCalls.add(block.id);
       }
       this.closeOpen();
+      if (block.kind === BlockKind.TOOL_RUN) block.partial = true;
       this.collected.push(block);
       this.sink.onBlockOpened?.(block);
-      this.sink.onBlockClosed?.(block);
+      if (block.kind !== BlockKind.TOOL_RUN) this.sink.onBlockClosed?.(block);
     }
   }
 
@@ -386,6 +435,11 @@ export class PresentationReducer {
   /** Mark the turn complete, closing anything still streaming. */
   endTurn(): void {
     this.closeOpen();
+    for (const block of this.collected) {
+      if (block.kind !== BlockKind.TOOL_RUN || !block.partial) continue;
+      block.partial = false;
+      this.sink.onBlockClosed?.(block);
+    }
   }
 
   private append(kind: BlockKind, delta: string): void {

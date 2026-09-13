@@ -37,7 +37,6 @@ flow suggest-fixes {
   found = call get_error_highlights(
     request: file_path | map {path: it, start_line: 0}
   )
-  skip found.path  # we asked about a path we already have
 
   whole = run interact_with_llm(
     config: {max_tokens: 48000, effort: "medium", max_output_tokens: 48000, num_predict: 48000}
@@ -45,9 +44,6 @@ flow suggest-fixes {
       forward headers "x-a11-llm-*"
       with "x-a11-allowed-llm-actions": ""
       via scratch
-  skip whole.event_stream
-  skip whole.thoughts
-  skip whole.new_interactions
 
   found.highlights
     | map strformat(

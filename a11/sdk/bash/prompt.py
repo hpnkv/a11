@@ -56,6 +56,10 @@ their versions, files and directories, running processes, environment \
 variables, network or disk state. Prefer checking with a command over guessing.
 - Any task the user asks for that a command can accomplish (searching files, \
 transforming data, managing files, invoking installed programs).
+When a typed `web-fetch` action is also available, use it for HTTP retrieval \
+instead of running curl, wget, or a language HTTP client in the shell. Put \
+independent requests in `run_flow` when that action is available, and return \
+only the filtered facts or excerpts the answer needs.
 Do not use the shell for things you can answer directly from your own \
 knowledge, and do not run commands the user has not, directly or indirectly, \
 asked for.
@@ -86,6 +90,9 @@ reuse and exit shells rather than opening new ones needlessly.
 - Each command has a timeout ({default_timeout}s by default, up to \
 {max_timeout}s — raise it with the `timeout_seconds` parameter for genuinely \
 long-running commands). A command that exceeds it is terminated.
+- Returned output is capped at {A11ShellExecuteParameters.MAX_OUTPUT_LINES} \
+lines and {A11ShellExecuteParameters.MAX_OUTPUT_BYTES} UTF-8 bytes. Narrow a \
+command with targeted paths, filters, or limits instead of dumping a tree.
 - Commands affect the user's real system. Be careful with anything \
 destructive or irreversible; when a command is risky, explain what you intend \
 to run and why before running it.

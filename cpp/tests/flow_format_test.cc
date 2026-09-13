@@ -352,17 +352,17 @@ TEST(FlowFormat, AnElseKeepsItsPlaceOnTheClosingLine) {
   const std::string source =
       "flow t {\n"
       "  in  a: string\n"
-      "  if a { skip a } else if a { skip a } else { skip a }\n"
+      "  if a { skip 1 a } else if a { skip 1 a } else { skip 1 a }\n"
       "}\n";
   EXPECT_EQ(Formatted(source),
             "flow t {\n"
             "  in  a: string\n"
             "  if a {\n"
-            "    skip a\n"
+            "    skip 1 a\n"
             "  } else if a {\n"
-            "    skip a\n"
+            "    skip 1 a\n"
             "  } else {\n"
-            "    skip a\n"
+            "    skip 1 a\n"
             "  }\n"
             "}\n");
 }

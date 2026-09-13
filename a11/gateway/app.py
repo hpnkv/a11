@@ -37,7 +37,20 @@ def _make_action_registry(
 
     conversation_actions.install(registry, conversation_store)
 
-    if config.shell_tools:
+    if config.coding_tools:
+        from a11.cli.coding_agent import ApprovalMode, CodingAgent, SandboxMode
+
+        CodingAgent.install(
+            registry,
+            cwd=config.coding_cwd,
+            add_dirs=config.coding_add_dirs,
+            approval_mode=ApprovalMode(config.coding_approval),
+            sandbox_mode=SandboxMode(config.coding_sandbox),
+            approve=None,
+            command_tools=config.shell_tools,
+            flow_tools=config.flow_tools,
+        )
+    elif config.shell_tools:
         for schema, handler in bash.SHELL_ACTIONS:
             registry.register(schema.name, schema, handler)
 
@@ -66,7 +79,7 @@ class A11Gateway:
 
     Which tools a turn may use is the *caller's* decision, expressed as the
     allowed-action patterns on its ``interact_with_llm`` call: a client that
-    says ``shell_.*`` is offered this side's shell tools, and one that does not
+    says ``run_command`` is offered that command action, and one that does not
     is not (see [collect_tools][a11.sdk.llm_tools.runner.collect_tools]). So the
     gateway registers everything it can serve and lets each call narrow it.
     """
@@ -132,10 +145,6 @@ class A11Gateway:
 
 def init_app(config: GatewayConfig | None = None) -> A11Gateway:
     """Build a gateway from `config`, defaulting to serving everything."""
-
-    from a11 import logging as a11_logging
-
-    a11_logging.enable("info")
 
     resolved = config if config is not None else GatewayConfig()
     conversation_store = conversations.get_conversation_store(

@@ -104,11 +104,10 @@ puts it on the stream the flow is attached to and lets the peer do it. \
 `runnable: true` — so `run` is the usual verb, and a `run` of something \
 without a handler is refused rather than quietly sent elsewhere.
 - **Use listed actions.** `flow_actions` is the set of names the flow may resolve.
-- **Every output port of every step is read.** You do not have to name them \
-all — the runtime drains what you ignore — but `skip x.debug` makes the choice \
-explicit for a large output. `skip 1 x.rows` is the \
-other one: it drops a port's first value for *every* reader, which is how you \
-throw away a header line, and several of them naming one port add up.
+- **Every output port of every step is read.** The runtime drains outputs you \
+do not bind. `skip 1 x.rows` drops a port's first value for *every* reader, \
+which is how you throw away a header line, and several statements naming one \
+port add up.
 - **A failing step ends the flow** unless you wrote `try`. When a failure is \
 one the composition should handle, write `try run` (or `try call`) and then \
 `wait` to find out how it went.
@@ -168,12 +167,10 @@ flow answer-from-the-web {{
       page = try run web-fetch(url: hit.url)
       hit.url -> sources
       page.text | truncate 2000 -> brief.pages
-      skip page.bytes
     }}
   }}
 
   brief.summary -> answer
-  skip search.debug
 }}
 ```
 

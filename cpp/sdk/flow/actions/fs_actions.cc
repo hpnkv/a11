@@ -1034,7 +1034,9 @@ ActionSchema ReadFileSchema() {
       "so "
       "a file larger than memory costs a chunk at a time.";
   schema.inputs.emplace("path",
-                        Port("path", "string", "Path of the file to read.",
+                        Port("path", "string",
+                             "File to read; relative paths use the current "
+                             "directory.",
                              /*required=*/true, /*unary=*/true));
   schema.inputs.emplace(
       "options",
@@ -1080,7 +1082,9 @@ ActionSchema WriteFileSchema() {
       "neither a partial file nor a temporary. Appending cannot be atomic and "
       "says so.";
   schema.inputs.emplace("path",
-                        Port("path", "string", "Path of the file to write.",
+                        Port("path", "string",
+                             "File to write; relative paths use the current "
+                             "directory.",
                              /*required=*/true, /*unary=*/true));
   // Not "bytes": an input and an output of the same name are one node, so a
   // port called `bytes` in both directions would be a stream writing to itself.
@@ -1127,7 +1131,9 @@ ActionSchema ListDirectorySchema() {
       "its first entry arrives before the walk has finished. `truncated` says "
       "whether a limit cut the listing short, because a partial listing that "
       "looks complete is worse than no listing.";
-  schema.inputs.emplace("path", Port("path", "string", "Directory to list.",
+  schema.inputs.emplace("path", Port("path", "string",
+                                     "Directory to list; relative paths use "
+                                     "the current directory.",
                                      /*required=*/true, /*unary=*/true));
   schema.inputs.emplace(
       "options",
@@ -1164,7 +1170,9 @@ ActionSchema StatPathSchema() {
       "Read one path's metadata. A path that is not there is an answer -- "
       "`exists` is false -- rather than a failure, so a composition can ask "
       "without wrapping the question in a `try`.";
-  schema.inputs.emplace("path", Port("path", "string", "Path to look at.",
+  schema.inputs.emplace("path", Port("path", "string",
+                                     "Path to inspect; relative paths use the "
+                                     "current directory.",
                                      /*required=*/true, /*unary=*/true));
   schema.inputs.emplace("options", Port("options", JsonType(),
                                         absl::StrCat("Optional: ", kOmitHelp()),
@@ -1187,7 +1195,9 @@ ActionSchema MakeDirectorySchema() {
       "Create a directory, and by default its parents. Finding it already "
       "there is a success with `created` false, because a composition that "
       "wants a directory to exist has got what it wanted.";
-  schema.inputs.emplace("path", Port("path", "string", "Directory to create.",
+  schema.inputs.emplace("path", Port("path", "string",
+                                     "Directory to create; relative paths use "
+                                     "the current directory.",
                                      /*required=*/true, /*unary=*/true));
   schema.inputs.emplace("options",
                         Port("options", JsonType(), "Optional: parents (true).",
@@ -1212,7 +1222,9 @@ ActionSchema RemovePathSchema() {
       "otherwise -- a recursive delete nobody asked for is the most expensive "
       "way for this library to be convenient. A path that is not there is a "
       "success by default, since the composition wanted it gone.";
-  schema.inputs.emplace("path", Port("path", "string", "Path to remove.",
+  schema.inputs.emplace("path", Port("path", "string",
+                                     "Path to remove; relative paths use the "
+                                     "current directory.",
                                      /*required=*/true, /*unary=*/true));
   schema.inputs.emplace("options",
                         Port("options", JsonType(),
@@ -1232,9 +1244,13 @@ ActionSchema MovePathSchema() {
       "Rename a path. Atomic within one filesystem and refused across two, "
       "where a move requires copying and deleting. Use copy_path followed by "
       "remove_path for that operation.";
-  schema.inputs.emplace("path", Port("path", "string", "Path to move.",
+  schema.inputs.emplace("path", Port("path", "string",
+                                     "Path to move; relative paths use the "
+                                     "current directory.",
                                      /*required=*/true, /*unary=*/true));
-  schema.inputs.emplace("to", Port("to", "string", "Where to move it.",
+  schema.inputs.emplace("to", Port("to", "string",
+                                   "Destination; relative paths use the "
+                                   "current directory.",
                                    /*required=*/true, /*unary=*/true));
   schema.inputs.emplace(
       "options", Port("options", JsonType(), "Optional: overwrite (false).",
@@ -1253,9 +1269,13 @@ ActionSchema CopyPathSchema() {
       "Copy a file or, with options.recursive, a tree. For a copy whose "
       "progress a composition wants to watch, read_file into write_file gives "
       "the same result one chunk at a time.";
-  schema.inputs.emplace("path", Port("path", "string", "What to copy.",
+  schema.inputs.emplace("path", Port("path", "string",
+                                     "Path to copy; relative paths use the "
+                                     "current directory.",
                                      /*required=*/true, /*unary=*/true));
-  schema.inputs.emplace("to", Port("to", "string", "Where to copy it.",
+  schema.inputs.emplace("to", Port("to", "string",
+                                   "Destination; relative paths use the "
+                                   "current directory.",
                                    /*required=*/true, /*unary=*/true));
   schema.inputs.emplace("options",
                         Port("options", JsonType(),
@@ -1281,7 +1301,8 @@ ActionSchema MakeTempSchema() {
       "options",
       Port("options", JsonType(),
            "Optional: directory (true -- a directory rather than a file), "
-           "prefix (\"a11-\"), suffix, in (which directory to make it in).",
+           "prefix (\"a11-\"), suffix, in (directory, relative to the current "
+           "directory).",
            /*required=*/false, /*unary=*/true));
   schema.outputs.emplace("path",
                          Port("path", "string", "The path that was made.",

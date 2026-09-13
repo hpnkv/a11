@@ -45,12 +45,34 @@ class A11ShellExecuteParameters(BaseModel):
     MAX: ClassVar[int] = 600
     #: Default hard timeout applied when no parameters are supplied.
     DEFAULT: ClassVar[int] = 30
+    #: Maximum number of output lines returned to the caller.
+    MAX_OUTPUT_LINES: ClassVar[int] = 1_000
+    #: Maximum encoded size of output returned to the caller.
+    MAX_OUTPUT_BYTES: ClassVar[int] = 128 * 1024
 
     timeout_seconds: int = Field(
         default=30,
         description=(
             "Hard timeout, in seconds, for the command to run before it is"
             " terminated. Defaults to 30; capped at an absolute maximum of 600."
+        ),
+    )
+    max_output_lines: int = Field(
+        default=MAX_OUTPUT_LINES,
+        ge=1,
+        le=MAX_OUTPUT_LINES,
+        description=(
+            "Maximum output lines returned before the command is terminated."
+            " Defaults to and cannot exceed 1000."
+        ),
+    )
+    max_output_bytes: int = Field(
+        default=MAX_OUTPUT_BYTES,
+        ge=1024,
+        le=MAX_OUTPUT_BYTES,
+        description=(
+            "Maximum UTF-8 bytes returned before the command is terminated."
+            " Defaults to and cannot exceed 131072 (128 KiB)."
         ),
     )
 
@@ -93,14 +115,21 @@ SHELL_EXECUTE_SCHEMA = a11.ActionSchema(
         " stderr, interleaved). Target a shell started with shell_start via the"
         " x-a11-shell-id header to reuse its state; omit the header to run the"
         " command in a throwaway shell that is discarded afterwards. The"
-        " command is terminated if it exceeds the timeout or the action's"
-        " deadline."
+        " command is terminated if it exceeds the timeout, the action's"
+        " deadline, 1000 output lines, or 128 KiB of output. Truncated output"
+        " ends with a descriptive marker. When web-fetch is also offered, use"
+        " it for HTTP retrieval"
+        " and keep shell_execute for work that requires shell syntax, process"
+        " state, or an installed command."
     ),
     inputs={
         "command": a11.ActionPortSchema(
             "command",
             "text/plain",
-            description="The command to execute.",
+            description=(
+                "The command to execute. When web-fetch is also offered, do"
+                " not use curl, wget, or a language HTTP client here."
+            ),
             typeinfo=str,
             unary=True,
             required=False,
@@ -118,7 +147,11 @@ SHELL_EXECUTE_SCHEMA = a11.ActionSchema(
         "output_lines": a11.ActionPortSchema(
             "output_lines",
             "text/plain",
-            description="Output lines produced by the command, if any.",
+            description=(
+                "Output lines produced by the command, bounded by the requested"
+                " limits and hard caps of 1000 lines and 128 KiB. A final"
+                " marker says when output was truncated."
+            ),
             required=False,
         ),
     },

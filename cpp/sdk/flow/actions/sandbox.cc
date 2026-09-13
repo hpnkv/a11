@@ -15,6 +15,7 @@
 #include "sdk/flow/actions/sandbox.h"
 
 #include <cerrno>
+#include <cstdlib>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -343,6 +344,9 @@ absl::StatusOr<std::shared_ptr<Sandbox>> Sandbox::Prepare(
     }
     ABSL_RETURN_IF_ERROR(allow(root, rights));
   }
+  for (const std::string& root : process.read_roots) {
+    ABSL_RETURN_IF_ERROR(allow(root, ReadRights(abi)));
+  }
   // The program itself, and the libraries it needs to start at all. Read and
   // execute only: a child that cannot read /usr/lib cannot exec anything, and a
   // sandbox that stops the program from starting is not a useful sandbox.
@@ -391,10 +395,15 @@ absl::StatusOr<std::shared_ptr<Sandbox>> Sandbox::Prepare(
   for (const std::string& root : filesystem.roots) {
     subpaths.push_back(absl::StrCat("(subpath ", QuoteForProfile(root), ")"));
   }
+  const std::string writable_roots = absl::StrJoin(subpaths, " ");
+  for (const std::string& root : process.read_roots) {
+    subpaths.push_back(absl::StrCat("(subpath ", QuoteForProfile(root), ")"));
+  }
   const std::string roots = absl::StrJoin(subpaths, " ");
   lines.push_back(absl::StrCat("(allow file-read* ", roots, ")"));
   if (filesystem.writable) {
-    lines.push_back(absl::StrCat("(allow file-write* ", roots, ")"));
+    lines.push_back(
+        absl::StrCat("(allow file-write* ", writable_roots, ")"));
   }
   // Its own output, which is the one thing the child is certainly meant to do.
   lines.emplace_back("(allow file-write* (literal \"/dev/null\"))");
@@ -405,6 +414,32 @@ absl::StatusOr<std::shared_ptr<Sandbox>> Sandbox::Prepare(
     lines.push_back(absl::StrCat("(allow file-read* (literal ",
                                  QuoteForProfile(program), "))"));
   }
+  // Apple's bsd.sb base profile is intentionally broad enough for dynamic
+  // runtimes. Put the high-value user-data exclusions back explicitly: build
+  // tools need their installations and caches, never browser sessions, cloud
+  // credentials, private keys, password stores, mail, messages, or histories.
+  if (const char* home = std::getenv("HOME"); home != nullptr && *home != '\0') {
+    std::vector<std::string> denied;
+    for (const std::string_view suffix : {
+             "/.ssh", "/.gnupg", "/.aws", "/.azure", "/.config/gcloud",
+             "/.gcloud", "/.kube", "/.docker", "/.password-store",
+             "/.1password", "/.op", "/.local/share/keyrings",
+             "/Library/Keychains", "/Library/Messages", "/Library/Mail",
+             "/Library/Cookies", "/Library/Application Support/Google/Chrome",
+             "/Library/Application Support/Chromium",
+             "/Library/Application Support/Firefox",
+             "/Library/Application Support/Microsoft Edge",
+             "/Library/Application Support/Arc",
+             "/Library/Application Support/BraveSoftware",
+             "/Library/Safari", "/.bash_history", "/.zsh_history",
+             "/.python_history", "/.netrc", "/.git-credentials", "/.env",
+             "/.envrc"}) {
+      denied.push_back(absl::StrCat(
+          "(subpath ", QuoteForProfile(absl::StrCat(home, suffix)), ")"));
+    }
+    lines.push_back(absl::StrCat("(deny file-read* ",
+                                 absl::StrJoin(denied, " "), ")"));
+  }
   sandbox->profile_ = absl::StrJoin(lines, "\n");
   sandbox->kind_ = SandboxKind::kSeatbelt;
   sandbox->description_ = absl::StrCat(
@@ -413,7 +448,7 @@ absl::StatusOr<std::shared_ptr<Sandbox>> Sandbox::Prepare(
       filesystem.writable ? "writes confined" : "read-only, writes refused",
       capabilities.network.enabled ? ", network allowed" : ", network refused",
       // Said in the description a flow can read, not only in a header comment.
-      ", reads NOT confined (macOS)");
+      ", general reads not confined; sensitive user data refused (macOS)");
   return sandbox;
 #else
   return sandbox;

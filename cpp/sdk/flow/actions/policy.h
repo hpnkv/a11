@@ -67,6 +67,8 @@ namespace a11::sdk::flow {
 
 /** @brief What the filesystem actions may reach. */
 struct FilesystemPolicy {
+  /** Base for relative action paths. Empty uses the process directory. */
+  std::string current_directory;
   /**
    * Directories the actions may work inside, resolved before use. A path
    * outside every one of them is refused with `permission_denied`.
@@ -126,6 +128,8 @@ struct ProcessPolicy {
    * unset refuses everything, so enabling the action is not by itself a shell.
    */
   std::vector<std::string> programs;
+  /** Read-only runtime and toolchain roots needed after the child starts. */
+  std::vector<std::string> read_roots;
   /** Whether any program may be run. */
   bool any_program = false;
   /** Whether a child inherits this process's environment. */
@@ -196,8 +200,8 @@ using CapabilitiesPtr = std::shared_ptr<const Capabilities>;
  *
  * @param policy The filesystem policy to check against.
  * @param path The path as the caller wrote it. Relative paths resolve against
- *        the process's working directory, which is only useful where a root
- *        contains it -- and refused otherwise, like any other outside path.
+ *        @c policy.current_directory, or the process directory when it is
+ *        empty, and are refused when the result is outside every root.
  * @param for_write Whether this is a write. Checked here rather than at each
  *        call site so that a read-only policy refuses `write_file` even if
  *        somebody registers it by mistake.

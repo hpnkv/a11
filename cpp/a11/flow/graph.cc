@@ -136,12 +136,7 @@ std::vector<RefId> FlowGraph::Sources(StepId step) const {
       Push(found, one.source);
       break;
     case StepKind::kSkip:
-      // A counted `skip` is not a reader at all: the values are already gone,
-      // taken where the stream is produced, so reading here would claim a slot
-      // this step was never counted for.
-      if (!one.count.has_value()) {
-        Push(found, one.source);
-      }
+      // Values are removed where the stream is produced, with no reader slot.
       break;
     case StepKind::kWait:
     case StepKind::kDrain:

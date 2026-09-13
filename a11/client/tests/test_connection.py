@@ -123,17 +123,17 @@ async def test_something_that_is_not_a_gateway_is_treated_as_absent(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_no_gateway_anywhere_falls_back_to_an_embedded_one(monkeypatch):
+async def test_no_gateway_anywhere_starts_a_websocket_gateway(monkeypatch):
     # Point the default endpoint at a port nothing listens on, so the fallback
     # path is taken without depending on whether the developer happens to have a
     # gateway running.
     monkeypatch.setattr(
-        "a11.client.connection.DEFAULT_GATEWAY_URL", "ws://127.0.0.1:9/a11"
+        "a11.client.connection.DEFAULT_GATEWAY_URL",
+        "ws://127.0.0.1:49151/a11",
     )
     async with open_gateway(None) as connection:
-        assert connection.embedded
-        assert connection.description == "in-process gateway"
-        # The embedded gateway is a real gateway: it answers a ping.
+        assert not connection.embedded
+        assert connection.description.startswith("ws://127.0.0.1:")
         await connection.probe()
 
 

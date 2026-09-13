@@ -328,9 +328,7 @@ class Action:
         stream: WireStream | None = None,
         session: Session | None = None,
         registry: ActionRegistry | None = None,
-        max_concurrent_nested_actions: (
-            typing.SupportsInt | typing.SupportsIndex
-        ) = 64,
+        max_concurrent_nested_actions: typing.SupportsInt = 64,
     ) -> None:
         """
         Create an action from a schema and optional bindings.
@@ -633,7 +631,7 @@ class Action:
         metadata: collections.abc.Mapping[str, str] | None = None,
         channel: str | None = None,
         file: str | None = None,
-        lineno: typing.SupportsInt | typing.SupportsIndex | None = None,
+        lineno: typing.SupportsInt | None = None,
         internal: bool = False,
     ) -> None:
         """
@@ -1846,9 +1844,7 @@ class AsyncNode:
         """
 
     def next_fragments(
-        self,
-        limit: typing.SupportsInt | typing.SupportsIndex,
-        timeout: Duration | None = None,
+        self, limit: typing.SupportsInt, timeout: Duration | None = None
     ) -> asyncio.Future[list[NodeFragment | None]]:
         """
         Returns a future resolving to a list of up to `limit` fragments, with a trailing None at end-of-stream. The batched counterpart to next_fragment, and the one to prefer when draining: every await costs an event-loop turn, so reading a hundred values one await at a time is a hundred turns. It returns whatever is already buffered and waits only when nothing is, so a live stream still yields each value as soon as it arrives.
@@ -2029,8 +2025,8 @@ class AudioBuffer:
     def __init__(
         self,
         data: collections.abc.Buffer,
-        sample_rate: typing.SupportsFloat | typing.SupportsIndex,
-        num_channels: typing.SupportsInt | typing.SupportsIndex = 1,
+        sample_rate: typing.SupportsFloat,
+        num_channels: typing.SupportsInt = 1,
     ) -> None:
         """
         Build an AudioBuffer from a buffer-protocol object (bytes, a NumPy array, a CPU PyTorch tensor, ...). Samples are read as channel-major float32 (raw bytes are reinterpreted as float32); a 2-D buffer's first dimension is the channel count.
@@ -2088,9 +2084,7 @@ class AudioCaptureEvent:
     @staticmethod
     def __get_pydantic_json_schema__(option_cls, _schema, _handler): ...
     @staticmethod
-    def buffers_dropped(
-        count: typing.SupportsInt | typing.SupportsIndex,
-    ) -> AudioCaptureEvent: ...
+    def buffers_dropped(count: typing.SupportsInt) -> AudioCaptureEvent: ...
     @staticmethod
     def model_json_schema(
         option_cls, **_: typing.Any
@@ -2105,9 +2099,7 @@ class AudioCaptureEvent:
     def __deepcopy__(self, _memo): ...
     def __eq__(self, other: object) -> bool: ...
     def __init__(
-        self,
-        kind: str = "started",
-        dropped: typing.SupportsInt | typing.SupportsIndex = 0,
+        self, kind: str = "started", dropped: typing.SupportsInt = 0
     ) -> None:
         """
         Construct a capture event.
@@ -2128,9 +2120,7 @@ class AudioCaptureEvent:
         Buffers dropped since the previous event.
         """
     @dropped.setter
-    def dropped(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def dropped(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def kind(self) -> str:
@@ -2348,13 +2338,13 @@ class AudioInputOptions:
     def __eq__(self, other: object) -> bool: ...
     def __init__(
         self,
-        device_index: typing.SupportsInt | typing.SupportsIndex = -1,
+        device_index: typing.SupportsInt = -1,
         device_name: str = "",
-        sample_rate: typing.SupportsFloat | typing.SupportsIndex = 0.0,
-        channels: typing.SupportsInt | typing.SupportsIndex = 0,
-        block_frames: typing.SupportsInt | typing.SupportsIndex = 256,
-        ring_blocks: typing.SupportsInt | typing.SupportsIndex = 32,
-        buffer_frames: typing.SupportsInt | typing.SupportsIndex = 0,
+        sample_rate: typing.SupportsFloat = 0.0,
+        channels: typing.SupportsInt = 0,
+        block_frames: typing.SupportsInt = 256,
+        ring_blocks: typing.SupportsInt = 32,
+        buffer_frames: typing.SupportsInt = 0,
     ) -> None:
         """
         Construct validated audio input options.
@@ -2375,9 +2365,7 @@ class AudioInputOptions:
         Frames per PortAudio callback block.
         """
     @block_frames.setter
-    def block_frames(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def block_frames(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def buffer_frames(self) -> int:
@@ -2385,9 +2373,7 @@ class AudioInputOptions:
         Frames per delivered subscription buffer, or 0 for the block size.
         """
     @buffer_frames.setter
-    def buffer_frames(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def buffer_frames(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def channels(self) -> int:
@@ -2395,9 +2381,7 @@ class AudioInputOptions:
         Requested channel count, or 0 for the device's count.
         """
     @channels.setter
-    def channels(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def channels(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def device_index(self) -> int:
@@ -2405,9 +2389,7 @@ class AudioInputOptions:
         Device index to capture from, or negative for default.
         """
     @device_index.setter
-    def device_index(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def device_index(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def device_name(self) -> str:
@@ -2423,9 +2405,7 @@ class AudioInputOptions:
         Depth of the internal callback-to-fiber ring, in blocks.
         """
     @ring_blocks.setter
-    def ring_blocks(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def ring_blocks(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def sample_rate(self) -> float:
@@ -2433,9 +2413,7 @@ class AudioInputOptions:
         Requested sample rate in hertz, or 0 for the default.
         """
     @sample_rate.setter
-    def sample_rate(
-        self, arg0: typing.SupportsFloat | typing.SupportsIndex
-    ) -> None: ...
+    def sample_rate(self, arg0: typing.SupportsFloat) -> None: ...
 
 class AudioModelSpec:
     def __repr__(self) -> str: ...
@@ -2522,10 +2500,7 @@ class AuthorizationContext:
 
 class AuthorizationContextStore:
     def __init__(
-        self,
-        max_contexts_per_stream: (
-            typing.SupportsInt | typing.SupportsIndex
-        ) = 128,
+        self, max_contexts_per_stream: typing.SupportsInt = 128
     ) -> None: ...
     def clear_session(self, session_id: str) -> None: ...
     def clear_stream(self, action: Action) -> None: ...
@@ -2548,7 +2523,7 @@ class AuthorizationEnvelope:
     def __init__(
         self,
         chain: collections.abc.Sequence[str],
-        version: typing.SupportsInt | typing.SupportsIndex = 1,
+        version: typing.SupportsInt = 1,
     ) -> None: ...
     @property
     def chain(self) -> tuple: ...
@@ -2572,29 +2547,15 @@ class CachePolicy:
     UNSET: typing.ClassVar[CachePolicy]
     VOLATILE: typing.ClassVar[CachePolicy]
     __members__: typing.ClassVar[dict[str, CachePolicy]]
-
-    @typing.overload
     def __eq__(self, other: object) -> bool: ...
-    @typing.overload
-    def __eq__(self, other: object) -> bool: ...
-
     def __getstate__(self) -> int: ...
     def __hash__(self) -> int: ...
     def __index__(self) -> int: ...
-    def __init__(
-        self, value: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def __init__(self, value: typing.SupportsInt) -> None: ...
     def __int__(self) -> int: ...
-
-    @typing.overload
     def __ne__(self, other: object) -> bool: ...
-    @typing.overload
-    def __ne__(self, other: object) -> bool: ...
-
     def __repr__(self) -> str: ...
-    def __setstate__(
-        self, state: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def __setstate__(self, state: typing.SupportsInt) -> None: ...
     def __str__(self) -> str: ...
     @property
     def name(self) -> str: ...
@@ -2618,9 +2579,7 @@ class ChannelFramingOptions:
         Maximum total bytes of in-flight frames.
         """
     @max_pending_bytes.setter
-    def max_pending_bytes(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def max_pending_bytes(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def max_pending_messages(self) -> int:
@@ -2628,9 +2587,7 @@ class ChannelFramingOptions:
         Maximum number of in-flight (unacknowledged) frames.
         """
     @max_pending_messages.setter
-    def max_pending_messages(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def max_pending_messages(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def split_size(self) -> int:
@@ -2638,9 +2595,7 @@ class ChannelFramingOptions:
         Maximum payload size before a message is split into multiple frames.
         """
     @split_size.setter
-    def split_size(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def split_size(self, arg0: typing.SupportsInt) -> None: ...
 
 class Chunk:
     """
@@ -2904,7 +2859,7 @@ class ChunkStore:
         """
 
     def clear_data(
-        self, seq: typing.SupportsInt | typing.SupportsIndex
+        self, seq: typing.SupportsInt
     ) -> asyncio.Future[NodeFragment]:
         """
         Erase the payload of the fragment at a sequence number while keeping its slot, and await the resulting fragment.
@@ -2925,9 +2880,7 @@ class ChunkStore:
         """
 
     def get(
-        self,
-        seq: typing.SupportsInt | typing.SupportsIndex,
-        deadline: Time | None = None,
+        self, seq: typing.SupportsInt, deadline: Time | None = None
     ) -> asyncio.Future[NodeFragment]:
         """
         Await the fragment stored at a sequence number. The future resolves when the fragment is available or the optional deadline elapses.
@@ -2941,9 +2894,7 @@ class ChunkStore:
         """
 
     def get_by_arrival_order(
-        self,
-        arrival_order: typing.SupportsInt | typing.SupportsIndex,
-        deadline: Time | None = None,
+        self, arrival_order: typing.SupportsInt, deadline: Time | None = None
     ) -> asyncio.Future[NodeFragment]:
         """
         Await the fragment identified by the order in which it arrived rather than its sequence number. The future resolves when the fragment is present or the optional deadline passes.
@@ -2960,16 +2911,14 @@ class ChunkStore:
         """
 
     def get_seq_for_arrival_order(
-        self, arrival_order: typing.SupportsInt | typing.SupportsIndex
+        self, arrival_order: typing.SupportsInt
     ) -> asyncio.Future[int]:
         """
         Await the sequence number that corresponds to a given arrival order.
         """
 
     def next(
-        self,
-        deadline: Time | None = None,
-        limit: typing.SupportsInt | typing.SupportsIndex = 1,
+        self, deadline: Time | None = None, limit: typing.SupportsInt = 1
     ) -> asyncio.Future[list[NodeFragment | None]]:
         """
         Await up to `limit` of the next available fragments as a stream. This is the primary way an agent reads chunks as they are produced: the future resolves with whatever is ready before the optional deadline, and slots may be None when a fragment is missing. Loop over successive calls to follow a growing store.
@@ -3094,9 +3043,9 @@ class ChunkStoreReaderOptions:
         self,
         ordered: bool = True,
         pop_chunks: bool = False,
-        num_chunks_to_buffer: int | None = 32,
-        offset: int | None = 0,
-        max_chunks_to_read: int | None = None,
+        num_chunks_to_buffer: typing.SupportsInt | None = 32,
+        offset: typing.SupportsInt | None = 0,
+        max_chunks_to_read: typing.SupportsInt | None = None,
         sticky_mimetype: bool = False,
     ) -> None:
         """
@@ -3122,9 +3071,7 @@ class ChunkStoreReaderOptions:
         Optional cap on the total number of chunks to read.
         """
     @max_chunks_to_read.setter
-    def max_chunks_to_read(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex | None
-    ) -> None: ...
+    def max_chunks_to_read(self, arg0: typing.SupportsInt | None) -> None: ...
 
     @property
     def num_chunks_to_buffer(self) -> int:
@@ -3132,9 +3079,7 @@ class ChunkStoreReaderOptions:
         Maximum number of chunks to prefetch into the buffer.
         """
     @num_chunks_to_buffer.setter
-    def num_chunks_to_buffer(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def num_chunks_to_buffer(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def offset(self) -> int:
@@ -3142,9 +3087,7 @@ class ChunkStoreReaderOptions:
         Sequence number at which reading begins.
         """
     @offset.setter
-    def offset(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def offset(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def ordered(self) -> bool:
@@ -3210,8 +3153,11 @@ class ChunkStoreWriter:
         """
 
     def enqueue_chunk(
-        self, chunk: Chunk, seq: int | None = None, final: bool = False
-    ) -> tuple[typing.Any, typing.Any]:
+        self,
+        chunk: Chunk,
+        seq: typing.SupportsInt | None = None,
+        final: bool = False,
+    ) -> tuple:
         """
         Enqueue a chunk and get back a (confirmation, admission) pair of awaitables. Unlike `put_chunk`, this exposes backpressure explicitly: `admission` resolves when the chunk is accepted into the bounded queue (None if it fit immediately) and `confirmation` resolves with the sequence assigned by the backing store. An agent awaits admission to pace production and confirmation to know the store accepted the write.
         """
@@ -3323,9 +3269,9 @@ class ChunkStoreWriterOptions:
     def __eq__(self, other: object) -> bool: ...
     def __init__(
         self,
-        offset: int | None = 0,
-        max_chunks_to_write_at_once: int | None = 8,
-        num_chunks_to_buffer: int | None = None,
+        offset: typing.SupportsInt | None = 0,
+        max_chunks_to_write_at_once: typing.SupportsInt | None = 8,
+        num_chunks_to_buffer: typing.SupportsInt | None = None,
         sticky_mimetype: bool = False,
     ) -> None:
         """
@@ -3351,9 +3297,7 @@ class ChunkStoreWriterOptions:
         Maximum number of chunks flushed to the store per batch.
         """
     @max_chunks_to_write_at_once.setter
-    def max_chunks_to_write_at_once(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def max_chunks_to_write_at_once(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def num_chunks_to_buffer(self) -> int | None:
@@ -3361,9 +3305,7 @@ class ChunkStoreWriterOptions:
         Optional bound on the in-flight write buffer size.
         """
     @num_chunks_to_buffer.setter
-    def num_chunks_to_buffer(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex | None
-    ) -> None: ...
+    def num_chunks_to_buffer(self, arg0: typing.SupportsInt | None) -> None: ...
 
     @property
     def offset(self) -> int:
@@ -3371,9 +3313,7 @@ class ChunkStoreWriterOptions:
         Sequence number at which writing begins.
         """
     @offset.setter
-    def offset(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def offset(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def sticky_mimetype(self) -> bool:
@@ -3440,9 +3380,7 @@ class CorsOptions:
         Access-Control-Max-Age in seconds; 0 omits it.
         """
     @max_age_seconds.setter
-    def max_age_seconds(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def max_age_seconds(self, arg0: typing.SupportsInt) -> None: ...
 
 class DescribeEndpointOptions:
     def __init__(self) -> None:
@@ -3495,13 +3433,24 @@ class DownloadOptions:
     def fetch(self, arg0: FetchOptions) -> None: ...
 
     @property
-    def on_progress(self) -> collections.abc.Callable[[int, int], None] | None:
+    def on_progress(
+        self,
+    ) -> (
+        collections.abc.Callable[[typing.SupportsInt, typing.SupportsInt], None]
+        | None
+    ):
         """
         Callable taking (bytes_done, bytes_total); write-only.
         """
     @on_progress.setter
     def on_progress(
-        self, arg1: collections.abc.Callable[[int, int], None] | None
+        self,
+        arg1: (
+            collections.abc.Callable[
+                [typing.SupportsInt, typing.SupportsInt], None
+            ]
+            | None
+        ),
     ) -> None: ...
 
 class Duration:
@@ -3518,33 +3467,25 @@ class Duration:
         """
 
     @staticmethod
-    def microseconds(
-        value: typing.SupportsFloat | typing.SupportsIndex | None,
-    ) -> Duration:
+    def microseconds(value: typing.SupportsFloat | None) -> Duration:
         """
         Creates a duration from microseconds; None or negative means infinite.
         """
 
     @staticmethod
-    def milliseconds(
-        value: typing.SupportsFloat | typing.SupportsIndex | None,
-    ) -> Duration:
+    def milliseconds(value: typing.SupportsFloat | None) -> Duration:
         """
         Creates a duration from milliseconds; None or negative means infinite.
         """
 
     @staticmethod
-    def nanoseconds(
-        value: typing.SupportsInt | typing.SupportsIndex | None,
-    ) -> Duration:
+    def nanoseconds(value: typing.SupportsInt | None) -> Duration:
         """
         Creates a duration from nanoseconds; None or negative means infinite.
         """
 
     @staticmethod
-    def seconds(
-        value: typing.SupportsFloat | typing.SupportsIndex | None,
-    ) -> Duration:
+    def seconds(value: typing.SupportsFloat | None) -> Duration:
         """
         Creates a duration from seconds; None or negative means infinite.
         """
@@ -3566,9 +3507,7 @@ class Duration:
         Returns a hash of the duration.
         """
 
-    def __init__(
-        self, nanoseconds: typing.SupportsInt | typing.SupportsIndex
-    ) -> None:
+    def __init__(self, nanoseconds: typing.SupportsInt) -> None:
         """
         Creates a duration from a whole number of nanoseconds.
         """
@@ -3599,7 +3538,7 @@ class Duration:
         """
 
     def float_seconds(
-        self, infinity_value: float | None = None
+        self, infinity_value: typing.SupportsFloat | None = None
     ) -> float | None:
         """
         Returns the duration in seconds as a float; infinity_value is returned for a positive-infinite duration.
@@ -3659,9 +3598,7 @@ class FetchOptions:
         Redirects to follow; 0 returns the 3xx response itself.
         """
     @max_redirects.setter
-    def max_redirects(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def max_redirects(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def method(self) -> str:
@@ -3690,9 +3627,7 @@ class FetchOptions:
 class Http2Client:
     @staticmethod
     def connect(
-        host: str,
-        port: typing.SupportsInt | typing.SupportsIndex,
-        options: Http2Options = ...,
+        host: str, port: typing.SupportsInt, options: Http2Options = ...
     ) -> asyncio.Future[Http2Client]:
         """
         Asynchronously connect to an HTTP/2 server, returning a future that resolves to the connected client.
@@ -3910,9 +3845,7 @@ class Http2Options:
         Maximum buffered request bytes before backpressure.
         """
     @max_buffered_request_bytes.setter
-    def max_buffered_request_bytes(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def max_buffered_request_bytes(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def max_buffered_response_bytes(self) -> int:
@@ -3920,9 +3853,7 @@ class Http2Options:
         Maximum buffered response bytes before backpressure.
         """
     @max_buffered_response_bytes.setter
-    def max_buffered_response_bytes(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def max_buffered_response_bytes(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def max_request_body_size(self) -> int:
@@ -3930,9 +3861,7 @@ class Http2Options:
         Maximum accepted request body size in bytes.
         """
     @max_request_body_size.setter
-    def max_request_body_size(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def max_request_body_size(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def max_response_body_size(self) -> int:
@@ -3940,9 +3869,7 @@ class Http2Options:
         Maximum accepted response body size in bytes.
         """
     @max_response_body_size.setter
-    def max_response_body_size(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def max_response_body_size(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def tls(self) -> Http2TlsOptions:
@@ -4057,7 +3984,7 @@ class Http2ResponseWriter:
 
     def send_headers(
         self,
-        status: typing.SupportsInt | typing.SupportsIndex,
+        status: typing.SupportsInt,
         headers: collections.abc.Iterable[tuple[str, str]] | None = None,
     ) -> None:
         """
@@ -4066,7 +3993,7 @@ class Http2ResponseWriter:
 
     def send_response(
         self,
-        status: typing.SupportsInt | typing.SupportsIndex,
+        status: typing.SupportsInt,
         headers: collections.abc.Iterable[tuple[str, str]] | None = None,
         body: typing.Any = b"",
     ) -> None:
@@ -4112,7 +4039,7 @@ class Http2Server:
     @staticmethod
     def create(
         bind_address: str = "127.0.0.1",
-        port: typing.SupportsInt | typing.SupportsIndex = 0,
+        port: typing.SupportsInt = 0,
         handler: typing.Any | None = None,
         options: Http2Options = ...,
     ) -> Http2Server:
@@ -4222,29 +4149,15 @@ class HttpProtocolPreference:
     HTTP11: typing.ClassVar[HttpProtocolPreference]
     HTTP2: typing.ClassVar[HttpProtocolPreference]
     __members__: typing.ClassVar[dict[str, HttpProtocolPreference]]
-
-    @typing.overload
     def __eq__(self, other: object) -> bool: ...
-    @typing.overload
-    def __eq__(self, other: object) -> bool: ...
-
     def __getstate__(self) -> int: ...
     def __hash__(self) -> int: ...
     def __index__(self) -> int: ...
-    def __init__(
-        self, value: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def __init__(self, value: typing.SupportsInt) -> None: ...
     def __int__(self) -> int: ...
-
-    @typing.overload
     def __ne__(self, other: object) -> bool: ...
-    @typing.overload
-    def __ne__(self, other: object) -> bool: ...
-
     def __repr__(self) -> str: ...
-    def __setstate__(
-        self, state: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def __setstate__(self, state: typing.SupportsInt) -> None: ...
     def __str__(self) -> str: ...
     @property
     def name(self) -> str: ...
@@ -4394,7 +4307,7 @@ class HttpResponse:
 class HttpResponseHead:
     def __init__(
         self,
-        status: typing.SupportsInt | typing.SupportsIndex = 0,
+        status: typing.SupportsInt = 0,
         headers: collections.abc.Iterable[tuple[str, str]] | None = None,
     ) -> None:
         """
@@ -4417,9 +4330,7 @@ class HttpResponseHead:
         The HTTP status code.
         """
     @status.setter
-    def status(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def status(self, arg0: typing.SupportsInt) -> None: ...
 
 class HttpSseClientWireStream(HttpSseWireStream):
     @staticmethod
@@ -4525,9 +4436,7 @@ class HttpSseOptions:
         Outbound POSTs kept in flight at once; 1 restores strictly serialised delivery.
         """
     @max_concurrent_posts.setter
-    def max_concurrent_posts(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def max_concurrent_posts(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def message_endpoint(self) -> str:
@@ -4557,7 +4466,7 @@ class HttpSseServer:
     @staticmethod
     def create(
         bind_address: str = "127.0.0.1",
-        port: typing.SupportsInt | typing.SupportsIndex = 0,
+        port: typing.SupportsInt = 0,
         on_connect: typing.Any | None = None,
         options: HttpSseOptions = ...,
     ) -> HttpSseServer:
@@ -4725,7 +4634,7 @@ class NodeFragment:
         self,
         data: typing.Any,
         id: str = "",
-        seq: int | None = None,
+        seq: typing.SupportsInt | None = None,
         continued: bool = False,
     ) -> None:
         """
@@ -4805,9 +4714,7 @@ class NodeFragment:
         Optional sequence number of the fragment.
         """
     @seq.setter
-    def seq(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex | None
-    ) -> None: ...
+    def seq(self, arg0: typing.SupportsInt | None) -> None: ...
 
 class NodeMap:
     @staticmethod
@@ -4916,7 +4823,10 @@ class NodeRef:
         """
 
     def __init__(
-        self, id: str, offset: int | None = 0, length: typing.Any | None = None
+        self,
+        id: str,
+        offset: typing.SupportsInt | None = 0,
+        length: typing.Any | None = None,
     ) -> None:
         """
         Create a node reference from an id, byte offset, and length.
@@ -4969,9 +4879,7 @@ class NodeRef:
         Optional byte length of the referenced range.
         """
     @length.setter
-    def length(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex | None
-    ) -> None: ...
+    def length(self, arg0: typing.SupportsInt | None) -> None: ...
 
     @property
     def offset(self) -> int:
@@ -4979,9 +4887,7 @@ class NodeRef:
         Byte offset into the referenced node.
         """
     @offset.setter
-    def offset(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def offset(self, arg0: typing.SupportsInt) -> None: ...
 
 class ParsedUrl:
     def __init__(self) -> None:
@@ -5025,7 +4931,7 @@ class ParsedUrl:
         Explicit port, or the scheme's default.
         """
     @port.setter
-    def port(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None: ...
+    def port(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def query(self) -> str:
@@ -5426,7 +5332,7 @@ class RedisChunkStoreOptions:
     def __init__(
         self,
         key_prefix: str = "a11:",
-        inline_data_threshold: int | None = 262144,
+        inline_data_threshold: typing.SupportsInt | None = 262144,
     ) -> None:
         """
         Construct validated Redis chunk-store options.
@@ -5451,9 +5357,7 @@ class RedisChunkStoreOptions:
         Chunk data larger than this many bytes uses the blob hash.
         """
     @inline_data_threshold.setter
-    def inline_data_threshold(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def inline_data_threshold(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def key_prefix(self) -> str:
@@ -5568,10 +5472,10 @@ class RedisClientOptions:
     def __init__(
         self,
         host: str = "127.0.0.1",
-        port: typing.SupportsInt | typing.SupportsIndex = 6379,
+        port: typing.SupportsInt = 6379,
         username: str = "",
         password: str = "",
-        database: typing.SupportsInt | typing.SupportsIndex = 0,
+        database: typing.SupportsInt = 0,
         client_name: str = "a11",
         connect_timeout: typing.Any | None = None,
         command_timeout: typing.Any | None = None,
@@ -5623,9 +5527,7 @@ class RedisClientOptions:
         Logical Redis database selected after connection.
         """
     @database.setter
-    def database(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def database(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def host(self) -> str:
@@ -5649,7 +5551,7 @@ class RedisClientOptions:
         Redis TCP port.
         """
     @port.setter
-    def port(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None: ...
+    def port(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def username(self) -> str:
@@ -5748,29 +5650,15 @@ class RedisReplyType:
     SET: typing.ClassVar[RedisReplyType]
     STRING: typing.ClassVar[RedisReplyType]
     __members__: typing.ClassVar[dict[str, RedisReplyType]]
-
-    @typing.overload
     def __eq__(self, other: object) -> bool: ...
-    @typing.overload
-    def __eq__(self, other: object) -> bool: ...
-
     def __getstate__(self) -> int: ...
     def __hash__(self) -> int: ...
     def __index__(self) -> int: ...
-    def __init__(
-        self, value: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def __init__(self, value: typing.SupportsInt) -> None: ...
     def __int__(self) -> int: ...
-
-    @typing.overload
     def __ne__(self, other: object) -> bool: ...
-    @typing.overload
-    def __ne__(self, other: object) -> bool: ...
-
     def __repr__(self) -> str: ...
-    def __setstate__(
-        self, state: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def __setstate__(self, state: typing.SupportsInt) -> None: ...
     def __str__(self) -> str: ...
     @property
     def name(self) -> str: ...
@@ -6107,7 +5995,7 @@ class SQLiteChunkStoreOptions:
     def __eq__(self, other: object) -> bool: ...
     def __init__(
         self,
-        inline_data_threshold: int | None = 131072,
+        inline_data_threshold: typing.SupportsInt | None = 131072,
         owner_id: str = "",
         synchronous: SQLiteSynchronous = ...,
         cross_process_poll_interval: typing.Any | None = None,
@@ -6152,9 +6040,7 @@ class SQLiteChunkStoreOptions:
         Payloads larger than this many bytes move into a blob file.
         """
     @inline_data_threshold.setter
-    def inline_data_threshold(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def inline_data_threshold(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def owner_id(self) -> str:
@@ -6189,29 +6075,15 @@ class SQLiteSynchronous:
     NORMAL: typing.ClassVar[SQLiteSynchronous]
     OFF: typing.ClassVar[SQLiteSynchronous]
     __members__: typing.ClassVar[dict[str, SQLiteSynchronous]]
-
-    @typing.overload
     def __eq__(self, other: object) -> bool: ...
-    @typing.overload
-    def __eq__(self, other: object) -> bool: ...
-
     def __getstate__(self) -> int: ...
     def __hash__(self) -> int: ...
     def __index__(self) -> int: ...
-    def __init__(
-        self, value: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def __init__(self, value: typing.SupportsInt) -> None: ...
     def __int__(self) -> int: ...
-
-    @typing.overload
     def __ne__(self, other: object) -> bool: ...
-    @typing.overload
-    def __ne__(self, other: object) -> bool: ...
-
     def __repr__(self) -> str: ...
-    def __setstate__(
-        self, state: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def __setstate__(self, state: typing.SupportsInt) -> None: ...
     def __str__(self) -> str: ...
     @property
     def name(self) -> str: ...
@@ -6768,13 +6640,13 @@ class SessionOptions:
     def __init__(
         self,
         *,
-        max_buffered_messages_total: int | None = 256,
-        max_buffered_messages_per_stream: int | None = 32,
-        max_concurrent_root_actions: int | None = 32,
-        max_concurrent_nested_actions: int | None = 128,
-        max_single_message_size: int | None = 33554432,
-        max_buffered_bytes_total: int | None = 33554432,
-        max_buffered_bytes_per_stream: int | None = 4194304,
+        max_buffered_messages_total: typing.SupportsInt | None = 256,
+        max_buffered_messages_per_stream: typing.SupportsInt | None = 32,
+        max_concurrent_root_actions: typing.SupportsInt | None = 32,
+        max_concurrent_nested_actions: typing.SupportsInt | None = 128,
+        max_single_message_size: typing.SupportsInt | None = 33554432,
+        max_buffered_bytes_total: typing.SupportsInt | None = 33554432,
+        max_buffered_bytes_per_stream: typing.SupportsInt | None = 4194304,
         no_stream_timeout: Duration | None = None,
         deadline: Time | None = None,
     ) -> None:
@@ -6810,7 +6682,7 @@ class SessionOptions:
         """
     @max_buffered_bytes_per_stream.setter
     def max_buffered_bytes_per_stream(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
+        self, arg0: typing.SupportsInt
     ) -> None: ...
 
     @property
@@ -6819,9 +6691,7 @@ class SessionOptions:
         Maximum total bytes buffered across all streams.
         """
     @max_buffered_bytes_total.setter
-    def max_buffered_bytes_total(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def max_buffered_bytes_total(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def max_buffered_messages_per_stream(self) -> int:
@@ -6830,7 +6700,7 @@ class SessionOptions:
         """
     @max_buffered_messages_per_stream.setter
     def max_buffered_messages_per_stream(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
+        self, arg0: typing.SupportsInt
     ) -> None: ...
 
     @property
@@ -6839,9 +6709,7 @@ class SessionOptions:
         Maximum number of messages buffered across all streams.
         """
     @max_buffered_messages_total.setter
-    def max_buffered_messages_total(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def max_buffered_messages_total(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def max_concurrent_nested_actions(self) -> int:
@@ -6850,7 +6718,7 @@ class SessionOptions:
         """
     @max_concurrent_nested_actions.setter
     def max_concurrent_nested_actions(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
+        self, arg0: typing.SupportsInt
     ) -> None: ...
 
     @property
@@ -6859,9 +6727,7 @@ class SessionOptions:
         Maximum number of concurrently running root actions.
         """
     @max_concurrent_root_actions.setter
-    def max_concurrent_root_actions(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def max_concurrent_root_actions(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def max_single_message_size(self) -> int:
@@ -6869,9 +6735,7 @@ class SessionOptions:
         Maximum size in bytes of a single wire message.
         """
     @max_single_message_size.setter
-    def max_single_message_size(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def max_single_message_size(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def no_stream_timeout(self) -> Duration:
@@ -7069,29 +6933,15 @@ class SignallingMessageType:
     DESCRIPTION: typing.ClassVar[SignallingMessageType]
     ERROR: typing.ClassVar[SignallingMessageType]
     __members__: typing.ClassVar[dict[str, SignallingMessageType]]
-
-    @typing.overload
     def __eq__(self, other: object) -> bool: ...
-    @typing.overload
-    def __eq__(self, other: object) -> bool: ...
-
     def __getstate__(self) -> int: ...
     def __hash__(self) -> int: ...
     def __index__(self) -> int: ...
-    def __init__(
-        self, value: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def __init__(self, value: typing.SupportsInt) -> None: ...
     def __int__(self) -> int: ...
-
-    @typing.overload
     def __ne__(self, other: object) -> bool: ...
-    @typing.overload
-    def __ne__(self, other: object) -> bool: ...
-
     def __repr__(self) -> str: ...
-    def __setstate__(
-        self, state: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def __setstate__(self, state: typing.SupportsInt) -> None: ...
     def __str__(self) -> str: ...
     @property
     def name(self) -> str: ...
@@ -7284,25 +7134,21 @@ class SpeechRecognizerOptions:
         model: str = "",
         language: str = "auto",
         translate: bool = False,
-        inference_threads: typing.SupportsInt | typing.SupportsIndex = 0,
+        inference_threads: typing.SupportsInt = 0,
         use_gpu: bool = True,
         flash_attention: bool = True,
         use_context: bool = False,
         initial_prompt: str = "",
-        subscription_buffer_millis: (
-            typing.SupportsInt | typing.SupportsIndex
-        ) = 100,
-        vad_threshold: (
-            typing.SupportsFloat | typing.SupportsIndex
-        ) = 0.009999999776482582,
-        vad_noise_ratio: typing.SupportsFloat | typing.SupportsIndex = 2.5,
-        vad_window_millis: typing.SupportsInt | typing.SupportsIndex = 20,
-        min_speech_millis: typing.SupportsInt | typing.SupportsIndex = 250,
-        min_silence_millis: typing.SupportsInt | typing.SupportsIndex = 600,
-        speech_pad_millis: typing.SupportsInt | typing.SupportsIndex = 160,
-        max_speech_seconds: typing.SupportsInt | typing.SupportsIndex = 30,
+        subscription_buffer_millis: typing.SupportsInt = 100,
+        vad_threshold: typing.SupportsFloat = 0.009999999776482582,
+        vad_noise_ratio: typing.SupportsFloat = 2.5,
+        vad_window_millis: typing.SupportsInt = 20,
+        min_speech_millis: typing.SupportsInt = 250,
+        min_silence_millis: typing.SupportsInt = 600,
+        speech_pad_millis: typing.SupportsInt = 160,
+        max_speech_seconds: typing.SupportsInt = 30,
         vad_model: str = "",
-        silero_threshold: typing.SupportsFloat | typing.SupportsIndex = 0.5,
+        silero_threshold: typing.SupportsFloat = 0.5,
     ) -> None:
         """
         Construct validated speech recognition options.
@@ -7331,9 +7177,7 @@ class SpeechRecognizerOptions:
         Decoder threads, or zero for the bounded default.
         """
     @inference_threads.setter
-    def inference_threads(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def inference_threads(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def initial_prompt(self) -> str:
@@ -7357,9 +7201,7 @@ class SpeechRecognizerOptions:
         Maximum utterance duration before splitting.
         """
     @max_speech_seconds.setter
-    def max_speech_seconds(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def max_speech_seconds(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def min_silence_millis(self) -> int:
@@ -7367,9 +7209,7 @@ class SpeechRecognizerOptions:
         Silence needed to endpoint speech.
         """
     @min_silence_millis.setter
-    def min_silence_millis(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def min_silence_millis(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def min_speech_millis(self) -> int:
@@ -7377,9 +7217,7 @@ class SpeechRecognizerOptions:
         Minimum voiced duration accepted.
         """
     @min_speech_millis.setter
-    def min_speech_millis(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def min_speech_millis(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def model(self) -> str:
@@ -7395,9 +7233,7 @@ class SpeechRecognizerOptions:
         Silero speech-probability threshold in (0, 1].
         """
     @silero_threshold.setter
-    def silero_threshold(
-        self, arg0: typing.SupportsFloat | typing.SupportsIndex
-    ) -> None: ...
+    def silero_threshold(self, arg0: typing.SupportsFloat) -> None: ...
 
     @property
     def speech_pad_millis(self) -> int:
@@ -7405,9 +7241,7 @@ class SpeechRecognizerOptions:
         Audio retained around an utterance.
         """
     @speech_pad_millis.setter
-    def speech_pad_millis(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def speech_pad_millis(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def subscription_buffer_millis(self) -> int:
@@ -7415,9 +7249,7 @@ class SpeechRecognizerOptions:
         Duration of internally-created capture buffers.
         """
     @subscription_buffer_millis.setter
-    def subscription_buffer_millis(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def subscription_buffer_millis(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def translate(self) -> bool:
@@ -7457,9 +7289,7 @@ class SpeechRecognizerOptions:
         Speech threshold relative to learned noise.
         """
     @vad_noise_ratio.setter
-    def vad_noise_ratio(
-        self, arg0: typing.SupportsFloat | typing.SupportsIndex
-    ) -> None: ...
+    def vad_noise_ratio(self, arg0: typing.SupportsFloat) -> None: ...
 
     @property
     def vad_threshold(self) -> float:
@@ -7467,9 +7297,7 @@ class SpeechRecognizerOptions:
         Absolute RMS speech threshold.
         """
     @vad_threshold.setter
-    def vad_threshold(
-        self, arg0: typing.SupportsFloat | typing.SupportsIndex
-    ) -> None: ...
+    def vad_threshold(self, arg0: typing.SupportsFloat) -> None: ...
 
     @property
     def vad_window_millis(self) -> int:
@@ -7477,9 +7305,7 @@ class SpeechRecognizerOptions:
         RMS analysis window duration.
         """
     @vad_window_millis.setter
-    def vad_window_millis(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def vad_window_millis(self, arg0: typing.SupportsInt) -> None: ...
 
 class SseOutboundDelivery:
     """
@@ -7495,29 +7321,15 @@ class SseOutboundDelivery:
     POST: typing.ClassVar[SseOutboundDelivery]
     STREAM: typing.ClassVar[SseOutboundDelivery]
     __members__: typing.ClassVar[dict[str, SseOutboundDelivery]]
-
-    @typing.overload
     def __eq__(self, other: object) -> bool: ...
-    @typing.overload
-    def __eq__(self, other: object) -> bool: ...
-
     def __getstate__(self) -> int: ...
     def __hash__(self) -> int: ...
     def __index__(self) -> int: ...
-    def __init__(
-        self, value: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def __init__(self, value: typing.SupportsInt) -> None: ...
     def __int__(self) -> int: ...
-
-    @typing.overload
     def __ne__(self, other: object) -> bool: ...
-    @typing.overload
-    def __ne__(self, other: object) -> bool: ...
-
     def __repr__(self) -> str: ...
-    def __setstate__(
-        self, state: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def __setstate__(self, state: typing.SupportsInt) -> None: ...
     def __str__(self) -> str: ...
     @property
     def name(self) -> str: ...
@@ -7601,7 +7413,7 @@ class Status:
 
     def __init__(
         self,
-        code: typing.SupportsInt | typing.SupportsIndex = 0,
+        code: typing.SupportsInt = 0,
         message: str = "OK",
         details: typing.Any = [],
     ) -> None:
@@ -7662,7 +7474,7 @@ class Status:
         The canonical status code.
         """
     @code.setter
-    def code(self, arg1: typing.SupportsInt | typing.SupportsIndex) -> None: ...
+    def code(self, arg1: typing.SupportsInt) -> None: ...
 
     @property
     def details(self) -> list[typing.Any]:
@@ -7692,29 +7504,15 @@ class StreamMode:
     ACCEPT: typing.ClassVar[StreamMode]
     START: typing.ClassVar[StreamMode]
     __members__: typing.ClassVar[dict[str, StreamMode]]
-
-    @typing.overload
     def __eq__(self, other: object) -> bool: ...
-    @typing.overload
-    def __eq__(self, other: object) -> bool: ...
-
     def __getstate__(self) -> int: ...
     def __hash__(self) -> int: ...
     def __index__(self) -> int: ...
-    def __init__(
-        self, value: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def __init__(self, value: typing.SupportsInt) -> None: ...
     def __int__(self) -> int: ...
-
-    @typing.overload
     def __ne__(self, other: object) -> bool: ...
-    @typing.overload
-    def __ne__(self, other: object) -> bool: ...
-
     def __repr__(self) -> str: ...
-    def __setstate__(
-        self, state: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def __setstate__(self, state: typing.SupportsInt) -> None: ...
     def __str__(self) -> str: ...
     @property
     def name(self) -> str: ...
@@ -7741,9 +7539,7 @@ class Time:
         """
 
     @staticmethod
-    def from_nanoseconds_since_epoch(
-        nanoseconds: typing.SupportsInt | typing.SupportsIndex,
-    ) -> Time:
+    def from_nanoseconds_since_epoch(nanoseconds: typing.SupportsInt) -> Time:
         """
         Creates a time from nanoseconds since the Unix epoch.
         """
@@ -7765,9 +7561,7 @@ class Time:
         Returns a hash of the time.
         """
 
-    def __init__(
-        self, nanoseconds_since_epoch: typing.SupportsInt | typing.SupportsIndex
-    ) -> None:
+    def __init__(self, nanoseconds_since_epoch: typing.SupportsInt) -> None:
         """
         Creates a time from nanoseconds since the Unix epoch.
         """
@@ -7863,29 +7657,15 @@ class TurnRelayType:
     TLS: typing.ClassVar[TurnRelayType]
     UDP: typing.ClassVar[TurnRelayType]
     __members__: typing.ClassVar[dict[str, TurnRelayType]]
-
-    @typing.overload
     def __eq__(self, other: object) -> bool: ...
-    @typing.overload
-    def __eq__(self, other: object) -> bool: ...
-
     def __getstate__(self) -> int: ...
     def __hash__(self) -> int: ...
     def __index__(self) -> int: ...
-    def __init__(
-        self, value: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def __init__(self, value: typing.SupportsInt) -> None: ...
     def __int__(self) -> int: ...
-
-    @typing.overload
     def __ne__(self, other: object) -> bool: ...
-    @typing.overload
-    def __ne__(self, other: object) -> bool: ...
-
     def __repr__(self) -> str: ...
-    def __setstate__(
-        self, state: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def __setstate__(self, state: typing.SupportsInt) -> None: ...
     def __str__(self) -> str: ...
     @property
     def name(self) -> str: ...
@@ -7932,7 +7712,7 @@ class TurnServer:
         TURN server port (default 3478).
         """
     @port.setter
-    def port(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None: ...
+    def port(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def relay_type(self) -> TurnRelayType:
@@ -7962,10 +7742,10 @@ class VerifiedAuthorization:
         subject_kind: str,
         actors: collections.abc.Sequence[str],
         audience: str,
-        expires_at: typing.SupportsFloat | typing.SupportsIndex,
+        expires_at: typing.SupportsFloat,
         grants: typing.Any = (),
         restrictions: typing.Any = {},
-        authorization_epoch: typing.SupportsInt | typing.SupportsIndex = 0,
+        authorization_epoch: typing.SupportsInt = 0,
         provenance: collections.abc.Sequence[str] = (),
         assurance: str = "",
     ) -> None: ...
@@ -8021,9 +7801,7 @@ class WebRtcConfiguration:
         Size at which A11 fragments large logical messages.
         """
     @channel_split_size.setter
-    def channel_split_size(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def channel_split_size(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def desired_channels(self) -> int:
@@ -8031,9 +7809,7 @@ class WebRtcConfiguration:
         Number of WebRTC data channels a dialing client opens per connection and keeps replenished. Streaming with several channels lets slow per-channel acknowledgement round-trips overlap; the stream still behaves as one ordered, reliable channel. Defaults to 8. Has no effect on the accepting side.
         """
     @desired_channels.setter
-    def desired_channels(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def desired_channels(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def enable_ice_udp_mux(self) -> bool:
@@ -8049,9 +7825,7 @@ class WebRtcConfiguration:
         Maximum number of WebRTC data channels an accepting server admits per peer connection. Surplus channels a client opens beyond this are refused. Defaults to 8. Has no effect on the dialing side.
         """
     @max_channels.setter
-    def max_channels(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def max_channels(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def max_discovered_mtu(self) -> int:
@@ -8059,9 +7833,7 @@ class WebRtcConfiguration:
         Ceiling the search may raise the MTU to, in bytes. Defaults to 9216. Lowering it bounds how wrong discovery can be without switching it off; setting it to `mtu` is another way of pinning.
         """
     @max_discovered_mtu.setter
-    def max_discovered_mtu(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def max_discovered_mtu(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def max_message_size(self) -> int | None:
@@ -8069,9 +7841,7 @@ class WebRtcConfiguration:
         Advertised local libdatachannel message size ceiling.
         """
     @max_message_size.setter
-    def max_message_size(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex | None
-    ) -> None: ...
+    def max_message_size(self, arg0: typing.SupportsInt | None) -> None: ...
 
     @property
     def mtu(self) -> int | None:
@@ -8079,9 +7849,7 @@ class WebRtcConfiguration:
         Network MTU in bytes that SCTP builds packets to; None means 1280. The largest performance knob this transport has: path MTU discovery is unavailable, so the default fragments every message into 1172-byte chunks regardless of what the path can carry, and raising it to 4096 is worth about 3x at 64 KiB (131 -> 368 MiB/s on Linux loopback). Above roughly 4 KiB, messages that need more than one chunk silently stop arriving while small ones keep flowing, so set it only for a peer whose end-to-end path MTU is known -- leave it None for a browser or an internet peer.
         """
     @mtu.setter
-    def mtu(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex | None
-    ) -> None: ...
+    def mtu(self, arg0: typing.SupportsInt | None) -> None: ...
 
     @property
     def path_mtu_discovery(self) -> bool:
@@ -8114,14 +7882,7 @@ class WebRtcConfiguration:
         """
     @preferred_port_range.setter
     def preferred_port_range(
-        self,
-        arg0: (
-            tuple[
-                typing.SupportsInt | typing.SupportsIndex,
-                typing.SupportsInt | typing.SupportsIndex,
-            ]
-            | None
-        ),
+        self, arg0: tuple[typing.SupportsInt, typing.SupportsInt] | None
     ) -> None: ...
 
     @property
@@ -8375,7 +8136,7 @@ class WebSocketServerOptions:
         TCP port to listen on; 0 selects an ephemeral port.
         """
     @port.setter
-    def port(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None: ...
+    def port(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def stream_options(self) -> WireStreamOptions:
@@ -8445,9 +8206,7 @@ class WebSocketSignallingClientOptions:
         Maximum inbound signalling message size in bytes.
         """
     @max_message_size.setter
-    def max_message_size(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def max_message_size(self, arg0: typing.SupportsInt) -> None: ...
 
 class WebSocketSignallingServer:
     @staticmethod
@@ -8535,9 +8294,7 @@ class WebSocketSignallingServerOptions:
         Maximum inbound signalling message size in bytes.
         """
     @max_message_size.setter
-    def max_message_size(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def max_message_size(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def on_admit(self) -> None:
@@ -8585,7 +8342,7 @@ class WebSocketSignallingServerOptions:
         TCP port to listen on (0 selects an ephemeral port).
         """
     @port.setter
-    def port(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None: ...
+    def port(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def replace_existing(self) -> bool:
@@ -8916,9 +8673,9 @@ class WireStreamOptions:
     def __eq__(self, other: object) -> bool: ...
     def __init__(
         self,
-        max_buffered_incoming_messages: int | None = 100,
-        max_single_message_size: int | None = 33554432,
-        max_buffered_incoming_bytes: int | None = 33554432,
+        max_buffered_incoming_messages: typing.SupportsInt | None = 100,
+        max_single_message_size: typing.SupportsInt | None = 33554432,
+        max_buffered_incoming_bytes: typing.SupportsInt | None = 33554432,
         message_timeout_millis: typing.Any | None = None,
         deadline: Time | None = None,
     ) -> None:
@@ -8953,9 +8710,7 @@ class WireStreamOptions:
         Maximum total bytes of buffered inbound messages before backpressure is applied.
         """
     @max_buffered_incoming_bytes.setter
-    def max_buffered_incoming_bytes(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def max_buffered_incoming_bytes(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def max_buffered_incoming_messages(self) -> int:
@@ -8964,7 +8719,7 @@ class WireStreamOptions:
         """
     @max_buffered_incoming_messages.setter
     def max_buffered_incoming_messages(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
+        self, arg0: typing.SupportsInt
     ) -> None: ...
 
     @property
@@ -8973,9 +8728,7 @@ class WireStreamOptions:
         Maximum size, in bytes, of a single wire message.
         """
     @max_single_message_size.setter
-    def max_single_message_size(
-        self, arg0: typing.SupportsInt | typing.SupportsIndex
-    ) -> None: ...
+    def max_single_message_size(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def message_timeout(self) -> Duration:
@@ -9127,9 +8880,7 @@ class _ActionMessageVectorView:
         """
 
     @typing.overload
-    def __delitem__(
-        self, index: typing.SupportsInt | typing.SupportsIndex
-    ) -> None:
+    def __delitem__(self, index: typing.SupportsInt) -> None:
         """
         Delete the element at the given index.
         """
@@ -9145,9 +8896,7 @@ class _ActionMessageVectorView:
         """
 
     @typing.overload
-    def __getitem__(
-        self, index: typing.SupportsInt | typing.SupportsIndex
-    ) -> ActionMessage:
+    def __getitem__(self, index: typing.SupportsInt) -> ActionMessage:
         """
         Return the element at the given index.
         """
@@ -9174,9 +8923,7 @@ class _ActionMessageVectorView:
 
     @typing.overload
     def __setitem__(
-        self,
-        index: typing.SupportsInt | typing.SupportsIndex,
-        value: ActionMessage,
+        self, index: typing.SupportsInt, value: ActionMessage
     ) -> None:
         """
         Assign a value to the element at the given index.
@@ -9217,18 +8964,12 @@ class _ActionMessageVectorView:
         Return the index of the first element equal to the given value.
         """
 
-    def insert(
-        self,
-        index: typing.SupportsInt | typing.SupportsIndex,
-        value: ActionMessage,
-    ) -> None:
+    def insert(self, index: typing.SupportsInt, value: ActionMessage) -> None:
         """
         Insert a value before the given index.
         """
 
-    def pop(
-        self, index: typing.SupportsInt | typing.SupportsIndex = -1
-    ) -> ActionMessage:
+    def pop(self, index: typing.SupportsInt = -1) -> ActionMessage:
         """
         Remove and return the element at the given index (default last).
         """
@@ -9429,9 +9170,7 @@ class _NodeFragmentVectorView:
         """
 
     @typing.overload
-    def __delitem__(
-        self, index: typing.SupportsInt | typing.SupportsIndex
-    ) -> None:
+    def __delitem__(self, index: typing.SupportsInt) -> None:
         """
         Delete the element at the given index.
         """
@@ -9447,9 +9186,7 @@ class _NodeFragmentVectorView:
         """
 
     @typing.overload
-    def __getitem__(
-        self, index: typing.SupportsInt | typing.SupportsIndex
-    ) -> NodeFragment:
+    def __getitem__(self, index: typing.SupportsInt) -> NodeFragment:
         """
         Return the element at the given index.
         """
@@ -9476,9 +9213,7 @@ class _NodeFragmentVectorView:
 
     @typing.overload
     def __setitem__(
-        self,
-        index: typing.SupportsInt | typing.SupportsIndex,
-        value: NodeFragment,
+        self, index: typing.SupportsInt, value: NodeFragment
     ) -> None:
         """
         Assign a value to the element at the given index.
@@ -9519,18 +9254,12 @@ class _NodeFragmentVectorView:
         Return the index of the first element equal to the given value.
         """
 
-    def insert(
-        self,
-        index: typing.SupportsInt | typing.SupportsIndex,
-        value: NodeFragment,
-    ) -> None:
+    def insert(self, index: typing.SupportsInt, value: NodeFragment) -> None:
         """
         Insert a value before the given index.
         """
 
-    def pop(
-        self, index: typing.SupportsInt | typing.SupportsIndex = -1
-    ) -> NodeFragment:
+    def pop(self, index: typing.SupportsInt = -1) -> NodeFragment:
         """
         Remove and return the element at the given index (default last).
         """
@@ -9562,9 +9291,7 @@ class _PortVectorView:
         """
 
     @typing.overload
-    def __delitem__(
-        self, index: typing.SupportsInt | typing.SupportsIndex
-    ) -> None:
+    def __delitem__(self, index: typing.SupportsInt) -> None:
         """
         Delete the element at the given index.
         """
@@ -9580,9 +9307,7 @@ class _PortVectorView:
         """
 
     @typing.overload
-    def __getitem__(
-        self, index: typing.SupportsInt | typing.SupportsIndex
-    ) -> Port:
+    def __getitem__(self, index: typing.SupportsInt) -> Port:
         """
         Return the element at the given index.
         """
@@ -9608,9 +9333,7 @@ class _PortVectorView:
         """
 
     @typing.overload
-    def __setitem__(
-        self, index: typing.SupportsInt | typing.SupportsIndex, value: Port
-    ) -> None:
+    def __setitem__(self, index: typing.SupportsInt, value: Port) -> None:
         """
         Assign a value to the element at the given index.
         """
@@ -9650,16 +9373,12 @@ class _PortVectorView:
         Return the index of the first element equal to the given value.
         """
 
-    def insert(
-        self, index: typing.SupportsInt | typing.SupportsIndex, value: Port
-    ) -> None:
+    def insert(self, index: typing.SupportsInt, value: Port) -> None:
         """
         Insert a value before the given index.
         """
 
-    def pop(
-        self, index: typing.SupportsInt | typing.SupportsIndex = -1
-    ) -> Port:
+    def pop(self, index: typing.SupportsInt = -1) -> Port:
         """
         Remove and return the element at the given index (default last).
         """
@@ -9821,9 +9540,7 @@ def audio_buffer_to_msgpack(buffer: AudioBuffer) -> bytes:
     Encode an AudioBuffer to A11's MessagePack representation.
     """
 
-def audio_device_info(
-    index: typing.SupportsInt | typing.SupportsIndex,
-) -> AudioDeviceInfo:
+def audio_device_info(index: typing.SupportsInt) -> AudioDeviceInfo:
     """
     Return metadata for the audio device at `index`.
     """
@@ -9883,9 +9600,9 @@ def download(url: str, options: DownloadOptions) -> asyncio.Future[str]:
     """
 
 def emit_log(
-    severity: typing.SupportsInt | typing.SupportsIndex,
+    severity: typing.SupportsInt,
     message: str,
-    verbosity: typing.SupportsInt | typing.SupportsIndex = -1,
+    verbosity: typing.SupportsInt = -1,
 ) -> None:
     """
     Write one entry to the native log, so an application can check that its logging configuration reaches the C++ runtime. FATAL is not available here.
@@ -9908,17 +9625,15 @@ def fetch(
     """
 
 def fiber_report(
-    stall_threshold_seconds: typing.SupportsFloat | typing.SupportsIndex = 0.0,
-    max_frames: typing.SupportsInt | typing.SupportsIndex = 24,
+    stall_threshold_seconds: typing.SupportsFloat = 0.0,
+    max_frames: typing.SupportsInt = 24,
     include_running: bool = False,
 ) -> str:
     """
     A symbolized report of every live fiber: a census by wait kind, any deadlock cycles, then the stalled fibers with their parked stacks.
     """
 
-def fiber_snapshot(
-    max_frames: typing.SupportsInt | typing.SupportsIndex = 24,
-) -> list:
+def fiber_snapshot(max_frames: typing.SupportsInt = 24) -> list:
     """
     Every live fiber as a list of dicts, with parked stacks unwound to raw program counters. Pass max_frames=0 to skip the unwind.
     """
@@ -9946,15 +9661,14 @@ def http_actions() -> (
     """
 
 def install_fiber_dump_signal_handler(
-    signal_number: typing.SupportsInt | typing.SupportsIndex = 0,
+    signal_number: typing.SupportsInt = 0,
 ) -> bool:
     """
     Installs a handler that logs a fiber report on a signal, default SIGUSR2 or A11_FIBER_DUMP_SIGNAL. Returns whether it was installed.
     """
 
 def install_fiber_watchdog(
-    stall_threshold_seconds: typing.SupportsFloat | typing.SupportsIndex,
-    abort_on_stall: bool = False,
+    stall_threshold_seconds: typing.SupportsFloat, abort_on_stall: bool = False
 ) -> None:
     """
     Starts a thread that logs a fiber report once any fiber has waited longer than the threshold. Idempotent.
@@ -10030,7 +9744,7 @@ def obs_configure(
     use_simple_processor: bool = False,
     otlp_endpoint: str = "",
     otlp_headers: collections.abc.Mapping[str, str] = {},
-    otlp_timeout_millis: typing.SupportsInt | typing.SupportsIndex = 10000,
+    otlp_timeout_millis: typing.SupportsInt = 10000,
     baggage_span_attributes: collections.abc.Sequence[str] = [],
 ) -> None:
     """
@@ -10100,7 +9814,10 @@ def reset_default_redis_client() -> None:
 
 def resolve_asr_model(
     spec: str,
-    on_progress: collections.abc.Callable[[int, int], None] | None = None,
+    on_progress: (
+        collections.abc.Callable[[typing.SupportsInt, typing.SupportsInt], None]
+        | None
+    ) = None,
 ) -> asyncio.Future[str]:
     """
     Resolve a transcription model shorthand or path to a local file, downloading it if needed. Awaitable.
@@ -10113,7 +9830,10 @@ def resolve_url_reference(base: ParsedUrl, reference: str) -> ParsedUrl:
 
 def resolve_vad_model(
     spec: str,
-    on_progress: collections.abc.Callable[[int, int], None] | None = None,
+    on_progress: (
+        collections.abc.Callable[[typing.SupportsInt, typing.SupportsInt], None]
+        | None
+    ) = None,
 ) -> asyncio.Future[str]:
     """
     Resolve a VAD model shorthand or path to a local file, downloading it if needed. An empty spec resolves to an empty path. Awaitable.
@@ -10153,37 +9873,25 @@ def set_log_sink(callback: typing.Any) -> None:
     Route native log entries to `callback(severity, verbosity, filename, line, message, unix_seconds)`, replacing any previously installed sink. None removes the sink. FATAL entries are never routed; Abseil writes those to stderr with a backtrace.
     """
 
-def set_min_log_level(
-    severity: typing.SupportsInt | typing.SupportsIndex,
-) -> None:
+def set_min_log_level(severity: typing.SupportsInt) -> None:
     """
     Drop native log entries below this absl severity (0=INFO, 1=WARNING, 2=ERROR, 3=FATAL) before they are formatted.
     """
 
-def set_stderr_threshold(
-    severity: typing.SupportsInt | typing.SupportsIndex,
-) -> None:
+def set_stderr_threshold(severity: typing.SupportsInt) -> None:
     """
     Write native log entries at or above this absl severity straight to stderr, bypassing any installed sink.
     """
 
-def set_vlog_level(level: typing.SupportsInt | typing.SupportsIndex) -> None:
+def set_vlog_level(level: typing.SupportsInt) -> None:
     """
     Emit VLOG(n) entries for n at or below this level. 0 disables them.
     """
 
-def status_code_from_http(
-    arg0: typing.SupportsInt | typing.SupportsIndex,
-) -> int: ...
-def status_code_from_websocket(
-    arg0: typing.SupportsInt | typing.SupportsIndex,
-) -> int: ...
-def status_code_to_http(
-    arg0: typing.SupportsInt | typing.SupportsIndex,
-) -> int: ...
-def status_code_to_websocket(
-    arg0: typing.SupportsInt | typing.SupportsIndex,
-) -> int: ...
+def status_code_from_http(arg0: typing.SupportsInt) -> int: ...
+def status_code_from_websocket(arg0: typing.SupportsInt) -> int: ...
+def status_code_to_http(arg0: typing.SupportsInt) -> int: ...
+def status_code_to_websocket(arg0: typing.SupportsInt) -> int: ...
 def status_from_chunk(chunk: Chunk) -> Status:
     """
     Decode an absl Status from a data chunk.

@@ -77,12 +77,10 @@ flow research {
       page = run web-fetch(url: hit.url)
       hit.url -> sources
       page.text | truncate 200 -> brief.pages
-      skip page.bytes
     }
   }
 
   brief.summary -> answer
-  skip search.debug
 }
 ```
 
@@ -218,9 +216,8 @@ reusable compositions in one source file with a single entry point for
 
 ### Discarding stream values
 
-An undrained output port stalls its producer. `skip page.bytes` consumes one
-value without retaining it. The runtime drains declared outputs that the flow
-does not reference.
+An undrained output port stalls its producer. The runtime drains declared call
+outputs that the flow does not reference.
 
 `skip n port` removes values from the node before fan-out. Every reader starts
 after those values. In comparison, `| drop 1` trims only its pipeline:

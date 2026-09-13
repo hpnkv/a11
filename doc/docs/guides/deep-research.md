@@ -345,8 +345,7 @@ Flow also makes the orchestration policies part of the loaded composition:
 
 - The runtime drains every declared action output that the flow does not read.
   The Python illustration can leave unused nested outputs to session cleanup;
-  Flow keeps them moving during the run. `skip output` records an intentional
-  discard when that is useful to a reader.
+  Flow keeps them moving during the run.
 - `parallel 3` starts up to three investigations without task creation,
   semaphore, and gather code. The bound is part of the composition and applies
   when the source is loaded at runtime.

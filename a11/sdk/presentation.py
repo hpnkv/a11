@@ -51,10 +51,12 @@ import json
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, Protocol
 
+import a11
 from pydantic import BaseModel, Field
 
 from a11.sdk.llm import (
     TOOL_LOGS_METADATA_KEY,
+    TOOL_STATUSES_METADATA_KEY,
     Interaction,
     NormalizedContentType,
     Role,
@@ -154,6 +156,28 @@ def tool_logs(interaction: Interaction) -> dict[str, str]:
     return {str(key): str(value) for key, value in decoded.items()}
 
 
+def tool_statuses(interaction: Interaction) -> dict[str, Status]:
+    """Native failures for tool calls carried by a result interaction."""
+    raw = interaction.backend_specific_metadata.get(TOOL_STATUSES_METADATA_KEY)
+    if not raw:
+        return {}
+    try:
+        decoded = json.loads(
+            raw.decode() if isinstance(raw, bytes) else str(raw)
+        )
+    except (ValueError, UnicodeDecodeError):
+        return {}
+    if not isinstance(decoded, dict):
+        return {}
+    statuses: dict[str, Status] = {}
+    for call_id, value in decoded.items():
+        try:
+            statuses[str(call_id)] = Status.model_validate(value)
+        except (TypeError, ValueError):
+            continue
+    return statuses
+
+
 def plain_text(interaction: Interaction) -> str:
     """Best-effort human-readable text of an interaction's content.
 
@@ -179,8 +203,30 @@ def is_tool_result_carrier(interaction: Interaction) -> bool:
     return bool(interaction.action_outputs) and not plain_text(interaction)
 
 
+def _tool_arguments(
+    interaction: Interaction, call_id: str
+) -> dict[str, Any] | None:
+    """Decode the model-supplied input fragments for one action call."""
+    grouped: dict[str, list[Any]] = {}
+    for fragment in interaction.action_inputs.get(call_id, []):
+        if fragment is None:
+            continue
+        chunk = fragment.get_chunk()
+        if chunk.is_null():
+            continue
+        grouped.setdefault(fragment.id, []).append(a11.from_chunk(chunk))
+    if not grouped:
+        return None
+    return {
+        name: values[0] if len(values) == 1 else values
+        for name, values in grouped.items()
+    }
+
+
 def present_interaction(
-    interaction: Interaction, logs: Mapping[str, str] | None = None
+    interaction: Interaction,
+    logs: Mapping[str, str] | None = None,
+    statuses: Mapping[str, Status] | None = None,
 ) -> PresentationTurn:
     """The blocks a single interaction contributes.
 
@@ -195,6 +241,7 @@ def present_interaction(
         draw.
     """
     resolved_logs = dict(logs or {})
+    resolved_statuses = dict(statuses or {})
     message = normalize_interaction(interaction)
     blocks: list[PresentationBlock] = []
 
@@ -241,6 +288,8 @@ def present_interaction(
                 id=call.id,
                 tool_name=call.name,
                 text=resolved_logs.get(call.id, ""),
+                tool_arguments=_tool_arguments(interaction, call.id),
+                status=resolved_statuses.get(call.id),
             )
         )
 
@@ -268,8 +317,10 @@ def present_conversation(
     drawn.
     """
     logs: dict[str, str] = {}
+    statuses: dict[str, Status] = {}
     for interaction in interactions:
         logs.update(tool_logs(interaction))
+        statuses.update(tool_statuses(interaction))
 
     turns: list[PresentationTurn] = []
     for interaction in interactions:
@@ -277,7 +328,7 @@ def present_conversation(
             continue
         if is_tool_result_carrier(interaction):
             continue
-        turn = present_interaction(interaction, logs)
+        turn = present_interaction(interaction, logs, statuses)
         if turn.blocks:
             turns.append(turn)
     return turns
@@ -307,6 +358,7 @@ class PresentationReducer:
         self._open: PresentationBlock | None = None
         self._seen_calls: set[str] = set()
         self._logs: dict[str, str] = {}
+        self._statuses: dict[str, Status] = {}
         #: Whether prose has arrived as deltas. Only then is the text inside a
         #: later interaction a duplicate; text from a *different* interaction is
         #: not, which is what replaying a whole conversation depends on.
@@ -335,15 +387,24 @@ class PresentationReducer:
         interaction that lands on ``new_interactions``.
         """
         self._logs.update(tool_logs(interaction))
+        self._statuses.update(tool_statuses(interaction))
         # A late-arriving log belongs to the run block already drawn for it.
         for block in self._blocks:
             if block.kind == BlockKind.TOOL_RUN and not block.text:
-                block.text = self._logs.get(block.id, "")
+                delta = self._logs.get(block.id, "")
+                block.text = delta
+                if delta and self._sink is not None:
+                    self._sink.on_block_appended(block, delta)
+            if block.kind == BlockKind.TOOL_RUN and block.id in self._statuses:
+                block.status = self._statuses[block.id]
+                block.partial = False
+                if self._sink is not None:
+                    self._sink.on_block_closed(block)
 
         if is_tool_result_carrier(interaction):
             return
 
-        turn = present_interaction(interaction, self._logs)
+        turn = present_interaction(interaction, self._logs, self._statuses)
         for block in turn.blocks:
             # Only deltas make an interaction's text a duplicate: on the live
             # path the same prose arrives twice, once on `text_output` and once
@@ -352,12 +413,25 @@ class PresentationReducer:
                 continue
             if block.kind == BlockKind.TOOL_RUN:
                 if block.id in self._seen_calls:
+                    existing = next(
+                        candidate
+                        for candidate in self._blocks
+                        if candidate.kind == BlockKind.TOOL_RUN
+                        and candidate.id == block.id
+                    )
+                    existing.tool_name = block.tool_name
+                    existing.tool_arguments = block.tool_arguments
+                    if self._sink is not None:
+                        self._sink.on_block_appended(existing, "")
                     continue
                 self._seen_calls.add(block.id)
             self._close_open()
+            if block.kind == BlockKind.TOOL_RUN:
+                block.partial = True
             self._blocks.append(block)
             self._emit_opened(block)
-            self._emit_closed(block)
+            if block.kind != BlockKind.TOOL_RUN:
+                self._emit_closed(block)
 
     def on_error(self, status: Status) -> None:
         """Record a failure as the turn's last block."""
@@ -369,9 +443,88 @@ class PresentationReducer:
         self._emit_opened(block)
         self._emit_closed(block)
 
+    def on_tool_log(self, call_id: str, tool_name: str, text: str) -> None:
+        """Append a live child-action log to its existing activity block."""
+        if not text:
+            return
+        block = next(
+            (
+                candidate
+                for candidate in reversed(self._blocks)
+                if candidate.kind == BlockKind.TOOL_RUN
+                and candidate.id == call_id
+            ),
+            None,
+        )
+        if block is None:
+            block = PresentationBlock(
+                kind=BlockKind.TOOL_RUN,
+                id=call_id,
+                tool_name=tool_name,
+                partial=True,
+                role=self._role,
+            )
+            self._blocks.append(block)
+            self._seen_calls.add(call_id)
+            self._emit_opened(block)
+        block.text += text
+        if self._sink is not None:
+            self._sink.on_block_appended(block, text)
+
+    def on_tool_started(self, call_id: str, tool_name: str) -> None:
+        """Open an activity as soon as A11 starts the nested action."""
+        self._close_open()
+        block = next(
+            (
+                candidate
+                for candidate in reversed(self._blocks)
+                if candidate.kind == BlockKind.TOOL_RUN
+                and candidate.id == call_id
+            ),
+            None,
+        )
+        if block is None:
+            block = PresentationBlock(
+                kind=BlockKind.TOOL_RUN,
+                id=call_id,
+                tool_name=tool_name,
+                partial=True,
+                role=self._role,
+            )
+            self._blocks.append(block)
+            self._seen_calls.add(call_id)
+            self._emit_opened(block)
+        else:
+            block.tool_name = tool_name or block.tool_name
+            block.partial = True
+            if self._sink is not None:
+                self._sink.on_block_appended(block, "")
+
+    def on_tool_finished(self, call_id: str, status: Status) -> None:
+        """Close an activity from its native A11 completion status."""
+        block = next(
+            (
+                candidate
+                for candidate in reversed(self._blocks)
+                if candidate.kind == BlockKind.TOOL_RUN
+                and candidate.id == call_id
+            ),
+            None,
+        )
+        if block is None:
+            return
+        block.partial = False
+        if not status.is_ok():
+            block.status = status
+        self._emit_closed(block)
+
     def end_turn(self) -> None:
         """Mark the turn complete, closing anything still streaming."""
         self._close_open()
+        for block in self._blocks:
+            if block.kind == BlockKind.TOOL_RUN and block.partial:
+                block.partial = False
+                self._emit_closed(block)
 
     # -- internals ---------------------------------------------------------
 
@@ -416,4 +569,5 @@ __all__ = [
     "present_conversation",
     "present_interaction",
     "tool_logs",
+    "tool_statuses",
 ]

@@ -32,13 +32,11 @@ flow {
 
   clock = run ticker(options: {"every": "1s", "for": "10s", "immediate": true})
       via scratch
-  skip skipped, count of clock
 
   # One `stat_path` per tick. `parallel` is deliberately absent: these are meant
   # to happen one after another, a second apart.
   for tick in clock.ticks {
     look = run stat_path(path: path) via scratch
-    skip look.exists
     # The tick's own number, so the output says which reading this was -- and so
     # the loop variable is read, which the language checks for.
     look.info | map strformat("%d  %s  %d bytes\n", tick.number, it.modified,
@@ -47,5 +45,4 @@ flow {
   }
 
   out = run write_stdout(content: report) via scratch
-  skip out.bytes_written
 }

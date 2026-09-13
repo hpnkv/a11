@@ -32,5 +32,4 @@ flow {
   out = run write_stdout(
     content: who | map strformat("Hello, %s!\n", trim(it))
   ) via scratch
-  skip out.bytes_written
 }

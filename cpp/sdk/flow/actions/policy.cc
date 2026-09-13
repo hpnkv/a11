@@ -137,8 +137,11 @@ absl::StatusOr<std::filesystem::path> ResolvePath(
     return absl::PermissionDeniedError(
         "this host registered the filesystem actions read-only");
   }
-  ABSL_ASSIGN_OR_RETURN(std::filesystem::path resolved,
-                        Canonical(std::filesystem::path(path)));
+  std::filesystem::path candidate(path);
+  if (candidate.is_relative() && !policy.current_directory.empty()) {
+    candidate = std::filesystem::path(policy.current_directory) / candidate;
+  }
+  ABSL_ASSIGN_OR_RETURN(std::filesystem::path resolved, Canonical(candidate));
   if (policy.unrestricted) {
     return resolved;
   }

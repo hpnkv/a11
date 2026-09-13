@@ -13,6 +13,8 @@
 // limitations under the License.
 
 #include <algorithm>
+#include <cstdlib>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
@@ -1151,6 +1153,75 @@ caller can tell a half-read tree from a small one.
 
 The result is what a frontend passes as ``context`` to the other methods, or
 merges over the embedded snapshot itself.
+)doc");
+
+  flow.def(
+      "register_standard_actions",
+      [](const std::shared_ptr<actions::ActionRegistry>& registry,
+         const std::vector<std::string>& roots, bool allow_write,
+         bool allow_run, bool require_sandbox, bool inherit_environment,
+         std::int64_t max_seconds, const std::string& current_directory) {
+        namespace sdk_flow = a11::sdk::flow;
+        if (registry == nullptr) {
+          ThrowStatus(absl::InvalidArgumentError("a registry is required"));
+        }
+        std::vector<std::string> where = roots;
+        if (where.empty()) {
+          where.emplace_back(".");
+        }
+        sdk_flow::CapabilitiesBuilder capabilities =
+            allow_write ? sdk_flow::WorkspaceCapabilities(std::move(where))
+                        : sdk_flow::ReadOnlyCapabilities(std::move(where));
+        capabilities->filesystem.current_directory = current_directory;
+        capabilities->process.enabled = allow_run;
+        capabilities->process.any_program = allow_run;
+        capabilities->process.inherit_environment = inherit_environment;
+        capabilities->process.max_seconds = max_seconds;
+        capabilities->process.sandbox =
+            require_sandbox ? sdk_flow::SandboxRequest::kRequired
+                            : sdk_flow::SandboxRequest::kPreferred;
+        const auto add_runtime_root = [&capabilities](std::string path) {
+          std::error_code error;
+          if (std::filesystem::exists(path, error) && !error) {
+            capabilities->process.read_roots.push_back(std::move(path));
+          }
+        };
+        if (const char* home = std::getenv("HOME");
+            home != nullptr && *home != '\0') {
+          for (const std::string_view suffix :
+               {"/.local/bin", "/.local/lib", "/.local/share/uv", "/.pyenv",
+                "/.conda", "/.cargo", "/.rustup", "/.nvm", "/.fnm", "/.npm",
+                "/.bun", "/.sdkman", "/.m2", "/.gradle", "/go", "/.nix-profile",
+                "/Library/pnpm", "/.local/share/pnpm"}) {
+            add_runtime_root(absl::StrCat(home, suffix));
+          }
+        }
+        for (const std::string_view root :
+             {"/opt/homebrew", "/usr/local/go", "/nix/store",
+              "/run/current-system/sw", "/home/linuxbrew/.linuxbrew",
+              "/Library/Developer", "/System/Library/Developer",
+              "/Applications/Xcode.app"}) {
+          add_runtime_root(std::string(root));
+        }
+        capabilities->network.enabled = true;
+        capabilities->network.any_host = true;
+        const absl::Status status =
+            sdk_flow::RegisterFlowActions(*registry, capabilities);
+        if (!status.ok()) {
+          ThrowStatus(status);
+        }
+      },
+      py::arg("registry"), py::arg("roots"), py::arg("allow_write") = false,
+      py::arg("allow_run") = false, py::arg("require_sandbox") = true,
+      py::arg("inherit_environment") = false, py::arg("max_seconds") = 600,
+      py::arg("current_directory") = ".",
+      R"doc(Register the native filesystem and process actions on a registry.
+
+The policy is captured by the handlers at registration. A caller may narrow one
+run through action options but cannot widen the roots, write access, process
+access, environment inheritance, deadline ceiling, or kernel-sandbox requirement.
+Relative filesystem paths resolve against ``current_directory``. Spawned
+processes may make outbound network connections by default.
 )doc");
 
   flow.def(

@@ -18,8 +18,8 @@ A client has three situations to tell apart, and the difference matters:
 
 * it was given an explicit endpoint, which must work or the command must fail;
 * it was given nothing and a gateway is already running, which it should join;
-* it was given nothing and there is none, in which case it runs one itself, in
-  process, over an in-memory stream pair.
+* it was given nothing and there is none, in which case it starts a local
+  WebSocket gateway on the default endpoint.
 
 The middle case needs a *probe*, not a connect. Anything at all can be listening
 on 8011, and a TCP handshake with something that is not an A11 gateway succeeds
@@ -39,6 +39,7 @@ from absl import logging
 import a11
 from a11 import net, timing
 from a11.gateway.config import DEFAULT_GATEWAY_URL
+from a11.gateway.config import GatewayConfig
 from a11.gateway.ping import PING_ACTION, PING_SCHEMA
 from a11.service.session import Session
 from a11.status import Status, StatusCode, StatusException
@@ -212,7 +213,8 @@ class GatewayConnection:
             schema if schema is not None else self._registry.get_schema(name)
         )
         return (
-            a11.Action(resolved)
+            a11
+            .Action(resolved)
             .bind_node_map(self.session.node_map)
             .bind_session(self.session)
             .bind_stream(self.stream)
@@ -225,6 +227,7 @@ async def open_gateway(
     *,
     registry: a11.ActionRegistry | None = None,
     allow_embedded: bool = True,
+    local_config: GatewayConfig | None = None,
 ) -> AsyncIterator[GatewayConnection]:
     """Yield a connection to a gateway, starting one only if it must.
 
@@ -235,8 +238,10 @@ async def open_gateway(
             available -- their tools would run somewhere they did not choose.
         registry: Registry the gateway's reverse-dispatched tool calls run
             against.
-        allow_embedded: Whether to fall back to an in-process gateway when
-            nothing answers at the default endpoint.
+        allow_embedded: Whether to start a local WebSocket gateway when
+            nothing answers at the default endpoint. The legacy name remains
+            for API compatibility.
+        local_config: Tool groups and coding policy for a gateway started here.
 
     Yields:
         The connection, closed on exit.
@@ -275,11 +280,32 @@ async def open_gateway(
             ),
         ).to_exception()
 
-    # Import only when the fallback needs an embedded gateway.
-    from a11.gateway.embedded import embedded_gateway
+    from a11.gateway import app as gateway_app
 
-    async with embedded_gateway(registry=registry) as connection:
-        yield connection
+    gateway = gateway_app.init_app(local_config)
+    from a11.net import http as net_http
+
+    endpoint = net_http.parse_url(DEFAULT_GATEWAY_URL)
+    options = net.WebSocketServerOptions()
+    options.path = endpoint.path
+    options.bind_address = endpoint.host
+    options.port = endpoint.port
+    options.http2_options.enable_h2 = False
+    options.http2_options.enable_h2c = False
+    server = net.WebSocketWireServer.create(gateway.handle_stream, options)
+    local_url = f"ws://{endpoint.host}:{server.port}{endpoint.path}"
+    logging.info("started a local WebSocket gateway at %s", local_url)
+    try:
+        connection = await GatewayConnection.connect(
+            local_url, registry=registry
+        )
+        await connection.probe()
+        try:
+            yield connection
+        finally:
+            await connection.aclose()
+    finally:
+        server.stop()
 
 
 async def _probe_default(

@@ -26,7 +26,7 @@ from the syntax menu. `Cmd/Ctrl-/` comments with `#`.
 ## What it highlights
 
 * `flow` names, and the ports, headers and `describe` line that declare one
-* statements -- `run`, `call`, `node`, `nodes`, `skip`, `wait`, `drain`,
+* statements -- `run`, `call`, `node`, `nodes`, `skip n`, `wait`, `drain`,
   `status`, `cancel`, `fail`, `for`, `repeat`, `until`, `while`, `if`, `else`
 * call modifiers (`tee`, `via`, `timeout`, `after`, `with`, `id`) and `try`
 * pipeline stages after a `|`, and `then`/`where` where they drop the pipe --

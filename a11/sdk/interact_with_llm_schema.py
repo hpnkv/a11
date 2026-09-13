@@ -12,9 +12,33 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import a11
+import json
 
+import a11
+from pydantic import TypeAdapter
+
+from a11.sdk.anthropic.interact_with_claude_code_schema import (
+    CreateSessionConfig as ClaudeCodeConfig,
+)
+from a11.sdk.anthropic.interact_with_claude_schema import CreateMessageConfig
+from a11.sdk.gemini.interact_with_gemini_schema import CreateInteractionConfig
 from a11.sdk.llm import Interaction, LlmHeaders
+from a11.sdk.ollama.interact_with_ollama_schema import CreateChatConfig
+from a11.sdk.openai.interact_with_codex_schema import CreateCodexSessionConfig
+from a11.sdk.openai.interact_with_gpt_schema import CreateChatCompletionConfig
+from a11.sdk.vllm.interact_with_vllm_schema import (
+    CreateChatCompletionConfig as VllmChatConfig,
+)
+
+PROVIDER_CONFIG_SCHEMA = TypeAdapter(
+    CreateMessageConfig
+    | ClaudeCodeConfig
+    | CreateCodexSessionConfig
+    | CreateChatCompletionConfig
+    | CreateInteractionConfig
+    | CreateChatConfig
+    | VllmChatConfig
+).json_schema()
 
 INTERACT_WITH_LLM_SCHEMA = a11.ActionSchema(
     name="interact_with_llm",
@@ -34,8 +58,14 @@ INTERACT_WITH_LLM_SCHEMA = a11.ActionSchema(
         "config": a11.ActionPortSchema(
             "config",
             "application/json",
+            description=(
+                "Options for the provider selected by x-a11-llm-provider."
+                " Choose that provider's object schema."
+            ),
             unary=True,
             required=True,
+            typeinfo=dict,
+            json_schema=json.dumps(PROVIDER_CONFIG_SCHEMA),
         ),
     },
     outputs={

@@ -41,11 +41,13 @@ import a11
 from a11 import net, timing
 from a11.cli.commands import serve as serve_command
 from a11.demos import web_demos_server as demos
+from a11.demos.rate_limit import RateLimiter
 from a11.gateway import conversation_actions, conversations
 from a11.sdk.interact_with_llm_schema import INTERACT_WITH_LLM_SCHEMA
 from a11.sdk.llm import Interaction, LlmHeaders, Role
 from a11.service.serving import serving, websocket
 from a11.service.session import Session
+from a11.status import StatusCode, StatusException
 
 ollama = pytest.importorskip("ollama")
 
@@ -111,8 +113,10 @@ class _FakeOllama:
         self._reply = reply
         self.prompts: list[str] = []
         self.tools_offered: list[str] = []
+        self.options: list[dict] = []
 
     async def chat(self, **kwargs):
+        self.options.append(dict(kwargs.get("options") or {}))
         for tool in kwargs.get("tools") or []:
             name = tool.get("function", {}).get("name") or tool.get("name")
             if name:
@@ -227,13 +231,19 @@ async def _one_turn(
     peer: _Peer,
     question: Interaction,
     *,
+    schema: a11.ActionSchema = INTERACT_WITH_LLM_SCHEMA,
     allowed: bytes = b"",
     tools: list[dict] | None = None,
+    api_key: str = "",
+    config: dict | None = None,
+    model: str = "fake",
 ) -> tuple[str, list[Interaction]]:
     """One chat turn, read the way the guides' page reads it."""
-    call = peer.action(INTERACT_WITH_LLM_SCHEMA)
+    call = peer.action(schema)
     call.set_header(LlmHeaders.PROVIDER.value, b"ollama")
-    call.set_header(LlmHeaders.MODEL.value, b"fake")
+    call.set_header(LlmHeaders.MODEL.value, model.encode())
+    if api_key:
+        call.set_header(LlmHeaders.API_KEY.value, api_key.encode())
     if allowed:
         call.set_header(LlmHeaders.ALLOWED_LLM_ACTIONS.value, allowed)
     await call.call()
@@ -243,7 +253,10 @@ async def _one_turn(
     for tool in tools or []:
         await tools_port.put(tool)
     await tools_port.finalize()
-    await call["config"].finalize()
+    if config is None:
+        await call["config"].finalize()
+    else:
+        await call["config"].finalize(config)
 
     text: list[str] = []
     produced: list[Interaction] = []
@@ -297,6 +310,76 @@ async def test_a_turn_is_recorded_and_read_back_after_a_reload(
     ]
 
 
+@pytest.mark.asyncio
+async def test_public_demo_bounds_prompts_and_provider_output(
+    peer, fake_ollama, monkeypatch: pytest.MonkeyPatch
+):
+    """The hosted credential has server-side input and generation ceilings."""
+    monkeypatch.setenv(demos.DEMO_API_KEY_ENV, "real-test-key")
+    fake = fake_ollama(lambda asked: _says("bounded"))
+    connected = await peer()
+
+    answer, _ = await _one_turn(
+        connected,
+        _user("x" * demos.DEMO_MAX_INPUT_CHARACTERS),
+        api_key=demos.DEMO_API_KEY_PLACEHOLDER,
+        config={"num_predict": 50_000},
+        model=demos.DEMO_ALLOWED_MODEL,
+    )
+    assert answer == "bounded"
+    assert fake.options[-1]["num_predict"] == demos.DEMO_MAX_OUTPUT_TOKENS
+
+    await _one_turn(
+        connected,
+        _user("also cap ask_model"),
+        schema=demos.ASK_MODEL_SCHEMA,
+        api_key=demos.DEMO_API_KEY_PLACEHOLDER,
+        model=demos.DEMO_ALLOWED_MODEL,
+    )
+    assert fake.options[-1]["num_predict"] == demos.DEMO_MAX_OUTPUT_TOKENS
+
+    with pytest.raises(StatusException) as raised:
+        await _one_turn(
+            connected,
+            _user("x" * (demos.DEMO_MAX_INPUT_CHARACTERS + 1)),
+            api_key=demos.DEMO_API_KEY_PLACEHOLDER,
+            model=demos.DEMO_ALLOWED_MODEL,
+        )
+    assert raised.value.status.code == StatusCode.INVALID_ARGUMENT
+    assert len(fake.prompts) == 2
+
+
+@pytest.mark.asyncio
+async def test_public_demo_action_fails_after_rate_limit(
+    peer, fake_ollama, monkeypatch: pytest.MonkeyPatch
+):
+    """The limit rejects an action before a second provider call is made."""
+    monkeypatch.setenv(demos.DEMO_API_KEY_ENV, "real-test-key")
+    monkeypatch.setattr(
+        demos,
+        "_RATE_LIMITER",
+        RateLimiter(hourly_limit=1, daily_limit=1),
+    )
+    fake = fake_ollama(lambda asked: _says("once"))
+    connected = await peer()
+
+    await _one_turn(
+        connected,
+        _user("first"),
+        api_key=demos.DEMO_API_KEY_PLACEHOLDER,
+        model=demos.DEMO_ALLOWED_MODEL,
+    )
+    with pytest.raises(StatusException) as raised:
+        await _one_turn(
+            connected,
+            _user("second"),
+            api_key=demos.DEMO_API_KEY_PLACEHOLDER,
+            model=demos.DEMO_ALLOWED_MODEL,
+        )
+    assert raised.value.status.code == StatusCode.RESOURCE_EXHAUSTED
+    assert len(fake.prompts) == 1
+
+
 # --- The deep-research guide -------------------------------------------------
 
 _PLAN = "\n".join((
@@ -318,9 +401,15 @@ def _research_reply(asked: str) -> list[ollama.ChatResponse]:
 
 @pytest.mark.asyncio
 async def test_deep_research_plans_investigates_and_synthesises(
-    peer, fake_ollama
+    peer, fake_ollama, monkeypatch: pytest.MonkeyPatch
 ):
     """The whole composition, over a wire, as the page dispatches it."""
+    monkeypatch.setenv(demos.DEMO_API_KEY_ENV, "real-test-key")
+    monkeypatch.setattr(
+        demos,
+        "_RATE_LIMITER",
+        RateLimiter(hourly_limit=1, daily_limit=1),
+    )
     fake = fake_ollama(_research_reply)
     connected = await peer()
 
@@ -331,7 +420,10 @@ async def test_deep_research_plans_investigates_and_synthesises(
     # is a nested action, and A11 hands a nested action its parent's `x-a11-`
     # headers -- which is why the flow says nothing about providers at all.
     research.set_header(LlmHeaders.PROVIDER.value, b"ollama")
-    research.set_header(LlmHeaders.MODEL.value, b"fake")
+    research.set_header(LlmHeaders.MODEL.value, demos.DEMO_ALLOWED_MODEL)
+    research.set_header(
+        LlmHeaders.API_KEY.value, demos.DEMO_API_KEY_PLACEHOLDER
+    )
     # Claimed before the call, which is when the port has to be held: a log
     # written before anything reads it goes to the process sink and is gone.
     # The composition narrates itself *here* and on no output port, which is
@@ -379,6 +471,10 @@ async def test_deep_research_plans_investigates_and_synthesises(
 
     # One model call to plan, one per brief, one to synthesise.
     assert len(fake.prompts) == 4
+    assert all(
+        options["num_predict"] == demos.DEMO_MAX_OUTPUT_TOKENS
+        for options in fake.options
+    )
     # And the synthesis saw both investigations' findings, which is the only
     # place in the composition where anything waits for anything.
     synthesis = [p for p in fake.prompts if "investigations found" in p]
@@ -475,9 +571,11 @@ SET_COLOR_SCHEMA = a11.ActionSchema(
 
 @pytest.mark.asyncio
 async def test_an_action_the_page_serves_is_called_by_the_model(
-    peer, fake_ollama
+    peer, fake_ollama, monkeypatch: pytest.MonkeyPatch
 ):
     """The model's tool call runs in the page, over the page's own socket."""
+    monkeypatch.setenv(demos.DEMO_API_KEY_ENV, "real-test-key")
+    monkeypatch.setattr(demos, "_RATE_LIMITER", RateLimiter())
     ran: list[tuple[list[int], list[str]]] = []
 
     async def set_color(action: a11.Action) -> None:
@@ -500,7 +598,11 @@ async def test_an_action_the_page_serves_is_called_by_the_model(
     # The page registers `set_color` on its session registry. The server reads
     # the available actions from that registry when a turn first needs tools.
     answer, _ = await _one_turn(
-        connected, _user("make blob 2 red"), allowed=b"set_color"
+        connected,
+        _user("make blob 2 red"),
+        allowed=b"set_color",
+        api_key=demos.DEMO_API_KEY_PLACEHOLDER,
+        model=demos.DEMO_ALLOWED_MODEL,
     )
 
     assert answer == "done."

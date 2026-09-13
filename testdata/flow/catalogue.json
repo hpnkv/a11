@@ -24,7 +24,7 @@
       "description": "List the actions this peer serves, with their schemas, as one a11.actions/v1 document. Takes an optional request object on 'request': 'names' (full-match patterns), 'exact' (names), 'ports' (\"callable\" or \"all\"), 'include_reserved', and 'runnable_only'.",
       "inputs": [
         {
-          "description": "Which actions to describe. Absent means all of them.",
+          "description": "Action selection and port visibility filters. Absent means all non-reserved actions.",
           "name": "request",
           "type": "application/json"
         }
@@ -219,6 +219,11 @@
           "type": "string"
         },
         {
+          "description": "Signed A11 subject and caller delegation chain.",
+          "name": "x-a11-auth",
+          "type": "string"
+        },
+        {
           "description": "Deadline for execution in milliseconds since epoch.",
           "name": "x-a11-deadline",
           "type": "string"
@@ -229,7 +234,12 @@
           "type": "string"
         },
         {
-          "description": "Which backend to route to, one of: claude, gemini, ollama.",
+          "description": "The backend model.",
+          "name": "x-a11-llm-model",
+          "type": "string"
+        },
+        {
+          "description": "Which backend to route to, one of: claude, claude_code, gemini, gpt, openai, codex, ollama, vllm.",
           "name": "x-a11-llm-provider",
           "type": "string"
         },
@@ -392,11 +402,16 @@
       ]
     },
     {
-      "description": "Run a shell command and stream back its output lines (stdout and stderr, interleaved). Target a shell started with shell_start via the x-a11-shell-id header to reuse its state; omit the header to run the command in a throwaway shell that is discarded afterwards. The command is terminated if it exceeds the timeout or the action's deadline.",
+      "description": "Run a shell command and stream back its output lines (stdout and stderr, interleaved). Target a shell started with shell_start via the x-a11-shell-id header to reuse its state; omit the header to run the command in a throwaway shell that is discarded afterwards. The command is terminated if it exceeds the timeout, the action's deadline, 1000 output lines, or 128 KiB of output. Truncated output ends with a descriptive marker. When web-fetch is also offered, use it for HTTP retrieval and keep shell_execute for work that requires shell syntax, process state, or an installed command.",
       "headers": [
         {
           "description": "Comma-separated regex patterns of actions the LLM may call as tools.",
           "name": "x-a11-allowed-llm-actions",
+          "type": "string"
+        },
+        {
+          "description": "Signed A11 subject and caller delegation chain.",
+          "name": "x-a11-auth",
           "type": "string"
         },
         {
@@ -427,7 +442,7 @@
       ],
       "inputs": [
         {
-          "description": "The command to execute.",
+          "description": "The command to execute. When web-fetch is also offered, do not use curl, wget, or a language HTTP client here.",
           "name": "command",
           "type": "text/plain"
         },
@@ -440,7 +455,7 @@
       "name": "shell_execute",
       "outputs": [
         {
-          "description": "Output lines produced by the command, if any.",
+          "description": "Output lines produced by the command, bounded by the requested limits and hard caps of 1000 lines and 128 KiB. A final marker says when output was truncated.",
           "name": "output_lines",
           "type": "text/plain",
           "unary": false
@@ -944,6 +959,439 @@
         }
       ],
       "tag": "a11.sdk.AudioInputOptions"
+    },
+    {
+      "description": "Parameters for one Claude Code session.",
+      "fields": [
+        {
+          "description": "Claude Code's own tools. `false` offers the model A11 actions alone; `true` offers the full Claude Code toolset, which reads and writes the filesystem and runs commands; a list offers the named subset. Enabling a tool also permits it \u2014 a session driven through A11 answers no permission prompt \u2014 so name only what the turn should be able to do, and use `disallowed_tools` to carve back a command shape.",
+          "name": "builtin_tools",
+          "type": "json"
+        },
+        {
+          "description": "Claude Code's permission mode, such as `plan` for a read-only session or `acceptEdits` for unattended file edits.",
+          "name": "permission_mode",
+          "type": "json"
+        },
+        {
+          "description": "Tool names or scoped rules the model may never use, such as `Bash(rm *)`. A scoped rule is refused in every permission mode.",
+          "element": "string",
+          "name": "disallowed_tools",
+          "type": "list"
+        },
+        {
+          "description": "Maximum agent turns before the session stops.",
+          "name": "max_turns",
+          "type": "integer"
+        },
+        {
+          "description": "Stop the session once the estimated cost reaches this.",
+          "name": "max_budget_usd",
+          "type": "number"
+        },
+        {
+          "description": "Working directory for the session's tools.",
+          "name": "cwd",
+          "type": "string"
+        },
+        {
+          "description": "Extra directories the session's tools may reach.",
+          "element": "string",
+          "name": "add_dirs",
+          "type": "list"
+        },
+        {
+          "description": "Which on-disk Claude Code settings to load. Omitted loads none, which keeps a session's behaviour independent of the host's configuration; include `project` to load CLAUDE.md.",
+          "element": "json",
+          "name": "setting_sources",
+          "type": "list"
+        },
+        {
+          "description": "Skills to make available, or `all`.",
+          "name": "skills",
+          "type": "json"
+        },
+        {
+          "description": "Enable adaptive thinking so the model decides when and how much internal reasoning to spend.",
+          "name": "thinking",
+          "type": "bool"
+        },
+        {
+          "description": "Stream summaries of the model's reasoning as it thinks.",
+          "name": "thinking_summaries",
+          "type": "bool"
+        },
+        {
+          "description": "Overall thinking depth and token spend.",
+          "name": "effort",
+          "type": "json"
+        },
+        {
+          "description": "Model to fall back to when the primary is unavailable.",
+          "name": "fallback_model",
+          "type": "string"
+        },
+        {
+          "description": "Claude Code session id to continue. Also read from the newest assistant interaction's metadata when unset.",
+          "name": "resume",
+          "type": "string"
+        },
+        {
+          "description": "Branch a resumed session instead of extending it.",
+          "name": "fork_session",
+          "type": "bool"
+        },
+        {
+          "description": "Path to the `claude` executable.",
+          "name": "cli_path",
+          "type": "string"
+        }
+      ],
+      "tag": "a11.sdk.InteractWithClaudeCodeConfig"
+    },
+    {
+      "description": "Parameters for creating a Claude message.",
+      "fields": [
+        {
+          "description": "Maximum number of tokens to generate.",
+          "name": "max_tokens",
+          "type": "integer"
+        },
+        {
+          "description": "Enable adaptive thinking so the model decides when and how much internal reasoning to spend. Unsupported alongside tools and on Haiku models.",
+          "name": "thinking",
+          "type": "bool"
+        },
+        {
+          "description": "Stream summaries of the model's reasoning as it thinks.",
+          "name": "thinking_summaries",
+          "type": "bool"
+        },
+        {
+          "description": "Overall thinking depth and token spend. Only honoured on models that support the effort parameter.",
+          "name": "effort",
+          "type": "json"
+        },
+        {
+          "description": "Enable the built-in web search tool.",
+          "name": "web_search",
+          "type": "bool"
+        },
+        {
+          "description": "Enable the built-in web fetch tool.",
+          "name": "web_fetch",
+          "type": "bool"
+        },
+        {
+          "description": "Enable the built-in code execution tool.",
+          "name": "code_execution",
+          "type": "bool"
+        }
+      ],
+      "tag": "a11.sdk.InteractWithClaudeConfig"
+    },
+    {
+      "description": "Options for a `codex exec --json` session.",
+      "fields": [
+        {
+          "description": "Working directory exposed as Codex's primary workspace.",
+          "name": "cwd",
+          "type": "string"
+        },
+        {
+          "description": "Additional writable directories.",
+          "element": "string",
+          "name": "add_dirs",
+          "type": "list"
+        },
+        {
+          "description": "Sandbox policy for Codex's built-in tools.",
+          "name": "sandbox",
+          "type": "json"
+        },
+        {
+          "description": "Codex configuration profile.",
+          "name": "profile",
+          "type": "string"
+        },
+        {
+          "description": "Model reasoning effort.",
+          "name": "reasoning_effort",
+          "type": "json"
+        },
+        {
+          "description": "JSON Schema for the final response.",
+          "name": "output_schema",
+          "type": "object"
+        },
+        {
+          "description": "Codex thread id to resume. The latest Codex interaction's metadata supplies it when omitted.",
+          "name": "resume",
+          "type": "string"
+        },
+        {
+          "description": "Do not persist the Codex thread on disk.",
+          "name": "ephemeral",
+          "type": "bool"
+        },
+        {
+          "description": "Allow Codex to run outside a Git repository.",
+          "name": "skip_git_repo_check",
+          "type": "bool"
+        },
+        {
+          "description": "Ignore the user's config.toml while retaining authentication.",
+          "name": "ignore_user_config",
+          "type": "bool"
+        },
+        {
+          "description": "Do not load user or project execpolicy rule files.",
+          "name": "ignore_rules",
+          "type": "bool"
+        },
+        {
+          "description": "Additional Codex `-c key=value` settings.",
+          "name": "config_overrides",
+          "type": "object"
+        },
+        {
+          "description": "Path to the Codex CLI executable.",
+          "name": "cli_path",
+          "type": "string"
+        }
+      ],
+      "tag": "a11.sdk.InteractWithCodexConfig"
+    },
+    {
+      "description": "Parameters for starting a Gemini interaction.",
+      "fields": [
+        {
+          "description": "Maximum number of tokens to generate per step.",
+          "name": "max_output_tokens",
+          "type": "integer"
+        },
+        {
+          "description": "How to carry conversation state across turns: resume by `previous_interaction_id` (`last-id`), replay the whole transcript every turn (`full-history`), or try the former and fall back to the latter (`auto`).",
+          "name": "state_mode",
+          "type": "json"
+        },
+        {
+          "description": "How much internal reasoning the model may spend.",
+          "name": "thinking_level",
+          "type": "json"
+        },
+        {
+          "description": "Stream summaries of the model's reasoning as it thinks.",
+          "name": "thinking_summaries",
+          "type": "bool"
+        },
+        {
+          "description": "Enable the built-in Google Search grounding tool.",
+          "name": "google_search",
+          "type": "bool"
+        },
+        {
+          "description": "Enable the built-in code execution tool.",
+          "name": "code_execution",
+          "type": "bool"
+        },
+        {
+          "description": "Enable the built-in URL context tool.",
+          "name": "url_context",
+          "type": "bool"
+        }
+      ],
+      "tag": "a11.sdk.InteractWithGeminiConfig"
+    },
+    {
+      "description": "Parameters for one OpenAI chat completion.",
+      "fields": [
+        {
+          "description": "Maximum generated tokens, including reasoning tokens.",
+          "name": "max_completion_tokens",
+          "type": "integer"
+        },
+        {
+          "description": "Sampling temperature.",
+          "name": "temperature",
+          "type": "number"
+        },
+        {
+          "description": "Nucleus-sampling probability.",
+          "name": "top_p",
+          "type": "number"
+        },
+        {
+          "description": "Penalty applied when a token already appeared.",
+          "name": "presence_penalty",
+          "type": "number"
+        },
+        {
+          "description": "Penalty scaled by a token's prior frequency.",
+          "name": "frequency_penalty",
+          "type": "number"
+        },
+        {
+          "description": "Best-effort sampling seed.",
+          "name": "seed",
+          "type": "integer"
+        },
+        {
+          "description": "Strings that end generation.",
+          "element": "string",
+          "name": "stop",
+          "type": "list"
+        },
+        {
+          "description": "Reasoning effort for models that support it.",
+          "name": "reasoning_effort",
+          "type": "json"
+        },
+        {
+          "description": "Constrain the response to a JSON object.",
+          "name": "json_output",
+          "type": "bool"
+        },
+        {
+          "description": "JSON Schema for a structured response.",
+          "name": "json_schema",
+          "type": "object"
+        },
+        {
+          "description": "OpenAI processing tier.",
+          "name": "service_tier",
+          "type": "json"
+        },
+        {
+          "description": "Additional OpenAI request fields.",
+          "name": "extra_body",
+          "type": "object"
+        }
+      ],
+      "tag": "a11.sdk.InteractWithGptConfig"
+    },
+    {
+      "description": "Parameters for a single Ollama chat turn.",
+      "fields": [
+        {
+          "description": "Maximum number of tokens to generate. -1 lets the model run until it stops on its own (Ollama `options.num_predict`).",
+          "name": "num_predict",
+          "type": "integer"
+        },
+        {
+          "description": "Enable the model's thinking, optionally at a given effort level. Only honoured by models that support it.",
+          "name": "think",
+          "type": "json"
+        },
+        {
+          "description": "Sampling temperature (Ollama `options.temperature`).",
+          "name": "temperature",
+          "type": "number"
+        },
+        {
+          "description": "Nucleus-sampling probability (Ollama `options.top_p`).",
+          "name": "top_p",
+          "type": "number"
+        },
+        {
+          "description": "Top-k sampling cutoff (Ollama `options.top_k`).",
+          "name": "top_k",
+          "type": "integer"
+        },
+        {
+          "description": "Sampling seed for reproducible output (Ollama `options.seed`).",
+          "name": "seed",
+          "type": "integer"
+        },
+        {
+          "description": "How long to keep the model loaded in memory after the request (e.g. `5m`, or seconds as a number).",
+          "name": "keep_alive",
+          "type": "json"
+        },
+        {
+          "description": "Constrain the model to emit valid JSON (Ollama `format=\"json\"`).",
+          "name": "json_output",
+          "type": "bool"
+        }
+      ],
+      "tag": "a11.sdk.InteractWithOllamaConfig"
+    },
+    {
+      "description": "Parameters for a single vLLM chat completion.",
+      "fields": [
+        {
+          "description": "Maximum number of tokens to generate. -1 lets the model run until it stops on its own or reaches the deployment's context limit.",
+          "name": "max_tokens",
+          "type": "integer"
+        },
+        {
+          "description": "Sampling temperature.",
+          "name": "temperature",
+          "type": "number"
+        },
+        {
+          "description": "Nucleus-sampling probability.",
+          "name": "top_p",
+          "type": "number"
+        },
+        {
+          "description": "Penalty applied to tokens that already appeared.",
+          "name": "presence_penalty",
+          "type": "number"
+        },
+        {
+          "description": "Penalty scaled by how often a token already appeared.",
+          "name": "frequency_penalty",
+          "type": "number"
+        },
+        {
+          "description": "Sampling seed for reproducible output.",
+          "name": "seed",
+          "type": "integer"
+        },
+        {
+          "description": "Strings that end the generation when produced.",
+          "element": "string",
+          "name": "stop",
+          "type": "list"
+        },
+        {
+          "description": "Top-k sampling cutoff (vLLM `extra_body.top_k`).",
+          "name": "top_k",
+          "type": "integer"
+        },
+        {
+          "description": "Minimum token probability, relative to the most likely token (vLLM `extra_body.min_p`).",
+          "name": "min_p",
+          "type": "number"
+        },
+        {
+          "description": "Penalty applied to tokens from the prompt and the output so far (vLLM `extra_body.repetition_penalty`).",
+          "name": "repetition_penalty",
+          "type": "number"
+        },
+        {
+          "description": "Constrain the model to emit valid JSON (`response_format={\"type\": \"json_object\"}`).",
+          "name": "json_output",
+          "type": "bool"
+        },
+        {
+          "description": "A JSON Schema the output has to satisfy, enforced by vLLM's structured decoding. Takes precedence over `json_output`.",
+          "name": "json_schema",
+          "type": "object"
+        },
+        {
+          "description": "Values passed to the model's chat template, such as `{\"enable_thinking\": true}` on models whose template gates reasoning (vLLM `extra_body.chat_template_kwargs`).",
+          "name": "chat_template_kwargs",
+          "type": "object"
+        },
+        {
+          "description": "Additional request fields, merged into the request body last. Covers deployment-specific sampling parameters this config does not name.",
+          "name": "extra_body",
+          "type": "object"
+        }
+      ],
+      "tag": "a11.sdk.InteractWithVllmConfig"
     },
     {
       "description": "!!! abstract \"Usage Documentation\"",

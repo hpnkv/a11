@@ -26,7 +26,6 @@ flow interact-on-full-sentence {
   # if the timeout is reached, the error will propagate and the whole flow
   # will fail
   mic = call capture_audio(options: device) timeout 600s
-  skip mic.events  # <- we never read them, so declare as skipped
 
   nodes scratch  # local nodes that are never sent to the client
 
@@ -36,7 +35,6 @@ flow interact-on-full-sentence {
   transcribe = run transcribe_audio(
     asr_options: asr, audio: mic.audio | packb
   ) via scratch  # <- never send transcription outputs to the client directly
-  skip transcribe.events
 
   # The sentence is wanted twice -- by the client and by the model -- and a
   # node is how a stream gets two readers: reading one twice would hand each
@@ -80,9 +78,6 @@ flow interact-on-full-sentence {
       forward headers "x-a11-llm-*"
       via scratch  # <- not sending outputs directly
 
-  # skip outputs that we never read
-  skip interact.event_stream
-  skip interact.thoughts
 
   # stream the LLM's output to the client
   interact.text_output -> reply

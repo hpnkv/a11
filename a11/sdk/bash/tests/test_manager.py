@@ -48,6 +48,7 @@ class FakeShell:
         self.executed: list[tuple[str, float | None]] = []
         self.output_lines: list[str] = ["line-1", "line-2"]
         self.last_exit_code: int | None = None
+        self.execution_closed = False
 
     @property
     def is_alive(self) -> bool:
@@ -60,9 +61,12 @@ class FakeShell:
         self, command: str, timeout: float | None = None
     ) -> AsyncIterator[str]:
         self.executed.append((command, timeout))
-        for line in self.output_lines:
-            yield line
-        self.last_exit_code = 0
+        try:
+            for line in self.output_lines:
+                yield line
+            self.last_exit_code = 0
+        finally:
+            self.execution_closed = True
 
     async def close(self) -> None:
         self.closed = True
@@ -303,6 +307,49 @@ async def test_output_processor_transforms_adds_and_drops_lines():
 
 
 @pytest.mark.asyncio
+async def test_output_is_truncated_at_requested_line_limit():
+    manager, made = _manager()
+    action, release = _running_action()
+    made_output = [f"line-{index}" for index in range(10)]
+    shell_id = await manager.start_shell(None)
+    made[0].output_lines = made_output
+    parameters = A11ShellExecuteParameters(max_output_lines=2)
+
+    output = [
+        line
+        async for line in manager.run_command(
+            "cmd", shell_id, parameters, action
+        )
+    ]
+
+    assert output[:2] == made_output[:2]
+    assert output[2].startswith("[output truncated after 2 lines")
+    assert made[0].execution_closed is True
+    await _finish(action, release)
+
+
+@pytest.mark.asyncio
+async def test_output_is_truncated_at_requested_byte_limit():
+    manager, made = _manager()
+    action, release = _running_action()
+    shell_id = await manager.start_shell(None)
+    made[0].output_lines = ["x" * 900]
+    parameters = A11ShellExecuteParameters(max_output_bytes=1024)
+
+    output = [
+        line
+        async for line in manager.run_command(
+            "cmd", shell_id, parameters, action
+        )
+    ]
+
+    assert len(output) == 1
+    assert output[0].startswith("[output truncated after 0 lines")
+    assert made[0].execution_closed is True
+    await _finish(action, release)
+
+
+@pytest.mark.asyncio
 async def test_expired_deadline_raises_before_running():
     manager, made = _manager()
     action, release = _running_action(
@@ -356,3 +403,10 @@ def test_parameters_reject_non_positive_timeout():
 def test_parameters_clamp_timeout_to_maximum():
     params = A11ShellExecuteParameters(timeout_seconds=10_000)
     assert params.timeout_seconds == A11ShellExecuteParameters.MAX
+
+
+def test_parameters_reject_output_limits_above_hard_caps():
+    with pytest.raises(Exception):
+        A11ShellExecuteParameters(max_output_lines=1_001)
+    with pytest.raises(Exception):
+        A11ShellExecuteParameters(max_output_bytes=128 * 1024 + 1)

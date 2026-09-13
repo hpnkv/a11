@@ -1732,53 +1732,6 @@
               "name": "notes"
             }
           ]
-        },
-        {
-          "after": [],
-          "at": {
-            "column": 3,
-            "end": 4762,
-            "line": 123,
-            "start": 4758
-          },
-          "count": null,
-          "kind": "skip",
-          "targets": [
-            {
-              "call": null,
-              "outputs": [],
-              "pipeline": {
-                "at": {
-                  "column": 8,
-                  "end": 4769,
-                  "line": 123,
-                  "start": 4763
-                },
-                "kind": "pipeline",
-                "source": {
-                  "at": {
-                    "column": 14,
-                    "end": 4770,
-                    "line": 123,
-                    "start": 4769
-                  },
-                  "base": {
-                    "at": {
-                      "column": 8,
-                      "end": 4769,
-                      "line": 123,
-                      "start": 4763
-                    },
-                    "kind": "name",
-                    "name": "search"
-                  },
-                  "kind": "attr",
-                  "name": "debug"
-                },
-                "stages": []
-              }
-            }
-          ]
         }
       ],
       "description": "Read a few pages and answer from them.",

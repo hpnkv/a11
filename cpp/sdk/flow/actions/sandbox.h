@@ -94,7 +94,8 @@ enum class SandboxKind {
  *
  *   * **Linux/Landlock** confines reads and writes, and -- from ABI 4 -- TCP.
  *   * **macOS/Seatbelt** as this library builds it confines *writes* and the
- *     network, and **not reads**. A deny-default read profile that also lets a
+ *     network, and only explicitly denies sensitive reads. A deny-default
+ *     read profile that also lets a
  *     dynamically linked program start needs an exact list of what dyld
  *     touches, which is undocumented and changes between releases; the
  *     alternative on offer -- importing Apple's own `bsd.sb` base profile --
@@ -102,10 +103,10 @@ enum class SandboxKind {
  *     silently allows reads and one that says it allows reads, this library
  *     says it.
  *
- * So on macOS a confined child can still *read* what the policy forbids, and
- * the only thing standing between a spawned program and `/etc/passwd` there is
- * that nothing in the flow asked it to look. Reported, so it is a known
- * limitation rather than a false sense of security.
+ * So on macOS a confined child can still perform general reads outside the
+ * workspace, while credential stores, browser sessions, private user data,
+ * shell histories, and common secret files are denied. The policy reports
+ * that partial boundary rather than claiming full read confinement.
  */
 struct SandboxAvailability {
   SandboxKind kind = SandboxKind::kNone;

@@ -67,11 +67,9 @@ async def demo_echo_flow():
       nodes scratch
       
       i = node() in scratch
-      s = node() in scratch
       input -> i
       
-      i | logf info "%s" it -> s
-      skip s
+      i | logf info "%s" it -> _
     }
     """,
         "echo.flow",

@@ -53,7 +53,4 @@ flow triage-strictly {
 
   inner = run triage(report: report)
   inner.verdict -> verdict
-
-  skip inner.passes
-  skip inner.notes
 }

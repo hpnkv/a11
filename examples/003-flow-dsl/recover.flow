@@ -39,7 +39,6 @@ flow resilient-read {
     # A call that failed produced nothing, so no branch is needed here: there
     # is simply nothing to pipe.
     page.text | truncate 120 -> best
-    skip page.bytes
   }
 
   best | first 1 -> text
@@ -71,7 +70,6 @@ flow annotated-read {
 
   # The reader was lent the node; the flow that lent it says when it is over.
   drain seen after reader
-  skip page.bytes
 }
 
 flow strict-read {

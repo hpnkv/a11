@@ -3416,24 +3416,8 @@ absl::Status Scope::Execute(StepId step) {
       }
     }
     case StepKind::kSkip: {
-      // With a count the values are already gone: it was applied where the
-      // stream is produced. Reading here would take a reader slot this step was
-      // never counted for.
-      if (one.count.has_value()) {
-        return absl::OkStatus();
-      }
-      // `skip act` against a call whose real ports are not known here (an
-      // action from a registry): nothing to subscribe to.
-      if (one.source == kNone) {
-        return absl::OkStatus();
-      }
-      ABSL_ASSIGN_OR_RETURN(ReaderPtr reader, Subscribe(one.source));
-      while (true) {
-        ABSL_ASSIGN_OR_RETURN(const ItemPtr item, reader->Next());
-        if (item == nullptr) {
-          return absl::OkStatus();
-        }
-      }
+      // Values are removed where the stream is produced.
+      return absl::OkStatus();
     }
     case StepKind::kCapture: {
       ABSL_ASSIGN_OR_RETURN(ReaderPtr reader, Subscribe(one.source));

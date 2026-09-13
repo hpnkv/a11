@@ -32,6 +32,7 @@ from a11.sdk.ollama.client import get_ollama_client
 from a11.sdk.ollama.interact_with_ollama_schema import (
     CreateChatConfig,
     DEFAULT_MODEL,
+    MAX_OUTPUT_TOKENS_HEADER,
 )
 from a11.sdk import llm
 from a11.sdk.llm_tools import runner
@@ -660,6 +661,29 @@ async def interact_with_ollama(action: a11.Action):
     )
     if config is None:
         config = CreateChatConfig()
+    server_limit = action.get_header(MAX_OUTPUT_TOKENS_HEADER, decode=True)
+    if server_limit:
+        try:
+            maximum = int(server_limit)
+        except ValueError as error:
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT,
+                message=(
+                    f"{MAX_OUTPUT_TOKENS_HEADER} must be a positive integer."
+                ),
+            ).to_exception() from error
+        if maximum <= 0:
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT,
+                message=(
+                    f"{MAX_OUTPUT_TOKENS_HEADER} must be a positive integer."
+                ),
+            ).to_exception()
+        config.num_predict = (
+            maximum
+            if config.num_predict < 0
+            else min(config.num_predict, maximum)
+        )
 
     previous_interaction_id = ""
     conversation = Conversation()

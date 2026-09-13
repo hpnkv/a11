@@ -667,15 +667,13 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StatementDocs() {
         "stream does.",
         "advance word"}},
       {"skip",
-       {"Reads a stream to its end and keeps nothing.",
-        "a stream, a count and a port, or several of either, separated by ','",
-        "The runtime already drains every output. This form records that an "
-        "output is unused. `skip n port` drops the port's first `n` values "
-        "for every reader, such as removing a shared header row. Several of "
-        "them naming one port add up. A bare call skips every one of its "
-        "outputs, and `skip o1, o2 of act` (or `skip (o1, o2) of act`) skips "
-        "just those; several subjects may share one `skip`, across lines.",
-        "skip search.debug"}},
+       {"Drops values from the front of a shared stream.",
+        "a positive count and a port or node",
+        "`skip n port` removes the port's first `n` values for every reader, "
+        "such as removing a shared header row. Several statements naming one "
+        "port add up. Unbound call outputs are drained automatically. Use "
+        "`| drop n` to trim one pipeline only.",
+        "skip 1 rows"}},
       {"wait",
        {"Holds until a step, node, port or barrier has finished.",
         "a subject, and optionally `timeout`",
@@ -1680,7 +1678,7 @@ constexpr std::array kStatementOrder = {
 
 // `else` continues an `if`; `parallel` and `max` say how wide a loop or a stage
 // runs and `unordered` gives up the order a parallel stage otherwise keeps;
-// `of` ties a `skip`'s output names to the call they belong to, and.
+// `of` joins the subjects of `wait first of` and `wait all of`.
 constexpr std::array kClauseOrder = {
     std::string_view("else"),      std::string_view("parallel"),
     std::string_view("unordered"), std::string_view("max"),

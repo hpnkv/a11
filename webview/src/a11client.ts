@@ -42,7 +42,10 @@
 
 import {
     Action,
+    ActionPortSchema,
     ActionRegistry,
+    ActionSchema,
+    BlockKind,
     INTERACT_WITH_LLM_SCHEMA,
     LlmHeaders,
     Session,
@@ -52,6 +55,8 @@ import {
     getToolDefinitions,
     isOk,
     makeTextMessageInteraction,
+    presentInteraction,
+    toolStatuses,
     type Interaction,
     type Status,
     type WireStream,
@@ -63,7 +68,6 @@ import {runFlow} from './runFlow.js';
 import {
     fetchConversation,
     fetchConversations,
-    toolCalls,
     toolLogs,
     type ConversationSummary,
 } from './conversations.js';
@@ -80,6 +84,18 @@ const need = <T>(value: T | Status): T => {
  */
 const isTimeout = (error: unknown): boolean =>
     error instanceof Error && error.message.startsWith(`${StatusCode[StatusCode.DEADLINE_EXCEEDED]}:`);
+
+const RESPOND_USER_INPUT_SCHEMA = new ActionSchema({
+    name: 'respond_user_input',
+    description: 'Answer a pending coding-agent question.',
+    inputs: {
+        request_id: new ActionPortSchema({name: 'request_id', type: 'text/plain', unary: true, required: true}),
+        answer: new ActionPortSchema({name: 'answer', type: 'text/plain', unary: true, required: true}),
+    },
+    outputs: {
+        result: new ActionPortSchema({name: 'result', type: 'application/json', unary: true}),
+    },
+});
 
 /**
  * The model is an assistant inside an IDE. Tell it to act through the offered
@@ -105,8 +121,9 @@ project index, and the PSI (symbols, references, refactorings). Use them.
 - Remember that shell commands may fail, deadlock, run for a very long time, etc.
   Use shell utilities to provide your commands with strong upper bounds on output
   size and execution time.
-- Only ask the user a question when a tool has reported an ambiguity you cannot
-  resolve (for example, a symbol name that is declared more than once).
+- Only ask when an ambiguity cannot be resolved from project evidence. Use
+  request_user_input so the IDE can present choices or free text and resume the
+  same turn.
 `;
 
 /**
@@ -282,6 +299,19 @@ export class A11ChatSession {
         const interactions = await fetchConversation(this.session!, this.stream!, id);
         this.history = interactions;
         return interactions;
+    }
+
+    async respondUserInput(requestId: string, answer: string): Promise<void> {
+        await this.ensureConnected();
+        const call = need(Action.create(RESPOND_USER_INPUT_SCHEMA, {
+            session: this.session!, stream: this.stream!, nodeMap: this.session!.getNodeMap(),
+        }));
+        need(await call.call());
+        need(await need(await call.getInput('request_id')).finalize(requestId));
+        need(await need(await call.getInput('answer')).finalize(answer));
+        const result = need(await call.getOutput('result', false));
+        need(await result.consume({timeoutMs: 30_000, allowNone: true}));
+        need(await call.wait(30_000));
     }
 
     /**
@@ -471,7 +501,7 @@ export class A11ChatSession {
      */
     private allowedTools(): string[] {
         const extra = (this.config.allowedTools ?? []).filter((pattern) => !this.toolNames.includes(pattern));
-        return [...this.toolNames, ...extra];
+        return [...this.toolNames, ...extra, 'request_user_input'];
     }
 
     /**
@@ -495,14 +525,30 @@ export class A11ChatSession {
             if (next === null) break;
             const interaction = next as Interaction;
             into.push(interaction);
-            for (const {id, name} of toolCalls(interaction)) names.set(id, name);
+            const presented = await presentInteraction(interaction);
+            for (const block of presented.blocks) {
+                if (block.kind !== BlockKind.TOOL_RUN) continue;
+                names.set(block.id, block.toolName);
+                this.ranTool = true;
+                this.onToolRun?.({
+                    id: block.id,
+                    tool: block.toolName,
+                    arguments: block.toolArguments,
+                    phase: 'started',
+                });
+            }
             for (const [id, log] of Object.entries(toolLogs(interaction))) {
                 const name = names.get(id);
                 if (!name || this.toolNames.includes(name)) continue;
                 // A gateway tool may have changed the project just as an IDE
                 // one may have, so this turn is no longer safe to retry either.
                 this.ranTool = true;
-                this.onToolRun?.({tool: name, log});
+                this.onToolRun?.({id, tool: name, log, status: toolStatuses(interaction)[id], phase: 'finished'});
+            }
+            for (const [id, status] of Object.entries(toolStatuses(interaction))) {
+                const name = names.get(id);
+                if (!name || this.toolNames.includes(name) || toolLogs(interaction)[id]) continue;
+                this.onToolRun?.({id, tool: name, status, phase: 'finished'});
             }
         }
     }

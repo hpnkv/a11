@@ -248,7 +248,6 @@ def test_a_flow_describes_itself_as_data():
           out a: string
           step = run text-upper(text: q)
           step.upper | first 1 -> a
-          skip step.other
         }
         """)
     described = program["work"].describe()
@@ -261,7 +260,7 @@ def test_a_flow_describes_itself_as_data():
     }
     kinds = [step["step"] for step in described["steps"]]
     # A described step names the verb it was written with, not just "a call".
-    assert kinds == ["run", "pipe", "pipe", "skip"]
+    assert kinds == ["run", "pipe", "pipe"]
     assert described["steps"][2]["from"] == "step.upper | first 1"
 
 
@@ -500,7 +499,6 @@ async def test_first_stops_reading_without_stalling_the_producer(registry):
           out head:  string
           noise = run noisy(text: words)
           noise.result | first 1 -> head
-          skip noise.log
         }
         """,
         registry,
@@ -808,7 +806,6 @@ async def test_an_after_holds_the_arguments_of_its_statement(registry):
 
           slow = run slowly(text: "go")
           done = wait slow
-          skip slow.upper
 
           measured = run text-upper(
             text: strformat("%(ms)d", now() - started)
@@ -1286,7 +1283,7 @@ def test_a_brace_after_a_name_still_opens_a_block():
             "not yet" -> out
           }
           for one in step.items {
-            skip one
+            one -> _
           }
         }
         """)
@@ -2331,7 +2328,6 @@ async def test_not_negates_a_condition(registry):
           risky = try run boom(text: words)
           outcome = wait risky
           if not outcome.ok { "recovered" -> took } else { "fine" -> took }
-          skip risky.result
         }
         """,
         registry,
@@ -2359,7 +2355,6 @@ async def test_a_failing_guard_ends_the_flow_before_the_rest_of_it(registry):
               if not outcome.ok { fail unavailable outcome.message }
               ok = run text-upper(text: words)
               ok.upper -> shouted
-              skip risky.result
             }
             """,
             registry,

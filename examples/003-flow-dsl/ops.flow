@@ -87,7 +87,4 @@ flow explain-a-command {
       with "x-a11-llm-base-url": base_url
 
   llm.text_output | join "" -> verdict
-  skip llm.thoughts
-  skip llm.event_stream
-  skip llm.new_interactions
 }

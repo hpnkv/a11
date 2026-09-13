@@ -29,7 +29,6 @@ flow live-captions {
   out pieces:    string stream          "The raw utterances, as decoded."
 
   mic = call capture_audio(options: capture) timeout 600s
-  skip mic.events
 
   # The caller holds the microphone's off switch. Nothing in the flow decides
   # when listening ends, so the flow cannot get it wrong.
@@ -40,7 +39,6 @@ flow live-captions {
   # anyway: the flow says what the port needs instead of assuming what the
   # producer does.
   heard = call transcribe_audio(audio: mic.audio | packb, asr_options: asr)
-  skip heard.events
 
   heard.transcription_pieces -> pieces
 
@@ -69,7 +67,6 @@ flow dictate-a-note {
 
   # A flow is an action, so the captions above are simply called.
   captions = run live-captions(asr: asr, capture: capture, control: control)
-  skip captions.pieces
 
   spoken = node()
   captions.sentences -> spoken
@@ -98,7 +95,4 @@ flow dictate-a-note {
       with "x-a11-llm-base-url": base_url
 
   llm.text_output | join "" -> note
-  skip llm.thoughts
-  skip llm.event_stream
-  skip llm.new_interactions
 }

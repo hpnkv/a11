@@ -86,7 +86,6 @@ flow {
   out = run write_stdout(
     content: who | map strformat("Hello, %s!\\n", trim(it))
   ) via scratch
-  skip out.bytes_written
 }
 """
 
@@ -137,7 +136,6 @@ flow {
   loud = run shout(text: said) via scratch
   out = run write_stdout(content: loud.result | map strformat("%s\\n", it))
     via scratch
-  skip out.bytes_written
 }
 """
 
@@ -224,7 +222,6 @@ flow {
   argv | drop 1 | first 1 -> where
   got = run read_file(path: where) via scratch
   out = run write_stdout(content: got.content) via scratch
-  skip out.bytes_written
 }
 """
     outcome = await run(
@@ -246,11 +243,7 @@ flow {
   where = node() in scratch
   argv | drop 1 | first 1 -> where
   got = run read_file(path: where) via scratch
-  skip got.info
-  skip got.lines
-  skip got.bytes
   out = run write_stdout(content: got.text) via scratch
-  skip out.bytes_written
 }
 """
 
@@ -298,7 +291,6 @@ async def test_writing_is_refused_unless_it_was_allowed(tmp_path):
 flow {
   nodes scratch
   out = run write_file(path: "%s", content: "nope") via scratch
-  skip out.bytes_written
 }
 """ % (tmp_path / "should-not-appear.txt")
 
@@ -345,12 +337,9 @@ flow {
   nodes scratch
   total = node() in scratch
   input = run read_stdin() via scratch
-  skip input.bytes
-  skip input.is_tty
   input.lines | count -> total
   out = run write_stdout(content: total | map strformat("%d\\n", it))
     via scratch
-  skip out.bytes_written
 }
 """
 
@@ -391,15 +380,11 @@ flow {
     },
     config: {}
   ) via scratch
-  skip llm.event_stream
-  skip llm.thoughts
-  skip llm.new_interactions
 
   llm.text_output -> answer
 
   out = run write_stdout(content: answer | map strformat("%s\\n", it))
     via scratch
-  skip out.bytes_written
 }
 """
 

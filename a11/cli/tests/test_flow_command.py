@@ -473,7 +473,6 @@ flow {
   argv | drop 1 then "world" | first 1 -> who
   who | map strformat("Hello, %s!\\n", trim(it)) -> said
   out = run write_stdout(content: said) via s
-  skip out.bytes_written
 }
 """
 
@@ -520,10 +519,8 @@ flow {
   nodes s
   seen = node() in s
   clock = run ticker(options: {"every": "20ms"}) via s
-  skip count of clock
   clock.ticks | map strformat("tick %d\\n", it.number) -> seen
   o = run write_stdout(content: seen) via s
-  skip o.bytes_written
 }
 """,
     )
@@ -585,11 +582,7 @@ flow {
   where = node() in s
   argv | drop 1 | first 1 -> where
   got = run read_file(path: where) via s
-  skip got.info
-  skip got.lines
-  skip got.bytes
   out = run write_stdout(content: got.text) via s
-  skip out.bytes_written
 }
 """,
     )
@@ -611,7 +604,6 @@ def test_writing_needs_allow_write(tmp_path, capfd):
 flow {{
   nodes s
   out = run write_file(path: "{made}", content: "hi") via s
-  skip out.bytes_written
 }}
 """,
     )
@@ -640,11 +632,7 @@ flow {
     interactions: q | map a11.sdk.Interaction{role: "user", content: []},
     config: {}
   ) via s
-  skip llm.event_stream
-  skip llm.thoughts
-  skip llm.new_interactions
   o = run write_stdout(content: llm.text_output) via s
-  skip o.bytes_written
 }
 """,
     )

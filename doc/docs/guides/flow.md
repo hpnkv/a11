@@ -102,17 +102,15 @@ it.
 
 ```a11flow
   mic = call capture_audio(options: device) timeout 600s
-  skip mic.events
 ```
 
 `run` executes a handler registered with the process running the flow. `call`
 dispatches through the flow's attached stream. Because this composition runs on
 a gateway while the microphone belongs to the client, capture uses `call`.
 
-`skip` drains an output port without retaining its values. Undrained outputs
-stall their producers. Use `-> _` when a pipeline must execute but its result is
-not needed: `pages | map summarise(it) -> _` processes every page, while
-`skip pages` performs no summarisation.
+Unbound call outputs are drained automatically. Use `-> _` when a pipeline must
+execute but its result is not needed: `pages | map summarise(it) -> _` processes
+every page and discards the results.
 
 The `timeout` bounds the wait for a sentence. Expiry propagates as a flow
 failure.
@@ -125,7 +123,6 @@ failure.
   transcribe = run transcribe_audio(
     asr_options: asr, audio: mic.audio | packb
   ) via scratch
-  skip transcribe.events
 ```
 
 `mic.audio` is the client's capture stream, and `audio:` is the recogniser's
@@ -221,9 +218,6 @@ client's history want it.
   )
       forward headers "x-a11-llm-*"
       via scratch
-
-  skip interact.event_stream
-  skip interact.thoughts
 
   interact.text_output -> reply
 

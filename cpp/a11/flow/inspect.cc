@@ -231,7 +231,7 @@ class Inspector {
             Report("flow.unused.value",
                    absl::StrCat("Nothing reads ", Quoted(symbol.name),
                                 ", so the stream behind it is never read. Use "
-                                "it, or 'skip' the stream instead."),
+                                "it, or pipe the stream to '_'."),
                    symbol.location, Severity::kWarning, Family::kUnused);
           }
           break;
@@ -523,12 +523,6 @@ class Inspector {
         return;
       }
       case NodeKind::kSkip:
-        for (const syntax::SkipTarget& target :
-             syntax::As<syntax::Skip>(statement)->targets) {
-          if (target.pipeline != nullptr) {
-            Pipeline(*target.pipeline);
-          }
-        }
         return;
       case NodeKind::kCarry:
         Pipeline(*syntax::As<syntax::Carry>(statement)->pipeline);

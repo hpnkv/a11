@@ -529,7 +529,8 @@ def test_the_skill_teaches_the_language_that_is_implemented():
 def test_every_flow_the_skill_shows_compiles():
     """A skill that teaches a flow the compiler rejects is worse than none."""
     blocks = re.findall(
-        r"```\n(flow [\s\S]*?)```", flow_tools.get_system_prompt()
+        r"```(?:a11flow)?\n(flow [\s\S]*?)```",
+        flow_tools.get_system_prompt(),
     )
     assert blocks, "the skill shows no example flow"
     for block in blocks:

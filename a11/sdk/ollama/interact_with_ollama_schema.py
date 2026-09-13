@@ -21,6 +21,11 @@ from a11.data import serial_tags
 from a11.sdk.llm import Interaction, InteractionAdapter, LlmHeaders, Role
 from a11.status import Status, StatusCode
 
+#: Optional server-side ceiling forwarded through nested A11 actions. The
+#: ordinary config remains the caller-facing control; hosted services use this
+#: header when their own provider credential pays for the generation.
+MAX_OUTPUT_TOKENS_HEADER = "x-a11-ollama-max-output-tokens"
+
 
 class CreateChatConfig(BaseModel):
     """Parameters for a single Ollama chat turn.
@@ -81,7 +86,7 @@ class CreateChatConfig(BaseModel):
     json_output: bool = Field(
         default=False,
         description="Constrain the model to emit valid JSON (Ollama"
-        " `format=\"json\"`).",
+        ' `format="json"`).',
         exclude_if=lambda x: not x,
     )
 
@@ -173,12 +178,10 @@ def make_text_message_interaction(
     return Interaction(
         role=role,
         content=[
-            a11.to_chunk(
-                {
-                    "role": role_str,
-                    "content": text,
-                }
-            )
+            a11.to_chunk({
+                "role": role_str,
+                "content": text,
+            })
         ],
         system_instructions=system_instructions,
     )

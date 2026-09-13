@@ -42,6 +42,7 @@ __all__: list[str] = [
     "highlight",
     "parse",
     "plan",
+    "register_standard_actions",
     "request",
     "run_program",
     "scan",
@@ -251,9 +252,7 @@ def compile(source: str, source_name: str = "") -> Program:
     turns that into ``FlowSyntaxError``.
     """
 
-def complete(
-    source: str, offset: typing.SupportsInt | typing.SupportsIndex
-) -> dict[str, typing.Any]:
+def complete(source: str, offset: typing.SupportsInt) -> dict[str, typing.Any]:
     """
     What may be written at ``offset``.
 
@@ -311,6 +310,26 @@ def plan(source: str, source_name: str = "-") -> dict[str, typing.Any]:
     whole truth would be misled.
     """
 
+def register_standard_actions(
+    registry: ActionRegistry | None,
+    roots: collections.abc.Sequence[str],
+    allow_write: bool = False,
+    allow_run: bool = False,
+    require_sandbox: bool = True,
+    inherit_environment: bool = False,
+    max_seconds: typing.SupportsInt = 600,
+    current_directory: str = ".",
+) -> None:
+    """
+    Register the native filesystem and process actions on a registry.
+
+    The policy is captured by the handlers at registration. A caller may narrow one
+    run through action options but cannot widen the roots, write access, process
+    access, environment inheritance, deadline ceiling, or kernel-sandbox requirement.
+    Relative filesystem paths resolve against ``current_directory``. Spawned
+    processes may make outbound network connections by default.
+    """
+
 def request(request: dict[str, typing.Any]) -> dict[str, typing.Any]:
     """
     One request to the language service, answered.
@@ -335,7 +354,7 @@ def run_program(
     allow_local_net: bool = False,
     allow_env: collections.abc.Sequence[str] = [],
     unrestricted: bool = False,
-    timeout_seconds: typing.SupportsFloat | typing.SupportsIndex | None = None,
+    timeout_seconds: typing.SupportsFloat | None = None,
     standard_streams: bool = True,
     registry: typing.Any | None = None,
     session: typing.Any | None = None,

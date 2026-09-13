@@ -33,12 +33,19 @@ import type { MountedView } from './mount.js';
 import {
   interactionText,
   isToolResultCarrier,
-  toolCalls,
   toolLogs,
   type ConversationSummary,
 } from './conversations.js';
 import { renderMarkdown } from './markdown.js';
-import { Role, type Interaction } from '@curiositystack/a11';
+import {
+  BlockKind,
+  isOk,
+  presentInteraction,
+  Role,
+  toolStatuses,
+  type Interaction,
+} from '@curiositystack/a11';
+import type { ToolActivity } from './ideTools.js';
 
 /** How far from the bottom still counts as "following the stream". */
 const NEAR_BOTTOM_PX = 48;
@@ -52,6 +59,29 @@ const SUGGEST_FLOW = 'suggest-fixes';
 /** Rows the composer opens with, and how tall it may grow while typing. */
 const COMPOSER_ROWS = 3;
 const COMPOSER_MAX_PX = 260;
+
+/** A completed unary report input, as readable text. */
+function completionText(
+  arguments_: Record<string, unknown> | undefined,
+  name: string,
+): string {
+  const value = arguments_?.[name];
+  if (typeof value === 'string') return value.trim();
+  if (Array.isArray(value)) return value.map(String).join('\n').trim();
+  return value == null ? '' : String(value).trim();
+}
+
+/** One quiet nested section in an IDE completion report. */
+function completionSection(title: string, value: string): HTMLElement {
+  const section = document.createElement('section');
+  section.className = 'completion-section';
+  const heading = document.createElement('strong');
+  heading.textContent = title;
+  const body = document.createElement('div');
+  body.textContent = value;
+  section.append(heading, body);
+  return section;
+}
 
 /**
  * One assistant turn's rendering: the turn's content as an ordered sequence of
@@ -89,8 +119,21 @@ export class AssistantBubble {
   private wroteAnything = false;
   /** Pending paint (a `requestAnimationFrame` handle), or 0 when up to date. */
   private frame = 0;
+  private readonly toolElements = new Map<string, {
+    box: HTMLElement;
+    summary: HTMLSpanElement;
+    body: HTMLDivElement;
+    completionState?: HTMLSpanElement;
+    requestState?: HTMLSpanElement;
+    requestTitle?: HTMLElement;
+    requestButtons?: HTMLButtonElement[];
+  }>();
 
-  constructor(private readonly element: HTMLElement, private readonly onGrow: () => void) {
+  constructor(
+    private readonly element: HTMLElement,
+    private readonly onGrow: () => void,
+    private readonly onAnswer?: (id: string, answer: string) => void,
+  ) {
     // A working indicator shown until the first thought or answer token arrives.
     this.indicator = document.createElement('div');
     this.indicator.className = 'thinking';
@@ -177,32 +220,100 @@ export class AssistantBubble {
    * thinking panel, since that is where in the turn it belongs; anything else
    * goes at the end of the bubble.
    */
-  addToolRun(tool: string, log: string | null): void {
+  addToolRun(run: ToolActivity): void {
     this.indicator.remove();
+    const existing = this.toolElements.get(run.id);
+    if (existing) {
+      const failed = run.status !== undefined && !isOk(run.status);
+      existing.box.classList.toggle('failed', failed);
+      if (existing.completionState) {
+        existing.completionState.textContent = failed
+          ? 'Report failed'
+          : run.phase === 'started'
+            ? 'Finalising…'
+            : 'Recorded';
+        existing.body.textContent = run.log ?? '';
+        this.onGrow();
+        return;
+      }
+      if (existing.requestState) {
+        if (existing.requestTitle) {
+          existing.requestTitle.textContent = failed
+            ? 'Input request failed'
+            : run.phase === 'started'
+              ? 'Input required'
+              : 'Input received';
+        }
+        existing.requestState.textContent = failed
+          ? 'Request failed'
+          : run.phase === 'started'
+            ? 'Waiting…'
+            : 'Answered';
+        for (const button of existing.requestButtons ?? []) {
+          button.disabled = failed || run.phase !== 'started';
+        }
+        existing.body.textContent = run.log ?? '';
+        this.onGrow();
+        return;
+      }
+      existing.summary.textContent = failed
+        ? run.status!.message || 'failed'
+        : run.phase === 'started'
+          ? 'running…'
+          : (run.log ?? '').split('\n')[0]?.trim() || 'complete';
+      const detail = (run.log ?? '').split('\n').slice(1).join('\n').trim();
+      if (detail) existing.body.innerHTML = renderMarkdown(detail);
+      this.onGrow();
+      return;
+    }
+    if (run.tool === 'report_completion' && completionText(run.arguments, 'summary')) {
+      this.addCompletionReport(run);
+      return;
+    }
+    if (run.tool === 'request_user_input' && completionText(run.arguments, 'question')) {
+      this.addInputRequest(run);
+      return;
+    }
     // The box goes after the text that led to it, so that text has to be on the
     // page before the box is appended.
     this.flushPaint();
-    const [summary, ...rest] = (log ?? '').split('\n');
+    const [summary, ...rest] = (run.log ?? '').split('\n');
     const box = document.createElement('details');
     box.className = 'tool-run';
     const head = document.createElement('summary');
     const label = document.createElement('span');
     label.className = 'tool-run-name';
-    label.textContent = tool;
+    label.textContent = run.tool;
     const text = document.createElement('span');
     text.className = 'tool-run-summary';
-    text.textContent = summary?.trim() || 'ran';
+    text.textContent = run.phase === 'started' ? 'running…' : summary?.trim() || 'complete';
     head.append(label, text);
     box.append(head);
+    const body = document.createElement('div');
+    body.className = 'tool-run-body';
     const detail = rest.join('\n').trim();
-    if (detail) {
-      const body = document.createElement('div');
-      body.className = 'tool-run-body';
+    if (run.tool === 'request_user_input' && run.arguments) {
+      const question = document.createElement('strong');
+      question.textContent = String(run.arguments.question ?? 'Input requested');
+      body.append(question);
+      const options = Array.isArray(run.arguments.options) ? run.arguments.options : [];
+      for (const option of options) {
+        if (!option || typeof option !== 'object') continue;
+        const record = option as Record<string, unknown>;
+        const line = document.createElement('div');
+        line.className = 'user-input-option';
+        line.textContent = `${String(record.label ?? '')}${record.description ? ` — ${String(record.description)}` : ''}`;
+        body.append(line);
+      }
+      box.open = true;
+      box.append(body);
+    } else if (detail) {
       body.innerHTML = renderMarkdown(detail);
       box.append(body);
     } else {
       box.classList.add('empty');
     }
+    this.toolElements.set(run.id, {box, summary: text, body});
     if (this.thinking) {
       this.thinking.details.append(box);
       this.thinking.tools += 1;
@@ -211,6 +322,188 @@ export class AssistantBubble {
     }
     // Whatever the model says or thinks next belongs after this box, not before
     // it — including a thought, which opens a fresh run below it in the panel.
+    this.sink = null;
+    this.wroteAnything = true;
+    this.onGrow();
+  }
+
+  /** Present a fully received report_completion call as the turn's outcome. */
+  private addCompletionReport(run: ToolActivity): void {
+    this.flushPaint();
+    const failed = run.status !== undefined && !isOk(run.status);
+    const report = document.createElement('article');
+    report.className = `completion-report${failed ? ' failed' : ''}`;
+    report.setAttribute('aria-label', 'Completion report');
+
+    const header = document.createElement('div');
+    header.className = 'completion-header';
+    const icon = document.createElement('span');
+    icon.className = 'completion-icon';
+    icon.textContent = failed ? '!' : '✓';
+    const heading = document.createElement('div');
+    heading.className = 'completion-heading';
+    const title = document.createElement('strong');
+    title.textContent = failed ? 'Completion report failed' : 'Task completed';
+    const subtitle = document.createElement('span');
+    subtitle.textContent = 'Completion reported by the coding agent';
+    heading.append(title, subtitle);
+    const state = document.createElement('span');
+    state.className = 'completion-state';
+    state.textContent = failed
+      ? 'Report failed'
+      : run.phase === 'started'
+        ? 'Finalising…'
+        : 'Recorded';
+    header.append(icon, heading, state);
+    report.append(header);
+
+    const content = document.createElement('div');
+    content.className = 'completion-content';
+    const summary = document.createElement('div');
+    summary.className = 'completion-summary';
+    summary.innerHTML = renderMarkdown(completionText(run.arguments, 'summary'));
+    content.append(summary);
+    const sections = document.createElement('div');
+    sections.className = 'completion-sections';
+    const checks = completionText(run.arguments, 'checks');
+    const remaining = completionText(run.arguments, 'remaining');
+    if (checks) sections.append(completionSection('Verification', checks));
+    if (remaining) sections.append(completionSection('Remaining', remaining));
+    if (sections.childElementCount > 0) content.append(sections);
+    report.append(content);
+
+    const technical = document.createElement('details');
+    technical.className = 'completion-technical';
+    const technicalSummary = document.createElement('summary');
+    technicalSummary.textContent = 'Technical details';
+    const body = document.createElement('div');
+    body.className = 'completion-log';
+    body.textContent = run.log ?? '';
+    technical.append(technicalSummary, body);
+    report.append(technical);
+
+    const hiddenName = document.createElement('span');
+    hiddenName.className = 'tool-run-name';
+    hiddenName.textContent = run.tool;
+    this.toolElements.set(run.id, {
+      box: report,
+      summary: hiddenName,
+      body,
+      completionState: state,
+    });
+    if (this.thinking) {
+      this.thinking.details.append(report);
+      this.thinking.tools += 1;
+    } else {
+      this.element.append(report);
+    }
+    this.sink = null;
+    this.wroteAnything = true;
+    this.onGrow();
+  }
+
+  /** Present a complete request_user_input call as an interactive question. */
+  private addInputRequest(run: ToolActivity): void {
+    this.flushPaint();
+    const failed = run.status !== undefined && !isOk(run.status);
+    const request = document.createElement('article');
+    request.className = `input-request-report${failed ? ' failed' : ''}`;
+    request.setAttribute('aria-label', 'User input request');
+
+    const header = document.createElement('div');
+    header.className = 'input-request-header';
+    const icon = document.createElement('span');
+    icon.className = 'input-request-icon';
+    icon.textContent = failed ? '!' : '?';
+    const heading = document.createElement('div');
+    heading.className = 'input-request-heading';
+    const title = document.createElement('strong');
+    title.textContent = failed
+      ? 'Input request failed'
+      : run.phase === 'started'
+        ? 'Input required'
+        : 'Input received';
+    const question = document.createElement('span');
+    question.textContent = completionText(run.arguments, 'question');
+    heading.append(title, question);
+    const state = document.createElement('span');
+    state.className = 'input-request-state';
+    state.textContent = failed
+      ? 'Request failed'
+      : run.phase === 'started'
+        ? 'Waiting…'
+        : 'Answered';
+    header.append(icon, heading, state);
+    request.append(header);
+
+    const choices = document.createElement('div');
+    choices.className = 'input-request-choices';
+    const options = Array.isArray(run.arguments?.options) ? run.arguments.options : [];
+    const buttons: HTMLButtonElement[] = [];
+    for (const [index, option] of options.entries()) {
+      if (!option || typeof option !== 'object') continue;
+      const record = option as Record<string, unknown>;
+      const label = String(record.label ?? '').trim();
+      if (!label) continue;
+      const choice = document.createElement('button');
+      choice.type = 'button';
+      choice.className = 'input-request-choice';
+      choice.disabled = failed || run.phase !== 'started' || !this.onAnswer;
+      const choiceLabel = document.createElement('strong');
+      choiceLabel.textContent = `${index + 1}. ${label}`;
+      choice.append(choiceLabel);
+      const description = String(record.description ?? '').trim();
+      if (description) {
+        const detail = document.createElement('span');
+        detail.textContent = description;
+        choice.append(detail);
+      }
+      choice.addEventListener('click', () => {
+        for (const button of buttons) button.disabled = true;
+        choice.disabled = true;
+        this.onAnswer?.(run.id, label);
+      });
+      choices.append(choice);
+      buttons.push(choice);
+    }
+    const allowFreeText = options.length === 0 || run.arguments?.allow_free_text !== false;
+    if (allowFreeText) {
+      const hint = document.createElement('p');
+      hint.className = 'input-request-hint';
+      hint.textContent = options.length
+        ? 'A custom response is also accepted in the composer.'
+        : 'Enter a free-text response in the composer.';
+      choices.append(hint);
+    }
+    request.append(choices);
+
+    const technical = document.createElement('details');
+    technical.className = 'input-request-technical';
+    const technicalSummary = document.createElement('summary');
+    technicalSummary.textContent = 'Technical details';
+    const body = document.createElement('div');
+    body.className = 'input-request-log';
+    body.textContent = run.log ?? '';
+    technical.append(technicalSummary, body);
+    request.append(technical);
+
+    const hiddenName = document.createElement('span');
+    hiddenName.className = 'tool-run-name';
+    hiddenName.textContent = run.tool;
+    this.toolElements.set(run.id, {
+      box: request,
+      summary: hiddenName,
+      body,
+      requestState: state,
+      requestTitle: title,
+      requestButtons: buttons,
+    });
+    if (this.thinking) {
+      this.thinking.details.append(request);
+      this.thinking.tools += 1;
+    } else {
+      this.element.append(request);
+    }
     this.sink = null;
     this.wroteAnything = true;
     this.onGrow();
@@ -296,6 +589,7 @@ export class ChatView {
   private historyOpen = false;
   /** The turn currently streaming, so tool runs land in the right bubble. */
   private active: AssistantBubble | null = null;
+  private pendingInput: ({ id: string } & Record<string, unknown>) | null = null;
 
   constructor(root: HTMLElement) {
     this.root = root;
@@ -399,9 +693,25 @@ export class ChatView {
       // No config passed: the session reads the settings itself, before every
       // turn, so a provider or model changed mid-conversation takes effect on the
       // next message instead of on the next IDE restart.
-      this.session = new A11ChatSession((run) =>
-        this.active?.addToolRun(run.tool, run.log),
-      );
+      this.session = new A11ChatSession((run) => {
+        this.active?.addToolRun(run);
+        if (run.tool === 'request_user_input' && run.phase === 'started' && run.arguments) {
+          this.pendingInput = {id: run.id, ...run.arguments};
+          this.textarea.disabled = false;
+          this.sendButton.disabled = false;
+          this.textarea.placeholder = String(run.arguments.question ?? 'Type your answer…');
+          this.textarea.focus();
+        }
+        if (
+          run.tool === 'request_user_input' &&
+          run.phase === 'finished' &&
+          this.pendingInput?.id === run.id
+        ) {
+          this.pendingInput = null;
+          this.textarea.placeholder = 'Ask A11 about your project...  (Enter to send, Shift+Enter for newline)';
+          this.setBusy(this.busy);
+        }
+      });
     }
     return this.session;
   }
@@ -522,14 +832,24 @@ export class ChatView {
    */
   private async rehydrate(interactions: Interaction[]): Promise<void> {
     const logs: Record<string, string> = Object.assign({}, ...interactions.map(toolLogs));
+    const statuses = Object.assign({}, ...interactions.map(toolStatuses));
     for (const interaction of interactions) {
       if (interaction.role === Role.SYSTEM) continue;
       const text = await interactionText(interaction);
       if (interaction.role === Role.ASSISTANT) {
         const bubble = new AssistantBubble(this.addBubble('assistant'), () => {});
         if (text) bubble.appendToken(text);
-        for (const call of toolCalls(interaction)) {
-          bubble.addToolRun(call.name, logs[call.id] ?? null);
+        const presented = await presentInteraction(interaction, logs, statuses);
+        for (const block of presented.blocks) {
+          if (block.kind !== BlockKind.TOOL_RUN) continue;
+          bubble.addToolRun({
+            id: block.id,
+            tool: block.toolName,
+            arguments: block.toolArguments,
+            log: logs[block.id] ?? null,
+            status: statuses[block.id],
+            phase: 'finished',
+          });
         }
         bubble.finish();
         continue;
@@ -540,6 +860,13 @@ export class ChatView {
   }
 
   private async submit(): Promise<void> {
+    if (this.pendingInput) {
+      const answer = this.textarea.value.trim();
+      if (!answer) return;
+      this.textarea.value = '';
+      await this.answerPendingInput(this.pendingInput.id, answer);
+      return;
+    }
     if (this.busy) return;
     const prompt = this.textarea.value.trim();
     if (!prompt) return;
@@ -555,7 +882,11 @@ export class ChatView {
     this.follow();
 
     const assistantElement = this.addBubble('assistant');
-    const bubble = new AssistantBubble(assistantElement, () => this.follow());
+    const bubble = new AssistantBubble(
+      assistantElement,
+      () => this.follow(),
+      (id, answer) => void this.answerPendingInput(id, answer),
+    );
     this.active = bubble;
 
     try {
@@ -572,6 +903,19 @@ export class ChatView {
       this.setBusy(false);
       this.follow();
       this.textarea.focus();
+    }
+  }
+
+  private async answerPendingInput(id: string, answer: string): Promise<void> {
+    try {
+      await (await this.ensureSession()).respondUserInput(id, answer);
+      if (this.pendingInput?.id === id) {
+        this.pendingInput = null;
+        this.textarea.placeholder = 'Ask A11 about your project...  (Enter to send, Shift+Enter for newline)';
+        this.setBusy(this.busy);
+      }
+    } catch (error) {
+      this.active?.fail(error instanceof Error ? error.message : String(error));
     }
   }
 

@@ -36,10 +36,6 @@ flow read-a-page {
   page.text -> text
   page.status_code -> code
   page.ok -> ok
-  skip page.json
-  skip page.body
-  skip page.items
-  skip page.headers
 }
 
 # Deciding before the body arrives.
@@ -58,11 +54,6 @@ flow only-if-json {
   http = run make_http_request(url: url)
       with "accept": "application/json"
 
-  skip http.fields
-  skip http.pushes
-  skip http.redirects
-  skip http.connection
-  skip http.trailers
 
   # `headers` is one value and it is here already; the body is still in flight.
   if http.headers["content-type"] == "application/json" {
@@ -70,16 +61,13 @@ flow only-if-json {
     "" -> declined
   } else {
     http.headers["content-type"] -> declined
-    skip http.body
   }
-  skip http.status_code
 }
 
 # The whole protocol, for a caller that wants all of it.
 #
-# Eight outputs is not eight things to remember: it is HTTP's own list, and a
-# flow reads the ones it needs and `skip`s the rest. `options.omit` does the same
-# from the other side -- it tells the action not to bother.
+# The action produces HTTP's full result. Flow drains outputs this composition
+# does not bind; `options.omit` tells the action not to produce them.
 flow inspect-a-url {
   describe "Everything the protocol said, on the port that carries it."
 
@@ -106,7 +94,6 @@ flow inspect-a-url {
   # Responses the server sent without being asked. Each record names a node its
   # body was streamed into, because one port cannot interleave several bodies --
   # which is exactly how HTTP/2 frames them too.
-  skip http.pushes
 }
 
 # A streamed upload.
@@ -129,11 +116,4 @@ flow send-a-stream {
   ) with "content-type": "text/plain"
 
   http.body | collect | map join(it, "") -> answer
-  skip http.status_code
-  skip http.headers
-  skip http.fields
-  skip http.trailers
-  skip http.redirects
-  skip http.pushes
-  skip http.connection
 }

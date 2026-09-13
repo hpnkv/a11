@@ -20,8 +20,8 @@
  * A flow's blocks are `{ }`, and the editor's own default -- copy the previous
  * line's indentation -- already gets those right, because the line that opens
  * one is exactly one level shallower than what follows it. What it cannot know
- * is a *continuation*: a `skip` list still running past a `,`, a pipeline left
- * open after `|` or `->`, an `(o1, o2 of act)` group whose `)` has not been
+ * is a *continuation*: an `after` list still running past a `,`, a pipeline
+ * left open after `|` or `->`, or an argument group whose `)` has not been
  * typed yet. Each of those wants one more level than the statement they are
  * part of, and the line after the continuation ends comes back to the block's
  * own indent -- which is what "provably ends" means here: no trailing `,`,

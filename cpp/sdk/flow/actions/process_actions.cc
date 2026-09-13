@@ -258,6 +258,7 @@ struct SpawnSettings {
   bool clear_environment = false;
   absl::Duration grace = absl::Seconds(5);
   std::uint64_t max_output_bytes = 0;
+  std::uint64_t max_output_lines = 0;
 };
 
 absl::StatusOr<SpawnSettings> ReadSpawnSettings(const Options& options,
@@ -271,6 +272,8 @@ absl::StatusOr<SpawnSettings> ReadSpawnSettings(const Options& options,
                         options.Duration("grace", absl::Seconds(5)));
   ABSL_ASSIGN_OR_RETURN(settings.max_output_bytes,
                         options.Bytes("max_output_bytes", 0));
+  ABSL_ASSIGN_OR_RETURN(settings.max_output_lines,
+                        options.Bytes("max_output_lines", 0));
   if (!policy.inherit_environment && !settings.clear_environment) {
     // The option may narrow the policy and never widen it.
     settings.clear_environment = true;
@@ -730,6 +733,9 @@ absl::Status RunSpawnProcess(const std::shared_ptr<Action>& action,
 
   absl::Status trouble = absl::OkStatus();
   std::uint64_t produced = 0;
+  std::uint64_t output_lines = 0;
+  bool line_limit_reached = false;
+  bool output_truncated = false;
   bool termed = false;
   absl::Time term_at = absl::InfiniteFuture();
   // On the heap: a fiber's stack is measured in kilobytes, and 64 KiB of local
@@ -809,7 +815,40 @@ absl::Status RunSpawnProcess(const std::shared_ptr<Action>& action,
       }
       const std::string_view piece(buffer.data(),
                                    static_cast<std::size_t>(got));
-      produced += piece.size();
+      if (line_limit_reached) {
+        output_truncated = true;
+        if (!termed) {
+          termed = true;
+          term_at = absl::Now();
+          SignalChild(*spawned, SIGTERM);
+          stdin_node->CancelReader();
+        }
+        continue;
+      }
+      std::string_view visible = piece;
+      if (settings.max_output_lines != 0) {
+        std::size_t at = 0;
+        while (at < piece.size() && output_lines < settings.max_output_lines) {
+          const std::size_t newline = piece.find('\n', at);
+          if (newline == std::string_view::npos) {
+            break;
+          }
+          ++output_lines;
+          at = newline + 1;
+        }
+        if (output_lines >= settings.max_output_lines) {
+          line_limit_reached = true;
+          visible = piece.substr(0, at);
+          output_truncated = true;
+          if (!termed) {
+            termed = true;
+            term_at = absl::Now();
+            SignalChild(*spawned, SIGTERM);
+            stdin_node->CancelReader();
+          }
+        }
+      }
+      produced += visible.size();
       if (settings.max_output_bytes != 0 &&
           produced > settings.max_output_bytes) {
         trouble = absl::ResourceExhaustedError(absl::StrCat(
@@ -818,12 +857,12 @@ absl::Status RunSpawnProcess(const std::shared_ptr<Action>& action,
         break;
       }
       if (const absl::Status written =
-              stream->bytes.PutBytes(std::string(piece));
+              stream->bytes.PutBytes(std::string(visible));
           !written.ok()) {
         trouble = written;
         break;
       }
-      if (const absl::Status written = stream->lines.Feed(piece);
+      if (const absl::Status written = stream->lines.Feed(visible);
           !written.ok()) {
         trouble = written;
         break;
@@ -868,6 +907,8 @@ absl::Status RunSpawnProcess(const std::shared_ptr<Action>& action,
   ABSL_RETURN_IF_ERROR(outputs["signal"].PutOnly(
       signalled ? nlohmann::json(SignalName(WTERMSIG(wait_status)))
                 : nlohmann::json()));
+  ABSL_RETURN_IF_ERROR(
+      outputs["output_truncated"].PutOnly(nlohmann::json(output_truncated)));
   ABSL_RETURN_IF_ERROR(outputs["usage"].PutOnly(nlohmann::json{
       {"user_ms", static_cast<std::int64_t>(usage.ru_utime.tv_sec) * 1000 +
                       usage.ru_utime.tv_usec / 1000},
@@ -942,8 +983,9 @@ ActionSchema SpawnProcessSchema() {
           "All optional: cwd (checked against the same filesystem policy as "
           "any other path), environment (an object of names to values), "
           "clear_environment, grace (how long SIGTERM is given before SIGKILL, "
-          "default 5s), max_output_bytes, and omit -- output port names to "
-          "close immediately rather than write.",
+          "default 5s), max_output_bytes, max_output_lines (stop after this "
+          "many combined stdout/stderr lines), and omit -- output port names "
+          "to close immediately rather than write.",
           /*required=*/false, /*unary=*/true));
   schema.inputs.emplace(
       std::string(kControlPort),
@@ -988,6 +1030,11 @@ ActionSchema SpawnProcessSchema() {
       Port("signal", "string",
            "The name of the signal that ended it, or nothing when it exited of "
            "its own accord.",
+           /*required=*/false, /*unary=*/true));
+  schema.outputs.emplace(
+      "output_truncated",
+      Port("output_truncated", "boolean",
+           "Whether max_output_lines stopped the process at its line bound.",
            /*required=*/false, /*unary=*/true));
   schema.outputs.emplace(
       "usage",

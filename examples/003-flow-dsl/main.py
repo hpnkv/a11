@@ -224,9 +224,7 @@ async def a_flow_that_arrived_as_a_string() -> None:
       for hit in search.hits {
         page = run web-fetch(url: hit.url)
         page.text | truncate 80 -> answer
-        skip page.bytes
       }
-      skip search.debug
     }
     """
     program = flow.register(source, registry, "from-the-wire.flow")

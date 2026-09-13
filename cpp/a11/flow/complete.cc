@@ -373,6 +373,17 @@ class Completer {
     return false;
   }
 
+  /// Whether this line contains a canonical spelling of `word`.
+  [[nodiscard]] bool LineHasWord(std::string_view word) const {
+    for (const size_t index : line_) {
+      const Token& token = tokens_[index];
+      if (token.IsWord() && vocabulary::Canonical(token.text) == word) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   /// How many parentheses on this line are still open.
   [[nodiscard]] int OpenParens() const {
     int depth = 0;
@@ -638,6 +649,10 @@ class Completer {
     if (PreviousIs(TokenKind::kArrow) ||
         (PreviousIs(TokenKind::kComma) && LineHas(TokenKind::kArrow))) {
       ProposeDestinations();
+      return;
+    }
+    if (PreviousIs(TokenKind::kComma) && LineHasWord("after")) {
+      ProposeSubjects();
       return;
     }
     if (PreviousIs(TokenKind::kCarry)) {
@@ -1241,10 +1256,6 @@ class Completer {
     }
     if (previous == "drain" || previous == "cancel" || previous == "status") {
       ProposeSubjects();
-      return true;
-    }
-    if (previous == "skip") {
-      ProposeSources();
       return true;
     }
     if (previous == "after") {

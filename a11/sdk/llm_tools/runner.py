@@ -34,9 +34,12 @@ from a11.sdk.llm import (
     get_allowed_llm_action_patterns,
     Interaction,
     TOOL_LOGS_METADATA_KEY,
+    TOOL_STATUSES_METADATA_KEY,
     WHOLE_JSON_FRAGMENT_ID,
 )
 from a11.sdk.llm_tools.adapter import WHOLE_JSON_OUTPUT, ToolAdapter
+
+MAX_MODEL_TOOL_OUTPUT_BYTES = 128 * 1024
 
 
 def definition_from_schema(entry: dict[str, Any]) -> dict[str, Any]:
@@ -270,9 +273,21 @@ class ExecutedActions:
         these calls' results, which is where a consumer looks for them; see
         [TOOL_LOGS_METADATA_KEY][a11.sdk.llm.TOOL_LOGS_METADATA_KEY].
         """
-        if not self.logs:
-            return {}
-        return {TOOL_LOGS_METADATA_KEY: json.dumps(self.logs).encode()}
+        metadata: dict[str, bytes] = {}
+        if self.logs:
+            metadata[TOOL_LOGS_METADATA_KEY] = json.dumps(self.logs).encode()
+        if self.outputs:
+            metadata[TOOL_STATUSES_METADATA_KEY] = json.dumps(
+                {
+                    call_id: (
+                        self.errors.get(call_id, Status()).model_dump(
+                            mode="json"
+                        )
+                    )
+                    for call_id in self.outputs
+                }
+            ).encode()
+        return metadata
 
     def error_message(self, call_id: str) -> str | None:
         """A caller-facing description of a call's failure, if it failed."""
@@ -350,7 +365,11 @@ async def relay_user_facing_logs(
     entries: list[str] = []
     try:
         async for chunk in node.iter_chunks(timeout=timeout):
-            if chunk is None or chunk.is_null() or _native.is_status_chunk(chunk):
+            if (
+                chunk is None
+                or chunk.is_null()
+                or _native.is_status_chunk(chunk)
+            ):
                 continue
             try:
                 record = _native.log_record_from_chunk(chunk)
@@ -383,7 +402,7 @@ async def wait_and_report_status(
     action_name: str,
     deadline: a11.Time,
 ) -> Status:
-    """Wait for one child and report its native completion status immediately."""
+    """Wait for one child and immediately report its completion status."""
     try:
         await child.wait(max(deadline - a11.now(), a11.zero_duration()))
         status = Status()
@@ -427,7 +446,9 @@ async def feed_action_inputs(
 
 
 async def collect_action_outputs(
-    action: a11.Action, deadline: a11.Time
+    action: a11.Action,
+    deadline: a11.Time,
+    max_bytes: int | None = None,
 ) -> tuple[list[NodeFragment], Status | None]:
     """Everything one finished action wrote, as fragments a caller can report.
 
@@ -439,19 +460,31 @@ async def collect_action_outputs(
     reads the payload as the result rather than as a field of one.
 
     Returns:
-        The fragments, and the status that ended a port early. An aborted
-        output carries the failure that aborted it and a timed-out one the
-        deadline; whatever arrived before it is kept.
+        The fragments, and the status that ended a port early. ``max_bytes``
+        bounds retained chunk data; exceeding it returns no partial result and
+        a ``RESOURCE_EXHAUSTED`` status.
     """
     failure: Status | None = None
     per_port: dict[str, list[NodeFragment]] = {}
+    retained_bytes = 0
+    output_too_large = False
+    mapping = dict(action.get_schema().output_to_json_field)
     for output_name in action.get_schema().outputs.keys():
         per_port[output_name] = []
+        map_to = mapping.get(output_name) if mapping else output_name
         try:
             node = action[output_name]
             async for fragment in node.iter_fragments(
                 timeout=_drain_timeout(deadline)
             ):
+                if map_to is None:
+                    continue
+                retained_bytes += fragment.get_chunk().approx_bytes
+                if max_bytes is not None and retained_bytes > max_bytes:
+                    output_too_large = True
+                    continue
+                if output_too_large:
+                    continue
                 fragment.id = output_name
                 fragment.continued = True
                 per_port[output_name].append(fragment)
@@ -461,7 +494,15 @@ async def collect_action_outputs(
         if per_port[output_name]:
             per_port[output_name][-1].continued = False
 
-    mapping = dict(action.get_schema().output_to_json_field)
+    if output_too_large:
+        return [], Status(
+            code=StatusCode.RESOURCE_EXHAUSTED,
+            message=(
+                f"Tool output exceeded the {max_bytes}-byte model-facing limit;"
+                " rerun it with a narrower query, filter, or Flow projection."
+            ),
+        )
+
     fragments: list[NodeFragment] = []
     whole = whole_json_port(mapping)
     if whole is not None:
@@ -593,7 +634,7 @@ async def execute_actions_from_interaction(
 
     for nested_action in nested_actions:
         fragments, failure = await collect_action_outputs(
-            nested_action, deadline
+            nested_action, deadline, max_bytes=MAX_MODEL_TOOL_OUTPUT_BYTES
         )
         all_outputs[nested_action.id] = fragments
         if failure is not None:

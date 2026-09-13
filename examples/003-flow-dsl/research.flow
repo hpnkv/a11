@@ -44,16 +44,11 @@ flow research {
       # The model does not need the whole page, and everything dropped here is
       # never serialised, never sent, and never charged for.
       page.text | truncate 200 -> brief.pages
-
-      # Read, and keep nothing: an output nobody drains stalls its producer.
-      skip page.bytes
     }
   }
 
   brief.summary -> answer
   brief.characters -> read
-
-  skip search.debug
 }
 
 # A flow is an action, so a flow can call one.
@@ -65,7 +60,4 @@ flow headline {
 
   found = run research(question: question)
   found.sources | first 2 | join " and " -> line
-
-  skip found.answer
-  skip found.read
 }

@@ -531,6 +531,7 @@ BACKEND_METADATA_KEY = "backend"
 #: interaction no backend turns into provider content -- the log must never
 #: reach the model, but a conversation replayed from storage is poorer for it.
 TOOL_LOGS_METADATA_KEY = "tool_logs"
+TOOL_STATUSES_METADATA_KEY = "tool_statuses"
 
 
 class Backend(enum.StrEnum):
@@ -1033,10 +1034,21 @@ class ActionCallAdapter:
 
     async def get_action_inputs(self) -> list[a11.NodeFragment]:
         inputs = list()
-        for key, value_list in self._arguments.items():
+        for key, value in self._arguments.items():
             port = self._schema.inputs.get(key)
-            if not isinstance(value_list, list):
-                value_list = [value_list]
+            # A JSON array on a unary port is one structured value. Only a
+            # streaming port interprets an array as several values. Treating
+            # `options: [...]` as a stream made consume(list) read the first
+            # option and then reject the second as a fragment after finality.
+            value_list = (
+                value
+                if (
+                    isinstance(value, list)
+                    and port is not None
+                    and not port.unary
+                )
+                else [value]
+            )
 
             node = a11.AsyncNode.create("node")
             for idx, value in enumerate(value_list):
@@ -1185,20 +1197,38 @@ async def add_tool_calls_to_interaction(
 
 
 MAX_FAILED_TOOL_ROUNDS = 5
+MAX_TOOL_ROUNDS = 64
 
 
 class FailedToolRounds:
-    def __init__(self, limit: int = MAX_FAILED_TOOL_ROUNDS):
+    def __init__(
+        self,
+        limit: int = MAX_FAILED_TOOL_ROUNDS,
+        total_limit: int = MAX_TOOL_ROUNDS,
+    ):
         self._limit = limit
+        self._total_limit = total_limit
         self._rounds = 0
+        self._total = 0
 
     @property
     def rounds(self) -> int:
-        """Rounds in which every call has failed, counting back from the last."""
+        """Consecutive rounds in which every call failed."""
         return self._rounds
 
     def record(self, executed: Any) -> bool:
         """Whether the conversation may continue after this round's results."""
+        self._total += 1
+        if self._total >= self._total_limit:
+            raise Status(
+                code=StatusCode.RESOURCE_EXHAUSTED,
+                message=(
+                    "The agent reached the 64-round nested-action safety"
+                    " limit without producing a final response. Review the"
+                    " last tool result, then continue in a new message."
+                ),
+                details=[{"tool_rounds": self._total}],
+            ).to_exception()
         calls = list(executed.outputs)
         failed = [
             call for call in calls if executed.error_message(call) is not None

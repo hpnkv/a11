@@ -47,7 +47,6 @@ page:
 | `source -> port, port` | pipe a stream into one or more node(s) |
 | `source \| stage \| stage -> port` | reshape it on the way |
 | `source \| stage -> _` | the same, keeping no result; `_` is not a name |
-| `skip source` | read a stream to its end and discard the values |
 | `skip n port` | drop a node's first `n` values, for every reader |
 | `s = wait x` | hold until `x` is finished, and say how it went |
 | `drain node` | end a node: mark it final and close it |
@@ -82,14 +81,14 @@ Flow provides syntax for these A11 operations:
   actions `call`s them; one composing actions of its own `run`s them; a client
   flow doing retrieval here and inference there does both, in the same flow.
   `run` requires a local handler and does not fall back to the session.
-* **`skip`, and stages that cut a stream down.** `skip x.debug` reads and
-  discards an output, preventing an undrained output from stalling its producer.
-  `skip 1 x.rows` takes the first
+* **`skip`, and stages that cut a stream down.** Unbound call outputs are
+  drained automatically, so they cannot stall their producer. `skip 1 x.rows`
+  takes the first
   value off the node itself, for *every* reader of it, which is how a header
   line stops being everybody's problem — `| drop 1` only trims the one reader
   that says it. Several of them naming the same node add up. `-> _` is the
-  complementary form: `skip` bypasses processing, while `_` discards the result
-  after the pipeline runs. `pages | map summarise(it) -> _` therefore
+  complementary form: `_` discards the result after the pipeline runs.
+  `pages | map summarise(it) -> _` therefore
   summarises every page. `_` is a destination, not a name, and cannot be read.
   `| first 3`,
   `| truncate 4000`, `| where it.ok` and
@@ -186,11 +185,7 @@ statement  := [name "="] call
             | [name "="] "wait" reference ["timeout" duration]
             | [name "="] "drain" reference
             | pipeline "->" destination ("," destination)*
-            | "skip" (number reference | skip-target ("," skip-target)*)
-destination := reference | "_"      # `_` keeps nothing, and is not a name
-skip-target := pipeline
-            | name ("," name)* "of" name
-            | "(" name ("," name)* [ "of" name ] ")"
+            | "skip" number reference
             | "cancel" name
             | "abort" reference [expr [expr]]
             | "fail" [expr [expr]]
@@ -202,6 +197,7 @@ skip-target := pipeline
             | ("until" | "while") expr
             | "if" expr block ["else" (block | if)]
             | "nodes" name [block]
+destination := reference | "_"      # `_` keeps nothing, and is not a name
 call       := ["try"] ("run" | "call") action "(" [name ":" pipeline, ...] ")"
                   modifier*
 modifier   := "tee" | "via" name | "timeout" duration
@@ -384,11 +380,7 @@ flow NAME {
   nodes MAP [{ ... }]                      # a node map; keeps traffic local
   SOURCE | STAGE | STAGE -> DEST, DEST     # pipe a stream into node(s)
   SOURCE | STAGE -> _                      # do the work, keep no result
-  skip SOURCE[, SOURCE...]                 # read to the end, keep nothing
   skip N PORT                              # drop its first N, for all readers
-  skip X                                   # every output of a call X
-  skip O[, O...] of X                      # just those outputs of X
-           # (also written `skip (O, O...) of X` or `skip (O, O... of X)`)
   S = wait SUBJECT [timeout 30s]           # finished; S is how it went
   S = drain NODE                           # end a node, and say how it ended
   abort NODE [CODE] [MESSAGE]              # end a node with a failure
@@ -502,7 +494,7 @@ the rest carry on; `wait all of a, b` holds for every one of them.
 A race is a value too: which one won, from zero. `wait first of a, b -> n`,
 `let n = wait first of a, b` and `n = wait first of a, b` all name it.
 `wait all of` has no winner, so it is a barrier only.
-MODIFIERS: tee | via MAP | timeout 30s | after X, Y (a step, or a port/node
+MODIFIERS: tee | via MAP | timeout 30s | after X, Y, ... (steps or ports/nodes
            to wait for) |
            id EXPR | with "header": EXPR, ... |
            forward headers "x-name", "x-family-*" (send on the headers this
@@ -786,6 +778,36 @@ def run_program(
     )
 
 
+def register_standard_actions(
+    registry: Any,
+    roots: Sequence[str],
+    *,
+    allow_write: bool = False,
+    allow_run: bool = False,
+    require_sandbox: bool = True,
+    inherit_environment: bool = False,
+    max_seconds: int = 600,
+    current_directory: str = ".",
+) -> None:
+    """Register native filesystem and process actions with a fixed policy.
+
+    ``spawn_process`` uses Landlock on Linux and Seatbelt on macOS. With
+    ``require_sandbox=True``, registration succeeds but a process call refuses
+    to start on a host where the kernel confinement is unavailable.
+    Relative filesystem paths resolve against ``current_directory``.
+    """
+    _flow.register_standard_actions(
+        registry,
+        list(roots),
+        allow_write=allow_write,
+        allow_run=allow_run,
+        require_sandbox=require_sandbox,
+        inherit_environment=inherit_environment,
+        max_seconds=max_seconds,
+        current_directory=current_directory,
+    )
+
+
 def check_program(source: str, source_name: str = "") -> str:
     """What a program's entry flow is, compiling it and running nothing.
 
@@ -829,6 +851,7 @@ __all__ = [
     "load",
     "loads",
     "register",
+    "register_standard_actions",
     "check_program",
     "request",
     "run_program",

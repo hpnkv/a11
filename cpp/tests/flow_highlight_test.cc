@@ -187,11 +187,12 @@ TEST(FlowHighlight, NodeIsTheKeywordOnlyWhereItMakesANode) {
                                       "identifier:answer"}));
 }
 
-TEST(FlowHighlight, OfTiesASkipsOutputsToTheirCall) {
-  EXPECT_EQ(Coloured("skip o1, o2 of act"),
-            (std::vector<std::string>{
-                "statement-keyword:skip", "identifier:o1", "punctuation:,",
-                "identifier:o2", "statement-keyword:of", "identifier:act"}));
+TEST(FlowHighlight, OfJoinsAWaitsSubjects) {
+  EXPECT_EQ(
+      Coloured("wait first of a, b"),
+      (std::vector<std::string>{"statement-keyword:wait", "identifier:first",
+                                "statement-keyword:of", "identifier:a",
+                                "punctuation:,", "identifier:b"}));
   // The same word before a `=` is a binding name, as every other clause and
   // statement word already is.
   EXPECT_EQ(Coloured("of = run act()"),

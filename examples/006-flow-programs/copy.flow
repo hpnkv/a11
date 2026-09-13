@@ -38,10 +38,9 @@ flow {
   argv | drop 1 | first 1 -> from
   argv | drop 2 | first 1 -> to
 
-  # `omit` rather than `skip`: skipping drains a port the action still produced,
-  # and for a binary file `text` and `lines` cannot be produced at all -- they
-  # are text, and a file is bytes. Omitting closes them before anything is read,
-  # which is both cheaper and the only thing that is *correct* here.
+  # Automatic draining still produces an unbound output. For a binary file,
+  # `text` and `lines` cannot be produced because they are text. Omitting them
+  # closes the ports before anything is read.
   source = run read_file(
     path: from,
     options: {"omit": ["text", "lines", "info"]}

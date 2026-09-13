@@ -53,8 +53,6 @@ flow {
   argv | drop 2 | first 1 -> closer
 
   input = run read_stdin() via scratch
-  skip input.bytes
-  skip input.is_tty
 
   # `for` twice, nested, is how both markers reach the expression: each outer
   # value is materialised for its block, so `from` and `to` are strings while
@@ -79,7 +77,6 @@ flow {
   }
 
   out = run write_stdout(content: body | map strformat("%s\n", it)) via scratch
-  skip out.bytes_written
 
   body | count -> found
   found where it > 0 | map 0 -> exit_code

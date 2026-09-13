@@ -37,7 +37,7 @@ A direct tool call is clearer for one action. Split the work into separate flows
 - **Declare focused outputs.** Return the answer, count, or selected hits rather than large intermediate values you do not need to inspect.
 - **`run` what is `runnable`, `call` what is not.** The two verbs are two different things: `run` executes the action where the flow is running, `call` puts it on the stream the flow is attached to and lets the peer do it. `flow_actions` marks each one, and almost everything it offers you is `runnable: true` — so `run` is the usual verb, and a `run` of something without a handler is refused rather than quietly sent elsewhere.
 - **Use listed actions.** `flow_actions` is the set of names the flow may resolve.
-- **Every output port of every step is read.** You do not have to name them all — the runtime drains what you ignore — but `skip x.debug` makes the choice explicit for a large output. `skip 1 x.rows` is the other one: it drops a port's first value for *every* reader, which is how you throw away a header line, and several of them naming one port add up.
+- **Every output port of every step is read.** The runtime drains outputs you do not bind. `skip 1 x.rows` drops a port's first value for *every* reader, which is how you throw away a header line, and several statements naming one port add up.
 - **A failing step ends the flow** unless you wrote `try`. When a failure is one the composition should handle, write `try run` (or `try call`) and then `wait` to find out how it went.
 - **Give a port the type it wants.** When an action's input is a real type rather than a bag of keys, write `a11.sdk.Interaction{role: "user", content: [...]}` (or `{...} as a11.sdk.Interaction`) and it is validated into that type, defaults and all. `to_chunk(value)` makes the `Chunk` such a type's content is made of. Which tags exist is the host's — ask `flow_actions` what the ports are and match them.
 - **A stream of fragments is not a stream of things.** `| group EXPR` gathers values until `EXPR` holds of the one just added, then hands over the list: `| group ends-with(trim(it), [".", "?"]) | map trim(join(it, " "))` is partial utterances becoming whole sentences. Reach for it whenever one value is only part of what you need.
@@ -68,11 +68,7 @@ flow NAME {
   nodes MAP [{ ... }]                      # a node map; keeps traffic local
   SOURCE | STAGE | STAGE -> DEST, DEST     # pipe a stream into node(s)
   SOURCE | STAGE -> _                      # do the work, keep no result
-  skip SOURCE[, SOURCE...]                 # read to the end, keep nothing
   skip N PORT                              # drop its first N, for all readers
-  skip X                                   # every output of a call X
-  skip O[, O...] of X                      # just those outputs of X
-           # (also written `skip (O, O...) of X` or `skip (O, O... of X)`)
   S = wait SUBJECT [timeout 30s]           # finished; S is how it went
   S = drain NODE                           # end a node, and say how it ended
   abort NODE [CODE] [MESSAGE]              # end a node with a failure
@@ -87,10 +83,9 @@ flow NAME {
            # have: drain marks it final and closes it, which says it is over;
            # abort says it went wrong. A reader cannot otherwise tell a stream
            # that finished from one cut short.
-           # `cancel` aborts, and a cancelled run reports `cancelled`. Asking
-           # an action to *finish* instead is not a language construct: it is
-           # `{"command": "stop"} -> X.control_events`, a convention of the
-           # standard library rather than of the language.
+           # `cancel` aborts, and a cancelled run reports `cancelled`. Graceful
+           # completion uses the standard-library control-port convention:
+           # `{"command": "stop"} -> X.control_events`.
            # The log needs no declared port or manual drain and is created
            # only when used
   for V[, V...] in SOURCE [parallel N] { ... }   # once per value; several
@@ -111,69 +106,61 @@ struct NAME {                              # a shape a port may be typed with
          [default LITERAL] "description"
 }
 
-A description may be a "..." string, a """...""" one that holds line breaks and
-gives back the indentation the source put in front of it, or either of those
-alone on the line below what it describes, at any indentation. A string with
-anything after it on its line is a value, as it always was. Strings written next
-to each other are one string, so prose that outgrows its line does not need a
-`+`, and `\"` is a quote inside one. A *keyword's* quoted argument — a
-`matching`, a `strformat` — is one literal, since a run there could not be told
-from the argument followed by a description.
+A description may use a "..." string or a dedented """...""" string with line
+breaks. Either form may appear alone below its declaration at any indentation.
+A string followed by another token is a value. Adjacent strings concatenate;
+`\"` inserts a quote. A keyword argument such as `matching` or `strformat`
+accepts one literal to distinguish it from a following description.
 
 A `struct` declares a record with named, typed, constrained fields. A port may
 use the record as its type, and a value may be coerced into it. A declared shape
-outranks a serialisation tag of the same name — what the file says about the
-name is what the file means by it — and it may hold, and be held by, another
-shape. `A..B` bounds a number, a duration or an instant, and the *length* of a
+takes precedence over a serialisation tag with the same name and may contain or
+be contained by another shape. `A..B` bounds a number, duration, instant, or the
+*length* of a
 string, a byte string or a list; either end may be left off (`1..`, `..200`).
 A shape holding `bytes` anywhere in it cannot go through `| json`, which has
 nothing to carry them in; `| packb` can.
 
-ONE VALUE: everything here is a stream, which is the right default for dataflow
-      — but some of what moves through a flow is one value, and `let` gives it
-      a name. `let code = http.status_code` reads one value of that stream and
+ONE VALUE: every source is a stream. `let` reads and names one value.
+      `let code = http.status_code` reads one value of that stream and
       binds it, and the name then stands *where an expression does*:
       `if code >= 200 and code < 300 { .. }`, `strformat("%d", code)`,
-      `code == other`. It is also a stream of one wherever a SOURCE goes, which
-      is the other direction: `let image = page.body` then
+      `code == other`. It also acts as a one-value stream wherever a SOURCE is
+      accepted: `let image = page.body` then
       `image | chunk 65536 -> upload.parts` cuts that one value into 64 KiB
-      pieces. A `let` is lazy — nothing is read until the name is — so it may
-      be written where it reads best rather than where the value is first
-      needed, and one nothing reads is reported. An empty stream binds nothing,
-      which `if not code` is how to ask about. A value is read, never written.
+      pieces. A `let` reads lazily on first use. The compiler reports unused
+      bindings. An empty stream binds nothing, which `if not code` tests. A
+      value is read-only.
 
-      Reading a stream where a value belongs *takes* a value off it. Two places
-      that read one stream for a value take turns on the one view of it, so they
-      see two different values rather than two copies of the first: reading the
-      first value and ignoring the rest would lose data silently. Which reader
-      receives each value is undefined; `after` can order separate statements.
+      Reading a stream where a value belongs consumes one value. Two value reads
+      from one stream receive different values from their shared view. Which
+      reader receives each value is undefined; `after` orders separate statements.
       Within one statement there is no
       `after` that could order two reads of one node against each other, and the
       language reports it (`flow.barrier.value-read-twice`). A `let` is the fix:
       it names a value, and a value is shared. A stream the language can *prove*
       carries one value is
-      the exception, and is shared rather than taken: a port that did not say
+      the exception and is shared: a port that did not say
       `stream`, a header, a status, or a pipeline that reduced with `| collect`,
       `| count` or `| first 1`. Those promise one value, so a second arriving
-      ends the flow with `invalid_argument` rather than passing unnoticed.
+      ends the flow with `invalid_argument`.
 
       `advance V` rebinds a `let` value to the *next* value of the same stream,
       which is how a flow reads several values of one stream one at a time and
       knows which is which: `let word = words`, use it, `advance word`, use it
-      again. The guarantee is positional rather than an ordering — the *k*th
-      binding of a name is the *k*th value of its stream however the flow is
+      again. The guarantee is positional: the *k*th binding of a name is the
+      *k*th value of its stream however the flow is
       scheduled — so it holds without a barrier. Statements written above an
       `advance` keep the value they were resolved against, which is what makes
       the name read top to bottom. Advancing past the end binds nothing.
 
       Several names take one value apart: `let name, age = user` by field, and
-      `let first, second = pair` by position. They are the same statement, and
-      which one is meant is a question about the value rather than about the
-      text: each name is looked up as a field, and as a position where there is
-      no such field. For example:
+      `let first, second = pair` by position. The value determines the form:
+      each name is looked up as a field, then as a position when no such field
+      exists. For example:
       `let name, age = match("name={name} age={age:int}", line)`
-      reads what a pattern named. A part is not a value of a stream of its own,
-      so `advance` on one says so rather than binding the next whole value.
+      reads what a pattern named. A part has no stream of its own, so `advance`
+      reports an error on it.
 
 SOURCE is a port (in-port, X.out-port), a node, a loop variable, a `let` value,
 a header alias, a literal, `status SUBJECT`, `N.id`, `zip(SOURCE, ...)`,
@@ -195,7 +182,7 @@ the rest carry on; `wait all of a, b` holds for every one of them.
 A race is a value too: which one won, from zero. `wait first of a, b -> n`,
 `let n = wait first of a, b` and `n = wait first of a, b` all name it.
 `wait all of` has no winner, so it is a barrier only.
-MODIFIERS: tee | via MAP | timeout 30s | after X, Y (a step, or a port/node
+MODIFIERS: tee | via MAP | timeout 30s | after X, Y, ... (steps or ports/nodes
            to wait for) |
            id EXPR | with "header": EXPR, ... |
            forward headers "x-name", "x-family-*" (send on the headers this
@@ -216,8 +203,8 @@ STAGES: first N | last N | drop N | truncate N | batch N | window N | flatten |
         text | json | packb | timeout 30s | pace 100ms | log [LEVEL] [EXPR] |
         logf [LEVEL] "fmt" [ARG, ...]
       try SOURCE -> DEST is the pipe's own form of the same word: a failure
-      arriving from the source, or refused by the destination, becomes a value
-      rather than the end of the flow. Bind it -- `p = try src -> dest` -- and
+      arriving from the source, or refused by the destination, becomes a status
+      value. Bind it -- `p = try src -> dest` -- and
       `status p` says how it went; unbound, a failure is silence and the
       language says so. It differs from `try` on a *stage*: a stage fails once
       per value and carries on, while a pipe fails once and stops.
@@ -235,7 +222,7 @@ STAGES: first N | last N | drop N | truncate N | batch N | window N | flatten |
       per-value work such as a host round trip or coercion.
       chunk N cuts each value into pieces of at most N *bytes* — the sizes
       people write are byte counts, because they are about a frame or a buffer.
-      Text stops at a character boundary rather than splitting one. A value
+      Text chunks stop at character boundaries. A value
       with nothing to cut goes through whole; `batch N` is the one that groups
       several values into one.
       then and where may drop the `|`: `history then asked`, `hits where
@@ -255,11 +242,11 @@ STAGES: first N | last N | drop N | truncate N | batch N | window N | flatten |
       `| fold 0 as total, total + it.price` binds `total` to what the last
       value produced and `it` to the value in hand. `+` is arithmetic, not
       concatenation -- `| join` is what puts strings together.
-      scan is fold with the values published as they are computed rather than
-      only the last: one value out per value in, carrying state forward. That
-      is a state machine over a stream, and it is the only way to write one --
-      `repeat` carries state but reads its stream from the start on every pass,
-      and `for` walks a stream but carries nothing between passes.
+      scan publishes each computed accumulator; fold publishes only the last.
+      It produces one value per input while carrying state forward, defining a
+      state machine over the stream. `repeat` carries state but reads its stream
+      from the start on every pass; `for` walks a stream without carrying state
+      between passes.
       `| scan 0 as n, n + 1` numbers a stream, and the start may be a record
       when the state has more than one part:
       `| scan {"in": false} as s, {"in": starts-with(it, "BEGIN") or s.in}`.
@@ -340,7 +327,7 @@ for every reader at once, `-> _` performs a pipeline and keeps none of it, and
 
 The action names below are examples — use the ones `flow_actions` gives you.
 
-```
+```a11flow
 flow answer-from-the-web {
   describe "Search, read the best hits, and answer from them."
 
@@ -356,12 +343,10 @@ flow answer-from-the-web {
       page = try run web-fetch(url: hit.url)
       hit.url -> sources
       page.text | truncate 2000 -> brief.pages
-      skip page.bytes
     }
   }
 
   brief.summary -> answer
-  skip search.debug
 }
 ```
 

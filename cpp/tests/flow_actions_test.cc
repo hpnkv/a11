@@ -328,6 +328,17 @@ TEST(FlowPolicyTest, RefusesAPathOutsideEveryRoot) {
   EXPECT_EQ(outside.status().code(), absl::StatusCode::kPermissionDenied);
 }
 
+TEST(FlowPolicyTest, ResolvesRelativePathsAgainstTheCurrentDirectory) {
+  Workspace workspace;
+  FilesystemPolicy policy;
+  policy.current_directory = workspace.root().string();
+  policy.roots = {workspace.root().string()};
+  const absl::StatusOr<fs::path> resolved =
+      ResolvePath(policy, "nested/file.txt", false);
+  ASSERT_TRUE(resolved.ok()) << resolved.status();
+  EXPECT_EQ(*resolved, workspace.root() / "nested/file.txt");
+}
+
 TEST(FlowPolicyTest, ResolvesDotDotBeforeCheckingContainment) {
   Workspace workspace;
   FilesystemPolicy policy;
@@ -1179,6 +1190,22 @@ TEST(SpawnProcessTest, StopsALongRunningProcessAndSaysHow) {
   EXPECT_EQ(status.code(), absl::StatusCode::kCancelled);
 }
 
+TEST(SpawnProcessTest, StopsSuccessfullyAtTheOutputLineBound) {
+  const std::shared_ptr<Action> action =
+      MakeSpawn(CanRun({}), "sh",
+                nlohmann::json::array({"-c", "while true; do echo line; done"}),
+                {{"max_output_lines", 6}, {"grace", "100ms"}});
+  ASSERT_NE(action, nullptr);
+  ASSERT_TRUE(action->Run().ok());
+  ASSERT_TRUE(action->Wait(kPatience).Await().ok());
+
+  EXPECT_EQ(ReadAll(action, "stdout_lines").size(), 6u);
+  const std::optional<nlohmann::json> truncated =
+      ReadOne(action, "output_truncated");
+  ASSERT_TRUE(truncated.has_value());
+  EXPECT_EQ(*truncated, true);
+}
+
 TEST(SpawnProcessTest, RunsInTheWorkingDirectoryItWasGiven) {
   Workspace workspace;
   workspace.Write("marker.txt", "here");
@@ -1355,7 +1382,7 @@ TEST(SandboxTest, StopsAReadOutsideTheRootWhereThePlatformCan) {
     const std::optional<nlohmann::json> describe =
         ReadOne(reading_out, "sandbox");
     ASSERT_TRUE(describe.has_value());
-    EXPECT_NE(describe->get<std::string>().find("reads NOT confined"),
+    EXPECT_NE(describe->get<std::string>().find("general reads not confined"),
               std::string::npos)
         << "an unconfined read has to be visible to whoever reads the port";
   }

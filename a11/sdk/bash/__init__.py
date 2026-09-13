@@ -31,7 +31,9 @@ The command process is an ordinary ``bash`` subprocess (see
 be wrapped in kernel-level sandboxing without changing the Action surface.
 """
 
-from a11.actions import ActionRegistry, ActionSchema, ActionHandler
+import functools
+
+from a11.actions import ActionHandler, ActionRegistry, ActionSchema
 from a11.sdk.bash.handlers import (
     shell_execute,
     shell_exit,
@@ -65,10 +67,17 @@ SHELL_ACTIONS: tuple[tuple[ActionSchema, ActionHandler], ...] = (
 )
 
 
-def register(registry: ActionRegistry) -> None:
-    """Register all four shell Actions on ``registry``."""
+def register(
+    registry: ActionRegistry, manager: ShellManager | None = None
+) -> None:
+    """Register all shell Actions, optionally against one scoped manager."""
     for schema, handler in SHELL_ACTIONS:
-        registry.register(schema.name, schema, handler)
+        installed = (
+            functools.partial(handler, manager=manager)
+            if manager is not None
+            else handler
+        )
+        registry.register(schema.name, schema, installed)
 
 
 __all__ = [

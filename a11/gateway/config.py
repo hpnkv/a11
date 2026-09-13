@@ -48,8 +48,14 @@ class GatewayConfig:
     conversation_store_root: pathlib.Path = dataclasses.field(
         default_factory=conversations.default_root
     )
-    #: Serve the ``shell_*`` action family.
+    #: Serve ``run_command`` for coding gateways, or ``shell_*`` without one.
     shell_tools: bool = True
+    #: Serve the sandboxed coding workspace, file, command, and agent actions.
+    coding_tools: bool = True
+    coding_cwd: str = "."
+    coding_add_dirs: tuple[str, ...] = ()
+    coding_approval: str = "auto"
+    coding_sandbox: str = "workspace-write"
     #: Serve ``flow_actions``, ``flow_check`` and ``flow_run``, which let a
     #: caller compose the gateway's other actions into one step.
     flow_tools: bool = True
@@ -77,6 +83,11 @@ class GatewayConfig:
                 args, "conversation_store_root", conversations.default_root()
             ),
             shell_tools=not getattr(args, "no_shell_tools", False),
+            coding_tools=not getattr(args, "no_coding_tools", False),
+            coding_cwd=getattr(args, "coding_cwd", "."),
+            coding_add_dirs=tuple(getattr(args, "coding_add_dir", ()) or ()),
+            coding_approval=getattr(args, "coding_approval", "auto"),
+            coding_sandbox=getattr(args, "coding_sandbox", "workspace-write"),
             flow_tools=not getattr(args, "no_flow_tools", False),
             audio_capture=not getattr(args, "no_audio_capture", False),
             speech_recognition=not getattr(

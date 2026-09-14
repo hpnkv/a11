@@ -29,6 +29,7 @@
 
 import {setHost, type HostBridge, type HighlightNote} from '../../../webview/src/bridge.js';
 import {mount, mountFailure, viewOf, type MountedView} from '../../../webview/src/mount.js';
+import type {RunnableFlow} from '../../../webview/src/flowRunner.js';
 
 interface VsCodeApi {
   postMessage(message: unknown): void;
@@ -53,7 +54,8 @@ interface Answer {
  * tell the two apart. An answer carries an `id`; this carries a `command`.
  */
 interface Push {
-  command: 'newChat';
+  command: 'newChat' | 'openFlow';
+  flow?: RunnableFlow;
 }
 
 /**
@@ -73,6 +75,9 @@ function makeBridge(api: VsCodeApi, mounted: () => MountedView | undefined): Hos
       // A command of the editor's, driving something the page owns. The same
       // action its own button runs, so the two cannot drift.
       if (message.command === 'newChat') mounted()?.newChat?.();
+      if (message.command === 'openFlow' && message.flow) {
+        mounted()?.openFlow?.(message.flow);
+      }
       return;
     }
     const answer = message as Answer;
@@ -99,6 +104,7 @@ function makeBridge(api: VsCodeApi, mounted: () => MountedView | undefined): Hos
     runAction: (name: string, inputs: unknown) => call('runAction', name, inputs),
     getConfig: () => call('getConfig'),
     readFlow: (name: string) => call('readFlow', name),
+    highlightFlow: (source: string) => call('highlightFlow', source),
     suggestOnHighlight: (note: HighlightNote) => call('suggestOnHighlight', note),
     clearSuggestions: (path: string) => call('clearSuggestions', path),
   };
@@ -111,13 +117,16 @@ function main(): void {
   // bridge has to exist before anything is mounted and the mounted view has to
   // exist before a command can reach it.
   let mounted: MountedView | undefined;
+  let api: VsCodeApi;
   try {
-    setHost(makeBridge(acquireVsCodeApi(), () => mounted));
+    api = acquireVsCodeApi();
+    setHost(makeBridge(api, () => mounted));
   } catch (error) {
     mountFailure(root, error);
     return;
   }
   mounted = mount(root, viewOf(window.__A11_VIEW));
+  api.postMessage({command: 'ready'});
 }
 
 if (document.readyState === 'loading') {

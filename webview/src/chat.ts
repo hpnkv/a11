@@ -28,15 +28,19 @@
  */
 
 import { A11ChatSession } from './a11client.js';
-import { clearSuggestions, suggestOnHighlight } from './bridge.js';
+import { clearSuggestions, highlightFlow, suggestOnHighlight } from './bridge.js';
 import type { MountedView } from './mount.js';
 import {
   interactionText,
   isToolResultCarrier,
   toolLogs,
+  toolOutputs,
   type ConversationSummary,
 } from './conversations.js';
 import { renderMarkdown } from './markdown.js';
+import {renderFlowSource} from './flowRunner.js';
+import {createConnectionStatus} from './connectionStatus.js';
+import {renderDebugValue} from './outputPresentation.js';
 import {
   BlockKind,
   isOk,
@@ -83,6 +87,56 @@ function completionSection(title: string, value: string): HTMLElement {
   return section;
 }
 
+/** Compact call arguments for a collapsed tool card. */
+function toolInputPreview(inputs: Record<string, unknown> | undefined): string {
+  if (!inputs || Object.keys(inputs).length === 0) return '';
+  return Object.entries(inputs)
+    .slice(0, 4)
+    .map(([name, value]) => `${name}: ${boundedValue(value)}`)
+    .join(' · ')
+    .slice(0, 320);
+}
+
+function boundedValue(value: unknown): string {
+  if (value instanceof Uint8Array) return `<${value.byteLength} bytes>`;
+  if (typeof value === 'string') {
+    return JSON.stringify(value.length > 100 ? `${value.slice(0, 97)}…` : value);
+  }
+  if (value === null || typeof value !== 'object') return String(value);
+  try {
+    const text = JSON.stringify(value, (_key, nested) =>
+      nested instanceof Uint8Array ? `<${nested.byteLength} bytes>` : nested,
+    );
+    return text.length > 120 ? `${text.slice(0, 117)}…` : text;
+  } catch {
+    return String(value);
+  }
+}
+
+/** One expandable Inputs, Outputs, or Logs section in a tool card. */
+function toolDetailSection(
+  label: string,
+  value: unknown,
+  empty: string,
+): HTMLElement {
+  const section = document.createElement('section');
+  section.className = 'tool-detail-section';
+  const heading = document.createElement('strong');
+  heading.textContent = label;
+  const content = document.createElement('div');
+  content.className = 'tool-detail-value';
+  if (value === undefined || value === null || value === '') {
+    content.classList.add('empty');
+    content.textContent = empty;
+  } else if (typeof value === 'string') {
+    renderDebugValue(content, value, 'text/plain');
+  } else {
+    renderDebugValue(content, value);
+  }
+  section.append(heading, content);
+  return section;
+}
+
 /**
  * One assistant turn's rendering: the turn's content as an ordered sequence of
  * blocks — streamed answer text, thinking panels, and tool-run boxes, in the
@@ -123,6 +177,9 @@ export class AssistantBubble {
     box: HTMLElement;
     summary: HTMLSpanElement;
     body: HTMLDivElement;
+    activity?: ToolActivity;
+    state?: HTMLSpanElement;
+    preview?: HTMLElement;
     completionState?: HTMLSpanElement;
     requestState?: HTMLSpanElement;
     requestTitle?: HTMLElement;
@@ -256,6 +313,16 @@ export class AssistantBubble {
         this.onGrow();
         return;
       }
+      if (existing.activity) {
+        existing.activity = {
+          ...existing.activity,
+          ...run,
+          arguments: run.arguments ?? existing.activity.arguments,
+          outputs: run.outputs ?? existing.activity.outputs,
+        };
+        this.updateToolDetails(existing);
+        return;
+      }
       existing.summary.textContent = failed
         ? run.status!.message || 'failed'
         : run.phase === 'started'
@@ -277,43 +344,24 @@ export class AssistantBubble {
     // The box goes after the text that led to it, so that text has to be on the
     // page before the box is appended.
     this.flushPaint();
-    const [summary, ...rest] = (run.log ?? '').split('\n');
     const box = document.createElement('details');
     box.className = 'tool-run';
     const head = document.createElement('summary');
     const label = document.createElement('span');
     label.className = 'tool-run-name';
-    label.textContent = run.tool;
+    label.textContent = run.tool === 'run_flow' ? 'A11 Flow' : run.tool;
     const text = document.createElement('span');
     text.className = 'tool-run-summary';
-    text.textContent = run.phase === 'started' ? 'running…' : summary?.trim() || 'complete';
-    head.append(label, text);
+    const state = document.createElement('span');
+    state.className = 'tool-run-state';
+    head.append(label, text, state);
     box.append(head);
     const body = document.createElement('div');
     body.className = 'tool-run-body';
-    const detail = rest.join('\n').trim();
-    if (run.tool === 'request_user_input' && run.arguments) {
-      const question = document.createElement('strong');
-      question.textContent = String(run.arguments.question ?? 'Input requested');
-      body.append(question);
-      const options = Array.isArray(run.arguments.options) ? run.arguments.options : [];
-      for (const option of options) {
-        if (!option || typeof option !== 'object') continue;
-        const record = option as Record<string, unknown>;
-        const line = document.createElement('div');
-        line.className = 'user-input-option';
-        line.textContent = `${String(record.label ?? '')}${record.description ? ` — ${String(record.description)}` : ''}`;
-        body.append(line);
-      }
-      box.open = true;
-      box.append(body);
-    } else if (detail) {
-      body.innerHTML = renderMarkdown(detail);
-      box.append(body);
-    } else {
-      box.classList.add('empty');
-    }
-    this.toolElements.set(run.id, {box, summary: text, body});
+    box.append(body);
+    const entry = {box, summary: text, body, activity: run, state};
+    this.toolElements.set(run.id, entry);
+    this.updateToolDetails(entry);
     if (this.thinking) {
       this.thinking.details.append(box);
       this.thinking.tools += 1;
@@ -324,6 +372,78 @@ export class AssistantBubble {
     // it — including a thought, which opens a fresh run below it in the panel.
     this.sink = null;
     this.wroteAnything = true;
+    this.onGrow();
+  }
+
+  /** Refresh a generic tool card from the latest streamed call information. */
+  private updateToolDetails(entry: {
+    box: HTMLElement;
+    summary: HTMLSpanElement;
+    body: HTMLDivElement;
+    activity?: ToolActivity;
+    state?: HTMLSpanElement;
+    preview?: HTMLElement;
+  }): void {
+    const run = entry.activity!;
+    const isFlow = run.tool === 'run_flow';
+    entry.box.classList.toggle('flow-run', isFlow);
+    if (isFlow) {
+      const name = entry.box.querySelector<HTMLElement>('.tool-run-name');
+      if (name) name.textContent = run.phase === 'started' ? 'Running A11 Flow' : 'Ran A11 Flow';
+    }
+    const failed = run.status !== undefined && !isOk(run.status);
+    entry.box.classList.toggle('failed', failed);
+    entry.state!.textContent = failed
+      ? 'Failed'
+      : run.phase === 'started'
+        ? 'running…'
+        : 'completed';
+    const source = isFlow && typeof run.arguments?.source === 'string'
+      ? run.arguments.source
+      : '';
+    const inputs = source
+      ? Object.fromEntries(Object.entries(run.arguments ?? {}).filter(([name]) => name !== 'source'))
+      : run.arguments;
+    const summary = (run.log ?? '').split('\n')[0]?.trim();
+    entry.summary.textContent = failed
+      ? run.status?.message || summary || 'The action failed.'
+      : summary || toolInputPreview(inputs);
+
+    entry.preview?.remove();
+    entry.preview = undefined;
+    if (source) {
+      const preview = document.createElement('pre');
+      preview.className = 'flow-preview';
+      preview.textContent = source;
+      entry.preview = preview;
+      void highlightFlow(source).then((tokens) => {
+        if (entry.activity?.arguments?.source === source) {
+          renderFlowSource(preview, source, tokens);
+          this.onGrow();
+        }
+      }).catch(() => undefined);
+    }
+
+    entry.body.innerHTML = '';
+    if (entry.preview) {
+      const flowSource = document.createElement('section');
+      flowSource.className = 'tool-detail flow-source-detail';
+      const heading = document.createElement('h4');
+      heading.textContent = 'Flow';
+      flowSource.append(heading, entry.preview);
+      entry.body.append(flowSource);
+    }
+    entry.body.append(
+      toolDetailSection('Inputs', inputs, source ? 'Flow source is shown above.' : 'No input values.'),
+      toolDetailSection('Outputs', run.outputs, run.phase === 'started' ? 'Waiting for output…' : 'No output values.'),
+      toolDetailSection('Logs', run.log, run.phase === 'started' ? 'Waiting for logs…' : 'Nothing logged.'),
+    );
+    if (failed) {
+      const failure = document.createElement('div');
+      failure.className = 'tool-run-failure';
+      failure.textContent = run.status?.message || 'The action failed.';
+      entry.body.append(failure);
+    }
     this.onGrow();
   }
 
@@ -582,9 +702,11 @@ export class ChatView {
   private readonly suggestButton: HTMLButtonElement;
   private readonly textarea: HTMLTextAreaElement;
   private readonly sendButton: HTMLButtonElement;
+  private readonly connection = createConnectionStatus();
   private readonly root: HTMLElement;
   private session: A11ChatSession | null = null;
   private busy = false;
+  private interruptible = false;
   private following = true;
   private historyOpen = false;
   /** The turn currently streaming, so tool runs land in the right bubble. */
@@ -611,7 +733,7 @@ export class ChatView {
     this.suggestButton.textContent = 'Suggest fixes';
     this.suggestButton.title =
       "Review the file you're looking at: what the IDE underlines, and what it doesn't";
-    bar.append(this.newChatButton, this.historyButton, this.suggestButton);
+    bar.append(this.newChatButton, this.historyButton, this.suggestButton, this.connection.element);
 
     this.transcript = document.createElement('div');
     this.transcript.className = 'transcript';
@@ -680,7 +802,9 @@ export class ChatView {
 
   private setBusy(busy: boolean): void {
     this.busy = busy;
-    this.sendButton.disabled = busy;
+    this.sendButton.disabled = busy && !this.interruptible;
+    this.sendButton.textContent = busy && this.interruptible ? 'Stop' : 'Send';
+    this.sendButton.classList.toggle('stop', busy && this.interruptible);
     this.textarea.disabled = busy;
     this.newChatButton.disabled = busy;
     this.historyButton.disabled = busy;
@@ -699,6 +823,8 @@ export class ChatView {
           this.pendingInput = {id: run.id, ...run.arguments};
           this.textarea.disabled = false;
           this.sendButton.disabled = false;
+          this.sendButton.textContent = 'Send';
+          this.sendButton.classList.remove('stop');
           this.textarea.placeholder = String(run.arguments.question ?? 'Type your answer…');
           this.textarea.focus();
         }
@@ -711,7 +837,7 @@ export class ChatView {
           this.textarea.placeholder = 'Ask A11 about your project...  (Enter to send, Shift+Enter for newline)';
           this.setBusy(this.busy);
         }
-      });
+      }, (notice) => this.connection.update(notice));
     }
     return this.session;
   }
@@ -833,6 +959,10 @@ export class ChatView {
   private async rehydrate(interactions: Interaction[]): Promise<void> {
     const logs: Record<string, string> = Object.assign({}, ...interactions.map(toolLogs));
     const statuses = Object.assign({}, ...interactions.map(toolStatuses));
+    const outputs: Record<string, Record<string, unknown>> = Object.assign(
+      {},
+      ...(await Promise.all(interactions.map(toolOutputs))),
+    );
     for (const interaction of interactions) {
       if (interaction.role === Role.SYSTEM) continue;
       const text = await interactionText(interaction);
@@ -840,12 +970,14 @@ export class ChatView {
         const bubble = new AssistantBubble(this.addBubble('assistant'), () => {});
         if (text) bubble.appendToken(text);
         const presented = await presentInteraction(interaction, logs, statuses);
+        if (!isOk(presented)) throw new Error(presented.message);
         for (const block of presented.blocks) {
           if (block.kind !== BlockKind.TOOL_RUN) continue;
           bubble.addToolRun({
             id: block.id,
             tool: block.toolName,
             arguments: block.toolArguments,
+            outputs: outputs[block.id],
             log: logs[block.id] ?? null,
             status: statuses[block.id],
             phase: 'finished',
@@ -867,12 +999,21 @@ export class ChatView {
       await this.answerPendingInput(this.pendingInput.id, answer);
       return;
     }
-    if (this.busy) return;
+    if (this.busy) {
+      if (this.interruptible && this.session?.interrupt()) {
+        this.interruptible = false;
+        this.sendButton.textContent = 'Stopping…';
+        this.sendButton.classList.remove('stop');
+        this.sendButton.disabled = true;
+      }
+      return;
+    }
     const prompt = this.textarea.value.trim();
     if (!prompt) return;
     this.textarea.value = '';
     this.autoSizeTextarea();
     this.showHistory(false);
+    this.interruptible = true;
     this.setBusy(true);
     // Sending is an explicit request to watch this turn.
     this.following = true;
@@ -891,15 +1032,17 @@ export class ChatView {
 
     try {
       const session = await this.ensureSession();
-      await session.chat(prompt, {
+      const completed = await session.chat(prompt, {
         onToken: (text) => bubble.appendToken(text),
         onThought: (text) => bubble.appendThought(text),
       });
+      if (!completed) bubble.appendToken('\n\n_Response stopped._');
       bubble.finish();
     } catch (error) {
       bubble.fail(error instanceof Error ? error.message : String(error));
     } finally {
       this.active = null;
+      this.interruptible = false;
       this.setBusy(false);
       this.follow();
       this.textarea.focus();

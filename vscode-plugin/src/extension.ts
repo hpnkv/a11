@@ -33,11 +33,13 @@ import {
   hoverInFragment,
   type FixCarrier,
 } from './fragments.js';
+import {runnableFlows, type RunnableFlow} from './flowDeclarations.js';
 import {indentAfter} from './flowIndent.js';
 import {registerKeyCommands} from './settings.js';
 import {Suggestions, registerApply} from './suggestions.js';
 import {complainOnce, findFlowTool} from './tool.js';
 import {A11ViewProvider} from './views.js';
+import {GatewayConnection} from './gateway.js';
 
 /** The languages a flow may be written inside a string of. */
 const HOSTS = ['python', 'typescript', 'javascript', 'typescriptreact', 'javascriptreact', 'java', 'kotlin', 'go', 'cpp'];
@@ -46,14 +48,23 @@ const HOSTS = ['python', 'typescript', 'javascript', 'typescriptreact', 'javascr
 const SETTLE_MILLIS = 400;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  const gateway = new GatewayConnection();
+  gateway.start();
   const suggestions = new Suggestions();
   context.subscriptions.push(suggestions, registerApply());
+  const flow = new FlowSupport(context);
 
   // The two views. Before the language server, because a chat that works
   // without an `a11-flow` binary should not wait for one.
-  const views = new Map<'chat' | 'actions', A11ViewProvider>();
-  for (const view of ['chat', 'actions'] as const) {
-    const provider = new A11ViewProvider(context, view, suggestions);
+  const views = new Map<'chat' | 'actions' | 'runner', A11ViewProvider>();
+  for (const view of ['chat', 'actions', 'runner'] as const) {
+    const provider = new A11ViewProvider(
+      context,
+      view,
+      suggestions,
+      (source) => flow.highlight(source),
+      gateway,
+    );
     views.set(view, provider);
     context.subscriptions.push(
       vscode.window.registerWebviewViewProvider(`a11.${view}`, provider, {
@@ -67,7 +78,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // register them: a command in the palette that reports "command not found"
   // tells the reader their editor is broken, when the truth is that a binary is
   // missing and there is something they can do about it.
-  const flow = new FlowSupport(context);
+  const runner = views.get('runner')!;
+  const runMarkers = registerFlowRunners(context, flow, runner);
 
   // Continuation-aware indent on Enter, needing no server and no binary: a
   // `after` list past a `,`, a pipeline left open after `|`/`->`, an unclosed
@@ -108,6 +120,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('a11.newChat', () => views.get('chat')?.newChat()),
     vscode.commands.registerCommand('a11.rescanActions', () => flow.rescan()),
     vscode.commands.registerCommand('a11.restartFlowServer', () => flow.restart()),
+    runMarkers,
+    gateway,
     flow,
   );
 
@@ -134,6 +148,21 @@ class FlowSupport implements vscode.Disposable {
   private readonly log = vscode.window.createOutputChannel('A11 Flow');
 
   constructor(private readonly context: vscode.ExtensionContext) {}
+
+  /** The current language connection for editor features outside LSP. */
+  currentServer(): FlowServer | undefined {
+    return this.server;
+  }
+
+  /** Native semantic tokens for Flow source embedded in the chat UI. */
+  async highlight(source: string): Promise<string> {
+    const answer = await this.server?.request({
+      method: 'tokens',
+      source,
+      offsets: 'utf16',
+    }) as {result?: unknown} | undefined;
+    return JSON.stringify(answer?.result ?? {tokens: []});
+  }
 
   /**
    * Look for the tool and, if it is there, start everything that needs it.
@@ -234,6 +263,92 @@ class FlowSupport implements vscode.Disposable {
     for (const one of this.parts) one.dispose();
     this.log.dispose();
   }
+}
+
+/**
+ * Put runnable declarations in the editor and keep the open runner in step.
+ *
+ * Declaration discovery remains a native language question. This layer only
+ * maps the returned UTF-16 ranges onto editor affordances.
+ */
+function registerFlowRunners(
+  context: vscode.ExtensionContext,
+  support: FlowSupport,
+  runner: A11ViewProvider,
+): vscode.Disposable {
+  const changed = new vscode.EventEmitter<void>();
+  const icon = vscode.Uri.joinPath(context.extensionUri, 'icons', 'a11flow.svg');
+  const decoration = vscode.window.createTextEditorDecorationType({
+    gutterIconPath: icon,
+    gutterIconSize: 'contain',
+  });
+  let selected: {uri: string; name: string} | undefined;
+  let timer: NodeJS.Timeout | undefined;
+
+  const declarations = (document: vscode.TextDocument) =>
+    runnableFlows(support.currentServer(), document);
+  const refreshEditor = async (editor: vscode.TextEditor): Promise<void> => {
+    if (!isFlowDocument(editor.document)) return;
+    const found = await declarations(editor.document);
+    editor.setDecorations(decoration, found.map(({range}) => range));
+    if (selected?.uri === editor.document.uri.toString()) {
+      const current = found.find(({flow}) => flow.name === selected!.name);
+      if (current) await runner.openFlow(current.flow, false);
+    }
+  };
+  const refresh = () => {
+    changed.fire();
+    for (const editor of vscode.window.visibleTextEditors) void refreshEditor(editor);
+  };
+  const later = () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(refresh, 250);
+  };
+
+  const lenses = vscode.languages.registerCodeLensProvider(
+    [{language: FLOW_LANGUAGE}, ...HOSTS.map((language) => ({language}))],
+    {
+      onDidChangeCodeLenses: changed.event,
+      async provideCodeLenses(document) {
+        return (await declarations(document)).map((candidate) => {
+          const lens = new vscode.CodeLens(candidate.range, {
+            command: 'a11.runFlowDeclaration',
+            title: '$(run) Run with A11',
+            arguments: [candidate],
+          });
+          return lens;
+        });
+      },
+    },
+  );
+  const documents = vscode.workspace.onDidChangeTextDocument(({document}) => {
+    if (isFlowDocument(document)) later();
+  });
+  const active = vscode.window.onDidChangeActiveTextEditor((editor) => {
+    if (editor) void refreshEditor(editor);
+  });
+  const command = vscode.commands.registerCommand('a11.runFlowDeclaration',
+    async (candidate: {flow: RunnableFlow}) => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor || !candidate?.flow) return;
+      selected = {uri: editor.document.uri.toString(), name: candidate.flow.name};
+      await runner.openFlow(candidate.flow);
+    },
+  );
+  refresh();
+  return vscode.Disposable.from(
+    changed,
+    decoration,
+    lenses,
+    documents,
+    active,
+    command,
+    {dispose: () => { if (timer) clearTimeout(timer); }},
+  );
+}
+
+function isFlowDocument(document: vscode.TextDocument): boolean {
+  return document.languageId === FLOW_LANGUAGE || HOSTS.includes(document.languageId);
 }
 
 /**

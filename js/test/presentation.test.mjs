@@ -210,3 +210,31 @@ test('a sink sees open, append and close', () => {
     ['close', 'text'],
   ]);
 });
+
+test('presentation sink exceptions become statuses', async () => {
+  const reducer = new PresentationReducer({
+    onBlockOpened() {
+      throw new Error('renderer detached');
+    },
+  });
+  const text = reducer.onText('hello');
+  assert.equal(isOk(text), false);
+  assert.match(text.message, /streamed text/i);
+
+  const interaction = await reducer.onInteraction(
+    makeInteraction({role: 'assistant', content: []}),
+  );
+  assert.equal(isOk(interaction), true);
+});
+
+test('malformed conversation metadata becomes a status', async () => {
+  const presented = await presentConversation([
+    {
+      role: 'assistant',
+      content: [],
+      backend_specific_metadata: { tool_logs: '{' },
+    },
+  ]);
+  assert.equal(isOk(presented), false);
+  assert.match(presented.message, /tool logs/i);
+});

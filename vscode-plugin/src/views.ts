@@ -36,6 +36,8 @@ import * as vscode from 'vscode';
 import {readConfig} from './settings.js';
 import type {Suggestions, HighlightNote} from './suggestions.js';
 import {listDescriptors, runByName} from './tools/index.js';
+import type {RunnableFlow} from './flowDeclarations.js';
+import type {GatewayConnection} from './gateway.js';
 
 /** What the page may ask for. The shared bridge's six methods, and nothing else. */
 type Method =
@@ -43,6 +45,7 @@ type Method =
   | 'runAction'
   | 'getConfig'
   | 'readFlow'
+  | 'highlightFlow'
   | 'suggestOnHighlight'
   | 'clearSuggestions';
 
@@ -50,6 +53,10 @@ interface Call {
   id: number;
   method: Method;
   args: unknown[];
+}
+
+interface Ready {
+  command: 'ready';
 }
 
 export class A11ViewProvider implements vscode.WebviewViewProvider {
@@ -62,11 +69,14 @@ export class A11ViewProvider implements vscode.WebviewViewProvider {
    * least once, which is why [newChat] reveals it first.
    */
   private panel: vscode.WebviewView | undefined;
+  private pendingFlow: RunnableFlow | undefined;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
-    private readonly view: 'chat' | 'actions',
+    private readonly view: 'chat' | 'actions' | 'runner',
     private readonly suggestions: Suggestions,
+    private readonly flowTokens: (source: string) => Promise<string>,
+    private readonly gateway: GatewayConnection,
   ) {}
 
   resolveWebviewView(panel: vscode.WebviewView): void {
@@ -79,9 +89,18 @@ export class A11ViewProvider implements vscode.WebviewViewProvider {
       localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'dist')],
     };
     panel.webview.html = this.html(panel.webview);
-    panel.webview.onDidReceiveMessage((message: Call) => {
+    panel.webview.onDidReceiveMessage((message: Call | Ready) => {
+      if ('command' in message) {
+        if (this.pendingFlow) {
+          void panel.webview.postMessage({command: 'openFlow', flow: this.pendingFlow});
+        }
+        return;
+      }
       void this.answer(panel.webview, message);
     });
+    if (this.pendingFlow) {
+      void panel.webview.postMessage({command: 'openFlow', flow: this.pendingFlow});
+    }
   }
 
   /**
@@ -95,6 +114,16 @@ export class A11ViewProvider implements vscode.WebviewViewProvider {
     await vscode.commands.executeCommand(`a11.${this.view}.focus`);
     this.panel?.show?.(true);
     await this.panel?.webview.postMessage({command: 'newChat'});
+  }
+
+  /** Reveal the document runner and keep its declaration synchronized. */
+  async openFlow(flow: RunnableFlow, reveal = true): Promise<void> {
+    this.pendingFlow = flow;
+    if (reveal) {
+      await vscode.commands.executeCommand('a11.runner.focus');
+      this.panel?.show?.(true);
+    }
+    await this.panel?.webview.postMessage({command: 'openFlow', flow});
   }
 
   /** Run one call from the page and send its answer back under the same id. */
@@ -119,6 +148,9 @@ export class A11ViewProvider implements vscode.WebviewViewProvider {
    * wrappers parse — the same contract the JetBrains bridge has.
    */
   private async dispatch(call: Call): Promise<string> {
+    if (call.method === 'runAction' || call.method === 'getConfig') {
+      this.gateway.ensureConnected();
+    }
     switch (call.method) {
       case 'listActions':
         return JSON.stringify(listDescriptors());
@@ -131,6 +163,10 @@ export class A11ViewProvider implements vscode.WebviewViewProvider {
       case 'readFlow': {
         const [name] = call.args as [string];
         return this.readFlow(name);
+      }
+      case 'highlightFlow': {
+        const [source] = call.args as [string];
+        return this.flowTokens(source);
       }
       case 'suggestOnHighlight': {
         const [note] = call.args as [HighlightNote];
@@ -203,6 +239,7 @@ export class A11ViewProvider implements vscode.WebviewViewProvider {
  * a light one: every value is a `--vscode-*` variable the webview host defines.
  */
 const THEME_VARS = `
+      color-scheme: light dark;
       --a11-bg: var(--vscode-sideBar-background);
       --a11-bg-alt: var(--vscode-editor-background);
       --a11-fg: var(--vscode-foreground);
@@ -217,6 +254,4 @@ const THEME_VARS = `
       --a11-json-string: var(--vscode-debugTokenExpression-string);
       --a11-json-number: var(--vscode-debugTokenExpression-number);
       --a11-json-keyword: var(--vscode-debugTokenExpression-boolean);
-      --a11-font: var(--vscode-font-family);
-      --a11-mono: var(--vscode-editor-font-family);
 `;

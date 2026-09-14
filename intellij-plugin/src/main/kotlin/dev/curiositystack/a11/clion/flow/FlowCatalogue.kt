@@ -22,6 +22,7 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.project.DumbAware
 import com.intellij.openapi.startup.ProjectActivity
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapi.vfs.newvfs.BulkFileListener
@@ -192,7 +193,7 @@ class FlowCatalogueService(private val project: Project) : Disposable {
  * A startup activity defers scanning until the IDE is idle and avoids work for
  * projects that never open Flow files.
  */
-class FlowCatalogueStartup : ProjectActivity {
+class FlowCatalogueStartup : ProjectActivity, DumbAware {
     override suspend fun execute(project: Project) {
         FlowCatalogueService.of(project).start()
     }

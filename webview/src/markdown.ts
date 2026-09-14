@@ -22,6 +22,7 @@
  */
 
 import { marked } from 'marked';
+import {highlightCodeBlocks} from './syntaxHighlight.js';
 
 marked.setOptions({ gfm: true, breaks: true });
 
@@ -48,5 +49,6 @@ export function renderMarkdown(markdown: string): string {
   const container = document.createElement('div');
   container.innerHTML = marked.parse(markdown, { async: false });
   sanitize(container);
+  highlightCodeBlocks(container);
   return container.innerHTML;
 }

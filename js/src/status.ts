@@ -62,31 +62,31 @@ export enum StatusCode {
 }
 
 const kDefaultStatusMessages = {
-  [StatusCode.OK]: 'OK',
-  [StatusCode.CANCELLED]: 'Cancelled',
-  [StatusCode.UNKNOWN]: 'Unknown',
-  [StatusCode.INVALID_ARGUMENT]: 'Invalid Argument',
-  [StatusCode.DEADLINE_EXCEEDED]: 'Deadline Exceeded',
-  [StatusCode.NOT_FOUND]: 'Not Found',
-  [StatusCode.ALREADY_EXISTS]: 'Already Exists',
-  [StatusCode.PERMISSION_DENIED]: 'Permission Denied',
-  [StatusCode.RESOURCE_EXHAUSTED]: 'Resource Exhausted',
-  [StatusCode.FAILED_PRECONDITION]: 'Failed Precondition',
-  [StatusCode.ABORTED]: 'Aborted',
-  [StatusCode.OUT_OF_RANGE]: 'Out of Range',
-  [StatusCode.UNIMPLEMENTED]: 'Unimplemented',
-  [StatusCode.INTERNAL]: 'Internal',
-  [StatusCode.UNAVAILABLE]: 'Unavailable',
-  [StatusCode.DATA_LOSS]: 'Data Loss',
-  [StatusCode.UNAUTHENTICATED]: 'Unauthenticated',
+  [StatusCode.OK]: "OK",
+  [StatusCode.CANCELLED]: "Cancelled",
+  [StatusCode.UNKNOWN]: "Unknown",
+  [StatusCode.INVALID_ARGUMENT]: "Invalid Argument",
+  [StatusCode.DEADLINE_EXCEEDED]: "Deadline Exceeded",
+  [StatusCode.NOT_FOUND]: "Not Found",
+  [StatusCode.ALREADY_EXISTS]: "Already Exists",
+  [StatusCode.PERMISSION_DENIED]: "Permission Denied",
+  [StatusCode.RESOURCE_EXHAUSTED]: "Resource Exhausted",
+  [StatusCode.FAILED_PRECONDITION]: "Failed Precondition",
+  [StatusCode.ABORTED]: "Aborted",
+  [StatusCode.OUT_OF_RANGE]: "Out of Range",
+  [StatusCode.UNIMPLEMENTED]: "Unimplemented",
+  [StatusCode.INTERNAL]: "Internal",
+  [StatusCode.UNAVAILABLE]: "Unavailable",
+  [StatusCode.DATA_LOSS]: "Data Loss",
+  [StatusCode.UNAUTHENTICATED]: "Unauthenticated",
 };
 
 /** Policy applied by {@link getValue} when given a non-OK status. */
 export enum InvalidStatusAccessBehaviour {
   /** Abort the Node process when possible. */
-  TERMINATE = 'TERMINATE',
+  TERMINATE = "TERMINATE",
   /** Throw the code-specific {@link StatusException}. */
-  THROW = 'THROW',
+  THROW = "THROW",
 }
 
 let _invalidStatusAccessBehaviour: InvalidStatusAccessBehaviour =
@@ -122,10 +122,10 @@ export type StatusOr<Type> = NonOkStatus | Type;
 
 const isStatusAndIsOk = (val: unknown): [boolean, boolean] => {
   try {
-    if (typeof val !== 'object' || val === null) {
+    if (typeof val !== "object" || val === null) {
       return [false, true];
     }
-    if (!('code' in val) || !('message' in val)) {
+    if (!("code" in val) || !("message" in val)) {
       return [false, true];
     }
 
@@ -134,15 +134,15 @@ const isStatusAndIsOk = (val: unknown): [boolean, boolean] => {
     if (
       keys.some(
         (key) =>
-          key !== 'code' &&
-          key !== 'message' &&
-          key !== 'details' &&
-          key !== 'cause',
+          key !== "code" &&
+          key !== "message" &&
+          key !== "details" &&
+          key !== "cause",
       ) ||
       !Number.isInteger(candidate.code) ||
       (candidate.code as number) < StatusCode.OK ||
       (candidate.code as number) > StatusCode.UNAUTHENTICATED ||
-      typeof candidate.message !== 'string'
+      typeof candidate.message !== "string"
     ) {
       return [false, true];
     }
@@ -150,7 +150,7 @@ const isStatusAndIsOk = (val: unknown): [boolean, boolean] => {
       candidate.details !== undefined &&
       (!Array.isArray(candidate.details) ||
         candidate.details.some(
-          (detail) => typeof detail !== 'object' || detail === null,
+          (detail) => typeof detail !== "object" || detail === null,
         ))
     ) {
       return [false, true];
@@ -202,7 +202,7 @@ export function getValue<T>(val: StatusOr<T>): T {
 /** Log a fatal status/message, abort Node when possible, and never return. */
 export function terminate(message_or_status: Status | string): never {
   let paramIsStatus = isStatus(message_or_status);
-  let codeRepr: string = 'UNKNOWN';
+  let codeRepr: string = "UNKNOWN";
   let message: string;
   if (paramIsStatus) {
     codeRepr = StatusCode[(message_or_status as Status).code];
@@ -212,7 +212,7 @@ export function terminate(message_or_status: Status | string): never {
   }
 
   console.error(`[${codeRepr}] ${message}`);
-  if (typeof process !== 'undefined' && process.abort) {
+  if (typeof process !== "undefined" && process.abort) {
     process.abort();
   }
 
@@ -238,14 +238,14 @@ export class StatusException extends Error {
     if (isOk(status)) {
       terminate(
         invalidArgumentError(
-          'StatusException cannot be created for OK status.',
+          "StatusException cannot be created for OK status.",
         ),
       );
     }
     if (options && options.cause && status.cause) {
       terminate(
         invalidArgumentError(
-          'StatusException cannot have cause both set in status and options.',
+          "StatusException cannot have cause both set in status and options.",
         ),
       );
     }
@@ -970,7 +970,7 @@ export class UnauthenticatedException extends StatusException {
 /** Construct an OK status, optionally with a more specific message. */
 export const okStatus = (message?: string): Status => ({
   code: StatusCode.OK,
-  message: message ?? 'OK',
+  message: message ?? "OK",
 });
 
 /** Throw a code-specific StatusException if a Status/StatusOr is non-OK. */
@@ -1061,8 +1061,8 @@ export function valueOrTerminate<T>(val: StatusOr<T>): T {
 function isPromiseLike<T>(value: unknown): value is PromiseLike<T> {
   return (
     value !== null &&
-    typeof value === 'object' &&
-    typeof (value as PromiseLike<T>).then === 'function'
+    typeof value === "object" &&
+    typeof (value as PromiseLike<T>).then === "function"
   );
 }
 
@@ -1072,25 +1072,29 @@ export function statusFromUnknown(
   message?: string,
   code: StatusCode = StatusCode.UNKNOWN,
 ): NonOkStatus {
-  if (err instanceof StatusException) {
-    return err.status() as NonOkStatus;
-  }
-
   const errorCode = code === StatusCode.OK ? StatusCode.UNKNOWN : code;
-
-  if (err instanceof Error) {
+  try {
+    if (err instanceof StatusException) {
+      const status = err.status();
+      return isOk(status)
+        ? { code: errorCode, message: message ?? "Unknown error.", cause: err }
+        : status;
+    }
     return {
       code: errorCode,
-      message: message ?? err.message,
+      message:
+        message ?? (err instanceof Error ? err.message : "Unknown error."),
+      cause: err,
+    };
+  } catch {
+    // Even a hostile exception object (for example an Error subclass with a
+    // throwing message getter) must not break the exception-to-Status boundary.
+    return {
+      code: errorCode,
+      message: message ?? "Unknown error.",
       cause: err,
     };
   }
-
-  return {
-    code: errorCode,
-    message: message ?? 'Unknown error.',
-    cause: err,
-  };
 }
 
 /** Run sync or async JavaScript and convert a rejection/throw into StatusOr. */
@@ -1108,7 +1112,9 @@ export function noexcept<T>(
   try {
     const result = callback();
     if (isPromiseLike(result)) {
-      return result.catch((err) => statusFromUnknown(err, message));
+      return Promise.resolve(result).catch((err) =>
+        statusFromUnknown(err, message),
+      );
     }
     return result;
   } catch (err) {
@@ -1125,13 +1131,13 @@ export async function noexceptFetch(
     return await globalThis.fetch(input, init);
   } catch (err) {
     if (
-      typeof DOMException !== 'undefined' &&
+      typeof DOMException !== "undefined" &&
       err instanceof DOMException &&
-      err.name === 'AbortError'
+      err.name === "AbortError"
     ) {
       return abortedError(err.message, [err], err);
     }
-    if (err instanceof TypeError && err.message.includes('Failed to fetch')) {
+    if (err instanceof TypeError && err.message.includes("Failed to fetch")) {
       return internalError(
         `${err.message}. This is likely due to a network issue or CORS policy. Check console for more details.`,
         [],
@@ -1164,26 +1170,26 @@ export function statusToJson(status: Status): StatusJson {
 /** Validate and decode a Status received from a JSON boundary. */
 export function statusFromJson(value: unknown): StatusOr<Status> {
   try {
-    if (typeof value !== 'object' || value === null) {
-      return invalidArgumentError('JSON does not contain a valid Status.');
+    if (typeof value !== "object" || value === null) {
+      return invalidArgumentError("JSON does not contain a valid Status.");
     }
     const candidate = value as Record<string, unknown>;
     if (
       !Number.isInteger(candidate.code) ||
       (candidate.code as number) < StatusCode.OK ||
       (candidate.code as number) > StatusCode.UNAUTHENTICATED ||
-      typeof candidate.message !== 'string'
+      typeof candidate.message !== "string"
     ) {
-      return invalidArgumentError('JSON does not contain a valid Status.');
+      return invalidArgumentError("JSON does not contain a valid Status.");
     }
     const details = candidate.details ?? [];
     if (
       !Array.isArray(details) ||
-      details.some(
-        (detail) => typeof detail !== 'object' || detail === null,
-      )
+      details.some((detail) => typeof detail !== "object" || detail === null)
     ) {
-      return invalidArgumentError('Status details must be an array of objects.');
+      return invalidArgumentError(
+        "Status details must be an array of objects.",
+      );
     }
     return {
       code: candidate.code as StatusCode,
@@ -1192,7 +1198,7 @@ export function statusFromJson(value: unknown): StatusOr<Status> {
     };
   } catch (error) {
     return invalidArgumentError(
-      'JSON does not contain a readable Status.',
+      "JSON does not contain a readable Status.",
       [],
       error,
     );
@@ -1273,11 +1279,11 @@ export function statusCodeToWebSocket(code: StatusCode): number {
  */
 export async function statusFromResponse(
   response: Response,
-  operation: string = 'HTTP request',
+  operation: string = "HTTP request",
 ): Promise<Status> {
   let httpStatus: number;
   try {
-    if (typeof response !== 'object' || response === null) {
+    if (typeof response !== "object" || response === null) {
       return invalidArgumentError(`${operation} did not return a Response.`);
     }
     if (response.ok) return okStatus();
@@ -1292,7 +1298,7 @@ export async function statusFromResponse(
       StatusCode.UNAVAILABLE,
     );
   }
-  let body = '';
+  let body = "";
   try {
     body = await response.text();
   } catch (error) {

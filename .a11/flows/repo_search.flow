@@ -1,8 +1,8 @@
 flow repo_search {
-  in QUERY: string required
+  in  QUERY:  string required
   out python: string stream
   out native: string stream
-  out docs: string stream
+  out docs:   string stream
 
   step = run search_text(query: QUERY, path: "a11", limit: 25)
   step.result.matches | flatten | first 25 | truncate 240 -> python

@@ -31,10 +31,11 @@ import {
   ActionSchema,
   INTERACTION_TAG,
   StatusCode,
-  fromChunk,
   isOk,
   parseInteraction,
-  type Chunk,
+  plainText,
+  toolLogs as presentationToolLogs,
+  toolOutputs as presentationToolOutputs,
   type Interaction,
   type Session,
   type Status,
@@ -135,24 +136,6 @@ export async function fetchConversation(
   return interactions;
 }
 
-/** Text of one decoded content payload, whatever shape the backend used. */
-function payloadText(value: unknown): string {
-  if (typeof value === 'string') return value;
-  if (!value || typeof value !== 'object') return '';
-  const record = value as { content?: unknown; text?: unknown };
-  if (typeof record.content === 'string') return record.content;
-  if (Array.isArray(record.content)) {
-    return record.content
-      .map((block) => {
-        if (!block || typeof block !== 'object') return '';
-        const part = block as { type?: unknown; text?: unknown };
-        return part.type === 'text' && typeof part.text === 'string' ? part.text : '';
-      })
-      .join('');
-  }
-  return typeof record.text === 'string' ? record.text : '';
-}
-
 /**
  * Best-effort human-readable text of an interaction.
  *
@@ -165,12 +148,7 @@ function payloadText(value: unknown): string {
  * normalizer on this side, and throws on the untagged interactions we mint.
  */
 export async function interactionText(interaction: Interaction): Promise<string> {
-  const parts: string[] = [];
-  for (const item of interaction.content ?? []) {
-    const decoded = await fromChunk(item as Chunk);
-    parts.push(isOk(decoded) ? payloadText(decoded) : '');
-  }
-  return parts.join('');
+  return need(await plainText(interaction));
 }
 
 /** One tool call an interaction made: what was called, and under which id. */
@@ -191,8 +169,6 @@ export function toolCalls(interaction: Interaction): ToolCall[] {
  * Where a backend files a turn's tool run logs: the metadata of the interaction
  * carrying that turn's tool results (`a11.sdk.llm.TOOL_LOGS_METADATA_KEY`).
  */
-const TOOL_LOGS_KEY = 'tool_logs';
-
 /**
  * The run logs recorded with this interaction, keyed by tool-call id.
  *
@@ -201,24 +177,15 @@ const TOOL_LOGS_KEY = 'tool_logs';
  * for reopened sessions.
  */
 export function toolLogs(interaction: Interaction): Record<string, string> {
-  const raw = interaction.backend_specific_metadata?.[TOOL_LOGS_KEY];
-  if (raw === undefined) return {};
-  // `dict[str, bytes]` on the Python side, so this arrives as a Uint8Array; a
-  // string is accepted too, since the schema allows a caller to set one by
-  // hand.
-  const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-  try {
-    const parsed: unknown = JSON.parse(text);
-    if (!parsed || typeof parsed !== 'object') return {};
-    return Object.fromEntries(
-      Object.entries(parsed as Record<string, unknown>).filter(
-        (entry): entry is [string, string] => typeof entry[1] === 'string',
-      ),
-    );
-  } catch {
-    // A malformed log is not worth failing a whole conversation to render.
-    return {};
-  }
+  return need(presentationToolLogs(interaction));
+}
+
+/** Decoded output values for each tool call carried by one interaction. */
+export async function toolOutputs(
+  interaction: Interaction,
+): Promise<Record<string, Record<string, unknown>>> {
+  const decoded = await presentationToolOutputs(interaction);
+  return isOk(decoded) ? decoded : {};
 }
 
 /**

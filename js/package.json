@@ -25,6 +25,14 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./presentation": {
+      "types": "./dist/presentation/index.d.ts",
+      "import": "./dist/presentation/index.js"
+    },
+    "./presentation/browser": {
+      "types": "./dist/presentation/browser/index.d.ts",
+      "import": "./dist/presentation/browser/index.js"
     }
   },
   "files": [

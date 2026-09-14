@@ -369,6 +369,9 @@ written — the shapes and the flows at the top, a shape's fields and a flow's
 ports, node maps and bound steps under them. That is a "go to symbol" list and
 an outline both. `range` is the whole construct and `selection` is the name, so
 "select symbol" takes the block and "go to symbol" puts the caret on the word.
+Port children also carry `direction`, `type`, `stream`, and `required`. A runner
+can build its input and output panes from these fields without parsing either
+source text or the human-facing `detail` label.
 
 ### `flow.definition/v1`
 

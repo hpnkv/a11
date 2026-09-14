@@ -25,19 +25,15 @@
  * drives the box height, which makes the editor grow with its content.
  */
 
-/** One JSON token class the highlighter recognizes. */
-const TOKENS = new RegExp(
-  [
-    '("(?:\\\\.|[^"\\\\])*")\\s*(?=:)', // property name
-    '("(?:\\\\.|[^"\\\\])*")', // string
-    '\\b(true|false|null)\\b', // keyword
-    '(-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)', // number
-    '([{}\\[\\],:])', // punctuation
-  ].join('|'),
-  'g',
-);
+import { indentJson, jsonTokens, readJson } from '@curiositystack/a11/presentation';
 
-const CLASSES = ['json-key', 'json-string', 'json-keyword', 'json-number', 'json-punct'];
+const CLASSES = {
+  key: 'json-key',
+  string: 'json-string',
+  keyword: 'json-keyword',
+  number: 'json-number',
+  punctuation: 'json-punct',
+} as const;
 
 function escapeHtml(text: string): string {
   return text.replace(/[&<>]/g, (c) => (c === '&' ? '&amp;' : c === '<' ? '&lt;' : '&gt;'));
@@ -47,17 +43,18 @@ function escapeHtml(text: string): string {
 function highlight(text: string): string {
   let html = '';
   let last = 0;
-  for (const match of text.matchAll(TOKENS)) {
-    const at = match.index ?? 0;
-    html += escapeHtml(text.slice(last, at));
-    // Group i+1 is set for exactly one alternative; its index picks the class.
-    const cls = CLASSES[CLASSES.findIndex((_, i) => match[i + 1] !== undefined)];
-    const token = escapeHtml(match[0]);
-    html += cls ? `<span class="${cls}">${token}</span>` : token;
-    last = at + match[0].length;
+  for (const token of jsonTokens(text)) {
+    html += escapeHtml(text.slice(last, token.from));
+    html += `<span class="${CLASSES[token.kind]}">${escapeHtml(text.slice(token.from, token.to))}</span>`;
+    last = token.to;
   }
   // The trailing newline keeps the box tall enough for a caret on the last line.
   return `${html + escapeHtml(text.slice(last))}\n`;
+}
+
+/** Render already-serialized JSON with the same colours as editable values. */
+export function renderJson(target: HTMLElement, text: string): void {
+  target.innerHTML = highlight(text).trimEnd();
 }
 
 export interface JsonEditor {
@@ -65,6 +62,7 @@ export interface JsonEditor {
   /** The parsed value, or `undefined` when blank. Throws on malformed JSON. */
   read(): unknown;
   setText(text: string): void;
+  text(): string;
 }
 
 /** Build a syntax-highlighted JSON editor, optionally seeded with `value`. */
@@ -89,15 +87,7 @@ export function createJsonEditor(options: { value?: string; placeholder?: string
 
   const sync = (): void => {
     highlighted.innerHTML = highlight(input.value);
-    const text = input.value.trim();
-    let message = '';
-    if (text !== '') {
-      try {
-        JSON.parse(text);
-      } catch (error) {
-        message = error instanceof Error ? error.message : String(error);
-      }
-    }
+    const message = readJson(input.value).error ?? '';
     hint.textContent = message;
     hint.classList.toggle('visible', message !== '');
     element.classList.toggle('invalid', message !== '');
@@ -108,9 +98,10 @@ export function createJsonEditor(options: { value?: string; placeholder?: string
   input.addEventListener('keydown', (event) => {
     if (event.key !== 'Tab') return;
     event.preventDefault();
-    const { selectionStart: start, selectionEnd: end, value } = input;
-    input.value = `${value.slice(0, start)}  ${value.slice(end)}`;
-    input.selectionStart = input.selectionEnd = start + 2;
+    const edit = indentJson(input.value, input.selectionStart, input.selectionEnd);
+    input.value = edit.text;
+    input.selectionStart = edit.selectionStart;
+    input.selectionEnd = edit.selectionEnd;
     sync();
   });
 
@@ -136,5 +127,6 @@ export function createJsonEditor(options: { value?: string; placeholder?: string
       }
     },
     setText,
+    text: () => input.value,
   };
 }

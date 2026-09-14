@@ -17,6 +17,7 @@
 package dev.curiositystack.a11.clion.ui
 
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.project.DumbAware
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
 import com.intellij.ui.components.JBLabel
@@ -30,16 +31,29 @@ import javax.swing.SwingConstants
  * TypeScript A11 library, which owns the WebSocket to the Python backend; IDE
  * tools are reached through the JS↔Kotlin bridge in [A11WebView].
  */
-class ChatToolWindowFactory : ToolWindowFactory {
+class ChatToolWindowFactory : ToolWindowFactory, DumbAware {
+    override fun shouldBeAvailable(project: Project): Boolean = true
+
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
         mountA11WebView(project, toolWindow, "chat")
     }
 }
 
 /** Registers the "A11 Actions" tool window (the action explorer) on the same bundle. */
-class ActionsToolWindowFactory : ToolWindowFactory {
+class ActionsToolWindowFactory : ToolWindowFactory, DumbAware {
+    override fun shouldBeAvailable(project: Project): Boolean = true
+
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
         mountA11WebView(project, toolWindow, "actions")
+    }
+}
+
+/** Registers the bottom Flow runner shared with the other editor frontend. */
+class FlowRunnerToolWindowFactory : ToolWindowFactory, DumbAware {
+    override fun shouldBeAvailable(project: Project): Boolean = true
+
+    override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
+        mountA11WebView(project, toolWindow, "runner")
     }
 }
 

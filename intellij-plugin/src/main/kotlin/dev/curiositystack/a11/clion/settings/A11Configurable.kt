@@ -38,7 +38,7 @@ class A11Configurable : Configurable {
                 row("Gateway URL:") { textField().bindText(state::gatewayUrl) }
                     .comment("Run it with <code>a11 gateway</code>; the plugin does not start one.")
                 row("Extra allowed tools:") { textField().bindText(state::allowedToolPatterns) }
-                    .comment("Comma-separated name patterns for the gateway's own tools, e.g. <code>shell_.*</code>.")
+                    .comment("Comma-separated names or patterns for Gateway tools; defaults enable its coding-agent and Flow actions.")
             }
             group("Model") {
                 row("Provider:") { textField().bindText(state::provider) }

@@ -42,7 +42,7 @@ class A11Settings : PersistentStateComponent<A11Settings.State> {
          * top of the IDE's own tools.
          *
          * These are what let the model reach tools that live in the *gateway*
-         * rather than the IDE — `shell_.*` for its shell tools, by default. The
+         * rather than the IDE. The defaults cover its coding-agent actions. The
          * gateway offers a tool only if a pattern here matches its name, so this
          * is also how they are turned off: empty the field.
          */
@@ -89,8 +89,11 @@ class A11Settings : PersistentStateComponent<A11Settings.State> {
         /** Where `a11 gateway` listens unless told otherwise. */
         const val DEFAULT_GATEWAY_URL = "ws://127.0.0.1:8011/a11"
         const val DEFAULT_GATEWAY_PATH = "/a11"
-        /** The gateway's shell tools, on by default. */
-        const val DEFAULT_ALLOWED_TOOL_PATTERNS = "shell_.*"
+        /** The gateway's coding-agent and Flow tools, on by default. */
+        const val DEFAULT_ALLOWED_TOOL_PATTERNS =
+            "shell_.*,workspace_info,read_file,list_directory,stat_path,list_files," +
+                "search_text,apply_patch,file_diff,run_command,discover_actions," +
+                "flow_guide,run_flow,report_completion,request_user_input"
 
         fun getInstance(): A11Settings = service()
     }

@@ -137,6 +137,12 @@ nlohmann::json SymbolToJson(const DocumentSymbol& symbol) {
   if (!symbol.detail.empty()) {
     value["detail"] = symbol.detail;
   }
+  if (symbol.kind == SymbolClass::kPort) {
+    value["direction"] = symbol.port_direction;
+    value["type"] = symbol.port_type;
+    value["stream"] = symbol.port_stream;
+    value["required"] = symbol.port_required;
+  }
   if (!children.empty()) {
     value["children"] = std::move(children);
   }

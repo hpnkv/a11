@@ -138,6 +138,16 @@ TEST(FlowNavigate, ListsWhatADocumentDeclaresNestedAsItIsWritten) {
   }
   EXPECT_EQ(absl::StrJoin(named, " "),
             "port:question port:answer port:found node:pages call:hits");
+  const DocumentSymbol& question = symbols[1].children[0];
+  EXPECT_EQ(question.port_direction, "in");
+  EXPECT_EQ(question.port_type, "string");
+  EXPECT_FALSE(question.port_stream);
+  EXPECT_TRUE(question.port_required);
+  const DocumentSymbol& found = symbols[1].children[2];
+  EXPECT_EQ(found.port_direction, "out");
+  EXPECT_EQ(found.port_type, "Source");
+  EXPECT_TRUE(found.port_stream);
+  EXPECT_FALSE(found.port_required);
 
   // The selection is the name and the range is the whole construct, so
   // "go to symbol" puts the caret on the word and "select symbol" takes the

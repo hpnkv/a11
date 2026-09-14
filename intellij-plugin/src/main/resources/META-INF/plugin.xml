@@ -43,6 +43,10 @@
                     anchor="right"
                     icon="AllIcons.Toolwindows.ToolWindowRun"
                     factoryClass="dev.curiositystack.a11.clion.ui.ActionsToolWindowFactory"/>
+        <toolWindow id="A11 Flow Runner"
+                    anchor="bottom"
+                    icon="/icons/a11flow.svg"
+                    factoryClass="dev.curiositystack.a11.clion.ui.FlowRunnerToolWindowFactory"/>
 
         <!-- The A11 Flow language: `.flow` files, and flows inside the string
              literals of any host language (see FlowInjector). Nothing here
@@ -123,6 +127,16 @@
                 implementationClass="dev.curiositystack.a11.clion.flow.FlowStructureViewFactory"/>
         <gotoDeclarationHandler
                 implementation="dev.curiositystack.a11.clion.flow.FlowDeclarationHandler"/>
+        <codeInsight.lineMarkerProvider
+                language="A11Flow"
+                implementationClass="dev.curiositystack.a11.clion.flow.FlowRunLineMarkerProvider"/>
+
+        <projectService
+                serviceImplementation="dev.curiositystack.a11.clion.ui.FlowRunnerService"/>
+        <projectService
+                serviceImplementation="dev.curiositystack.a11.clion.session.GatewayConnection"/>
+        <postStartupActivity
+                implementation="dev.curiositystack.a11.clion.session.GatewayStartup"/>
 
         <applicationService serviceImplementation="dev.curiositystack.a11.clion.settings.A11Settings"/>
         <applicationConfigurable

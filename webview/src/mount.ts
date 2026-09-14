@@ -25,9 +25,10 @@
 
 import { mountActions } from './actions.js';
 import { mountChat } from './chat.js';
+import { mountFlowRunner, type RunnableFlow } from './flowRunner.js';
 
 /** The surfaces this UI has. */
-export type View = 'chat' | 'actions';
+export type View = 'chat' | 'actions' | 'runner';
 
 /**
  * What a host can ask of a surface after it is mounted.
@@ -43,16 +44,20 @@ export type View = 'chat' | 'actions';
 export interface MountedView {
   /** Start a fresh conversation. The chat has this; the explorer does not. */
   newChat?: () => void;
+  /** Show the current declaration in the document-backed Flow runner. */
+  openFlow?: (flow: RunnableFlow) => void;
 }
 
 /** The view named, or the chat, which is what an unset host means. */
 export function viewOf(name: string | undefined): View {
-  return name === 'actions' ? 'actions' : 'chat';
+  return name === 'actions' || name === 'runner' ? name : 'chat';
 }
 
 /** Put `view` into `root`, and hand back what the host may then ask of it. */
 export function mount(root: HTMLElement, view: View): MountedView {
-  return view === 'actions' ? mountActions(root) : mountChat(root);
+  if (view === 'actions') return mountActions(root);
+  if (view === 'runner') return mountFlowRunner(root);
+  return mountChat(root);
 }
 
 /**

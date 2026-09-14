@@ -28,6 +28,7 @@
 import { listActions, runAction, type ActionDescriptor } from './bridge.js';
 import type { MountedView } from './mount.js';
 import { createPortInput, describeSchema, type PortInput } from './portForm.js';
+import {renderDebugValue} from './outputPresentation.js';
 
 class ActionExplorer {
   private readonly list: HTMLDivElement;
@@ -119,7 +120,7 @@ class ActionExplorer {
     controls.append(run, timing);
     this.detail.append(controls);
 
-    const output = document.createElement('pre');
+    const output = document.createElement('div');
     output.className = 'json-output';
     this.detail.append(output);
 
@@ -147,7 +148,7 @@ class ActionExplorer {
       try {
         const result = await runAction(descriptor.name, inputs);
         output.className = 'json-output';
-        output.textContent = JSON.stringify(result, null, 2);
+        renderDebugValue(output, result, 'application/json');
       } catch (error) {
         fail(error instanceof Error ? error.message : String(error));
       } finally {

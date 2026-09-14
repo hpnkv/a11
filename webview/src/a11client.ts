@@ -58,6 +58,7 @@ import {
     presentInteraction,
     toolStatuses,
     type Interaction,
+    type LogRecord,
     type Status,
     type WireStream,
 } from '@curiositystack/a11';
@@ -69,6 +70,7 @@ import {
     fetchConversation,
     fetchConversations,
     toolLogs,
+    toolOutputs,
     type ConversationSummary,
 } from './conversations.js';
 
@@ -85,6 +87,18 @@ const need = <T>(value: T | Status): T => {
 const isTimeout = (error: unknown): boolean =>
     error instanceof Error && error.message.startsWith(`${StatusCode[StatusCode.DEADLINE_EXCEEDED]}:`);
 
+const errorMessage = (error: unknown): string =>
+    error instanceof Error ? error.message : String(error);
+
+/** Errors that mean the remote endpoint cannot accept another action. */
+const endpointEnded = (error: unknown): boolean => {
+    const message = errorMessage(error).toLowerCase();
+    return message.includes('endpoint has already terminated') ||
+        message.includes('session is closed') ||
+        message.includes('connection is closed') ||
+        message.startsWith('unavailable:');
+};
+
 const RESPOND_USER_INPUT_SCHEMA = new ActionSchema({
     name: 'respond_user_input',
     description: 'Answer a pending coding-agent question.',
@@ -94,6 +108,14 @@ const RESPOND_USER_INPUT_SCHEMA = new ActionSchema({
     },
     outputs: {
         result: new ActionPortSchema({name: 'result', type: 'application/json', unary: true}),
+    },
+});
+
+const CODING_AGENT_INFO_SCHEMA = new ActionSchema({
+    name: 'coding_agent_info',
+    description: 'Read the coding-agent configuration installed in the gateway.',
+    outputs: {
+        result: new ActionPortSchema({name: 'result', type: 'application/json', unary: true, required: true}),
     },
 });
 
@@ -116,6 +138,8 @@ project index, and the PSI (symbols, references, refactorings). Use them.
   reasoning, and common sense to apply more general tools to fill in gaps. If IDE 
   tools do not provide you with information, use shell commands to recover it.
 - Chain tools as needed: inspect first, then act, then report what changed.
+- Use run_flow for independent, repeated, concurrent, or streaming tool work;
+  expose only the bounded outputs needed for the answer.
 - Avoid reading complete files: use search tools, pattern filters, line subset
   limiters, etc. Apply same limiters to shell commands.
 - Remember that shell commands may fail, deadlock, run for a very long time, etc.
@@ -134,20 +158,23 @@ project index, and the PSI (symbols, references, refactorings). Use them.
  * JetBrains IDE is running. The project path is omitted when the project has no
  * single root.
  */
-function systemPrompt(config: A11Config): string {
+function ideContext(config: A11Config): string {
     const where = [
         `- IDE: ${config.ide} ${config.ideVersion}`.trimEnd(),
         `- Project: ${config.projectName}`,
         ...(config.projectPath ? [`- Project path: ${config.projectPath}`] : []),
     ];
-    return `${SYSTEM_PROMPT}
-The user is working on:
+    return `The user is working on:
 
 ${where.join('\n')}
 
 Paths you report or pass to tools are interpreted relative to the project path
 unless they are already absolute.
 `;
+}
+
+function systemPrompt(config: A11Config): string {
+    return `${SYSTEM_PROMPT}\n${ideContext(config)}`;
 }
 
 /** Streaming callbacks for one chat turn. */
@@ -157,6 +184,16 @@ export interface ChatCallbacks {
     onThought?(text: string): void;
 }
 
+/** Connection state shown by IDE surfaces that issue Gateway calls. */
+export type GatewayConnectionState = 'connecting' | 'connected' | 'disconnected';
+
+export interface GatewayConnectionNotice {
+    state: GatewayConnectionState;
+    message?: string;
+}
+
+const RECONNECT_MILLIS = 5_000;
+
 export class A11ChatSession {
     private session: Session | null = null;
     private stream: WireStream | null = null;
@@ -164,6 +201,14 @@ export class A11ChatSession {
     private descriptors: ActionDescriptor[] = [];
     private toolNames: string[] = [];
     private connecting: Promise<void> | null = null;
+    private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    private connectionState: GatewayConnectionState | null = null;
+    /** The remote chat action currently producing a turn. */
+    private activeCall: Action | null = null;
+    /** Set only when the user stopped the active turn. */
+    private interrupted = false;
+    private activeQuestion: Interaction | null = null;
+    private activeProduced: Interaction[] | null = null;
     /**
      * Whether a tool ran during the turn in
      * flight; a retry must not repeat it.
@@ -184,10 +229,12 @@ export class A11ChatSession {
          * runs, with that run's user-facing log.
          */
         private readonly onToolRun?: ToolRunSink,
+        private readonly onConnectionChange?: (notice: GatewayConnectionNotice) => void,
     ) {
     }
 
     private async ensureConnected(): Promise<void> {
+        this.scheduleReconnect();
         // Settle a dial already in flight before judging the connection: it is
         // about to install a session, and one that appeared after the check
         // below would be a session nobody had re-examined against the current
@@ -200,12 +247,59 @@ export class A11ChatSession {
             }
         }
         await this.refreshConfig();
-        if (this.session) return;
+        if (this.session && !this.connectionIsHealthy()) this.discardSession();
+        if (this.session) {
+            this.reportConnection('connected');
+            return;
+        }
+        this.reportConnection('connecting');
         if (!this.connecting) this.connecting = this.connect();
         try {
             await this.connecting;
+            this.reportConnection('connected');
+        } catch (error) {
+            this.reportConnection('disconnected', errorMessage(error));
+            throw error;
         } finally {
             this.connecting = null;
+        }
+    }
+
+    private connectionIsHealthy(): boolean {
+        return this.session !== null && this.stream !== null &&
+            !this.session.isClosed() && isOk(this.session.getStatus()) && isOk(this.stream.getStatus());
+    }
+
+    /** Keep an opened panel ready, without retaining a worker or busy loop. */
+    private scheduleReconnect(): void {
+        if (this.reconnectTimer !== null) return;
+        this.reconnectTimer = setTimeout(() => {
+            this.reconnectTimer = null;
+            if (!this.connectionIsHealthy()) {
+                this.discardSession();
+                void this.ensureConnected().catch(() => undefined);
+            } else {
+                this.scheduleReconnect();
+            }
+        }, RECONNECT_MILLIS);
+        (this.reconnectTimer as unknown as {unref?: () => void}).unref?.();
+    }
+
+    private reportConnection(state: GatewayConnectionState, message?: string): void {
+        if (state === this.connectionState && state !== 'disconnected') return;
+        this.connectionState = state;
+        this.onConnectionChange?.({state, message});
+    }
+
+    private async gatewayOperation<T>(operation: () => Promise<T>): Promise<T> {
+        try {
+            return await operation();
+        } catch (error) {
+            if (!this.connectionIsHealthy() || endpointEnded(error)) {
+                this.discardSession();
+                this.reportConnection('disconnected', errorMessage(error));
+            }
+            throw error;
         }
     }
 
@@ -283,7 +377,7 @@ export class A11ChatSession {
      */
     async listConversations(): Promise<ConversationSummary[]> {
         await this.ensureConnected();
-        return fetchConversations(this.session!, this.stream!);
+        return this.gatewayOperation(() => fetchConversations(this.session!, this.stream!));
     }
 
     /**
@@ -296,22 +390,49 @@ export class A11ChatSession {
      */
     async loadConversation(id: string): Promise<Interaction[]> {
         await this.ensureConnected();
-        const interactions = await fetchConversation(this.session!, this.stream!, id);
+        const interactions = await this.gatewayOperation(
+            () => fetchConversation(this.session!, this.stream!, id),
+        );
         this.history = interactions;
         return interactions;
     }
 
     async respondUserInput(requestId: string, answer: string): Promise<void> {
         await this.ensureConnected();
-        const call = need(Action.create(RESPOND_USER_INPUT_SCHEMA, {
-            session: this.session!, stream: this.stream!, nodeMap: this.session!.getNodeMap(),
-        }));
-        need(await call.call());
-        need(await need(await call.getInput('request_id')).finalize(requestId));
-        need(await need(await call.getInput('answer')).finalize(answer));
-        const result = need(await call.getOutput('result', false));
-        need(await result.consume({timeoutMs: 30_000, allowNone: true}));
-        need(await call.wait(30_000));
+        await this.gatewayOperation(async () => {
+            const call = need(Action.create(RESPOND_USER_INPUT_SCHEMA, {
+                session: this.session!, stream: this.stream!, nodeMap: this.session!.getNodeMap(),
+            }));
+            need(await call.call());
+            need(await need(await call.getInput('request_id')).finalize(requestId));
+            need(await need(await call.getInput('answer')).finalize(answer));
+            const result = need(await call.getOutput('result', false));
+            need(await result.consume({timeoutMs: 30_000, allowNone: true}));
+            need(await call.wait(30_000));
+        });
+    }
+
+    /** Use the gateway's coding-agent contract when that capability is enabled. */
+    private async systemInstructions(): Promise<string> {
+        try {
+            const call = need(Action.create(CODING_AGENT_INFO_SCHEMA, {
+                session: this.session!, stream: this.stream!, nodeMap: this.session!.getNodeMap(),
+            }));
+            need(await call.call());
+            const result = need(await call.getOutput('result', false));
+            const info = need(await result.consume({timeoutMs: 10_000, allowNone: false}));
+            need(await call.wait(10_000));
+            if (info && typeof info === 'object') {
+                const prompt = (info as unknown as Record<string, unknown>).system_prompt;
+                if (typeof prompt === 'string' && prompt.trim()) {
+                    return `${prompt.trim()}\n\n${ideContext(this.config)}`;
+                }
+            }
+        } catch {
+            // A general gateway has no coding_agent_info action. Its IDE chat
+            // remains fully usable with the local instructions below.
+        }
+        return systemPrompt(this.config);
     }
 
     /**
@@ -335,11 +456,12 @@ export class A11ChatSession {
     async runFlow(
         name: string,
         outputs: Record<string, (value: unknown) => void>,
-        onLog?: (log: string) => void,
+        onLog?: (log: string, record: LogRecord) => void,
     ): Promise<Record<string, unknown>> {
         await this.ensureConnected();
-        return runFlow(this.session!, this.stream!, {
-            source: await readFlow(name),
+        const source = await readFlow(name);
+        return this.gatewayOperation(() => runFlow(this.session!, this.stream!, {
+            source,
             headers: {
                 [LlmHeaders.PROVIDER]: this.config.provider,
                 [LlmHeaders.MODEL]: this.config.model,
@@ -356,7 +478,35 @@ export class A11ChatSession {
             },
             outputs,
             onLog,
-        });
+        }));
+    }
+
+    /** Run source supplied by an editor document rather than a bundled flow. */
+    async runFlowSource(
+        source: string,
+        flow: string,
+        inputs: Record<string, unknown[]>,
+        inputMimetypes: Record<string, string>,
+        headers: Record<string, string>,
+        outputs: Record<string, (value: unknown) => void>,
+        onLog?: (log: string, record: LogRecord) => void,
+    ): Promise<Record<string, unknown>> {
+        await this.ensureConnected();
+        return this.gatewayOperation(() => runFlow(this.session!, this.stream!, {
+            source,
+            flow,
+            inputs,
+            inputMimetypes,
+            headers: {
+                [LlmHeaders.PROVIDER]: this.config.provider,
+                [LlmHeaders.MODEL]: this.config.model,
+                [LlmHeaders.API_KEY]: this.config.apiKey,
+                [LlmHeaders.BASE_URL]: this.config.baseUrl,
+                ...headers,
+            },
+            outputs,
+            onLog,
+        }));
     }
 
     /**
@@ -375,7 +525,7 @@ export class A11ChatSession {
      * the fresh one is handed the whole history back and the retried turn is
      * answered in context rather than from nothing.
      */
-    async chat(prompt: string, callbacks: ChatCallbacks): Promise<void> {
+    async chat(prompt: string, callbacks: ChatCallbacks): Promise<boolean> {
         let produced = false;
         const watched: ChatCallbacks = {
             onToken: (text) => {
@@ -388,11 +538,19 @@ export class A11ChatSession {
             }),
         };
         this.ranTool = false;
+        this.interrupted = false;
 
         try {
             await this.runTurn(prompt, watched);
-            return;
+            return !this.interrupted;
         } catch (error) {
+            this.activeCall = null;
+            if (this.interrupted) {
+                this.keepInterruptedTurn();
+                return false;
+            }
+            this.activeQuestion = null;
+            this.activeProduced = null;
             this.discardSession();
             // Only safe to retry when the turn achieved nothing: no text, no
             // thoughts, and above all no tool run, since a tool may have
@@ -403,6 +561,24 @@ export class A11ChatSession {
             if (isTimeout(error)) throw error;
         }
         await this.runTurn(prompt, watched);
+        return !this.interrupted;
+    }
+
+    /** Stop the active turn while retaining interactions already received. */
+    interrupt(): boolean {
+        if (!this.activeCall) return false;
+        this.interrupted = true;
+        need(this.activeCall.cancel());
+        return true;
+    }
+
+    /** Keep the question and every interaction received before cancellation. */
+    private keepInterruptedTurn(): void {
+        if (this.activeQuestion) {
+            this.history.push(this.activeQuestion, ...(this.activeProduced ?? []));
+        }
+        this.activeQuestion = null;
+        this.activeProduced = null;
     }
 
     /** Drop a session that has failed, so the next turn dials a fresh one. */
@@ -428,6 +604,7 @@ export class A11ChatSession {
         const call = need(
             Action.create(INTERACT_WITH_LLM_SCHEMA, {session, stream, nodeMap: session.getNodeMap()}),
         );
+        this.activeCall = call;
         need(call.setHeader(LlmHeaders.PROVIDER, this.config.provider));
         need(call.setHeader(LlmHeaders.MODEL, this.config.model));
         if (this.config.apiKey) need(call.setHeader(LlmHeaders.API_KEY, this.config.apiKey));
@@ -439,12 +616,15 @@ export class A11ChatSession {
         need(call.setHeader(LlmHeaders.ALLOWED_LLM_ACTIONS, this.allowedTools().join(',')));
         need(await call.call());
 
+        const produced: Interaction[] = [];
         const userInteraction = need(
             await makeTextMessageInteraction(
                 prompt,
-                this.history.length === 0 ? systemPrompt(this.config) : '',
+                this.history.length === 0 ? await this.systemInstructions() : '',
             ),
         );
+        this.activeQuestion = userInteraction;
+        this.activeProduced = produced;
         const interactions = need(await call.getInput('interactions'));
         for (const interaction of this.history) need(await interactions.put(interaction));
         need(await interactions.finalize(userInteraction));
@@ -471,8 +651,10 @@ export class A11ChatSession {
         // log arrives on this stream, mid-turn, and waiting for the text to
         // finish would hold every shell command's box back until the model had
         // stopped talking.
-        const produced: Interaction[] = [];
         const interactionsTask = this.pumpInteractions(call, produced);
+        // Cancellation may abort text first and leave this concurrent reader to
+        // observe the same status later. The chat action remains authoritative.
+        interactionsTask.catch(() => undefined);
 
         const textOut = need(await call.getOutput('text_output', false));
         for (; ;) {
@@ -493,6 +675,9 @@ export class A11ChatSession {
         // Only a turn that got this far joins the conversation, so a failed one
         // leaves the history as it was and the prompt can be retried.
         this.history.push(userInteraction, ...produced);
+        this.activeQuestion = null;
+        this.activeProduced = null;
+        if (this.activeCall === call) this.activeCall = null;
     }
 
     /**
@@ -525,7 +710,7 @@ export class A11ChatSession {
             if (next === null) break;
             const interaction = next as Interaction;
             into.push(interaction);
-            const presented = await presentInteraction(interaction);
+            const presented = need(await presentInteraction(interaction));
             for (const block of presented.blocks) {
                 if (block.kind !== BlockKind.TOOL_RUN) continue;
                 names.set(block.id, block.toolName);
@@ -537,18 +722,28 @@ export class A11ChatSession {
                     phase: 'started',
                 });
             }
-            for (const [id, log] of Object.entries(toolLogs(interaction))) {
+            const logs = toolLogs(interaction);
+            const statuses = need(toolStatuses(interaction));
+            const outputs = await toolOutputs(interaction);
+            const finished = new Set([
+                ...Object.keys(logs),
+                ...Object.keys(statuses),
+                ...Object.keys(outputs),
+            ]);
+            for (const id of finished) {
                 const name = names.get(id);
                 if (!name || this.toolNames.includes(name)) continue;
                 // A gateway tool may have changed the project just as an IDE
                 // one may have, so this turn is no longer safe to retry either.
                 this.ranTool = true;
-                this.onToolRun?.({id, tool: name, log, status: toolStatuses(interaction)[id], phase: 'finished'});
-            }
-            for (const [id, status] of Object.entries(toolStatuses(interaction))) {
-                const name = names.get(id);
-                if (!name || this.toolNames.includes(name) || toolLogs(interaction)[id]) continue;
-                this.onToolRun?.({id, tool: name, status, phase: 'finished'});
+                this.onToolRun?.({
+                    id,
+                    tool: name,
+                    log: logs[id],
+                    status: statuses[id],
+                    outputs: outputs[id],
+                    phase: 'finished',
+                });
             }
         }
     }
@@ -571,6 +766,10 @@ export class A11ChatSession {
     }
 
     halfClose(): void {
+        if (this.reconnectTimer !== null) clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+        this.activeCall?.cancel();
+        this.activeCall = null;
         try {
             this.session?.halfClose();
         } catch {

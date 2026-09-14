@@ -32,6 +32,25 @@ import {listDescriptors} from './tools/index.js';
 /** The key under which the provider key is kept. */
 const API_KEY = 'a11.apiKey';
 
+/** Gateway actions that make an enabled coding-agent workspace usable. */
+export const DEFAULT_GATEWAY_TOOLS = [
+  'shell_.*',
+  'workspace_info',
+  'read_file',
+  'list_directory',
+  'stat_path',
+  'list_files',
+  'search_text',
+  'apply_patch',
+  'file_diff',
+  'run_command',
+  'discover_actions',
+  'flow_guide',
+  'run_flow',
+  'report_completion',
+  'request_user_input',
+];
+
 export interface A11Config {
   url: string;
   provider: string;
@@ -83,7 +102,7 @@ export async function readConfig(
     // which is why emptying the setting is how the shell is turned off.
     allowedTools: [
       ...listDescriptors().map((one) => one.name),
-      ...settings.get<string[]>('extraAllowedTools', ['shell_.*']),
+      ...settings.get<string[]>('extraAllowedTools', DEFAULT_GATEWAY_TOOLS),
     ],
     ide: vscode.env.appName,
     ideVersion: vscode.version,

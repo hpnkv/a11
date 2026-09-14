@@ -113,6 +113,7 @@ export interface HostBridge {
   runAction(name: string, inputs: unknown): Promise<string>;
   getConfig(): Promise<string>;
   readFlow(name: string): Promise<string>;
+  highlightFlow(source: string): Promise<string>;
   suggestOnHighlight(note: HighlightNote): Promise<string>;
   clearSuggestions(path: string): Promise<string>;
 }
@@ -127,6 +128,10 @@ declare global {
     __a11Bridge?: HostBridge;
     /** "chat" or "actions": which surface to mount. Set by the host. */
     __A11_VIEW?: string;
+    /** Push a current document declaration into the Flow runner. */
+    __A11_OPEN_FLOW?: (
+      flow: import('./flowRunner.js').RunnableFlow,
+    ) => void;
   }
 }
 
@@ -175,6 +180,16 @@ export async function getConfig(): Promise<A11Config> {
  */
 export async function readFlow(name: string): Promise<string> {
   return raw().readFlow(name);
+}
+
+/** Native Flow semantic tokens for source shown outside an editor document. */
+export async function highlightFlow(
+  source: string,
+): Promise<Array<{start: number; end: number; kind: string}>> {
+  const answer = JSON.parse(await raw().highlightFlow(source)) as {
+    tokens?: Array<{start: number; end: number; kind: string}>;
+  };
+  return answer.tokens ?? [];
 }
 
 /**

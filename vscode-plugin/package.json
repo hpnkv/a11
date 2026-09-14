@@ -34,6 +34,7 @@
   "main": "./dist/extension.js",
   "type": "commonjs",
   "activationEvents": [
+    "onStartupFinished",
     "onLanguage:python",
     "onLanguage:typescript",
     "onLanguage:javascript",
@@ -120,9 +121,23 @@
             "type": "string"
           },
           "default": [
-            "shell_.*"
+            "shell_.*",
+            "workspace_info",
+            "read_file",
+            "list_directory",
+            "stat_path",
+            "list_files",
+            "search_text",
+            "apply_patch",
+            "file_diff",
+            "run_command",
+            "discover_actions",
+            "flow_guide",
+            "run_flow",
+            "report_completion",
+            "request_user_input"
           ],
-          "markdownDescription": "Patterns for the gateway's *own* tools, added to this editor's. Emptying this turns the gateway's shell tools off."
+          "markdownDescription": "Patterns for the gateway's own tools, added to this editor's. Defaults cover a coding-agent-enabled Gateway; remove entries to narrow its capabilities."
         },
         "a11.flow.toolPath": {
           "type": "string",
@@ -171,6 +186,12 @@
         "command": "a11.clearSuggestions",
         "title": "Clear review suggestions",
         "category": "A11"
+      },
+      {
+        "command": "a11.runFlowDeclaration",
+        "title": "Run Flow",
+        "category": "A11",
+        "icon": "$(run)"
       }
     ],
     "viewsContainers": {
@@ -178,6 +199,13 @@
         {
           "id": "a11",
           "title": "A11",
+          "icon": "./icons/a11flow.svg"
+        }
+      ],
+      "panel": [
+        {
+          "id": "a11-runner",
+          "title": "A11 Flow",
           "icon": "./icons/a11flow.svg"
         }
       ]
@@ -194,6 +222,13 @@
           "id": "a11.actions",
           "name": "Actions"
         }
+      ],
+      "a11-runner": [
+        {
+          "type": "webview",
+          "id": "a11.runner",
+          "name": "Flow Runner"
+        }
       ]
     }
   },
@@ -207,11 +242,13 @@
     "package": "npm run build && vsce package --no-dependencies"
   },
   "dependencies": {
-    "vscode-languageclient": "^9.0.1"
+    "vscode-languageclient": "^9.0.1",
+    "ws": "^8.21.3"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/vscode": "^1.90.0",
+    "@types/ws": "^8.18.1",
     "@vscode/test-electron": "^2.4.1",
     "esbuild": "^0.25.12",
     "typescript": "^5.9.3"

@@ -41,17 +41,23 @@
  * user originally watched.
  */
 
-import type { Chunk } from '../data.js';
-import { base64Decode } from '../bytes.js';
-import { fromChunk } from '../serialization.js';
-import { isOk } from '../status.js';
-import type { Status } from '../status.js';
+import type { Chunk } from "../data.js";
+import { base64Decode } from "../bytes.js";
+import { fromChunk } from "../serialization.js";
+import {
+  isOk,
+  isStatus,
+  okStatus,
+  statusFromUnknown,
+  type Status,
+  type StatusOr,
+} from "../status.js";
 import {
   NormalizedContentType,
   normalizeInteraction,
   type Interaction,
   type UsageMetadata,
-} from './llm.js';
+} from "./llm.js";
 
 /**
  * Where a turn's user-facing tool logs ride: JSON bytes of
@@ -61,25 +67,25 @@ import {
  * content -- the log must never reach the model, but a conversation replayed
  * from storage is poorer for its absence.
  */
-export const TOOL_LOGS_METADATA_KEY = 'tool_logs';
-export const TOOL_STATUSES_METADATA_KEY = 'tool_statuses';
+export const TOOL_LOGS_METADATA_KEY = "tool_logs";
+export const TOOL_STATUSES_METADATA_KEY = "tool_statuses";
 
 /** What a block is, and therefore how a client should draw it. */
 export enum BlockKind {
   /** Assistant or user prose. */
-  TEXT = 'text',
+  TEXT = "text",
   /** Reasoning the model exposed. Clients commonly fold this away. */
-  THOUGHT = 'thought',
+  THOUGHT = "thought",
   /** Inline image content. */
-  IMAGE = 'image',
+  IMAGE = "image",
   /** A tool call; `text` is the tool's own user-facing log, not its result. */
-  TOOL_RUN = 'tool_run',
+  TOOL_RUN = "tool_run",
   /** A tool result a client may want to show separately from its run. */
-  TOOL_RESULT = 'tool_result',
+  TOOL_RESULT = "tool_result",
   /** A failure, carrying `status`. */
-  ERROR = 'error',
+  ERROR = "error",
   /** Token accounting for a turn. */
-  USAGE = 'usage',
+  USAGE = "usage",
 }
 
 /** One renderable piece of a turn. */
@@ -94,6 +100,10 @@ export interface PresentationBlock {
   toolName: string;
   /** Decoded arguments supplied by the model, keyed by input port. */
   toolArguments?: Record<string, unknown>;
+  /** Decoded values produced by the tool, keyed by output port. */
+  toolOutputs?: Record<string, unknown>;
+  /** The decisive input fragments have closed, so special cards may render. */
+  toolArgumentsComplete?: boolean;
   /** Failure represented by an error or failed tool block. */
   status?: Status;
   /** Media type for image and binary content. */
@@ -133,12 +143,12 @@ export interface PresentationSink {
 function emptyBlock(kind: BlockKind, role: string): PresentationBlock {
   return {
     kind,
-    id: '',
-    text: '',
-    toolName: '',
-    mimeType: '',
+    id: "",
+    text: "",
+    toolName: "",
+    mimeType: "",
     partial: false,
-    interactionId: '',
+    interactionId: "",
     role,
   };
 }
@@ -152,87 +162,183 @@ function emptyBlock(kind: BlockKind, role: string): PresentationBlock {
  * Claude/Gemini backends all produce.
  */
 function shapeText(value: unknown): string {
-  if (typeof value === 'string') return value;
-  if (!value || typeof value !== 'object') return '';
+  if (typeof value === "string") return value;
+  if (!value || typeof value !== "object") return "";
   const record = value as { content?: unknown; text?: unknown };
-  if (typeof record.content === 'string') return record.content;
+  if (typeof record.content === "string") return record.content;
   if (Array.isArray(record.content)) {
     return record.content
       .map((block) => {
-        if (!block || typeof block !== 'object') return '';
+        if (!block || typeof block !== "object") return "";
         const part = block as { type?: unknown; text?: unknown };
-        return part.type === 'text' && typeof part.text === 'string' ? part.text : '';
+        return part.type === "text" && typeof part.text === "string"
+          ? part.text
+          : "";
       })
-      .join('');
+      .join("");
   }
-  return typeof record.text === 'string' ? record.text : '';
+  return typeof record.text === "string" ? record.text : "";
 }
 
 /** The user-facing tool logs an interaction carries, keyed by call id. */
-export function toolLogs(interaction: Interaction): Record<string, string> {
-  const raw = interaction.backend_specific_metadata?.[TOOL_LOGS_METADATA_KEY];
-  if (!raw) return {};
-  let text: string;
-  if (typeof raw === 'string') {
-    text = raw;
-  } else {
-    try {
-      text = new TextDecoder().decode(raw as Uint8Array);
-    } catch {
-      return {};
-    }
-  }
+export function toolLogs(
+  interaction: Interaction,
+): StatusOr<Record<string, string>> {
   try {
+    const raw = interaction.backend_specific_metadata?.[TOOL_LOGS_METADATA_KEY];
+    if (!raw) return {};
+    const text =
+      typeof raw === "string"
+        ? raw
+        : new TextDecoder().decode(raw as Uint8Array);
     const parsed = JSON.parse(text);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+      return {};
     const logs: Record<string, string> = {};
-    for (const [key, value] of Object.entries(parsed)) logs[key] = String(value);
+    for (const [key, value] of Object.entries(parsed))
+      logs[key] = String(value);
     return logs;
-  } catch {
-    // A broken log is not a reason to fail drawing a conversation.
-    return {};
+  } catch (error) {
+    return statusFromUnknown(error, "Could not read the tool logs.");
   }
 }
 
 /** Native failures for tool calls carried by a result interaction. */
-export function toolStatuses(interaction: Interaction): Record<string, Status> {
-  const raw = interaction.backend_specific_metadata?.[TOOL_STATUSES_METADATA_KEY];
-  if (!raw) return {};
+export function toolStatuses(
+  interaction: Interaction,
+): StatusOr<Record<string, Status>> {
   try {
-    const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw as Uint8Array);
+    const raw =
+      interaction.backend_specific_metadata?.[TOOL_STATUSES_METADATA_KEY];
+    if (!raw) return {};
+    const text =
+      typeof raw === "string"
+        ? raw
+        : new TextDecoder().decode(raw as Uint8Array);
     const parsed = JSON.parse(text);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+      return {};
     return parsed as Record<string, Status>;
-  } catch {
-    return {};
+  } catch (error) {
+    return statusFromUnknown(error, "Could not read the tool statuses.");
   }
 }
 
-async function toolArguments(
+async function decodeToolPorts(
   interaction: Interaction,
-  callId: string,
-): Promise<Record<string, unknown> | undefined> {
-  const grouped: Record<string, unknown[]> = {};
-  for (const fragment of interaction.action_inputs?.[callId] ?? []) {
-    if (!fragment) continue;
-    const value = await fromChunk(fragment.getChunk() as Chunk);
-    if (!isOk(value)) continue;
-    (grouped[fragment.id] ??= []).push(value);
+  direction: "action_inputs" | "action_outputs",
+): Promise<StatusOr<Record<string, Record<string, unknown>>>> {
+  try {
+    const result: Record<string, Record<string, unknown>> = {};
+    for (const [callId, fragments] of Object.entries(
+      interaction[direction] ?? {},
+    )) {
+      const grouped: Record<string, unknown[]> = {};
+      for (const fragment of fragments) {
+        if (!fragment) continue;
+        const chunk = fragment.getChunk();
+        if (!isOk(chunk)) {
+          return {
+            ...chunk,
+            message: `Could not read tool ${direction === "action_inputs" ? "input" : "output"} '${fragment.id}': ${chunk.message}`,
+          };
+        }
+        const value = await fromChunk(chunk as Chunk);
+        if (isStatus(value) && !isOk(value)) {
+          return {
+            ...value,
+            message: `Could not decode tool ${direction === "action_inputs" ? "input" : "output"} '${fragment.id}': ${value.message}`,
+          };
+        }
+        (grouped[fragment.id] ??= []).push(value);
+      }
+      if (Object.keys(grouped).length === 0) continue;
+      result[callId] = Object.fromEntries(
+        Object.entries(grouped).map(([name, values]) => [
+          name,
+          values.length === 1 ? values[0] : values,
+        ]),
+      );
+    }
+    return result;
+  } catch (error) {
+    return statusFromUnknown(
+      error,
+      `Could not decode tool ${direction === "action_inputs" ? "inputs" : "outputs"}.`,
+    );
   }
-  if (Object.keys(grouped).length === 0) return undefined;
-  return Object.fromEntries(
-    Object.entries(grouped).map(([name, values]) => [name, values.length === 1 ? values[0] : values]),
-  );
+}
+
+/** Decoded input values for every tool call carried by an interaction. */
+export function toolInputs(
+  interaction: Interaction,
+): Promise<StatusOr<Record<string, Record<string, unknown>>>> {
+  return decodeToolPorts(interaction, "action_inputs");
+}
+
+/** Decoded output values for every tool call carried by an interaction. */
+export function toolOutputs(
+  interaction: Interaction,
+): Promise<StatusOr<Record<string, Record<string, unknown>>>> {
+  return decodeToolPorts(interaction, "action_outputs");
+}
+
+/** Tool calls whose decisive Studio input has arrived and stopped streaming. */
+export function completeToolInputIds(
+  interaction: Interaction,
+): StatusOr<string[]> {
+  try {
+    const complete: string[] = [];
+    for (const call of interaction.action_calls ?? []) {
+      const fragments = interaction.action_inputs?.[call.id] ?? [];
+      if (fragments.length === 0) continue;
+      const latest = new Map<string, (typeof fragments)[number]>();
+      for (const fragment of fragments) {
+        const previous = latest.get(fragment.id);
+        if (!previous || (fragment.seq ?? 0) >= (previous.seq ?? 0)) {
+          latest.set(fragment.id, fragment);
+        }
+      }
+      const requiredInput =
+        call.name === "report_completion"
+          ? "summary"
+          : call.name === "request_user_input"
+            ? "question"
+            : "";
+      if (
+        requiredInput &&
+        latest.has(requiredInput) &&
+        [...latest.values()].every((fragment) => !fragment.continued)
+      ) {
+        complete.push(call.id);
+      }
+    }
+    return complete;
+  } catch (error) {
+    return statusFromUnknown(error, "Could not inspect the tool inputs.");
+  }
 }
 
 /** Best-effort human-readable text of an interaction's content. */
-export async function plainText(interaction: Interaction): Promise<string> {
-  const parts: string[] = [];
-  for (const item of interaction.content ?? []) {
-    const decoded = await fromChunk(item as Chunk);
-    parts.push(isOk(decoded) ? shapeText(decoded) : '');
+export async function plainText(
+  interaction: Interaction,
+): Promise<StatusOr<string>> {
+  try {
+    const parts: string[] = [];
+    for (const item of interaction.content ?? []) {
+      const decoded = await fromChunk(item as Chunk);
+      if (isStatus(decoded) && !isOk(decoded)) {
+        return {
+          ...decoded,
+          message: `Could not read conversation text: ${decoded.message}`,
+        };
+      }
+      parts.push(shapeText(decoded));
+    }
+    return parts.join("");
+  } catch (error) {
+    return statusFromUnknown(error, "Could not read conversation text.");
   }
-  return parts.join('');
 }
 
 /**
@@ -243,10 +349,18 @@ export async function plainText(interaction: Interaction): Promise<string> {
  * a reader does not, so clients skip drawing it and fold its logs into the call
  * it answers.
  */
-export async function isToolResultCarrier(interaction: Interaction): Promise<boolean> {
-  const outputs = interaction.action_outputs ?? {};
-  if (Object.keys(outputs).length === 0) return false;
-  return (await plainText(interaction)).length === 0;
+export async function isToolResultCarrier(
+  interaction: Interaction,
+): Promise<StatusOr<boolean>> {
+  try {
+    const outputs = interaction.action_outputs ?? {};
+    if (Object.keys(outputs).length === 0) return false;
+    const text = await plainText(interaction);
+    if (!isOk(text)) return text;
+    return text.length === 0;
+  } catch (error) {
+    return statusFromUnknown(error, "Could not inspect the tool result.");
+  }
 }
 
 /** The blocks a single interaction contributes. */
@@ -254,57 +368,76 @@ export async function presentInteraction(
   interaction: Interaction,
   logs: Record<string, string> = {},
   statuses: Record<string, Status> = {},
-): Promise<PresentationTurn> {
-  const role = String(interaction.role ?? 'model');
-  const blocks: PresentationBlock[] = [];
-  const make = (kind: BlockKind): PresentationBlock => ({
-    ...emptyBlock(kind, role),
-    interactionId: interaction.id ?? '',
-  });
+  inputs?: Record<string, Record<string, unknown>>,
+  outputs?: Record<string, Record<string, unknown>>,
+  completeInputs: ReadonlySet<string> = new Set(),
+): Promise<StatusOr<PresentationTurn>> {
+  try {
+    const role = String(interaction.role ?? "model");
+    const blocks: PresentationBlock[] = [];
+    const make = (kind: BlockKind): PresentationBlock => ({
+      ...emptyBlock(kind, role),
+      interactionId: interaction.id ?? "",
+    });
 
-  const text = await plainText(interaction);
-  if (text) blocks.push({ ...make(BlockKind.TEXT), text });
+    const text = await plainText(interaction);
+    if (!isOk(text)) return text;
+    if (text) blocks.push({ ...make(BlockKind.TEXT), text });
 
-  const normalized = normalizeInteraction(interaction);
-  if (isOk(normalized)) {
-    for (const part of normalized.parts) {
-      if (part.type !== NormalizedContentType.IMAGE) continue;
-      const data = part.data ? base64Decode(part.data) : null;
+    const normalized = normalizeInteraction(interaction);
+    if (isOk(normalized)) {
+      for (const part of normalized.parts) {
+        if (part.type !== NormalizedContentType.IMAGE) continue;
+        const data = part.data ? base64Decode(part.data) : null;
+        blocks.push({
+          ...make(BlockKind.IMAGE),
+          mimeType: part.mime_type ?? "",
+          ...(data !== null && isOk(data) ? { data } : {}),
+        });
+      }
+    }
+
+    // Tool calls come from `action_calls` rather than from content: it is the
+    // backend-independent record of what ran, and it carries the call ids the
+    // logs are keyed by.
+    let decodedInputs = inputs;
+    if (decodedInputs === undefined) {
+      const decoded = await toolInputs(interaction);
+      if (!isOk(decoded)) return decoded;
+      decodedInputs = decoded;
+    }
+    for (const call of interaction.action_calls ?? []) {
+      const id = (call as { id?: string }).id ?? "";
       blocks.push({
-        ...make(BlockKind.IMAGE),
-        mimeType: part.mime_type ?? '',
-        ...(data !== null && isOk(data) ? { data } : {}),
+        ...make(BlockKind.TOOL_RUN),
+        id,
+        toolName: (call as { name?: string }).name ?? "",
+        text: logs[id] ?? "",
+        toolArguments: decodedInputs[id],
+        toolOutputs: outputs?.[id],
+        toolArgumentsComplete: completeInputs.has(id) || undefined,
+        status: statuses[id],
       });
     }
-  }
 
-  // Tool calls come from `action_calls` rather than from content: it is the
-  // backend-independent record of what ran, and it carries the call ids the
-  // logs are keyed by.
-  for (const call of interaction.action_calls ?? []) {
-    const id = (call as { id?: string }).id ?? '';
-    blocks.push({
-      ...make(BlockKind.TOOL_RUN),
-      id,
-      toolName: (call as { name?: string }).name ?? '',
-      text: logs[id] ?? '',
-      toolArguments: await toolArguments(interaction, id),
-      status: statuses[id],
-    });
-  }
+    if (interaction.usage_metadata) {
+      blocks.push({
+        ...make(BlockKind.USAGE),
+        usage: interaction.usage_metadata,
+      });
+    }
 
-  if (interaction.usage_metadata) {
-    blocks.push({ ...make(BlockKind.USAGE), usage: interaction.usage_metadata });
-  }
+    // isOk, not a comparison against 'OK': a healthy status is not spelled that
+    // way, and treating it as an error gave every interaction an ERROR block.
+    const status = interaction.status as Status | undefined;
+    if (status && !isOk(status)) {
+      blocks.push({ ...make(BlockKind.ERROR), status });
+    }
 
-  // isOk, not a comparison against 'OK': a healthy status is not spelled that
-  // way, and treating it as an error gave every interaction an ERROR block.
-  const status = interaction.status as Status | undefined;
-  if (status && !isOk(status)) {
-    blocks.push({ ...make(BlockKind.ERROR), status });
+    return { role, interactionIds: [interaction.id ?? ""], blocks };
+  } catch (error) {
+    return statusFromUnknown(error, "Could not present the interaction.");
   }
-
-  return { role, interactionIds: [interaction.id ?? ''], blocks };
 }
 
 /**
@@ -316,22 +449,52 @@ export async function presentInteraction(
  */
 export async function presentConversation(
   interactions: readonly Interaction[],
-): Promise<PresentationTurn[]> {
-  const logs: Record<string, string> = {};
-  const statuses: Record<string, Status> = {};
-  for (const interaction of interactions) {
-    Object.assign(logs, toolLogs(interaction));
-    Object.assign(statuses, toolStatuses(interaction));
-  }
+): Promise<StatusOr<PresentationTurn[]>> {
+  try {
+    const logs: Record<string, string> = {};
+    const statuses: Record<string, Status> = {};
+    const inputs: Record<string, Record<string, unknown>> = {};
+    const outputs: Record<string, Record<string, unknown>> = {};
+    const completeInputs = new Set<string>();
+    for (const interaction of interactions) {
+      const interactionLogs = toolLogs(interaction);
+      if (!isOk(interactionLogs)) return interactionLogs;
+      Object.assign(logs, interactionLogs);
+      const interactionStatuses = toolStatuses(interaction);
+      if (!isOk(interactionStatuses)) return interactionStatuses;
+      Object.assign(statuses, interactionStatuses);
+      const decodedInputs = await toolInputs(interaction);
+      if (!isOk(decodedInputs)) return decodedInputs;
+      Object.assign(inputs, decodedInputs);
+      const decodedOutputs = await toolOutputs(interaction);
+      if (!isOk(decodedOutputs)) return decodedOutputs;
+      Object.assign(outputs, decodedOutputs);
+      const completed = completeToolInputIds(interaction);
+      if (!isOk(completed)) return completed;
+      for (const id of completed) completeInputs.add(id);
+    }
 
-  const turns: PresentationTurn[] = [];
-  for (const interaction of interactions) {
-    if (String(interaction.role) === 'system') continue;
-    if (await isToolResultCarrier(interaction)) continue;
-    const turn = await presentInteraction(interaction, logs, statuses);
-    if (turn.blocks.length > 0) turns.push(turn);
+    const turns: PresentationTurn[] = [];
+    for (const interaction of interactions) {
+      if (String(interaction.role) === "system") continue;
+      const carrier = await isToolResultCarrier(interaction);
+      if (!isOk(carrier)) return carrier;
+      if (carrier) continue;
+      const turn = await presentInteraction(
+        interaction,
+        logs,
+        statuses,
+        inputs,
+        outputs,
+        completeInputs,
+      );
+      if (!isOk(turn)) return turn;
+      if (turn.blocks.length > 0) turns.push(turn);
+    }
+    return turns;
+  } catch (error) {
+    return statusFromUnknown(error, "Could not present the conversation.");
   }
-  return turns;
 }
 
 /**
@@ -357,6 +520,9 @@ export class PresentationReducer {
   private readonly seenCalls = new Set<string>();
   private readonly logs: Record<string, string> = {};
   private readonly statuses: Record<string, Status> = {};
+  private readonly inputs: Record<string, Record<string, unknown>> = {};
+  private readonly outputs: Record<string, Record<string, unknown>> = {};
+  private readonly completeInputs = new Set<string>();
   /**
    * Whether prose has arrived as deltas. Only then is the text inside a later
    * interaction a duplicate; text from a *different* interaction is not, which
@@ -366,7 +532,7 @@ export class PresentationReducer {
 
   constructor(
     private readonly sink: PresentationSink = {},
-    private readonly role: string = 'model',
+    private readonly role: string = "model",
   ) {}
 
   /** The turn's blocks so far, in order. */
@@ -375,14 +541,24 @@ export class PresentationReducer {
   }
 
   /** Append assistant prose. */
-  onText(delta: string): void {
-    if (delta) this.streamedText = true;
-    this.append(BlockKind.TEXT, delta);
+  onText(delta: string): Status {
+    try {
+      if (delta) this.streamedText = true;
+      this.append(BlockKind.TEXT, delta);
+      return okStatus();
+    } catch (error) {
+      return statusFromUnknown(error, "Could not present streamed text.");
+    }
   }
 
   /** Append exposed reasoning. */
-  onThought(delta: string): void {
-    this.append(BlockKind.THOUGHT, delta);
+  onThought(delta: string): Status {
+    try {
+      this.append(BlockKind.THOUGHT, delta);
+      return okStatus();
+    } catch (error) {
+      return statusFromUnknown(error, "Could not present streamed thought.");
+    }
   }
 
   /**
@@ -392,53 +568,108 @@ export class PresentationReducer {
    * same prose arrives twice, once on `text_output` and once inside the
    * interaction that lands on `new_interactions`.
    */
-  async onInteraction(interaction: Interaction): Promise<void> {
-    Object.assign(this.logs, toolLogs(interaction));
-    Object.assign(this.statuses, toolStatuses(interaction));
-    // A late-arriving log belongs to the run block already drawn for it.
-    for (const block of this.collected) {
-      if (block.kind === BlockKind.TOOL_RUN && !block.text) {
-        block.text = this.logs[block.id] ?? '';
+  async onInteraction(interaction: Interaction): Promise<Status> {
+    try {
+      const interactionLogs = toolLogs(interaction);
+      if (!isOk(interactionLogs)) return interactionLogs;
+      Object.assign(this.logs, interactionLogs);
+      const interactionStatuses = toolStatuses(interaction);
+      if (!isOk(interactionStatuses)) return interactionStatuses;
+      Object.assign(this.statuses, interactionStatuses);
+      const inputs = await toolInputs(interaction);
+      if (!isOk(inputs)) return inputs;
+      Object.assign(this.inputs, inputs);
+      const outputs = await toolOutputs(interaction);
+      if (!isOk(outputs)) return outputs;
+      Object.assign(this.outputs, outputs);
+      const completed = completeToolInputIds(interaction);
+      if (!isOk(completed)) return completed;
+      for (const id of completed) {
+        this.completeInputs.add(id);
       }
-      if (block.kind === BlockKind.TOOL_RUN && this.statuses[block.id]) {
-        block.status = this.statuses[block.id];
-        block.partial = false;
-        this.sink.onBlockClosed?.(block);
+      // A late-arriving log belongs to the run block already drawn for it.
+      for (const block of this.collected) {
+        if (block.kind === BlockKind.TOOL_RUN && !block.text) {
+          block.text = this.logs[block.id] ?? "";
+        }
+        if (block.kind === BlockKind.TOOL_RUN && this.statuses[block.id]) {
+          block.status = this.statuses[block.id];
+          block.partial = false;
+          this.sink.onBlockClosed?.(block);
+        }
+        if (block.kind === BlockKind.TOOL_RUN && this.inputs[block.id]) {
+          block.toolArguments = this.inputs[block.id];
+        }
+        if (block.kind === BlockKind.TOOL_RUN && this.outputs[block.id]) {
+          block.toolOutputs = this.outputs[block.id];
+        }
+        if (
+          block.kind === BlockKind.TOOL_RUN &&
+          this.completeInputs.has(block.id)
+        ) {
+          block.toolArgumentsComplete = true;
+        }
       }
-    }
-    if (await isToolResultCarrier(interaction)) return;
+      const carrier = await isToolResultCarrier(interaction);
+      if (!isOk(carrier)) return carrier;
+      if (carrier) return okStatus();
 
-    const turn = await presentInteraction(interaction, this.logs, this.statuses);
-    for (const block of turn.blocks) {
-      if (block.kind === BlockKind.TEXT && this.streamedText) continue;
-      if (block.kind === BlockKind.TOOL_RUN) {
-        if (this.seenCalls.has(block.id)) continue;
-        this.seenCalls.add(block.id);
+      const turn = await presentInteraction(
+        interaction,
+        this.logs,
+        this.statuses,
+        this.inputs,
+        this.outputs,
+        this.completeInputs,
+      );
+      if (!isOk(turn)) return turn;
+      for (const block of turn.blocks) {
+        if (block.kind === BlockKind.TEXT && this.streamedText) continue;
+        if (block.kind === BlockKind.TOOL_RUN) {
+          if (this.seenCalls.has(block.id)) continue;
+          this.seenCalls.add(block.id);
+        }
+        this.closeOpen();
+        if (block.kind === BlockKind.TOOL_RUN) block.partial = true;
+        this.collected.push(block);
+        this.sink.onBlockOpened?.(block);
+        if (block.kind !== BlockKind.TOOL_RUN) this.sink.onBlockClosed?.(block);
       }
-      this.closeOpen();
-      if (block.kind === BlockKind.TOOL_RUN) block.partial = true;
-      this.collected.push(block);
-      this.sink.onBlockOpened?.(block);
-      if (block.kind !== BlockKind.TOOL_RUN) this.sink.onBlockClosed?.(block);
+      return okStatus();
+    } catch (error) {
+      return statusFromUnknown(error, "Could not present the interaction.");
     }
   }
 
   /** Record a failure as the turn's last block. */
-  onError(status: Status): void {
-    this.closeOpen();
-    const block = { ...emptyBlock(BlockKind.ERROR, this.role), status };
-    this.collected.push(block);
-    this.sink.onBlockOpened?.(block);
-    this.sink.onBlockClosed?.(block);
+  onError(status: Status): Status {
+    try {
+      this.closeOpen();
+      const block = { ...emptyBlock(BlockKind.ERROR, this.role), status };
+      this.collected.push(block);
+      this.sink.onBlockOpened?.(block);
+      this.sink.onBlockClosed?.(block);
+      return okStatus();
+    } catch (error) {
+      return statusFromUnknown(
+        error,
+        "Could not present the conversation error.",
+      );
+    }
   }
 
   /** Mark the turn complete, closing anything still streaming. */
-  endTurn(): void {
-    this.closeOpen();
-    for (const block of this.collected) {
-      if (block.kind !== BlockKind.TOOL_RUN || !block.partial) continue;
-      block.partial = false;
-      this.sink.onBlockClosed?.(block);
+  endTurn(): Status {
+    try {
+      this.closeOpen();
+      for (const block of this.collected) {
+        if (block.kind !== BlockKind.TOOL_RUN || !block.partial) continue;
+        block.partial = false;
+        this.sink.onBlockClosed?.(block);
+      }
+      return okStatus();
+    } catch (error) {
+      return statusFromUnknown(error, "Could not finish the presented turn.");
     }
   }
 

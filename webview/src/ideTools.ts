@@ -59,6 +59,7 @@ export interface ToolActivity {
   log?: string | null;
   status?: Status;
   arguments?: Record<string, unknown>;
+  outputs?: Record<string, unknown>;
   phase: 'started' | 'finished';
 }
 
@@ -203,19 +204,36 @@ function handlerFor(descriptor: ActionDescriptor, onRun?: ToolRunSink) {
   return async (action: Action): Promise<Status> => {
     onRun?.({ id: action.getId(), tool: name, phase: 'started' });
     const inputs = await readInputs(action, descriptor);
+    onRun?.({ id: action.getId(), tool: name, arguments: inputs, phase: 'started' });
     let outputs: unknown;
     try {
       outputs = await runAction(name, inputs);
     } catch (error) {
       const status = statusFromUnknown(error, `IDE tool '${name}' failed.`);
-      onRun?.({ id: action.getId(), tool: name, log: status.message, status, phase: 'finished' });
+      onRun?.({
+        id: action.getId(),
+        tool: name,
+        arguments: inputs,
+        log: status.message,
+        status,
+        phase: 'finished',
+      });
       return status;
     }
     if (typeof outputs !== 'object' || outputs === null) {
-      return statusFromUnknown(
+      const status = statusFromUnknown(
         new Error(`IDE tool '${name}' returned no outputs.`),
         `IDE tool '${name}' failed.`,
       );
+      onRun?.({
+        id: action.getId(),
+        tool: name,
+        arguments: inputs,
+        log: status.message,
+        status,
+        phase: 'finished',
+      });
+      return status;
     }
     const produced = outputs as Record<string, unknown>;
     // Straight to the UI, which is why the live transcript shows it without
@@ -224,7 +242,17 @@ function handlerFor(descriptor: ActionDescriptor, onRun?: ToolRunSink) {
     // the top of this file.
     const narration = produced[RUN_LOG_KEY];
     const log = asLogText(narration);
-    onRun?.({ id: action.getId(), tool: name, log, phase: 'finished' });
+    const visibleOutputs = Object.fromEntries(
+      Object.entries(produced).filter(([key]) => key !== RUN_LOG_KEY),
+    );
+    onRun?.({
+      id: action.getId(),
+      tool: name,
+      arguments: inputs,
+      outputs: visibleOutputs,
+      log,
+      phase: 'finished',
+    });
     if (log !== null) await action.log(log);
     return writeOutputs(action, descriptor, produced);
   };

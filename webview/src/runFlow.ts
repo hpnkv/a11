@@ -39,6 +39,7 @@ import {
   logRecordFromChunk,
   logText,
   type AsyncNode,
+  type LogRecord,
   type Session,
   type Status,
   type WireStream,
@@ -85,13 +86,15 @@ export interface FlowRun {
    * closed empty, which is what a port carrying no values is.
    */
   inputs?: Record<string, unknown[]>;
+  /** Representation to use for values written to each Flow input node. */
+  inputMimetypes?: Record<string, string>;
   /**
    * Output ports to read as they fill, keyed by port name. Each callback is
    * handed one value at a time, in the order the flow produced them.
    */
   outputs?: Record<string, (value: unknown) => void>;
   /** The run log the gateway narrates, for a UI that wants to show it. */
-  onLog?: (log: string) => void;
+  onLog?: (log: string, record: LogRecord) => void;
   /** How long to wait for the whole composition. */
   timeoutMs?: number;
 }
@@ -147,7 +150,9 @@ export async function runFlow(
     const node = await flowPort(port);
     // A port this end writes has to reach the other end.
     need(node.attachStream(stream));
-    for (const value of values) need(await node.put(value));
+    for (const value of values) {
+      need(await node.put(value, {mimetype: run.inputMimetypes?.[port] ?? ''}));
+    }
     need(await node.finalize());
   }
 
@@ -175,7 +180,8 @@ export async function runFlow(
       const chunk = need(await node.nextChunk(timeoutMs));
       if (chunk === null) break;
       if (isStatusChunk(chunk)) continue;
-      run.onLog?.(logText(logRecordFromChunk(chunk)));
+      const record = logRecordFromChunk(chunk);
+      if (!record.internal) run.onLog?.(logText(record), record);
     }
   })();
   logging.catch(() => undefined);

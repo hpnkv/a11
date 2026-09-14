@@ -5,6 +5,8 @@
 .idea
 .junie
 .venv
+__pycache__/
+*.py[cod]
 
 build*/
 cmake-build-debug/

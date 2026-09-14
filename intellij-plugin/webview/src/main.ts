@@ -64,10 +64,8 @@ async function main(): Promise<void> {
     mountFailure(root, error);
     return;
   }
-  // The handle is unused here for now: the JetBrains side drives a new chat from
-  // the page's own button. It is returned all the same, so an action added to the
-  // plugin has the same way in the VSCode command has.
-  mount(root, viewOf(window.__A11_VIEW));
+  const mounted = mount(root, viewOf(window.__A11_VIEW));
+  window.__A11_OPEN_FLOW = (flow) => mounted.openFlow?.(flow);
 }
 
 if (document.readyState === 'loading') {

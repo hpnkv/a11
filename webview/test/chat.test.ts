@@ -18,7 +18,9 @@ import assert from 'node:assert/strict';
 import { beforeEach, test } from 'node:test';
 
 import { JSDOM } from 'jsdom';
+import { okStatus } from '@curiositystack/a11';
 
+import { A11ChatSession } from '../src/a11client.js';
 import { AssistantBubble } from '../src/chat.js';
 
 beforeEach(() => {
@@ -123,4 +125,138 @@ test('request_user_input renders choices and answers through its host', () => {
   });
   assert.match(request.textContent ?? '', /Input received/);
   assert.equal(native.disabled, true);
+});
+
+test('tool cards expose inputs, outputs, logs, and status as they stream', () => {
+  const host = document.createElement('div');
+  const bubble = new AssistantBubble(host, () => {});
+
+  bubble.addToolRun({
+    id: 'tool-1',
+    tool: 'search_text',
+    arguments: {query: 'Flow', path: 'cpp'},
+    phase: 'started',
+  });
+  bubble.addToolRun({
+    id: 'tool-1',
+    tool: 'search_text',
+    outputs: {matches: [{path: 'cpp/a11/flow/values.cc', line: 1400}]},
+    log: 'Found one match.',
+    phase: 'finished',
+  });
+
+  const card = host.querySelector<HTMLElement>('.tool-run');
+  assert.ok(card);
+  assert.match(card.textContent ?? '', /Inputs/);
+  assert.match(card.textContent ?? '', /"query": "Flow"/);
+  assert.match(card.textContent ?? '', /Outputs/);
+  assert.match(card.textContent ?? '', /values\.cc/);
+  assert.match(card.textContent ?? '', /Logs/);
+  assert.match(card.textContent ?? '', /Found one match/);
+  assert.match(card.textContent ?? '', /completed/);
+});
+
+test('a collapsed failed tool shows its error message', () => {
+  const host = document.createElement('div');
+  const bubble = new AssistantBubble(host, () => {});
+  bubble.addToolRun({
+    id: 'failed-1',
+    tool: 'run_command',
+    arguments: {command: 'false'},
+    status: {code: 13, message: 'Permission denied by the workspace boundary'},
+    phase: 'finished',
+  });
+  const card = host.querySelector<HTMLDetailsElement>('.tool-run.failed');
+  assert.ok(card);
+  assert.equal(card.open, false);
+  assert.match(card.querySelector('summary')?.textContent ?? '', /Permission denied/);
+});
+
+test('run_flow has a dedicated source preview without duplicating it in inputs', () => {
+  const host = document.createElement('div');
+  const bubble = new AssistantBubble(host, () => {});
+  const source = 'flow inspect {\n  out result: string\n  "ok" -> result\n}';
+
+  bubble.addToolRun({
+    id: 'flow-1',
+    tool: 'run_flow',
+    arguments: {source, timeout_seconds: 60},
+    phase: 'started',
+  });
+
+  const preview = host.querySelector<HTMLElement>('.flow-preview');
+  assert.equal(preview?.textContent, source);
+  assert.ok(host.querySelector('.tool-run.flow-run'));
+  assert.match(host.querySelector('.tool-run-name')?.textContent ?? '', /Running A11 Flow/);
+  const inputs = host.querySelector<HTMLElement>('.tool-detail-section');
+  assert.match(inputs?.textContent ?? '', /timeout_seconds/);
+  assert.doesNotMatch(inputs?.textContent ?? '', /flow inspect/);
+});
+
+test('assistant fenced code receives token-level syntax highlighting', () => {
+  const host = document.createElement('div');
+  const bubble = new AssistantBubble(host, () => {});
+  bubble.appendToken('```python\ndef answer():\n    return 42\n```');
+  bubble.finish();
+  assert.ok(host.querySelector('code.language-python.hljs'));
+  assert.match(host.querySelector('code')?.innerHTML ?? '', /hljs-keyword/);
+});
+
+test('assistant fenced code without a language is highlighted automatically', () => {
+  const host = document.createElement('div');
+  const bubble = new AssistantBubble(host, () => {});
+  bubble.appendToken('```\nconst answer = 42;\n```');
+  bubble.finish();
+  const code = host.querySelector<HTMLElement>('pre code.hljs');
+  assert.ok(code);
+  assert.match(code.innerHTML, /class="hljs-/);
+});
+
+test('interrupt cooperatively cancels the active conversation action', () => {
+  let cancelled = 0;
+  const session = new A11ChatSession();
+  const internals = session as unknown as {
+    activeCall: {cancel(): ReturnType<typeof okStatus>} | null;
+  };
+  internals.activeCall = {
+    cancel: () => {
+      cancelled += 1;
+      return okStatus();
+    },
+  };
+
+  assert.equal(session.interrupt(), true);
+  assert.equal(cancelled, 1);
+  internals.activeCall = null;
+  assert.equal(session.interrupt(), false);
+});
+
+test('a closed Gateway session is replaced before the next action', async () => {
+  const notices: string[] = [];
+  const client = new A11ChatSession(undefined, ({state}) => notices.push(state));
+  let closed = 0;
+  const internals = client as unknown as {
+    session: unknown;
+    stream: unknown;
+    refreshConfig: () => Promise<void>;
+    connect: () => Promise<void>;
+    ensureConnected: () => Promise<void>;
+  };
+  internals.session = {
+    isClosed: () => true,
+    getStatus: okStatus,
+    halfClose: () => { closed += 1; },
+  };
+  internals.stream = {getStatus: okStatus};
+  internals.refreshConfig = async () => {};
+  internals.connect = async () => {
+    internals.session = {isClosed: () => false, getStatus: okStatus};
+    internals.stream = {getStatus: okStatus};
+  };
+
+  await internals.ensureConnected();
+
+  assert.equal(closed, 1);
+  assert.deepEqual(notices, ['connecting', 'connected']);
+  client.halfClose();
 });

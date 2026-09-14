@@ -27,10 +27,19 @@
  * button, one entry per value the caller wants to put on the node.
  */
 
+import {
+  asSchema,
+  isFormable,
+  requiredNames,
+  schemaShape,
+  schemaText,
+  type JsonSchema,
+  type SchemaShape,
+  typeLabel,
+} from '@curiositystack/a11/presentation';
+
 import { createJsonEditor } from './jsonEditor.js';
 import type { PortDescriptor } from './bridge.js';
-
-type JsonSchema = Record<string, unknown>;
 
 /** A widget holding one value; [read] throws when the value is unusable. */
 interface ValueEditor {
@@ -39,51 +48,6 @@ interface ValueEditor {
   read(): unknown;
 }
 
-const str = (schema: JsonSchema, key: string): string =>
-  typeof schema[key] === 'string' ? (schema[key] as string) : '';
-
-const asSchema = (value: unknown): JsonSchema | undefined =>
-  typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? (value as JsonSchema)
-    : undefined;
-
-const requiredNames = (schema: JsonSchema): string[] =>
-  Array.isArray(schema['required']) ? (schema['required'] as unknown[]).filter((n): n is string => typeof n === 'string') : [];
-
-interface SchemaShape {
-  readonly schema: JsonSchema;
-  readonly nullable: boolean;
-}
-
-/** Unwrap `T | null` while retaining constraints declared beside the union. */
-function schemaShape(schema: JsonSchema | undefined): SchemaShape | undefined {
-  if (!schema) return undefined;
-  for (const keyword of ['anyOf', 'oneOf']) {
-    const alternatives = schema[keyword];
-    if (!Array.isArray(alternatives)) continue;
-    const shapes = alternatives.map(asSchema);
-    if (shapes.some((shape) => shape === undefined)) continue;
-    const concrete = (shapes as JsonSchema[]).filter((shape) => shape['type'] !== 'null');
-    const nulls = (shapes as JsonSchema[]).filter((shape) => shape['type'] === 'null');
-    if (concrete.length !== 1 || nulls.length !== 1) continue;
-    const unwrapped = { ...schema, ...concrete[0] };
-    delete unwrapped['anyOf'];
-    delete unwrapped['oneOf'];
-    return { schema: unwrapped, nullable: true };
-  }
-  return { schema, nullable: schema['type'] === 'null' };
-}
-
-/** Whether the schema is specific enough to render as a typed widget. */
-function isFormable(schema: JsonSchema | undefined): boolean {
-  const shape = schemaShape(schema)?.schema;
-  if (!shape) return false;
-  if (Array.isArray(shape['enum'])) return true;
-  const type = shape['type'];
-  if (type === 'object') return asSchema(shape['properties']) !== undefined;
-  if (type === 'array') return asSchema(shape['items']) !== undefined;
-  return type === 'string' || type === 'number' || type === 'integer' || type === 'boolean';
-}
 
 function label(text: string, required: boolean): HTMLLabelElement {
   const element = document.createElement('label');
@@ -241,7 +205,7 @@ function objectEditor(schema: JsonSchema, path: string): ValueEditor {
     const row = document.createElement('div');
     row.className = 'field';
     row.append(label(name, isRequired));
-    const description = hint(field ? str(field, 'description') : '');
+    const description = hint(field ? schemaText(field, 'description') : '');
     if (description) row.append(description);
     row.append(editor.element);
     element.append(row);
@@ -400,21 +364,10 @@ export function describeSchema(schema: JsonSchema | undefined): HTMLElement | nu
       row.append(always);
     }
     element.append(row);
-    const description = hint(str(field, 'description'));
+    const description = hint(schemaText(field, 'description'));
     if (description) element.append(description);
   }
   return element;
-}
-
-/** A field's JSON type, including the item type of an array. */
-function typeLabel(schema: JsonSchema): string {
-  const resolved = schemaShape(schema);
-  const shape = resolved?.schema ?? schema;
-  const type = str(shape, 'type') || 'any';
-  const suffix = resolved?.nullable ? ' | null' : '';
-  if (type !== 'array') return `${type}${suffix}`;
-  const items = asSchema(shape['items']);
-  return `array<${items ? typeLabel(items) : 'any'}>${suffix}`;
 }
 
 function fieldType(text: string): HTMLElement {

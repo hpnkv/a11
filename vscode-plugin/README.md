@@ -9,6 +9,18 @@ it makes sense to share: the whole language, and the whole chat UI.
 
 ## The A11 Flow language
 
+Each native Flow declaration has an A11 gutter marker and a Run with A11 code
+lens. It opens the bottom Flow Runner, where inputs and headers can be edited
+and outputs and logs arrive while the Flow runs. The form follows declaration
+changes without closing the panel. Flow source colours come from the native
+language service. Text streams accumulate per port with joined and chunk views;
+JSON, binary data, images, audio, and video use Studio-style inspectable views.
+
+The extension connects to the configured Gateway when the editor starts and
+retries in the background. A tool or Flow invocation also forces an immediate
+connection attempt, and Gateway-backed views show when they are reconnecting.
+Flow editing remains available.
+
 `.flow` files, and flows written **inside string literals**, which is where most of
 them live because a flow is meant to travel as text.
 
@@ -100,7 +112,9 @@ An **A11** container in the activity bar with two views:
 
 - **Chat** — talks to the **A11 gateway** (`a11 gateway`) over a WebSocket and
   streams a reply. The model can call tools backed by this editor as well as the
-  gateway's own `shell_*` tools, so answers are grounded in your actual project.
+  Gateway's coding-agent, Flow, and shell tools. The send control becomes
+  **Stop** during a turn, and expandable tool cards show inputs, outputs, logs,
+  and status. `run_flow` cards include a Flow-source preview.
 - **Actions** — an explorer that lists every tool this editor exposes and runs it
   with arbitrary JSON input, independent of the model and the gateway. Good for
   seeing what a tool actually returns.
@@ -205,7 +219,7 @@ Under **A11** in the settings UI:
 | --- | --- |
 | `a11.gatewayUrl` | Where `a11 gateway` listens. A bare `host:port` is completed. |
 | `a11.provider` / `a11.model` / `a11.baseUrl` | Which model answers. |
-| `a11.extraAllowedTools` | Patterns for the gateway's *own* tools, `shell_.*` by default. Emptying this turns the shell off. |
+| `a11.extraAllowedTools` | Names or patterns for Gateway tools. Defaults cover its coding-agent, Flow, and shell actions; remove entries to narrow them. |
 | `a11.flow.toolPath` | Where `a11-flow` is, when it is not bundled or on the `PATH`. |
 | `a11.flow.scanWorkspace` | Read the workspace for its own actions. |
 | `a11.flow.checkFragments` | Check flows inside string literals, not only `.flow` files. |

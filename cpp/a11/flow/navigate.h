@@ -65,6 +65,11 @@ struct DocumentSymbol {
   SymbolClass kind = SymbolClass::kFlow;
   /// What an editor shows beside the name: a port's type, a call's action.
   std::string detail;
+  /// Port metadata, populated only when kind is kPort.
+  std::string port_direction;
+  std::string port_type;
+  bool port_stream = false;
+  bool port_required = false;
   /// The whole construct, for "select this symbol".
   Range range;
   /// Just the name, for "put the caret here".

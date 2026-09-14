@@ -13,31 +13,41 @@ import {
   ActionRegistry,
   ActionSchema,
   valueOrThrow,
-} from '@curiositystack/a11';
+} from "@curiositystack/a11";
 
 const schema = new ActionSchema({
-  name: 'classify',
+  name: "classify",
   inputs: {
     text: new ActionPortSchema({
-      name: 'text', type: 'text/plain', unary: true, required: true,
+      name: "text",
+      type: "text/plain",
+      unary: true,
+      required: true,
     }),
   },
   outputs: {
     label: new ActionPortSchema({
-      name: 'label', type: 'text/plain', unary: true, required: true,
+      name: "label",
+      type: "text/plain",
+      unary: true,
+      required: true,
     }),
   },
 });
 
 const registry = new ActionRegistry();
-valueOrThrow(registry.register('classify', schema, async (action) => {
-  const text = valueOrThrow(await action.getInput('text'));
-  const value = valueOrThrow(await text.next());
-  const label = valueOrThrow(await action.getOutput('label'));
-  valueOrThrow(await label.finalize(String(value).includes('?')
-    ? 'question'
-    : 'statement'));
-}));
+valueOrThrow(
+  registry.register("classify", schema, async (action) => {
+    const text = valueOrThrow(await action.getInput("text"));
+    const value = valueOrThrow(await text.next());
+    const label = valueOrThrow(await action.getOutput("label"));
+    valueOrThrow(
+      await label.finalize(
+        String(value).includes("?") ? "question" : "statement",
+      ),
+    );
+  }),
+);
 ```
 
 The public surface is organized around:
@@ -48,6 +58,30 @@ The public surface is organized around:
 - `Interaction`, tool adapters, and presentation reducers for LLM clients.
 - `Status` and `StatusOr<T>` for failures that retain their meaning across a
   transport or language boundary.
+
+## Headless developer-tool presentation
+
+`@curiositystack/a11/presentation` contains the React-free, style-neutral
+models used to build Studio-grade action, value, stream, Flow, JSON, and chat
+interfaces. It exports semantic widget descriptions and Status-aware
+controllers; the consumer owns markup, component conventions, CSS, focus, and
+product integration.
+
+```ts
+import { isOk } from "@curiositystack/a11";
+import { presentValue } from "@curiositystack/a11/presentation";
+
+const presented = presentValue(bytes, "image/png");
+if (!isOk(presented)) return presented;
+
+// Render `presented.kind` using this product's own elements and styles.
+```
+
+DOM-specific overlay observation is opt-in through
+`@curiositystack/a11/presentation/browser`. Importing the base presentation
+subpath does not require browser globals. Fallible callbacks, transports,
+storage, decoding, and controller mutations return `Status`, `StatusOr<T>`, or
+promises thereof; handle or propagate failures after `isOk()` narrows them.
 
 The generated pages include lifecycle details, parameter contracts, and small
 usage examples on the primary symbols.

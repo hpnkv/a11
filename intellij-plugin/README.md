@@ -24,6 +24,19 @@ manual testing — independent of the LLM and the gateway.
 
 ## The A11 Flow language
 
+Runnable declarations have an A11 gutter icon in `.flow` files and injected
+Flow fragments. The icon opens the bottom Flow Runner with editable inputs and
+headers plus streamed outputs and logs. Its fields and native syntax colours
+track the declaration as it changes. The runner uses Studio's three-pane
+composition and bounded stream presentation: textual streams can be joined or
+viewed as chunks, while JSON, binary data, images, audio, and video use their
+corresponding inspectable views.
+
+The plugin connects to the configured Gateway during project startup and
+retries in the background. A tool or Flow invocation also forces an immediate
+connection attempt. Gateway-backed views retain a visible reconnecting state
+while the connection is unavailable; Flow editing remains available.
+
 The plugin also brings [A11 Flow](../doc/docs/guides/flow.md) — the language for
 describing a composition of actions — to the IDE: `.flow` files, and flows
 written **inside string literals**, which is where most of them live because a
@@ -170,11 +183,13 @@ implementation of the check, and would corrupt a file the day the two disagreed.
   are styled by. It imports the TypeScript A11 library from [`../js`](../js) and
   owns the WebSocket to the gateway directly (no Kotlin broker). Chat renders
   markdown turns, streams tokens, auto-scrolls, and shows a live "thinking"
-  affordance.
+  affordance. The send control becomes **Stop** during a turn. Tool calls expand
+  into decoded inputs, outputs, logs, and status; `run_flow` also shows its Flow
+  source as a bounded code preview.
   [`webview/`](webview) *here* is this host's half: an entry point that installs
   the JCEF bridge, bundled with esbuild into `src/main/resources/webview/app.js`.
-  The seam between them is six methods (`bridge.ts`) — `listActions`, `runAction`,
-  `getConfig`, `readFlow`, `suggestOnHighlight`, `clearSuggestions` — which is the
+  The seam between them is seven methods (`bridge.ts`) — `listActions`, `runAction`,
+  `getConfig`, `readFlow`, `highlightFlow`, `suggestOnHighlight`, and `clearSuggestions` — which is the
   whole of what the UI asks of an editor, and why one UI serves two.
 - The **A11 compatibility layer** in [`../kotlin`](../kotlin) — a byte-compatible
   Kotlin port of the A11 client runtime — is **kept intact** and still consumed
@@ -188,8 +203,12 @@ implementation of the check, and would corrupt a file the day the two disagreed.
   gateway (`__register_tools__`) and served here; the gateway's own — its
   `shell_*` tools — are added by the gateway for every registered name the
   **allowed-tools header** matches, and run there. That header is the IDE tool
-  names plus the patterns from the *Extra allowed tools* setting (`shell_.*` by
-  default), so turning the shell off is emptying a field.
+  names plus the patterns from the *Extra allowed tools* setting. Its defaults
+  cover the Gateway's coding-agent, Flow, and shell actions and can be narrowed.
+- **Coding-agent Gateway parity.** When `coding_agent_info` is available, the
+  page uses its current workspace instructions for the first interaction. A
+  general Gateway falls back to the IDE prompt. `request_user_input` is rendered
+  as choices plus optional free text and answered through `respond_user_input`.
 - **A tool's run log reaches the gateway but never the model.** Every action has
   a reserved log port that no schema declares, and a handler narrates itself onto
   it with `log()`. The IDE tools return their narration under `RUN_LOG_KEY` and
@@ -281,13 +300,14 @@ a11 gateway               # ws://127.0.0.1:8011/a11
 Configure under **Preferences → Tools → A11 Chat**:
 - **Gateway URL**: defaults to `ws://127.0.0.1:8011/a11`; a bare `host:port` is
   accepted and completed.
-- **Extra allowed tools**: comma-separated patterns for the gateway's own tools,
-  `shell_.*` by default.
+- **Extra allowed tools**: comma-separated names or patterns for Gateway tools;
+  defaults enable its coding-agent, Flow, and shell actions.
 - **Provider / model / base URL** and the **API key** (stored in PasswordSafe).
 
 Open the **A11 Chat** tool window (right dock), type a prompt, and the reply
 streams in. Ask something like *"what file am I looking at?"* to exercise the
-`get_active_file` tool. **History** lists the conversations recorded under
+`get_active_file` tool. Press **Stop** to cancel an active turn. **History**
+lists the conversations recorded under
 `~/.cache/a11/gateway/conversations` — pick one to reopen it and keep going in it — and
 **+ New chat** starts a fresh one. Deleting that directory clears the history;
 nothing else depends on it.

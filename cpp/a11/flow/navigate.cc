@@ -86,6 +86,11 @@ DocumentSymbol PortSymbol(const LineIndex& lines, const PortPlan& port) {
       port.direction == syntax::PortDirection::kInput ? "in " : "out ",
       port.declared.empty() ? port.type : port.declared,
       port.unary ? "" : " stream", port.required ? " required" : "");
+  symbol.port_direction =
+      port.direction == syntax::PortDirection::kInput ? "in" : "out";
+  symbol.port_type = port.declared.empty() ? port.type : port.declared;
+  symbol.port_stream = !port.unary;
+  symbol.port_required = port.required;
   symbol.range = RangeOf(lines, port.location);
   symbol.selection = symbol.range;
   return symbol;

@@ -29,4 +29,12 @@ intellij-plugin/
 vscode-plugin/dist/
 vscode-plugin/node_modules/
 
+# The shared webview is built with npm; pnpm 11 creates these policy files when
+# invoked there, but they are not inputs to either IDE distribution.
+/webview/pnpm-lock.yaml
+/webview/pnpm-workspace.yaml
+
 .a11/docs/
+
+# Local campaign plans, reports, exports, and draft creative.
+.campaign/

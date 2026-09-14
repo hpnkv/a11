@@ -29,16 +29,15 @@
             stroke-width="5"/>
   </g>
 
-  <text x="76" y="263" fill="#1f2328"
+  <text x="76" y="285" fill="#1f2328"
         font-family="Noto Sans,Arial,sans-serif" font-size="64"
-        font-weight="800" letter-spacing="-2.7">
-    <tspan x="76">Streaming runtime for</tspan>
-    <tspan x="76" dy="69">agents and multimodal</tspan>
-    <tspan x="76" dy="69">APIs</tspan>
-  </text>
-  <text x="76" y="469" fill="#57606a"
+        font-weight="800" letter-spacing="-2.7">Build AI applications</text>
+  <text x="76" y="354" fill="#1f2328"
+        font-family="Noto Sans,Arial,sans-serif" font-size="64"
+        font-weight="800" letter-spacing="-2.7">like normal software</text>
+  <text x="76" y="449" fill="#57606a"
         font-family="Noto Sans,Arial,sans-serif" font-size="26">
-    Typed actions. Native streams. One protocol.
+    Model APIs · tools · interfaces · remote compute
   </text>
 
   <circle cx="80.5" cy="555.5" r="4.5" fill="#2da44e"/>

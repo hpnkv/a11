@@ -29,6 +29,7 @@
 
 import {
   asSchema,
+  describePortInput,
   isFormable,
   requiredNames,
   schemaShape,
@@ -37,6 +38,7 @@ import {
   type SchemaShape,
   typeLabel,
 } from '@curiositystack/a11/presentation';
+import {isOk} from '@curiositystack/a11';
 
 import { createJsonEditor } from './jsonEditor.js';
 import type { PortDescriptor } from './bridge.js';
@@ -100,6 +102,55 @@ function textEditor(schema: JsonSchema, path: string, required: boolean): ValueE
       const value = input.value.trim();
       if (value === '') return required ? missing(path) : undefined;
       return value;
+    },
+  };
+}
+
+function proseEditor(path: string, required: boolean): ValueEditor {
+  const textarea = document.createElement('textarea');
+  textarea.className = 'field-input field-prose';
+  textarea.rows = 5;
+  return {
+    element: textarea,
+    read: () => {
+      const value = textarea.value.trim();
+      if (!value) return required ? missing(path) : undefined;
+      return textarea.value;
+    },
+  };
+}
+
+function imageEditor(path: string, required: boolean): ValueEditor {
+  const element = document.createElement('div');
+  element.className = 'field-image';
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/*';
+  input.className = 'field-input';
+  const preview = document.createElement('img');
+  preview.alt = '';
+  preview.hidden = true;
+  let bytes: Uint8Array | undefined;
+  let loading = false;
+  input.addEventListener('change', () => {
+    const file = input.files?.[0];
+    bytes = undefined;
+    preview.hidden = true;
+    if (!file) return;
+    loading = true;
+    void file.arrayBuffer().then((buffer) => {
+      bytes = new Uint8Array(buffer);
+      preview.src = URL.createObjectURL(file);
+      preview.hidden = false;
+    }).finally(() => { loading = false; });
+  });
+  element.append(input, preview);
+  return {
+    element,
+    read: () => {
+      if (loading) throw new Error(`${path}: wait for the image to finish loading`);
+      if (!bytes && required) return missing(path);
+      return bytes;
     },
   };
 }
@@ -396,7 +447,7 @@ export function createPortInput(port: PortDescriptor): PortInput {
   head.append(name);
   for (const flag of [port.required ? 'required' : 'optional', port.unary ? 'single value' : 'multiple values']) {
     const tag = document.createElement('span');
-    tag.className = 'port-flag';
+    tag.className = `port-flag${flag === 'required' ? ' required' : ''}`;
     tag.textContent = flag;
     head.append(tag);
   }
@@ -413,16 +464,33 @@ export function createPortInput(port: PortDescriptor): PortInput {
   }
 
   const schema = asSchema(port.schema);
+  const widget = describePortInput({
+    name: port.name,
+    type: port.type,
+    required: port.required,
+    unary: port.unary,
+    description: port.description,
+    json_schema: port.schema,
+  }, undefined);
   if (!isFormable(schema)) {
     const note = hint('No schema for this port — enter JSON directly.');
     if (note) element.append(note);
   }
 
   // A unary port holds one value; a streaming one, a list the caller grows.
+  const unaryEditor = isOk(widget) && widget.kind === 'image'
+    ? imageEditor(port.name, port.required)
+    : isOk(widget) && widget.kind === 'prose'
+      ? proseEditor(port.name, port.required)
+      : valueEditor(schema, port.name, port.required);
   const editor = port.unary
-    ? valueEditor(schema, port.name, port.required)
+    ? unaryEditor
     : listEditor(schema, port.name, { addLabel: '+ Add value', startEmpty: !port.required });
   element.append(editor.element);
+  element.addEventListener('input', () => {
+    element.classList.remove('invalid');
+    editor.element.removeAttribute('aria-invalid');
+  });
 
   return {
     element,

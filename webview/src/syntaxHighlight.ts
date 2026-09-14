@@ -29,6 +29,7 @@ import sql from 'highlight.js/lib/languages/sql';
 import typescript from 'highlight.js/lib/languages/typescript';
 import xml from 'highlight.js/lib/languages/xml';
 import yaml from 'highlight.js/lib/languages/yaml';
+import {tokenizeFlow} from '@curiositystack/a11';
 
 for (const [name, grammar] of Object.entries({
   bash, shell: bash, cpp, css, go, java, javascript, js: javascript, json,
@@ -43,9 +44,24 @@ export function highlightCodeBlocks(root: HTMLElement): void {
   for (const code of root.querySelectorAll<HTMLElement>('pre code')) {
     const language = /(?:language|lang)-([\w-]+)/.exec(code.className)?.[1];
     const source = code.textContent ?? '';
+    if (language === 'flow' || language === 'a11flow' || (!language && looksLikeFlow(source))) {
+      code.replaceChildren(...tokenizeFlow(source).map((token) => {
+        const span = document.createElement('span');
+        span.className = `flow-token flow-token-${token.kind}`;
+        span.textContent = source.slice(token.start, token.end);
+        return span;
+      }));
+      code.classList.add('hljs');
+      continue;
+    }
     code.innerHTML = language && hljs.getLanguage(language)
       ? hljs.highlight(source, {language, ignoreIllegals: true}).value
       : hljs.highlightAuto(source).value;
     code.classList.add('hljs');
   }
+}
+
+/** Native run logs fence Flow source without attaching a Markdown language. */
+function looksLikeFlow(source: string): boolean {
+  return /^\s*(?:#[^\n]*\n\s*)*flow\s+[A-Za-z_][\w-]*\s*\{/.test(source);
 }

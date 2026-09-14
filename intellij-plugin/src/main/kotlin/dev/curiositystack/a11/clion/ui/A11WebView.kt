@@ -24,14 +24,11 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ApplicationNamesInfo
 import com.intellij.ide.ui.LafManagerListener
 import com.intellij.openapi.diagnostic.thisLogger
-import com.intellij.openapi.editor.DefaultLanguageHighlighterColors
-import com.intellij.openapi.editor.colors.EditorColorsManager
-import com.intellij.openapi.editor.colors.TextAttributesKey
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
-import com.intellij.ui.JBColor
 import com.intellij.ui.jcef.JBCefBrowser
 import com.intellij.ui.jcef.JBCefJSQuery
+import com.intellij.ui.jcef.JBCefOSRHandlerFactory
 import com.intellij.util.ui.UIUtil
 import com.intellij.util.concurrency.AppExecutorUtil
 import dev.curiositystack.a11.clion.highlights.HighlightNote
@@ -43,13 +40,17 @@ import dev.curiositystack.a11.clion.tools.IdeTools
 import java.awt.Color
 import java.awt.GraphicsDevice
 import java.awt.GraphicsEnvironment
+import java.awt.Rectangle
 import javax.swing.JComponent
-import javax.swing.UIManager
+import java.nio.ByteBuffer
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.ceil
 import org.cef.browser.CefBrowser
 import org.cef.browser.CefFrame
 import org.cef.handler.CefLoadHandlerAdapter
+import org.cef.handler.CefAcceleratedPaintInfo
+import org.cef.handler.CefRenderHandler
 
 /**
  * The JCEF-hosted A11 chat and action-explorer views, selected by [view].
@@ -65,14 +66,17 @@ import org.cef.handler.CefLoadHandlerAdapter
 class A11WebView(private val project: Project, private val view: String, parent: Disposable) {
 
     private val log = thisLogger()
-    private val browser = newBrowser()
+    private val paintCadence = PaintCadence()
+    private val browser = newBrowser(paintCadence)
     private val ideTools = IdeTools(project)
 
     private val listActionsQuery = JBCefJSQuery.create(browser)
+    private val helloQuery = JBCefJSQuery.create(browser)
     private val runActionQuery = JBCefJSQuery.create(browser)
     private val getConfigQuery = JBCefJSQuery.create(browser)
     private val readFlowQuery = JBCefJSQuery.create(browser)
     private val highlightFlowQuery = JBCefJSQuery.create(browser)
+    private val requestFlowLanguageQuery = JBCefJSQuery.create(browser)
     private val suggestOnHighlightQuery = JBCefJSQuery.create(browser)
     private val clearSuggestionsQuery = JBCefJSQuery.create(browser)
     private val frameRateQuery = JBCefJSQuery.create(browser)
@@ -93,10 +97,12 @@ class A11WebView(private val project: Project, private val view: String, parent:
     init {
         Disposer.register(parent, browser)
         Disposer.register(parent, listActionsQuery)
+        Disposer.register(parent, helloQuery)
         Disposer.register(parent, runActionQuery)
         Disposer.register(parent, getConfigQuery)
         Disposer.register(parent, readFlowQuery)
         Disposer.register(parent, highlightFlowQuery)
+        Disposer.register(parent, requestFlowLanguageQuery)
         Disposer.register(parent, suggestOnHighlightQuery)
         Disposer.register(parent, clearSuggestionsQuery)
         Disposer.register(parent, frameRateQuery)
@@ -125,6 +131,7 @@ class A11WebView(private val project: Project, private val view: String, parent:
         )
 
         listActionsQuery.addHandler { respond { A11Json.encodeToString(ideTools.listDescriptors()).valueOrThrow() } }
+        helloQuery.addHandler { respond { hello() } }
         runActionQuery.addHandler { request -> respond { runAction(request) } }
         getConfigQuery.addHandler { respond { config() } }
         readFlowQuery.addHandler { name -> respond { readFlow(name) } }
@@ -132,10 +139,12 @@ class A11WebView(private val project: Project, private val view: String, parent:
             A11Json.encodeToString(FlowEngine.instance().tokens(source) ?: mapOf("tokens" to emptyList<Any>()))
                 .valueOrThrow()
         } }
+        requestFlowLanguageQuery.addHandler { request -> respond { requestFlowLanguage(request) } }
         suggestOnHighlightQuery.addHandler { note -> respond { suggestOnHighlight(note) } }
         clearSuggestionsQuery.addHandler { path -> respond { clearSuggestions(path) } }
         frameRateQuery.addHandler { measured -> respond {
-            adaptFrameRate(measured.toDoubleOrNull() ?: 0.0)
+            val javascript = measured.toDoubleOrNull() ?: 0.0
+            adaptFrameRate(paintCadence.finish() ?: javascript, javascript)
             "{}"
         } }
 
@@ -221,12 +230,12 @@ class A11WebView(private val project: Project, private val view: String, parent:
         }
     }
 
-    /** Compensate when remote JCEF delivers fewer animation frames than asked. */
-    private fun adaptFrameRate(measured: Double) {
+    /** Compensate when remote JCEF delivers fewer painted frames than asked. */
+    private fun adaptFrameRate(measured: Double, javascript: Double) {
         if (measured <= 0.0 || desiredFrameRate <= 0) return
         log.info(
-            "A11 JCEF cadence: %.1ffps measured, %dfps display, %dfps requested"
-                .format(measured, desiredFrameRate, pushedFrameRate),
+            "A11 JCEF cadence: %.1ffps painted, %.1ffps JavaScript, %dfps display, %dfps requested"
+                .format(measured, javascript, desiredFrameRate, pushedFrameRate),
         )
         if (measured >= desiredFrameRate * 0.85 || frameRateAdjustments >= 2) return
         val corrected = ceil(pushedFrameRate * desiredFrameRate / measured)
@@ -242,6 +251,7 @@ class A11WebView(private val project: Project, private val view: String, parent:
     }
 
     private fun measureFrameRate() {
+        paintCadence.begin()
         browser.cefBrowser.executeJavaScript(
             "window.__A11_MEASURE_FPS && window.__A11_MEASURE_FPS();",
             browser.cefBrowser.url,
@@ -275,6 +285,48 @@ class A11WebView(private val project: Project, private val view: String, parent:
         val inputs = (parsed["inputs"] as? Map<String, Any?>) ?: emptyMap()
         val result = ideTools.runByName(name, inputs)
         return A11Json.encodeToString(result).valueOrThrow()
+    }
+
+    private fun hello(): String = A11Json.encodeToString(
+        linkedMapOf<String, Any?>(
+            "protocol" to "a11.ide-webview/v1",
+            "host" to "intellij",
+            "capabilities" to linkedMapOf(
+                "flowLanguage" to FlowEngine.instance().available,
+                "incrementalActions" to true,
+                "typedValues" to true,
+            ),
+        ),
+    ).valueOrThrow()
+
+    /** Forward the framework-neutral editor controller to the one native Flow service. */
+    private fun requestFlowLanguage(encoded: String): String {
+        @Suppress("UNCHECKED_CAST")
+        val request = A11Json.parse(encoded).valueOrThrow() as? Map<String, Any?>
+            ?: error("A Flow language request must be a JSON object.")
+        val method = request["method"] as? String ?: error("A Flow language request needs a method.")
+        val source = request["source"] as? String ?: ""
+        val offset = (request["offset"] as? Number)?.toInt() ?: 0
+        val engine = FlowEngine.instance()
+        val result = when (method) {
+            "check" -> engine.check(source)
+            "complete" -> engine.complete(source, offset)
+            "definition" -> engine.definition(source, offset)
+            "describe" -> engine.describe(source, offset)
+            "format" -> engine.format(source)
+            "symbols" -> engine.symbols(source)
+            "tokens" -> engine.tokens(source)
+            else -> error("Unsupported Flow language method '$method'.")
+        }
+        val reply = if (result == null) {
+            linkedMapOf<String, Any?>(
+                "ok" to false,
+                "error" to linkedMapOf("message" to "The native Flow language service is unavailable."),
+            )
+        } else {
+            linkedMapOf<String, Any?>("ok" to true, "result" to result)
+        }
+        return A11Json.encodeToString(reply).valueOrThrow()
     }
 
     /**
@@ -419,6 +471,9 @@ class A11WebView(private val project: Project, private val view: String, parent:
         )
         return """
             window.__a11Bridge = {
+              hello: function() {
+                return new Promise(function(resolve, reject) { var arg = ""; ${wrap(helloQuery)} });
+              },
               listActions: function() {
                 return new Promise(function(resolve, reject) { var arg = ""; ${wrap(listActionsQuery)} });
               },
@@ -434,6 +489,9 @@ class A11WebView(private val project: Project, private val view: String, parent:
               highlightFlow: function(source) {
                 return new Promise(function(resolve, reject) { var arg = String(source); ${wrap(highlightFlowQuery)} });
               },
+              requestFlowLanguage: function(request) {
+                return new Promise(function(resolve, reject) { var arg = JSON.stringify(request); ${wrap(requestFlowLanguageQuery)} });
+              },
               suggestOnHighlight: function(note) {
                 return new Promise(function(resolve, reject) { var arg = JSON.stringify(note); ${wrap(suggestOnHighlightQuery)} });
               },
@@ -444,13 +502,19 @@ class A11WebView(private val project: Project, private val view: String, parent:
             window.__A11_MEASURE_FPS = function() {
               var frames = 0;
               var started = 0;
+              var probe = document.createElement("span");
+              probe.setAttribute("aria-hidden", "true");
+              probe.style.cssText = "position:fixed;right:0;bottom:0;width:1px;height:1px;background:currentColor;opacity:.01;pointer-events:none";
+              document.body.appendChild(probe);
               function frame(now) {
                 if (!started) started = now;
                 frames += 1;
+                probe.style.transform = "translateX(" + (frames % 2) + "px)";
                 if (now - started < 1000) {
                   requestAnimationFrame(frame);
                   return;
                 }
+                probe.remove();
                 var fps = frames * 1000 / (now - started);
                 $reportFrameRate
               }
@@ -463,61 +527,41 @@ class A11WebView(private val project: Project, private val view: String, parent:
 
     /** Map the current IDE look-and-feel onto the page's CSS variables. */
     private fun themeVars(): String {
-        val bg = UIUtil.getPanelBackground()
-        val fg = UIUtil.getLabelForeground()
-        val bgAlt = UIUtil.getTextFieldBackground()
-        // JSON highlighting in the action explorer follows the editor's scheme,
-        // so a hand-typed value is colored like the same JSON would be in an
-        // editor.
-        val scheme = EditorColorsManager.getInstance().globalScheme
-        fun syntax(key: TextAttributesKey, fallback: Color): Color =
-            scheme.getAttributes(key)?.foregroundColor ?: fallback
-        val border = UIManager.getColor("Component.borderColor") ?: JBColor.border()
-        val accent = UIManager.getColor("Component.focusColor")
-            ?: UIManager.getColor("ProgressBar.progressColor")
-            ?: JBColor(Color(0x3574F0), Color(0x3574F0))
-        val vars = linkedMapOf(
-            "--a11-bg" to bg,
-            "--a11-bg-alt" to bgAlt,
-            "--a11-fg" to fg,
-            "--a11-muted" to JBColor.GRAY,
-            "--a11-border" to border,
-            "--a11-accent" to accent,
-            "--a11-accent-fg" to contrastingFg(accent),
-            "--a11-assistant-bg" to bgAlt,
-            "--a11-user-bg" to blend(accent, bg, 0.72),
-            "--a11-json-key" to syntax(DefaultLanguageHighlighterColors.INSTANCE_FIELD, fg),
-            "--a11-json-string" to syntax(DefaultLanguageHighlighterColors.STRING, fg),
-            "--a11-json-number" to syntax(DefaultLanguageHighlighterColors.NUMBER, fg),
-            "--a11-json-keyword" to syntax(DefaultLanguageHighlighterColors.KEYWORD, fg),
-        )
-        val colors = vars.entries.joinToString("\n      ") { (name, color) -> "$name: ${hex(color)};" }
         val schemeName = if (UIUtil.isUnderDarcula()) "dark" else "light"
-        return "color-scheme: $schemeName;\n      --a11-color-scheme: $schemeName;\n      $colors"
+        return "color-scheme: $schemeName;\n      --a11-color-scheme: $schemeName;\n" +
+            "      --a11-host-bg: ${hex(UIUtil.getPanelBackground())};"
     }
 
     private fun hex(color: Color): String = "#%02x%02x%02x".format(color.red, color.green, color.blue)
 
-    /**
-     * Text colour with sufficient contrast against [background].
-     * [JBColor.WHITE] is a theme pair and resolves to near-black in dark mode,
-     * while the accent background remains blue in both themes.
-     */
-    private fun contrastingFg(background: Color): Color {
-        val luma = (0.299 * background.red + 0.587 * background.green + 0.114 * background.blue) / 255.0
-        return if (luma > 0.6) Color(0x1E, 0x1F, 0x22) else Color.WHITE
-    }
-
-    /** Mix [a] into [b] by [towardB] in [0,1] (0 = all a, 1 = all b). */
-    private fun blend(a: Color, b: Color, towardB: Double): Color {
-        val t = towardB.coerceIn(0.0, 1.0)
-        fun mix(x: Int, y: Int) = (x * (1 - t) + y * t).toInt().coerceIn(0, 255)
-        return Color(mix(a.red, b.red), mix(a.green, b.green), mix(a.blue, b.blue))
-    }
-
     private fun readResource(path: String): String =
         javaClass.getResourceAsStream(path)?.use { it.readBytes().toString(Charsets.UTF_8) }
             ?: error("Missing plugin resource $path; run the webview build (see README).")
+
+    /** Counts frames that reached JCEF's off-screen paint handler, not merely rAF callbacks. */
+    private class PaintCadence {
+        private val frames = AtomicInteger()
+        @Volatile private var startedAt = 0L
+        @Volatile private var measuring = false
+
+        fun begin() {
+            frames.set(0)
+            startedAt = System.nanoTime()
+            measuring = true
+        }
+
+        fun painted() {
+            if (measuring) frames.incrementAndGet()
+        }
+
+        fun finish(): Double? {
+            if (!measuring) return null
+            measuring = false
+            val elapsed = System.nanoTime() - startedAt
+            if (elapsed <= 0) return null
+            return frames.get() * 1_000_000_000.0 / elapsed
+        }
+    }
 
     private companion object {
         const val ERROR_CODE = 1
@@ -617,10 +661,38 @@ class A11WebView(private val project: Project, private val view: String, parent:
          * 243). Older IDEs may raise [LinkageError]; browser creation continues
          * with the default frame rate.
          */
-        private fun newBrowser(): JBCefBrowser {
+        private fun newBrowser(cadence: PaintCadence): JBCefBrowser {
             val builder = JBCefBrowser.createBuilder()
             try {
                 builder.setWindowlessFramerate(frameRateOf(null))
+                builder.setOSRHandlerFactory(object : JBCefOSRHandlerFactory {
+                    override fun createCefRenderHandler(component: JComponent): CefRenderHandler {
+                        val delegate = JBCefOSRHandlerFactory.getInstance().createCefRenderHandler(component)
+                        return object : CefRenderHandler by delegate {
+                            override fun onPaint(
+                                browser: CefBrowser,
+                                popup: Boolean,
+                                dirtyRects: Array<Rectangle>,
+                                buffer: ByteBuffer,
+                                width: Int,
+                                height: Int,
+                            ) {
+                                cadence.painted()
+                                delegate.onPaint(browser, popup, dirtyRects, buffer, width, height)
+                            }
+
+                            override fun onAcceleratedPaint(
+                                browser: CefBrowser,
+                                popup: Boolean,
+                                dirtyRects: Array<Rectangle>,
+                                info: CefAcceleratedPaintInfo,
+                            ) {
+                                cadence.painted()
+                                delegate.onAcceleratedPaint(browser, popup, dirtyRects, info)
+                            }
+                        }
+                    }
+                })
             } catch (error: LinkageError) {
                 thisLogger().debug("JCEF windowless frame rate is not settable here", error)
             }

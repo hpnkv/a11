@@ -187,7 +187,7 @@ test('run_flow has a dedicated source preview without duplicating it in inputs',
   const preview = host.querySelector<HTMLElement>('.flow-preview');
   assert.equal(preview?.textContent, source);
   assert.ok(host.querySelector('.tool-run.flow-run'));
-  assert.match(host.querySelector('.tool-run-name')?.textContent ?? '', /Running A11 Flow/);
+  assert.equal(host.querySelector('.tool-run-name')?.textContent, 'run_flow');
   const inputs = host.querySelector<HTMLElement>('.tool-detail-section');
   assert.match(inputs?.textContent ?? '', /timeout_seconds/);
   assert.doesNotMatch(inputs?.textContent ?? '', /flow inspect/);
@@ -200,6 +200,25 @@ test('assistant fenced code receives token-level syntax highlighting', () => {
   bubble.finish();
   assert.ok(host.querySelector('code.language-python.hljs'));
   assert.match(host.querySelector('code')?.innerHTML ?? '', /hljs-keyword/);
+});
+
+test('assistant Flow fences use Studio semantic token roles', () => {
+  const host = document.createElement('div');
+  const bubble = new AssistantBubble(host, () => {});
+  bubble.appendToken('```flow\nflow ask {\n  in question: string\n}\n```');
+  bubble.finish();
+  assert.ok(host.querySelector('code.language-flow.hljs'));
+  assert.equal(host.querySelector('.flow-token-keyword')?.textContent, 'flow');
+  assert.equal(host.querySelector('.flow-token-type')?.textContent, 'string');
+});
+
+test('unlabelled Flow fences from native run logs use Studio semantic tokens', () => {
+  const host = document.createElement('div');
+  const bubble = new AssistantBubble(host, () => {});
+  bubble.appendToken('```\nflow ask {\n  in question: string\n}\n```');
+  bubble.finish();
+  assert.equal(host.querySelector('.flow-token-keyword')?.textContent, 'flow');
+  assert.equal(host.querySelector('.flow-token-type')?.textContent, 'string');
 });
 
 test('assistant fenced code without a language is highlighted automatically', () => {

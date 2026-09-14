@@ -47,18 +47,28 @@ import {
     ActionSchema,
     BlockKind,
     INTERACT_WITH_LLM_SCHEMA,
+    LIST_ACTIONS_NAME,
     LlmHeaders,
     Session,
     StatusCode,
     StreamMode,
     WebSocketWireStream,
     getToolDefinitions,
+    getBuiltinAction,
     isOk,
+    isStatusChunk,
+    logRecordFromChunk,
+    logText,
     makeTextMessageInteraction,
     presentInteraction,
+    schemaDocument,
+    schemaFromJson,
+    schemasInDocument,
     toolStatuses,
     type Interaction,
     type LogRecord,
+    type SchemaDocument,
+    type SchemaEntry,
     type Status,
     type WireStream,
 } from '@curiositystack/a11';
@@ -192,6 +202,15 @@ export interface GatewayConnectionNotice {
     message?: string;
 }
 
+/** Live events from one action call, in the same shape the shared run model consumes. */
+export interface GatewayActionCallbacks {
+    onStage?(stage: string): void;
+    onOutput?(port: string, value: unknown, mimetype: string): void;
+    onLog?(text: string, record: LogRecord): void;
+    onDispatchStatus?(at: number): void;
+    onStatus?(at: number): void;
+}
+
 const RECONNECT_MILLIS = 5_000;
 
 export class A11ChatSession {
@@ -205,6 +224,10 @@ export class A11ChatSession {
     private connectionState: GatewayConnectionState | null = null;
     /** The remote chat action currently producing a turn. */
     private activeCall: Action | null = null;
+    /** The remote action currently producing an Actions-workspace run. */
+    private activeWorkspaceCall: Action | null = null;
+    /** The flow_run call currently owned by the Flow Runner workspace. */
+    private activeFlowCall: Action | null = null;
     /** Set only when the user stopped the active turn. */
     private interrupted = false;
     private activeQuestion: Interaction | null = null;
@@ -397,6 +420,112 @@ export class A11ChatSession {
         return interactions;
     }
 
+    /** Discover the complete runnable gateway catalogue through A11's builtin. */
+    async listGatewayActions(): Promise<SchemaDocument> {
+        await this.ensureConnected();
+        return this.gatewayOperation(async () => {
+            const builtin = getBuiltinAction(LIST_ACTIONS_NAME);
+            if (!builtin) throw new Error('The A11 action-discovery builtin is unavailable.');
+            const call = need(Action.create(builtin.schema, {
+                session: this.session!, stream: this.stream!, nodeMap: this.session!.getNodeMap(),
+            }));
+            need(await call.call());
+            const request = need(await call.getInput('request'));
+            need(await request.finalize({ports: 'all', runnable_only: true}));
+            const output = need(await call.getOutput('actions', false));
+            const value = need(await output.consume({timeoutMs: 30_000, allowNone: false}));
+            need(await call.wait(30_000));
+            const entries = need(schemasInDocument(value));
+            return schemaDocument(entries);
+        });
+    }
+
+    /** Run a discovered gateway action while exposing output and log streams live. */
+    async runGatewayAction(
+        entry: SchemaEntry,
+        inputs: Readonly<Record<string, unknown>>,
+        headers: Readonly<Record<string, string>>,
+        callbacks: GatewayActionCallbacks,
+    ): Promise<void> {
+        await this.ensureConnected();
+        await this.gatewayOperation(async () => {
+            const schema = need(schemaFromJson(entry));
+            const call = need(Action.create(schema, {
+                session: this.session!, stream: this.stream!, nodeMap: this.session!.getNodeMap(),
+            }));
+            this.activeWorkspaceCall = call;
+            try {
+                for (const [name, value] of Object.entries(headers)) {
+                    if (value) need(call.setHeader(name, value));
+                }
+                callbacks.onStage?.('dispatching');
+                need(await call.call());
+                callbacks.onDispatchStatus?.(Date.now());
+                callbacks.onStage?.('working');
+
+                const outputTasks = (entry.outputs ?? []).map(async (port) => {
+                    const node = need(await call.getOutput(port.name, false));
+                    for (;;) {
+                        const chunk = need(await node.nextChunk(600_000));
+                        if (chunk === null) break;
+                        if (isStatusChunk(chunk)) continue;
+                        const value = need(await node.serializationRegistry.fromChunk(
+                            chunk,
+                            port.type ? [port.type] : undefined,
+                        ));
+                        callbacks.onOutput?.(
+                            port.name,
+                            value,
+                            chunk.metadata?.mimetype || port.type || '',
+                        );
+                    }
+                });
+                for (const task of outputTasks) task.catch(() => undefined);
+
+                const logging = (async () => {
+                    const node = need(await call.getLogNode());
+                    for (;;) {
+                        const chunk = need(await node.nextChunk(600_000));
+                        if (chunk === null) break;
+                        if (isStatusChunk(chunk)) continue;
+                        const record = logRecordFromChunk(chunk, entry.name, call.getId());
+                        if (!record.internal) callbacks.onLog?.(logText(record), record);
+                    }
+                })();
+                logging.catch(() => undefined);
+
+                for (const port of entry.inputs ?? []) {
+                    const node = need(await call.getInput(port.name));
+                    const held = inputs[port.name];
+                    if (port.unary === false) {
+                        const values = Array.isArray(held) ? held : held === undefined ? [] : [held];
+                        for (const value of values) {
+                            need(await node.put(value, {mimetype: port.type || ''}));
+                        }
+                        need(await node.finalize());
+                    } else {
+                        need(await node.finalize(held, held === undefined ? {} : {mimetype: port.type || ''}));
+                    }
+                }
+
+                need(await call.wait(600_000));
+                callbacks.onStatus?.(Date.now());
+                callbacks.onStage?.('draining');
+                await Promise.all(outputTasks);
+                await logging;
+            } finally {
+                if (this.activeWorkspaceCall === call) this.activeWorkspaceCall = null;
+            }
+        });
+    }
+
+    /** Cancel the action currently running in the Actions workspace. */
+    cancelGatewayAction(): boolean {
+        if (!this.activeWorkspaceCall) return false;
+        need(this.activeWorkspaceCall.cancel());
+        return true;
+    }
+
     async respondUserInput(requestId: string, answer: string): Promise<void> {
         await this.ensureConnected();
         await this.gatewayOperation(async () => {
@@ -492,21 +621,32 @@ export class A11ChatSession {
         onLog?: (log: string, record: LogRecord) => void,
     ): Promise<Record<string, unknown>> {
         await this.ensureConnected();
-        return this.gatewayOperation(() => runFlow(this.session!, this.stream!, {
-            source,
-            flow,
-            inputs,
-            inputMimetypes,
-            headers: {
-                [LlmHeaders.PROVIDER]: this.config.provider,
-                [LlmHeaders.MODEL]: this.config.model,
-                [LlmHeaders.API_KEY]: this.config.apiKey,
-                [LlmHeaders.BASE_URL]: this.config.baseUrl,
-                ...headers,
-            },
-            outputs,
-            onLog,
-        }));
+        try {
+            return await this.gatewayOperation(() => runFlow(this.session!, this.stream!, {
+                source,
+                flow,
+                inputs,
+                inputMimetypes,
+                headers: {
+                    [LlmHeaders.PROVIDER]: this.config.provider,
+                    [LlmHeaders.MODEL]: this.config.model,
+                    [LlmHeaders.API_KEY]: this.config.apiKey,
+                    [LlmHeaders.BASE_URL]: this.config.baseUrl,
+                    ...headers,
+                },
+                outputs,
+                onLog,
+                onAction: (call) => { this.activeFlowCall = call; },
+            }));
+        } finally {
+            this.activeFlowCall = null;
+        }
+    }
+
+    cancelFlow(): boolean {
+        if (!this.activeFlowCall) return false;
+        need(this.activeFlowCall.cancel());
+        return true;
     }
 
     /**
@@ -770,6 +910,10 @@ export class A11ChatSession {
         this.reconnectTimer = null;
         this.activeCall?.cancel();
         this.activeCall = null;
+        this.activeWorkspaceCall?.cancel();
+        this.activeWorkspaceCall = null;
+        this.activeFlowCall?.cancel();
+        this.activeFlowCall = null;
         try {
             this.session?.halfClose();
         } catch {

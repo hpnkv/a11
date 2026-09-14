@@ -400,8 +400,9 @@ def _research_reply(asked: str) -> list[ollama.ChatResponse]:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("api_key", [demos.DEMO_API_KEY_PLACEHOLDER, None])
 async def test_deep_research_plans_investigates_and_synthesises(
-    peer, fake_ollama, monkeypatch: pytest.MonkeyPatch
+    peer, fake_ollama, monkeypatch: pytest.MonkeyPatch, api_key: str | None
 ):
     """The whole composition, over a wire, as the page dispatches it."""
     monkeypatch.setenv(demos.DEMO_API_KEY_ENV, "real-test-key")
@@ -421,9 +422,8 @@ async def test_deep_research_plans_investigates_and_synthesises(
     # headers -- which is why the flow says nothing about providers at all.
     research.set_header(LlmHeaders.PROVIDER.value, b"ollama")
     research.set_header(LlmHeaders.MODEL.value, demos.DEMO_ALLOWED_MODEL)
-    research.set_header(
-        LlmHeaders.API_KEY.value, demos.DEMO_API_KEY_PLACEHOLDER
-    )
+    if api_key is not None:
+        research.set_header(LlmHeaders.API_KEY.value, api_key)
     # Claimed before the call, which is when the port has to be held: a log
     # written before anything reads it goes to the process sink and is gone.
     # The composition narrates itself *here* and on no output port, which is
@@ -471,10 +471,11 @@ async def test_deep_research_plans_investigates_and_synthesises(
 
     # One model call to plan, one per brief, one to synthesise.
     assert len(fake.prompts) == 4
-    assert all(
-        options["num_predict"] == demos.DEMO_MAX_OUTPUT_TOKENS
-        for options in fake.options
-    )
+    if api_key == demos.DEMO_API_KEY_PLACEHOLDER:
+        assert all(
+            options["num_predict"] == demos.DEMO_MAX_OUTPUT_TOKENS
+            for options in fake.options
+        )
     # And the synthesis saw both investigations' findings, which is the only
     # place in the composition where anything waits for anything.
     synthesis = [p for p in fake.prompts if "investigations found" in p]

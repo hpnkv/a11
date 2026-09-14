@@ -62,7 +62,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       context,
       view,
       suggestions,
-      (source) => flow.highlight(source),
+      (request) => flow.request(request),
       gateway,
     );
     views.set(view, provider);
@@ -154,14 +154,19 @@ class FlowSupport implements vscode.Disposable {
     return this.server;
   }
 
-  /** Native semantic tokens for Flow source embedded in the chat UI. */
-  async highlight(source: string): Promise<string> {
-    const answer = await this.server?.request({
-      method: 'tokens',
-      source,
-      offsets: 'utf16',
-    }) as {result?: unknown} | undefined;
-    return JSON.stringify(answer?.result ?? {tokens: []});
+  /** One native request for Flow editor and embedded-source surfaces. */
+  async request(request: Record<string, unknown>): Promise<string> {
+    if (!this.server) {
+      return JSON.stringify({
+        ok: false,
+        error: {message: 'The native Flow language service is unavailable.'},
+      });
+    }
+    const answer = await this.server.request(request);
+    return JSON.stringify(answer ?? {
+      ok: false,
+      error: {message: 'The native Flow language service stopped before it answered.'},
+    });
   }
 
   /**

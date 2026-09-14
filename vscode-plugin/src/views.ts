@@ -39,13 +39,15 @@ import {listDescriptors, runByName} from './tools/index.js';
 import type {RunnableFlow} from './flowDeclarations.js';
 import type {GatewayConnection} from './gateway.js';
 
-/** What the page may ask for. The shared bridge's six methods, and nothing else. */
+/** What the page may ask for. This is the complete versioned shared bridge. */
 type Method =
+  | 'hello'
   | 'listActions'
   | 'runAction'
   | 'getConfig'
   | 'readFlow'
   | 'highlightFlow'
+  | 'requestFlowLanguage'
   | 'suggestOnHighlight'
   | 'clearSuggestions';
 
@@ -75,7 +77,7 @@ export class A11ViewProvider implements vscode.WebviewViewProvider {
     private readonly context: vscode.ExtensionContext,
     private readonly view: 'chat' | 'actions' | 'runner',
     private readonly suggestions: Suggestions,
-    private readonly flowTokens: (source: string) => Promise<string>,
+    private readonly flowRequest: (request: Record<string, unknown>) => Promise<string>,
     private readonly gateway: GatewayConnection,
   ) {}
 
@@ -152,6 +154,12 @@ export class A11ViewProvider implements vscode.WebviewViewProvider {
       this.gateway.ensureConnected();
     }
     switch (call.method) {
+      case 'hello':
+        return JSON.stringify({
+          protocol: 'a11.ide-webview/v1',
+          host: 'vscode',
+          capabilities: {flowLanguage: true, incrementalActions: true, typedValues: true},
+        });
       case 'listActions':
         return JSON.stringify(listDescriptors());
       case 'runAction': {
@@ -166,7 +174,13 @@ export class A11ViewProvider implements vscode.WebviewViewProvider {
       }
       case 'highlightFlow': {
         const [source] = call.args as [string];
-        return this.flowTokens(source);
+        const encoded = await this.flowRequest({method: 'tokens', source, offsets: 'utf16'});
+        const answer = JSON.parse(encoded) as {result?: unknown};
+        return JSON.stringify(answer.result ?? {tokens: []});
+      }
+      case 'requestFlowLanguage': {
+        const [request] = call.args as [Record<string, unknown>];
+        return this.flowRequest(request);
       }
       case 'suggestOnHighlight': {
         const [note] = call.args as [HighlightNote];
@@ -235,23 +249,10 @@ export class A11ViewProvider implements vscode.WebviewViewProvider {
 /**
  * This editor's colours, in the variables the shared stylesheet reads.
  *
- * Mapped rather than hard-coded so the panel follows the user's theme, including
- * a light one: every value is a `--vscode-*` variable the webview host defines.
+ * The shared renderer owns Studio's complete visual system. The host supplies
+ * only its canvas colour; VS Code's body class supplies light versus dark.
  */
 const THEME_VARS = `
       color-scheme: light dark;
-      --a11-bg: var(--vscode-sideBar-background);
-      --a11-bg-alt: var(--vscode-editor-background);
-      --a11-fg: var(--vscode-foreground);
-      --a11-muted: var(--vscode-descriptionForeground);
-      --a11-border: var(--vscode-panel-border, var(--vscode-editorWidget-border));
-      --a11-accent: var(--vscode-button-background);
-      --a11-accent-fg: var(--vscode-button-foreground);
-      --a11-user-bg: var(--vscode-editorWidget-background);
-      --a11-assistant-bg: var(--vscode-editor-inactiveSelectionBackground);
-      --a11-error: var(--vscode-errorForeground);
-      --a11-json-key: var(--vscode-symbolIcon-propertyForeground);
-      --a11-json-string: var(--vscode-debugTokenExpression-string);
-      --a11-json-number: var(--vscode-debugTokenExpression-number);
-      --a11-json-keyword: var(--vscode-debugTokenExpression-boolean);
+      --a11-host-bg: var(--vscode-sideBar-background);
 `;

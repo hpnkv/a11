@@ -90,6 +90,7 @@ from absl import logging
 
 import a11
 from a11 import flow, net
+from a11.actions import NativeActionHandler
 from a11.cli import backends
 from a11.cli.commands import serve as serve_command
 from a11.demos import echo_server, split_lines
@@ -377,7 +378,8 @@ async def _run_bounded_llm_handler(
 
 
 async def _run_bounded_composition(
-    action: a11.Action, handler: a11.ActionHandler
+    action: a11.Action,
+    handler: a11.ActionHandler | NativeActionHandler,
 ) -> None:
     """Run a public composition while bounding its caller-owned text."""
     await _run_handler_with_pumps(
@@ -407,7 +409,7 @@ def _extract_ip(stream: net.WireStream) -> str:
 
 
 def _wrap_llm_handler(
-    handler: a11.ActionHandler,
+    handler: a11.ActionHandler | NativeActionHandler,
     ip: str,
     fingerprint: str,
 ) -> a11.ActionHandler:
@@ -488,6 +490,8 @@ def _wrap_llm_handler(
                 validate_input=not quota_charged,
             )
 
+        if isinstance(handler, NativeActionHandler):
+            return await _run_bounded_composition(action, handler)
         return await handler(action)
 
     return _inner
@@ -648,9 +652,8 @@ def make_service(registry: a11.ActionRegistry) -> Service:
 
         # Wrap every LLM-enabled Python handler with the demo-key proxy
         # and rate limiter, bound to this connection's identity.
-        # NativeActionHandlers (flow-compiled compositions) are not wrapped
-        # directly: they call `ask_model` internally, which is a Python
-        # handler and gets its own wrapper.
+        # NativeActionHandlers are rebound to a nested Action by the wrapper;
+        # the opaque handle itself is never called by Python.
         ip = _extract_ip(stream)
         fingerprint = _extract_fingerprint(stream)
         for action_name in _LLM_ACTION_NAMES:

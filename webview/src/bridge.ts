@@ -109,13 +109,25 @@ export interface HighlightNote {
  * channel is serialised anyway. Parsing happens once, in the wrappers below.
  */
 export interface HostBridge {
+  hello(): Promise<string>;
   listActions(): Promise<string>;
   runAction(name: string, inputs: unknown): Promise<string>;
   getConfig(): Promise<string>;
   readFlow(name: string): Promise<string>;
   highlightFlow(source: string): Promise<string>;
+  requestFlowLanguage(request: unknown): Promise<string>;
   suggestOnHighlight(note: HighlightNote): Promise<string>;
   clearSuggestions(path: string): Promise<string>;
+}
+
+export interface HostCapabilities {
+  protocol: 'a11.ide-webview/v1';
+  host: string;
+  capabilities: {
+    flowLanguage: boolean;
+    incrementalActions: boolean;
+    typedValues: boolean;
+  };
 }
 
 declare global {
@@ -143,6 +155,11 @@ let installed: HostBridge | undefined;
  */
 export function setHost(bridge: HostBridge): void {
   installed = bridge;
+}
+
+/** Versioned host capabilities; unavailable features remain explicit. */
+export async function hello(): Promise<HostCapabilities> {
+  return JSON.parse(await raw().hello()) as HostCapabilities;
 }
 
 function raw(): HostBridge {
@@ -190,6 +207,11 @@ export async function highlightFlow(
     tokens?: Array<{start: number; end: number; kind: string}>;
   };
   return answer.tokens ?? [];
+}
+
+/** One native Flow-language request, preserving the service's versioned envelope. */
+export async function requestFlowLanguage(request: unknown): Promise<unknown> {
+  return JSON.parse(await raw().requestFlowLanguage(request));
 }
 
 /**

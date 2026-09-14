@@ -42,6 +42,8 @@ export type View = 'chat' | 'actions' | 'runner';
  * that asks for one a surface does not have should do nothing rather than fail.
  */
 export interface MountedView {
+  /** Release controllers and transports owned by the mounted surface. */
+  dispose?: () => void;
   /** Start a fresh conversation. The chat has this; the explorer does not. */
   newChat?: () => void;
   /** Show the current declaration in the document-backed Flow runner. */

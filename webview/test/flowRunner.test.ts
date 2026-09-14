@@ -33,16 +33,49 @@ test('runner reconciles ports while retaining values for unchanged inputs', () =
   const root = document.createElement('main');
   const runner = new FlowRunnerView(root);
   runner.openFlow(flow(['query', 'limit']));
-  const editors = root.querySelectorAll('textarea');
+  const editors = root.querySelectorAll<HTMLTextAreaElement>('[data-kind]');
   editors[0].value = 'a11';
   editors[0].dispatchEvent(new Event('input'));
 
   runner.openFlow(flow(['query', 'path']));
 
   const labels = [...root.querySelectorAll('label')];
-  assert.deepEqual(labels.map((label) => label.textContent?.split(' · ')[0]), ['query', 'path']);
+  assert.deepEqual(labels.map((label) => label.querySelector('.runner-input-name')?.textContent), ['query', 'path']);
   assert.equal(labels[0].querySelector('textarea')?.value, 'a11');
   assert.equal(labels[0].querySelector('textarea')?.dataset.kind, 'text');
+});
+
+test('runner marks required inputs and does not start until they are provided', async () => {
+  const root = document.createElement('main');
+  const runner = new FlowRunnerView(root);
+  const spec = flow(['query']);
+  spec.ports[0]!.required = true;
+  runner.openFlow(spec);
+  let calls = 0;
+  const session = (runner as unknown as {
+    session: {runFlowSource: (...args: unknown[]) => Promise<Record<string, unknown>>};
+  }).session;
+  session.runFlowSource = async () => {
+    calls += 1;
+    return {};
+  };
+  const run = [...root.querySelectorAll<HTMLButtonElement>('button')]
+    .find((button) => button.textContent === 'Run Flow')!;
+
+  run.click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(calls, 0);
+  assert.equal(root.querySelector('.runner-input-required')?.textContent, 'required');
+  assert.match(root.querySelector('[role="alert"]')?.textContent ?? '', /query is required/);
+  assert.equal(root.querySelector('[data-kind]')?.getAttribute('aria-invalid'), 'true');
+
+  const editor = root.querySelector<HTMLTextAreaElement>('[data-kind]')!;
+  editor.value = 'hello';
+  editor.dispatchEvent(new Event('input'));
+  run.click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(calls, 1);
 });
 
 test('runner presents bytes as base64 text rather than JSON', () => {
@@ -52,7 +85,7 @@ test('runner presents bytes as base64 text rather than JSON', () => {
   spec.ports[0]!.type = 'bytes';
   runner.openFlow(spec);
 
-  const editor = root.querySelector<HTMLTextAreaElement>('textarea');
+  const editor = root.querySelector<HTMLTextAreaElement>('[data-kind]');
   assert.equal(editor?.dataset.kind, 'bytes');
   assert.match(editor?.placeholder ?? '', /base64 bytes/);
 });
@@ -75,7 +108,8 @@ test('runner writes strings as text and bytes as MessagePack', async () => {
     return {};
   };
 
-  root.querySelector<HTMLButtonElement>('button')!.click();
+  [...root.querySelectorAll<HTMLButtonElement>('button')]
+    .find((button) => button.textContent === 'Run Flow')!.click();
   await new Promise((resolve) => setTimeout(resolve, 0));
 
   const inputs = call?.[2] as Record<string, unknown[]>;

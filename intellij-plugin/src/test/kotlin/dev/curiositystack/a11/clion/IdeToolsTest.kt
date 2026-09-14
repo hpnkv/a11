@@ -40,7 +40,7 @@ class IdeToolsTest : BasePlatformTestCase() {
 
     fun testRegistryExposesExpectedTools() {
         val (registry, descriptors) = IdeTools(project).buildRegistry()
-        val names = registry.listRegisteredActions().toSet()
+        val names = registry.listRegisteredActions().filterNot { it.startsWith("__") }.toSet()
         assertTrue(
             names.containsAll(
                 setOf("get_active_file", "get_open_editors", "get_selection", "find_file", "search_project"),
@@ -53,7 +53,10 @@ class IdeToolsTest : BasePlatformTestCase() {
     fun testListDescriptorsMatchesRegistry() {
         val tools = IdeTools(project)
         val names = tools.listDescriptors().map { it["name"] as String }.toSet()
-        assertEquals(tools.buildRegistry().first.listRegisteredActions().toSet(), names)
+        val registered = tools.buildRegistry().first.listRegisteredActions()
+            .filterNot { it.startsWith("__") }
+            .toSet()
+        assertEquals(registered, names)
     }
 
     fun testArgumentTakingToolsDeclareASchemaTypedRequestPort() {

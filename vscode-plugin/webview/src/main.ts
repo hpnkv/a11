@@ -27,7 +27,7 @@
  * would be a shared abstraction over one case each.
  */
 
-import {setHost, type HostBridge, type HighlightNote} from '../../../webview/src/bridge.js';
+import {hello, setHost, type HostBridge, type HighlightNote} from '../../../webview/src/bridge.js';
 import {mount, mountFailure, viewOf, type MountedView} from '../../../webview/src/mount.js';
 import type {RunnableFlow} from '../../../webview/src/flowRunner.js';
 
@@ -100,17 +100,19 @@ function makeBridge(api: VsCodeApi, mounted: () => MountedView | undefined): Hos
     });
 
   return {
+    hello: () => call('hello'),
     listActions: () => call('listActions'),
     runAction: (name: string, inputs: unknown) => call('runAction', name, inputs),
     getConfig: () => call('getConfig'),
     readFlow: (name: string) => call('readFlow', name),
     highlightFlow: (source: string) => call('highlightFlow', source),
+    requestFlowLanguage: (request: unknown) => call('requestFlowLanguage', request),
     suggestOnHighlight: (note: HighlightNote) => call('suggestOnHighlight', note),
     clearSuggestions: (path: string) => call('clearSuggestions', path),
   };
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const root = document.getElementById('app');
   if (!root) return;
   // The handle is read through a closure rather than passed in, because the
@@ -121,16 +123,19 @@ function main(): void {
   try {
     api = acquireVsCodeApi();
     setHost(makeBridge(api, () => mounted));
+    const host = await hello();
+    if (host.protocol !== 'a11.ide-webview/v1') throw new Error('The A11 IDE bridge is incompatible.');
   } catch (error) {
     mountFailure(root, error);
     return;
   }
   mounted = mount(root, viewOf(window.__A11_VIEW));
+  window.addEventListener('pagehide', () => mounted?.dispose?.(), {once: true});
   api.postMessage({command: 'ready'});
 }
 
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', main);
+  document.addEventListener('DOMContentLoaded', () => void main());
 } else {
-  main();
+  void main();
 }

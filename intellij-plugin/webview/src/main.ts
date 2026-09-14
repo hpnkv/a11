@@ -29,7 +29,7 @@
  * asks for, which is why that shape is the one it asks for.
  */
 
-import { setHost, type HostBridge } from '../../../webview/src/bridge.js';
+import { hello, setHost, type HostBridge } from '../../../webview/src/bridge.js';
 import { mount, mountFailure, viewOf } from '../../../webview/src/mount.js';
 
 /**
@@ -60,11 +60,14 @@ async function main(): Promise<void> {
   if (!root) return;
   try {
     setHost(await waitForBridge());
+    const host = await hello();
+    if (host.protocol !== 'a11.ide-webview/v1') throw new Error('The A11 IDE bridge is incompatible.');
   } catch (error) {
     mountFailure(root, error);
     return;
   }
   const mounted = mount(root, viewOf(window.__A11_VIEW));
+  window.addEventListener('pagehide', () => mounted.dispose?.(), {once: true});
   window.__A11_OPEN_FLOW = (flow) => mounted.openFlow?.(flow);
 }
 

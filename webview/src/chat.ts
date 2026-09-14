@@ -50,6 +50,7 @@ import {
   type Interaction,
 } from '@curiositystack/a11';
 import type { ToolActivity } from './ideTools.js';
+import {describeChatTool, FollowTailController} from '@curiositystack/a11/presentation';
 
 /** How far from the bottom still counts as "following the stream". */
 const NEAR_BOTTOM_PX = 48;
@@ -87,32 +88,6 @@ function completionSection(title: string, value: string): HTMLElement {
   return section;
 }
 
-/** Compact call arguments for a collapsed tool card. */
-function toolInputPreview(inputs: Record<string, unknown> | undefined): string {
-  if (!inputs || Object.keys(inputs).length === 0) return '';
-  return Object.entries(inputs)
-    .slice(0, 4)
-    .map(([name, value]) => `${name}: ${boundedValue(value)}`)
-    .join(' · ')
-    .slice(0, 320);
-}
-
-function boundedValue(value: unknown): string {
-  if (value instanceof Uint8Array) return `<${value.byteLength} bytes>`;
-  if (typeof value === 'string') {
-    return JSON.stringify(value.length > 100 ? `${value.slice(0, 97)}…` : value);
-  }
-  if (value === null || typeof value !== 'object') return String(value);
-  try {
-    const text = JSON.stringify(value, (_key, nested) =>
-      nested instanceof Uint8Array ? `<${nested.byteLength} bytes>` : nested,
-    );
-    return text.length > 120 ? `${text.slice(0, 117)}…` : text;
-  } catch {
-    return String(value);
-  }
-}
-
 /** One expandable Inputs, Outputs, or Logs section in a tool card. */
 function toolDetailSection(
   label: string,
@@ -135,6 +110,24 @@ function toolDetailSection(
   }
   section.append(heading, content);
   return section;
+}
+
+function toolIcon(): SVGElement {
+  const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  icon.classList.add('tool-run-icon');
+  icon.setAttribute('viewBox', '0 0 24 24');
+  icon.setAttribute('width', '13');
+  icon.setAttribute('height', '13');
+  icon.setAttribute('aria-hidden', 'true');
+  icon.setAttribute('fill', 'none');
+  icon.setAttribute('stroke', 'currentColor');
+  icon.setAttribute('stroke-width', '2');
+  icon.setAttribute('stroke-linecap', 'round');
+  icon.setAttribute('stroke-linejoin', 'round');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', 'M14.7 6.3a4 4 0 0 0-5-5L7 4l3 3 2.7-2.7a4 4 0 0 0 5 5L7.6 19.4a2 2 0 0 1-3-3Z');
+  icon.append(path);
+  return icon;
 }
 
 /**
@@ -179,7 +172,9 @@ export class AssistantBubble {
     body: HTMLDivElement;
     activity?: ToolActivity;
     state?: HTMLSpanElement;
+    heading?: HTMLSpanElement;
     preview?: HTMLElement;
+    failurePreview?: HTMLElement;
     completionState?: HTMLSpanElement;
     requestState?: HTMLSpanElement;
     requestTitle?: HTMLElement;
@@ -347,19 +342,26 @@ export class AssistantBubble {
     const box = document.createElement('details');
     box.className = 'tool-run';
     const head = document.createElement('summary');
+    const icon = toolIcon();
+    const heading = document.createElement('span');
+    heading.className = 'tool-run-heading';
+    const headingRow = document.createElement('span');
+    headingRow.className = 'tool-run-heading-row';
     const label = document.createElement('span');
     label.className = 'tool-run-name';
-    label.textContent = run.tool === 'run_flow' ? 'A11 Flow' : run.tool;
+    label.textContent = run.tool || 'Action';
     const text = document.createElement('span');
     text.className = 'tool-run-summary';
     const state = document.createElement('span');
     state.className = 'tool-run-state';
-    head.append(label, text, state);
+    headingRow.append(label, state);
+    heading.append(headingRow, text);
+    head.append(icon, heading);
     box.append(head);
     const body = document.createElement('div');
     body.className = 'tool-run-body';
     box.append(body);
-    const entry = {box, summary: text, body, activity: run, state};
+    const entry = {box, summary: text, body, activity: run, state, heading};
     this.toolElements.set(run.id, entry);
     this.updateToolDetails(entry);
     if (this.thinking) {
@@ -382,15 +384,18 @@ export class AssistantBubble {
     body: HTMLDivElement;
     activity?: ToolActivity;
     state?: HTMLSpanElement;
+    heading?: HTMLSpanElement;
     preview?: HTMLElement;
+    failurePreview?: HTMLElement;
   }): void {
     const run = entry.activity!;
-    const isFlow = run.tool === 'run_flow';
+    const described = describeChatTool({
+      toolName: run.tool,
+      toolArguments: run.arguments,
+      toolArgumentsComplete: run.arguments !== undefined,
+    });
+    const isFlow = isOk(described) && described.kind === 'flow';
     entry.box.classList.toggle('flow-run', isFlow);
-    if (isFlow) {
-      const name = entry.box.querySelector<HTMLElement>('.tool-run-name');
-      if (name) name.textContent = run.phase === 'started' ? 'Running A11 Flow' : 'Ran A11 Flow';
-    }
     const failed = run.status !== undefined && !isOk(run.status);
     entry.box.classList.toggle('failed', failed);
     entry.state!.textContent = failed
@@ -398,24 +403,24 @@ export class AssistantBubble {
       : run.phase === 'started'
         ? 'running…'
         : 'completed';
-    const source = isFlow && typeof run.arguments?.source === 'string'
-      ? run.arguments.source
-      : '';
-    const inputs = source
-      ? Object.fromEntries(Object.entries(run.arguments ?? {}).filter(([name]) => name !== 'source'))
-      : run.arguments;
+    const source = isOk(described) ? described.flowSource : '';
+    const inputs = isOk(described) ? described.detailInputs : run.arguments;
     const summary = (run.log ?? '').split('\n')[0]?.trim();
-    entry.summary.textContent = failed
+    entry.summary.textContent = failed && !isFlow
       ? run.status?.message || summary || 'The action failed.'
-      : summary || toolInputPreview(inputs);
+      : summary || (isOk(described) ? described.inputPreview : '');
 
     entry.preview?.remove();
     entry.preview = undefined;
+    entry.failurePreview?.remove();
+    entry.failurePreview = undefined;
     if (source) {
       const preview = document.createElement('pre');
       preview.className = 'flow-preview';
+      preview.classList.toggle('complete', isOk(described) && described.completeFlowPreview);
       preview.textContent = source;
       entry.preview = preview;
+      entry.heading?.append(preview);
       void highlightFlow(source).then((tokens) => {
         if (entry.activity?.arguments?.source === source) {
           renderFlowSource(preview, source, tokens);
@@ -424,17 +429,19 @@ export class AssistantBubble {
       }).catch(() => undefined);
     }
 
-    entry.body.innerHTML = '';
-    if (entry.preview) {
-      const flowSource = document.createElement('section');
-      flowSource.className = 'tool-detail flow-source-detail';
-      const heading = document.createElement('h4');
-      heading.textContent = 'Flow';
-      flowSource.append(heading, entry.preview);
-      entry.body.append(flowSource);
+    if (source && failed) {
+      const failurePreview = document.createElement('p');
+      failurePreview.className = 'tool-run-error-preview';
+      failurePreview.setAttribute('role', 'alert');
+      failurePreview.setAttribute('aria-label', 'Flow error');
+      failurePreview.textContent = run.status?.message || 'The Flow failed.';
+      entry.failurePreview = failurePreview;
+      entry.heading?.append(failurePreview);
     }
+
+    entry.body.innerHTML = '';
     entry.body.append(
-      toolDetailSection('Inputs', inputs, source ? 'Flow source is shown above.' : 'No input values.'),
+      toolDetailSection('Inputs', inputs, source ? 'Flow source shown in the highlighted preview above.' : 'No input values.'),
       toolDetailSection('Outputs', run.outputs, run.phase === 'started' ? 'Waiting for output…' : 'No output values.'),
       toolDetailSection('Logs', run.log, run.phase === 'started' ? 'Waiting for logs…' : 'Nothing logged.'),
     );
@@ -707,7 +714,7 @@ export class ChatView {
   private session: A11ChatSession | null = null;
   private busy = false;
   private interruptible = false;
-  private following = true;
+  private readonly followTail = new FollowTailController(NEAR_BOTTOM_PX);
   private historyOpen = false;
   /** The turn currently streaming, so tool runs land in the right bubble. */
   private active: AssistantBubble | null = null;
@@ -733,10 +740,11 @@ export class ChatView {
     this.suggestButton.textContent = 'Suggest fixes';
     this.suggestButton.title =
       "Review the file you're looking at: what the IDE underlines, and what it doesn't";
-    bar.append(this.newChatButton, this.historyButton, this.suggestButton, this.connection.element);
+    bar.append(this.connection.element, this.historyButton, this.suggestButton, this.newChatButton);
 
     this.transcript = document.createElement('div');
     this.transcript.className = 'transcript';
+    this.renderEmptyTranscript();
 
     // The history takes the transcript's place rather than floating over it:
     // one column, nothing to position, and no way for the two to disagree about
@@ -773,7 +781,7 @@ export class ChatView {
     this.textarea.addEventListener('input', () => this.autoSizeTextarea());
     // The user leaving the bottom unlatches following; coming back re-latches it.
     this.transcript.addEventListener('scroll', () => {
-      this.following = this.atBottom();
+      this.followTail.measure(this.scrollMetrics());
     });
   }
 
@@ -782,17 +790,18 @@ export class ChatView {
     this.textarea.style.height = `${Math.min(this.textarea.scrollHeight, COMPOSER_MAX_PX)}px`;
   }
 
-  private atBottom(): boolean {
+  private scrollMetrics(): {scrollTop: number; scrollHeight: number; clientHeight: number} {
     const { scrollTop, scrollHeight, clientHeight } = this.transcript;
-    return scrollHeight - (scrollTop + clientHeight) <= NEAR_BOTTOM_PX;
+    return {scrollTop, scrollHeight, clientHeight};
   }
 
   /** Keep the newest content in view while the user is following the stream. */
   private follow(): void {
-    if (this.following) this.transcript.scrollTop = this.transcript.scrollHeight;
+    if (this.followTail.shouldFollow()) this.transcript.scrollTop = this.transcript.scrollHeight;
   }
 
   private addBubble(kind: 'user' | 'assistant'): HTMLDivElement {
+    this.transcript.querySelector('.chat-empty')?.remove();
     const bubble = document.createElement('div');
     bubble.className = `bubble ${kind}`;
     this.transcript.append(bubble);
@@ -859,12 +868,18 @@ export class ChatView {
     this.startNewChat();
   }
 
+  dispose(): void {
+    this.session?.halfClose();
+    this.session = null;
+  }
+
   private startNewChat(): void {
     if (this.busy) return;
     this.showHistory(false);
     this.session?.startNewConversation();
     this.transcript.innerHTML = '';
-    this.following = true;
+    this.renderEmptyTranscript();
+    this.followTail.reset();
     this.textarea.focus();
   }
 
@@ -931,8 +946,9 @@ export class ChatView {
       const interactions = await session.loadConversation(id);
       this.transcript.innerHTML = '';
       await this.rehydrate(interactions);
+      if (!this.transcript.childElementCount) this.renderEmptyTranscript();
       this.showHistory(false);
-      this.following = true;
+      this.followTail.reset();
       this.follow();
       this.textarea.focus();
     } catch (error) {
@@ -943,6 +959,22 @@ export class ChatView {
     } finally {
       this.setBusy(false);
     }
+  }
+
+  /** Studio's purposeful blank state, adapted to an IDE tool-window surface. */
+  private renderEmptyTranscript(): void {
+    const empty = document.createElement('div');
+    empty.className = 'chat-empty';
+    const mark = document.createElement('div');
+    mark.className = 'chat-empty-mark';
+    mark.setAttribute('aria-hidden', 'true');
+    mark.textContent = '✣';
+    const title = document.createElement('strong');
+    title.textContent = 'Start a conversation';
+    const detail = document.createElement('p');
+    detail.textContent = 'Messages and rich action results will appear here as the model responds.';
+    empty.append(mark, title, detail);
+    this.transcript.append(empty);
   }
 
   /**
@@ -1016,7 +1048,7 @@ export class ChatView {
     this.interruptible = true;
     this.setBusy(true);
     // Sending is an explicit request to watch this turn.
-    this.following = true;
+    this.followTail.reset();
 
     const userBubble = this.addBubble('user');
     userBubble.textContent = prompt;
@@ -1090,7 +1122,7 @@ export class ChatView {
     this.showHistory(false);
     this.setBusy(true);
     // Pressing the button is an explicit request to watch what it does.
-    this.following = true;
+    this.followTail.reset();
 
     const bubble = new AssistantBubble(this.addBubble('assistant'), () => this.follow());
     // Set so the flow's own IDE tool runs draw their boxes in this bubble.
@@ -1204,5 +1236,5 @@ function formatWhen(startedAtMillis: number): string {
 /** Mount the chat view into `root`. */
 export function mountChat(root: HTMLElement): MountedView {
   const view = new ChatView(root);
-  return {newChat: () => view.newChat()};
+  return {newChat: () => view.newChat(), dispose: () => view.dispose()};
 }

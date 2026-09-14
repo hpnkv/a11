@@ -95,6 +95,8 @@ export interface FlowRun {
   outputs?: Record<string, (value: unknown) => void>;
   /** The run log the gateway narrates, for a UI that wants to show it. */
   onLog?: (log: string, record: LogRecord) => void;
+  /** Observe the concrete call so a workspace Stop control can cancel it. */
+  onAction?: (action: Action | null) => void;
   /** How long to wait for the whole composition. */
   timeoutMs?: number;
 }
@@ -114,6 +116,7 @@ export async function runFlow(
 ): Promise<Record<string, unknown>> {
   const timeoutMs = run.timeoutMs ?? 600_000;
   const call = need(Action.create(FLOW_RUN_SCHEMA, { session, stream, nodeMap: session.getNodeMap() }));
+  run.onAction?.(call);
   for (const [name, value] of Object.entries(run.headers ?? {})) {
     if (value) need(call.setHeader(name, value));
   }
@@ -204,6 +207,7 @@ export async function runFlow(
   // sees its end -- one this caller named and the flow does not declare -- must
   // not hold up the answer.
   await Promise.race([Promise.all([...reading, logging]), delay(DRAIN_GRACE_MS)]);
+  run.onAction?.(null);
   return (result as Record<string, unknown> | null) ?? {};
 }
 

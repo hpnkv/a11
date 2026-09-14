@@ -36,6 +36,7 @@ interface OutputState {
   markdown: boolean;
   expanded: boolean;
   card: HTMLElement;
+  frame: number;
 }
 
 /** Studio-style bounded, per-port presentation of streaming action values. */
@@ -45,8 +46,28 @@ export class OutputPresenter {
   constructor(private readonly target: HTMLElement) {}
 
   clear(): void {
+    for (const state of this.states.values()) {
+      if (state.frame && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(state.frame);
+    }
     this.states.clear();
     this.target.replaceChildren();
+  }
+
+  /** Render an immutable shared-layer snapshot, including its exact retention counts. */
+  show(blocks: readonly OutputBlock[]): void {
+    this.clear();
+    for (const block of blocks) {
+      const state: OutputState = {
+        block,
+        ...DEFAULT_OUTPUT_VIEW,
+        card: document.createElement('article'),
+        frame: 0,
+      };
+      state.card.className = 'runner-value-card';
+      this.states.set(block.port, state);
+      this.target.append(state.card);
+      this.render(state);
+    }
   }
 
   append(port: string, value: unknown, mimetype: string): void {
@@ -58,6 +79,7 @@ export class OutputPresenter {
         block: block!,
         ...DEFAULT_OUTPUT_VIEW,
         card: document.createElement('article'),
+        frame: 0,
       };
       state.card.className = 'runner-value-card';
       this.states.set(port, state);
@@ -72,7 +94,19 @@ export class OutputPresenter {
       );
       state.block = block!;
     }
-    this.render(state);
+    this.scheduleRender(state);
+  }
+
+  private scheduleRender(state: OutputState): void {
+    if (typeof requestAnimationFrame !== 'function') {
+      this.render(state);
+      return;
+    }
+    if (state.frame) return;
+    state.frame = requestAnimationFrame(() => {
+      state.frame = 0;
+      this.render(state);
+    });
   }
 
   private render(state: OutputState): void {

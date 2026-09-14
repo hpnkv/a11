@@ -271,7 +271,7 @@ ActionSchema SleepSchema() {
       "the wait short and says so on `woke`.";
   schema.inputs.emplace(
       "duration",
-      Port("duration", "string",
+      Port("duration", kTextPlain,
            "How long to wait, written as Flow writes a duration (30s, 250ms, "
            "1m30s) or as a number of seconds.",
            /*required=*/true, /*unary=*/true));

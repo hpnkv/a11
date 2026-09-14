@@ -95,6 +95,7 @@
 
 #include "a11/actions/action.h"
 #include "a11/actions/schema.h"
+#include "a11/data/serialization.h"
 #include "a11/data/types.h"
 #include "sdk/flow/actions/options.h"
 
@@ -106,16 +107,17 @@ namespace a11::sdk::flow {
 
 /** @brief Mimetype for a port carrying opaque bytes. */
 inline constexpr std::string_view kOctetStream = "application/octet-stream";
+/** @brief Mimetype for a port carrying UTF-8 text. */
+inline constexpr std::string_view kTextPlain = data::kTextMimetype;
 /** @brief Default size of a streamed byte chunk: one read, one value. */
 inline constexpr std::size_t kDefaultChunkBytes = 64 * 1024;
 
 /**
  * @brief How a structured value is written.
  *
- * Chosen per action by `options.encoding`, and applied to every port that
- * carries a value rather than bytes. MessagePack is not merely the faster of
- * the two: it is the one that can hold a byte string, which is what a path and
- * a line of a file actually are.
+ * Chosen per action by `options.encoding`. Structured values use JSON by
+ * default; UTF-8 strings use text/plain. Selecting MessagePack applies it to
+ * both, including byte strings that are not valid UTF-8.
  */
 enum class Encoding {
   kJson,     ///< `application/json`. The default, and readable by everything.
@@ -223,9 +225,9 @@ class Sink {
   /**
    * @brief Writes one text value.
    *
-   * Text that is not valid UTF-8 is an error under JSON and ordinary under
-   * MessagePack, where it goes out as a byte string. See the file comment: this
-   * is the case a path or a line of a file can genuinely be in.
+   * Text uses text/plain by default. MessagePack remains available when the
+   * caller selects it explicitly, including for byte strings that are not
+   * valid UTF-8.
    */
   absl::Status PutText(std::string_view text, bool final = false) const;
   /** @brief Writes one opaque-byte value, untouched by the encoding. */

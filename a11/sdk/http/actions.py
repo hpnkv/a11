@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The two native HTTP Actions, and how to register them.
+"""The three native HTTP Actions, and how to register them.
 
 * ``make_http_request`` is HTTP with nothing hidden. Every concern the protocol
   keeps separate gets a port of its own -- the status, the header fields, the
@@ -23,8 +23,10 @@
 * ``web-fetch`` is the same machinery with the protocol turned down: a status, a
   header map, and the body as text, as JSON, as bytes, or decoded into a stream
   of items.
+* ``web-render`` loads a page in the platform WebKit engine and returns its
+  post-script HTML and an optional bounded PNG.
 
-Install both on a registry with [`register`][a11.sdk.http.actions.register]:
+Install them on a registry with [`register`][a11.sdk.http.actions.register]:
 
 ```python
 from a11.actions import ActionRegistry
@@ -75,6 +77,8 @@ if TYPE_CHECKING:
 MAKE_HTTP_REQUEST = "make_http_request"
 #: Registered name of the ``fetch()``-shaped adapter.
 WEB_FETCH = "web-fetch"
+#: Registered name of the platform WebKit renderer.
+WEB_RENDER = "web-render"
 
 # The native side owns the table -- the schemas, the handlers, and the order --
 # so the exported objects cannot drift from what a C++ host registers.
@@ -91,11 +95,16 @@ MAKE_HTTP_REQUEST_HANDLER: ActionHandler = _ENTRIES[MAKE_HTTP_REQUEST][1]
 WEB_FETCH_SCHEMA: ActionSchema = _ENTRIES[WEB_FETCH][0]
 #: Native handler for ``web-fetch``.
 WEB_FETCH_HANDLER: ActionHandler = _ENTRIES[WEB_FETCH][1]
+#: Schema for ``web-render``.
+WEB_RENDER_SCHEMA: ActionSchema = _ENTRIES[WEB_RENDER][0]
+#: Native handler for ``web-render``.
+WEB_RENDER_HANDLER: ActionHandler = _ENTRIES[WEB_RENDER][1]
 
-#: The two (schema, handler) pairs, low-level first.
+#: The three (schema, handler) pairs, low-level first.
 HTTP_ACTIONS: tuple[tuple[ActionSchema, ActionHandler], ...] = (
     (MAKE_HTTP_REQUEST_SCHEMA, MAKE_HTTP_REQUEST_HANDLER),
     (WEB_FETCH_SCHEMA, WEB_FETCH_HANDLER),
+    (WEB_RENDER_SCHEMA, WEB_RENDER_HANDLER),
 )
 
 del _ENTRIES
@@ -106,6 +115,7 @@ def register(
     *,
     low_level: bool = True,
     adapter: bool = True,
+    renderer: bool = True,
 ) -> None:
     """Register the HTTP Actions on ``registry``.
 
@@ -113,15 +123,16 @@ def register(
         registry: Registry to register on.
         low_level: Register ``make_http_request``.
         adapter: Register ``web-fetch``.
+        renderer: Register ``web-render``.
 
-    The two are separately selectable because they answer to different amounts
-    of trust. A gateway happy to let a caller fetch a document may not want to
-    hand out streamed uploads, arbitrary methods, and server pushes; serving
-    only ``web-fetch`` is how it says so.
+    The Actions are separately selectable because they answer to different
+    amounts of trust. A gateway can expose document retrieval without also
+    exposing streamed uploads, arbitrary methods, server pushes, or a browser.
     """
     selected = [
         *((HTTP_ACTIONS[0],) if low_level else ()),
         *((HTTP_ACTIONS[1],) if adapter else ()),
+        *((HTTP_ACTIONS[2],) if renderer else ()),
     ]
     for schema, handler in selected:
         registry.register(schema.name, schema, handler)
@@ -135,5 +146,8 @@ __all__ = [
     "WEB_FETCH",
     "WEB_FETCH_HANDLER",
     "WEB_FETCH_SCHEMA",
+    "WEB_RENDER",
+    "WEB_RENDER_HANDLER",
+    "WEB_RENDER_SCHEMA",
     "register",
 ]

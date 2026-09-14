@@ -160,7 +160,9 @@ std::optional<nlohmann::json> ReadOne(const std::shared_ptr<Action>& action,
   if (values.empty()) {
     return std::nullopt;
   }
-  return nlohmann::json::parse(values.front(), nullptr, false);
+  nlohmann::json parsed = nlohmann::json::parse(values.front(), nullptr, false);
+  return parsed.is_discarded() ? nlohmann::json(values.front())
+                               : std::move(parsed);
 }
 
 std::string Concat(const std::vector<std::string>& pieces) {
@@ -539,9 +541,9 @@ TEST(ReadFileTest, SplitsLinesAndKeepsALastOneWithoutANewline) {
 
   const std::vector<std::string> lines = ReadAll(action, "lines");
   ASSERT_EQ(lines.size(), 3u);
-  EXPECT_EQ(nlohmann::json::parse(lines[0], nullptr, false), "one");
-  EXPECT_EQ(nlohmann::json::parse(lines[1], nullptr, false), "two");
-  EXPECT_EQ(nlohmann::json::parse(lines[2], nullptr, false), "three");
+  EXPECT_EQ(lines[0], "one");
+  EXPECT_EQ(lines[1], "two");
+  EXPECT_EQ(lines[2], "three");
 }
 
 TEST(ReadFileTest, ReadsAWindowWithOffsetAndLength) {
@@ -1077,7 +1079,7 @@ TEST(SpawnProcessTest, KeepsStandardOutputAndStandardErrorApart) {
   EXPECT_EQ(Concat(ReadAll(action, "stderr")), "to-err\n");
   const std::vector<std::string> out_lines = ReadAll(action, "stdout_lines");
   ASSERT_EQ(out_lines.size(), 1u);
-  EXPECT_EQ(nlohmann::json::parse(out_lines[0], nullptr, false), "to-out");
+  EXPECT_EQ(out_lines[0], "to-out");
 }
 
 TEST(SpawnProcessTest, WritesThePidBeforeAnyOutput) {
@@ -1455,6 +1457,32 @@ TEST(EncodingTest, WritesMsgpackWhenAsked) {
   EXPECT_EQ(unpacked->value("name", std::string()), "one.txt");
 }
 
+TEST(EncodingTest, TextDefaultsToUtf8AndMsgpackCarriesOtherBytes) {
+  Workspace workspace;
+  const std::string path =
+      workspace.Write("bytes.txt", std::string("\xff\n", 2));
+
+  const std::shared_ptr<Action> as_text = MakeReadFile(workspace, path);
+  ASSERT_NE(as_text, nullptr);
+  ASSERT_TRUE(as_text->Run().ok());
+  EXPECT_EQ(as_text->Wait(kPatience).Await().status().code(),
+            absl::StatusCode::kInvalidArgument);
+
+  const std::shared_ptr<Action> as_msgpack =
+      MakeReadFile(workspace, path, {{"encoding", "msgpack"}});
+  ASSERT_NE(as_msgpack, nullptr);
+  ASSERT_TRUE(as_msgpack->Run().ok());
+  ASSERT_TRUE(as_msgpack->Wait(kPatience).Await().ok());
+  const std::vector<std::string> lines = ReadAll(as_msgpack, "lines");
+  ASSERT_EQ(lines.size(), 1u);
+  absl::StatusOr<nlohmann::json> value =
+      a11::UnpackMsgpack(lines.front(), "a byte line");
+  ASSERT_TRUE(value.ok());
+  ASSERT_TRUE(value->is_binary());
+  EXPECT_EQ(value->get_binary().size(), 1u);
+  EXPECT_EQ(value->get_binary().front(), 0xff);
+}
+
 TEST(EncodingTest, RefusesAnUnknownEncoding) {
   Workspace workspace;
   const std::shared_ptr<Action> action =
@@ -1567,9 +1595,15 @@ TEST(RandomBytesTest, DrawsTheCountAndEncodingItWasAsked) {
   ASSERT_TRUE((*created)->Wait(kPatience).Await().ok());
 
   EXPECT_EQ(Concat(ReadAll(*created, "bytes")).size(), 16u);
-  const std::optional<nlohmann::json> text = ReadOne(*created, "text");
-  ASSERT_TRUE(text.has_value());
-  EXPECT_EQ(text->get<std::string>().size(), 32u);  // two hex digits a byte
+  absl::StatusOr<std::shared_ptr<AsyncNode>> text_node =
+      (*created)->GetOutput("text");
+  ASSERT_TRUE(text_node.ok());
+  absl::StatusOr<std::optional<data::Chunk>> text =
+      (*text_node)->NextChunk(kPatience).Await();
+  ASSERT_TRUE(text.ok());
+  ASSERT_TRUE(text->has_value());
+  EXPECT_EQ((**text).GetMimetype(), data::kTextMimetype);
+  EXPECT_EQ((**text).data.size(), 32u);  // two hex digits a byte
 }
 
 TEST(NewUuidTest, MakesAsManyAsAsked) {

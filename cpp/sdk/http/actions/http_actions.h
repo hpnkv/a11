@@ -16,9 +16,9 @@
 
 /**
  * @file
- * @brief HTTP as A11 Actions: one protocol-faithful, one shaped like `fetch()`.
+ * @brief HTTP requests, document fetching, and browser rendering as Actions.
  *
- * Two Actions over the same engine:
+ * Three HTTP Actions:
  *   - @c make_http_request -- HTTP with nothing hidden. Every concern the
  *     protocol keeps separate gets a port of its own: the status, the header
  *     fields, the body, the trailer section, the redirect chain, the responses
@@ -28,6 +28,8 @@
  *   - @c web-fetch -- the same machinery at a lower level: a status,
  *     a header map, and the body as text, as JSON, as bytes, or decoded into a
  *     stream of items. What a caller who just wants a document asks for.
+ *   - @c web-render -- a page loaded by the platform WebKit engine, yielding
+ *     post-script HTML and, when requested, a bounded PNG snapshot.
  *
  * Why an Action rather than a function. An ordinary HTTP client hands back one
  * `Response` object because its language gives it nothing better to hand back;
@@ -65,19 +67,25 @@ namespace a11::sdk::http {
 inline constexpr std::string_view kMakeHttpRequestAction = "make_http_request";
 /** @brief Registered name of the `fetch()`-shaped adapter. */
 inline constexpr std::string_view kWebFetchAction = "web-fetch";
+/** @brief Registered name of the browser-rendered document Action. */
+inline constexpr std::string_view kWebRenderAction = "web-render";
 
 /** @brief Schema for @c make_http_request. */
 a11::actions::ActionSchema MakeHttpRequestSchema();
 /** @brief Schema for @c web-fetch. */
 a11::actions::ActionSchema WebFetchSchema();
+/** @brief Schema for @c web-render. */
+a11::actions::ActionSchema WebRenderSchema();
 
 /** @brief Handler for @c make_http_request. */
 a11::actions::ActionHandler MakeHttpRequestHandler();
 /** @brief Handler for @c web-fetch. */
 a11::actions::ActionHandler WebFetchHandler();
+/** @brief Handler for @c web-render. */
+a11::actions::ActionHandler WebRenderHandler();
 
 /**
- * @brief Registers both HTTP Actions on @p registry.
+ * @brief Registers the HTTP Actions on @p registry.
  * @return OK, or the first registration error.
  */
 absl::Status RegisterHttpActions(a11::actions::ActionRegistry& registry);

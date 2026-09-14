@@ -25,6 +25,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import http.server
+import json
+import sys
+import threading
 
 import pytest
 
@@ -134,20 +138,22 @@ def _url(server, path: str) -> str:
 # --- Registration and schemas ------------------------------------------------
 
 
-def test_register_installs_both_actions() -> None:
+def test_register_installs_all_actions() -> None:
     registry = a11.ActionRegistry()
     actions.register(registry)
     assert registry.is_registered(actions.MAKE_HTTP_REQUEST)
     assert registry.is_registered(actions.WEB_FETCH)
+    assert registry.is_registered(actions.WEB_RENDER)
     registry.get_schema(actions.MAKE_HTTP_REQUEST).validate()
     registry.get_schema(actions.WEB_FETCH).validate()
+    registry.get_schema(actions.WEB_RENDER).validate()
 
 
 def test_register_can_serve_only_the_adapter() -> None:
     # A gateway happy to let a caller fetch a document may not want to hand out
     # streamed uploads and arbitrary methods.
     registry = a11.ActionRegistry()
-    actions.register(registry, low_level=False)
+    actions.register(registry, low_level=False, renderer=False)
     assert not registry.is_registered(actions.MAKE_HTTP_REQUEST)
     assert registry.is_registered(actions.WEB_FETCH)
 
@@ -156,6 +162,7 @@ def test_exported_pairs_carry_native_handlers() -> None:
     assert tuple(schema.name for schema, _ in actions.HTTP_ACTIONS) == (
         actions.MAKE_HTTP_REQUEST,
         actions.WEB_FETCH,
+        actions.WEB_RENDER,
     )
     for schema, handler in actions.HTTP_ACTIONS:
         schema.validate()
@@ -188,13 +195,99 @@ def test_ports_are_typed_for_python() -> None:
     assert schema.outputs["status_code"].typeinfo is int
     assert schema.outputs["body"].typeinfo is bytes
     assert actions.WEB_FETCH_SCHEMA.outputs["ok"].typeinfo is bool
+    assert actions.WEB_FETCH_SCHEMA.outputs["text"].typeinfo is str
+    assert actions.WEB_RENDER_SCHEMA.outputs["final_url"].typeinfo is str
+    assert actions.WEB_RENDER_SCHEMA.outputs["html"].typeinfo is str
+    assert actions.WEB_RENDER_SCHEMA.outputs["text"].typeinfo is str
+    assert actions.WEB_RENDER_SCHEMA.outputs["image"].typeinfo is bytes
 
 
 def test_the_request_body_input_does_not_collide_with_the_body_output() -> None:
     # An input and an output of the same name would be the same node, since a
     # port's node id is derived from the action id and the name alone.
-    for schema in (actions.MAKE_HTTP_REQUEST_SCHEMA, actions.WEB_FETCH_SCHEMA):
+    for schema in (
+        actions.MAKE_HTTP_REQUEST_SCHEMA,
+        actions.WEB_FETCH_SCHEMA,
+        actions.WEB_RENDER_SCHEMA,
+    ):
         assert not set(schema.inputs) & set(schema.outputs)
+
+
+def test_renderer_can_be_registered_on_its_own() -> None:
+    registry = a11.ActionRegistry()
+    actions.register(registry, low_level=False, adapter=False)
+    assert registry.is_registered(actions.WEB_RENDER)
+    assert not registry.is_registered(actions.WEB_FETCH)
+
+
+def test_renderer_schema_bounds_snapshot_height() -> None:
+    options = json.loads(
+        actions.WEB_RENDER_SCHEMA.inputs["options"].json_schema
+    )
+    heights = options["properties"]["image_screen_heights"]
+    assert heights["type"] == "integer"
+    assert heights["minimum"] == 1
+    assert heights["maximum"] == 10
+    assert heights["default"] == 1
+    assert heights["description"]
+    assert all(
+        property_schema.get("description")
+        for property_schema in options["properties"].values()
+    )
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="WKWebView is macOS-only")
+@pytest.mark.asyncio
+async def test_renderer_publishes_response_before_rendered_text() -> None:
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            body = (
+                b"<html><body><h1>Rendered answer</h1><script>"
+                b"document.body.dataset.rendered='yes'"
+                b"</script></body></html>"
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        action = a11.Action(
+            actions.WEB_RENDER_SCHEMA, handler=actions.WEB_RENDER_HANDLER
+        )
+        await action["url"].finalize(f"http://127.0.0.1:{server.server_port}/")
+        await action["options"].finalize({"omit": ["headers", "image"]})
+        action.run()
+        completion = asyncio.ensure_future(action.wait())
+
+        assert await _bounded(action["status_code"].next_object(int)) == 200
+        assert not completion.done()
+        assert await _bounded(action["ok"].next_object(bool)) is True
+        final_url = [chunk async for chunk in action["final_url"].iter_chunks()]
+        assert len(final_url) == 1
+        assert final_url[0].get_mimetype() == "text/plain"
+        assert final_url[0].data.decode().startswith("http://127.0.0.1:")
+
+        html = [chunk async for chunk in action["html"].iter_chunks()]
+        assert len(html) == 1
+        assert html[0].get_mimetype() == "text/plain"
+        assert 'data-rendered="yes"' in html[0].data.decode()
+        text = [chunk async for chunk in action["text"].iter_chunks()]
+        assert len(text) == 1
+        assert text[0].get_mimetype() == "text/plain"
+        assert text[0].data.decode() == "Rendered answer"
+        await _bounded(completion)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=_PATIENCE)
 
 
 # --- make_http_request -------------------------------------------------------
@@ -206,9 +299,9 @@ async def test_request_separates_status_headers_and_body() -> None:
         async with await client.request(_url(server, "/plain")) as response:
             # The status is readable before the body, which is the point.
             assert await _bounded(response.status()) == 200
-            assert (await _bounded(response.headers()))["content-type"] == (
-                "text/plain"
-            )
+            assert (await _bounded(response.headers()))[
+                "content-type"
+            ] == "text/plain"
             assert await _bounded(response.read()) == b"a plain body"
             connection = await _bounded(response.connection())
             assert connection["http_version"] == "2"

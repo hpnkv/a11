@@ -424,7 +424,7 @@ ActionSchema ReadStdinSchema() {
                     /*required=*/false, /*unary=*/false));
   schema.outputs.emplace(
       "lines",
-      Port("lines", "string",
+      Port("lines", kTextPlain,
            "Standard input, one value per line, without its line ending.",
            /*required=*/false, /*unary=*/false));
   schema.outputs.emplace(
@@ -525,7 +525,7 @@ ActionSchema RandomBytesSchema() {
                          Port("bytes", kOctetStream, "The bytes themselves.",
                               /*required=*/false, /*unary=*/false));
   schema.outputs.emplace(
-      "text", Port("text", "string",
+      "text", Port("text", kTextPlain,
                    "The bytes in the requested format, or nothing when raw.",
                    /*required=*/false, /*unary=*/true));
   AddDeadlineHeader(schema, "The call fails once it is reached.");
@@ -542,7 +542,7 @@ ActionSchema NewUuidSchema() {
                         Port("options", JsonType(), "Optional: count (1).",
                              /*required=*/false, /*unary=*/true));
   schema.outputs.emplace(
-      "ids", Port("ids", "string", "The identifiers, one per value.",
+      "ids", Port("ids", kTextPlain, "The identifiers, one per value.",
                   /*required=*/false, /*unary=*/false));
   AddDeadlineHeader(schema, "The call fails once it is reached.");
   return schema;

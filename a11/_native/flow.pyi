@@ -252,7 +252,9 @@ def compile(source: str, source_name: str = "") -> Program:
     turns that into ``FlowSyntaxError``.
     """
 
-def complete(source: str, offset: typing.SupportsInt) -> dict[str, typing.Any]:
+def complete(
+    source: str, offset: typing.SupportsInt | typing.SupportsIndex
+) -> dict[str, typing.Any]:
     """
     What may be written at ``offset``.
 
@@ -317,7 +319,7 @@ def register_standard_actions(
     allow_run: bool = False,
     require_sandbox: bool = True,
     inherit_environment: bool = False,
-    max_seconds: typing.SupportsInt = 600,
+    max_seconds: typing.SupportsInt | typing.SupportsIndex = 600,
     current_directory: str = ".",
 ) -> None:
     """
@@ -354,7 +356,7 @@ def run_program(
     allow_local_net: bool = False,
     allow_env: collections.abc.Sequence[str] = [],
     unrestricted: bool = False,
-    timeout_seconds: typing.SupportsFloat | None = None,
+    timeout_seconds: typing.SupportsFloat | typing.SupportsIndex | None = None,
     standard_streams: bool = True,
     registry: typing.Any | None = None,
     session: typing.Any | None = None,

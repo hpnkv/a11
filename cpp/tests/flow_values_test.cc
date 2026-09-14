@@ -303,6 +303,17 @@ TEST(FlowValues, Base64GoesBothWaysInBothAlphabets) {
   EXPECT_FALSE(EvaluatedIn(R"(b64decode("not base64 at all!"))").ok());
 }
 
+TEST(FlowValues, Utf8GoesBetweenTextAndBytesStrictly) {
+  const absl::StatusOr<Value> encoded = EvaluatedIn(R"(utf8encode("café"))");
+  ASSERT_TRUE(encoded.ok()) << encoded.status();
+  EXPECT_EQ(encoded->kind(), Value::Kind::kBytes);
+  EXPECT_EQ(TextOf(R"(b64encode(utf8encode("✓")))"), "4pyT");
+  EXPECT_EQ(TextOf(R"(utf8decode(utf8encode("café")))"), "café");
+  EXPECT_EQ(EvaluatedIn(R"(utf8decode(utf8encode("text")))")->kind(),
+            Value::Kind::kString);
+  EXPECT_FALSE(EvaluatedIn(R"(utf8decode(b64decode("//8=")))").ok());
+}
+
 TEST(FlowValues, ALiteralMaySpreadAnotherIntoItself) {
   const Value record =
       Value::Object({{"a", Value::Integer(1)}, {"b", Value::Integer(2)}});

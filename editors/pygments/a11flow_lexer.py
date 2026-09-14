@@ -145,7 +145,8 @@ BUILTINS = _keywords(
     "values", "get", "join", "split", "merge", "contains", "starts-with",
     "ends-with", "replace", "match", "slice", "default", "to_chunk",
     "from_chunk", "strformat", "b64encode", "b64decode", "b64urlencode",
-    "b64urldecode", "now", "duration", "time", "seconds"
+    "b64urldecode", "utf8encode", "utf8decode", "now", "duration", "time",
+    "seconds"
 )
 
 #: The canonical status codes, which is what ``fail`` names.

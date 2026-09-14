@@ -531,6 +531,16 @@ const absl::flat_hash_map<std::string_view, WordDoc>& BuiltinDocs() {
         "sent "
         "without it.",
         "b64urldecode(segment) -> claims"}},
+      {"utf8encode",
+       {"Text encoded as UTF-8 bytes.", "one value",
+        "Produces bytes suitable for an application/octet-stream input. The "
+        "textual representation of a non-text value is encoded.",
+        "utf8encode(request.text) -> body"}},
+      {"utf8decode",
+       {"UTF-8 bytes decoded as text.", "one value",
+        "Produces text suitable for a text/plain input. Malformed UTF-8 ends "
+        "the flow with invalid_argument instead of replacing bytes.",
+        "utf8decode(response.body) -> text"}},
       {"now",
        {"The instant this is evaluated.", "",
         "Read once, where it is written. An expression naming it twice may see "
@@ -1656,7 +1666,8 @@ constexpr std::array kBuiltinOrder = {
     std::string_view("to_chunk"),     std::string_view("from_chunk"),
     std::string_view("strformat"),    std::string_view("b64encode"),
     std::string_view("b64decode"),    std::string_view("b64urlencode"),
-    std::string_view("b64urldecode"), std::string_view("now"),
+    std::string_view("b64urldecode"), std::string_view("utf8encode"),
+    std::string_view("utf8decode"),   std::string_view("now"),
     std::string_view("duration"),     std::string_view("time"),
     std::string_view("seconds"),
 };

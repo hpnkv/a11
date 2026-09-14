@@ -12,9 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# HTTP as Actions. A thin layer over a11::net -- the schemas, the two handlers,
+# HTTP as Actions. A thin layer over a11::net -- the schemas and handlers,
 # and the decoding web-fetch does -- kept as its own target so a11_net does not
 # gain a dependency on the actions and nodes layers above it.
 set(A11_HTTP_ACTIONS_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/actions/http_actions.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/render/protocol.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/render/web_render.cc
     PARENT_SCOPE)

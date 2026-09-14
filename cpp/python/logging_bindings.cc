@@ -91,27 +91,35 @@ std::unique_ptr<PythonLogSink>& InstalledSink() {
   return *sink;
 }
 
-// Forwards each action log to a Python callable.
-void SetActionLogSink(const py::object& callback) {
-  if (callback.is_none()) {
-    actions::SetActionLogSink(nullptr);
-    return;
+// Keeps the Python reference outside the copyable std::function closure.
+// ReportLog copies that closure on threads which need not hold the GIL.
+class PythonActionLogCallback {
+ public:
+  explicit PythonActionLogCallback(const py::object& callback)
+      : callback_(callback.inc_ref().ptr()) {}
+
+  PythonActionLogCallback(const PythonActionLogCallback&) = delete;
+  PythonActionLogCallback& operator=(const PythonActionLogCallback&) = delete;
+
+  ~PythonActionLogCallback() {
+    DeferredPythonRefs::Retire(std::exchange(callback_, nullptr));
   }
-  py::object held = callback;
-  actions::SetActionLogSink([held = std::move(held)](
-                                const actions::LogRecord& record) {
+
+  void Call(const actions::LogRecord& record) const {
     if (InterpreterIsGoingAway()) {
       return;
     }
     const PyGILState_STATE gil = PyGILState_Ensure();
     try {
-      held(std::string(record.action_name), std::string(record.action_id),
-           std::string(actions::LogLevelName(record.level)),
-           std::string(record.channel), std::string(record.file),
-           record.lineno.has_value() ? py::cast(*record.lineno) : py::none(),
-           record.internal, std::string(record.mimetype),
-           py::bytes(record.data.data(), record.data.size()),
-           absl::ToDoubleSeconds(record.timestamp - absl::UnixEpoch()));
+      auto callback = py::reinterpret_borrow<py::function>(callback_);
+      callback(
+          std::string(record.action_name), std::string(record.action_id),
+          std::string(actions::LogLevelName(record.level)),
+          std::string(record.channel), std::string(record.file),
+          record.lineno.has_value() ? py::cast(*record.lineno) : py::none(),
+          record.internal, std::string(record.mimetype),
+          py::bytes(record.data.data(), record.data.size()),
+          absl::ToDoubleSeconds(record.timestamp - absl::UnixEpoch()));
     } catch (const py::error_already_set&) {
       // A failure to log must never reach the code that was logging.
       PyErr_Clear();
@@ -119,7 +127,23 @@ void SetActionLogSink(const py::object& callback) {
       PyErr_Clear();
     }
     PyGILState_Release(gil);
-  });
+  }
+
+ private:
+  PyObject* callback_ = nullptr;
+};
+
+// Forwards each action log to a Python callable.
+void SetActionLogSink(const py::object& callback) {
+  if (callback.is_none()) {
+    actions::SetActionLogSink(nullptr);
+    return;
+  }
+  auto held = std::make_shared<PythonActionLogCallback>(callback);
+  actions::SetActionLogSink(
+      [held = std::move(held)](const actions::LogRecord& record) {
+        held->Call(record);
+      });
 }
 
 void SetLogSink(const py::object& callback) {

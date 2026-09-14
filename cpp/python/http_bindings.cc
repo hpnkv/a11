@@ -191,7 +191,7 @@ std::shared_ptr<void> TypeInfoFromClass(const py::object& cls) {
   return {cls.ptr(), &ReleaseHttpTypeInfo};
 }
 
-// One HTTP Action, ready to register. Both the Python export and
+// One HTTP Action, ready to register. The Python export and
 // RegisterHttpActionsPy build from this table, so they cannot drift apart.
 struct HttpActionEntry {
   std::string_view name;
@@ -200,7 +200,7 @@ struct HttpActionEntry {
 };
 
 /**
- * The two HTTP Actions, with Python types attached to the ports C++ cannot
+ * The HTTP Actions, with Python types attached to the ports C++ cannot
  * name.
  *
  * Every port here carries JSON, bytes, or a scalar, so the mapping is to
@@ -210,7 +210,7 @@ struct HttpActionEntry {
  */
 std::vector<HttpActionEntry> HttpActionEntries() {
   const auto type_for = [](std::string_view port_type) -> PyObject* {
-    if (port_type == "string") {
+    if (port_type == "string" || port_type == "text/plain") {
       return reinterpret_cast<PyObject*>(&PyUnicode_Type);
     }
     if (port_type == "integer") {
@@ -219,7 +219,7 @@ std::vector<HttpActionEntry> HttpActionEntries() {
     if (port_type == "bool") {
       return reinterpret_cast<PyObject*>(&PyBool_Type);
     }
-    if (port_type == "application/octet-stream") {
+    if (port_type == "application/octet-stream" || port_type == "image/png") {
       return reinterpret_cast<PyObject*>(&PyBytes_Type);
     }
     return nullptr;  // JSON: a dict, a list or a scalar, so nothing to pin.
@@ -246,6 +246,8 @@ std::vector<HttpActionEntry> HttpActionEntries() {
       sdk::http::MakeHttpRequestHandler());
   add(sdk::http::kWebFetchAction, sdk::http::WebFetchSchema(),
       sdk::http::WebFetchHandler());
+  add(sdk::http::kWebRenderAction, sdk::http::WebRenderSchema(),
+      sdk::http::WebRenderHandler());
   return entries;
 }
 
@@ -1421,13 +1423,15 @@ Returns the destination path. A destination that already exists and matches
       py::arg("headers"));
   module.def("http_actions", &HttpActionsPy,
              "Return the HTTP Actions as (name, schema, handler) triples: "
-             "make_http_request and web-fetch, in that order.");
+             "make_http_request, web-fetch, and web-render, in that order.");
   module.def("register_http_actions", &RegisterHttpActionsPy,
              py::arg("registry"),
-             "Register make_http_request and web-fetch on `registry`.");
+             "Register make_http_request, web-fetch, and web-render on "
+             "`registry`.");
   module.attr("MAKE_HTTP_REQUEST_ACTION") =
       std::string(sdk::http::kMakeHttpRequestAction);
   module.attr("WEB_FETCH_ACTION") = std::string(sdk::http::kWebFetchAction);
+  module.attr("WEB_RENDER_ACTION") = std::string(sdk::http::kWebRenderAction);
 
   module.attr("SSE_STREAM_ID_HEADER") = std::string(net::kSseStreamIdHeader);
   module.attr("SSE_HTTP_HEADER_PREFIX") =

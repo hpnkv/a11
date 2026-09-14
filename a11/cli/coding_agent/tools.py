@@ -1315,6 +1315,7 @@ async def run_flow(action: a11.Action, context: CodingContext) -> None:
             "search_text",
             "file_diff",
             "web-fetch",
+            "web-render",
         }
         if effectful:
             allowed.update({"apply_patch", "run_command"})

@@ -153,6 +153,7 @@ def main() -> None:
             path
             for path in Path(directory).rglob("*")
             if path.suffix in {".so", ".dylib", ".pyd"}
+            or (path.parent.name == "libexec" and path.is_file())
         ]
         native_binaries = [
             path

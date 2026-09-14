@@ -48,6 +48,8 @@ option(A11_BUILD_FLOW_TOOL "Build the standalone a11-flow language tool"
         ${A11_FLOW_TOOL_DEFAULT})
 option(A11_BUILD_BENCH "Build the native benchmark binary a11_bench" OFF)
 option(A11_BUILD_HTTP "Build HTTP wire streams and servers" ON)
+option(A11_BUILD_WEB_RENDER_WPE
+        "Build the Linux web-render helper against system WPEPlatform" OFF)
 option(A11_BUILD_FLOW_ACTIONS
         "Build the Flow standard library of Actions (files, time, processes)"
         ON)
@@ -1452,7 +1454,7 @@ if (A11_BUILD_AUDIO)
 endif ()
 
 if (A11_BUILD_HTTP)
-    # HTTP as Actions: make_http_request and web-fetch. Above a11::net because it
+    # HTTP as Actions. Above a11::net because it
     # is a client of it, and above a11::actions because that is what it produces;
     # its own target so neither of those has to know about the other.
     add_library(a11_http_actions STATIC ${A11_HTTP_ACTIONS_SOURCES})
@@ -1471,7 +1473,82 @@ if (A11_BUILD_HTTP)
             PRIVATE
             $<BUILD_INTERFACE:absl::strings> $<INSTALL_INTERFACE:absl::strings>
             $<BUILD_INTERFACE:absl::time> $<INSTALL_INTERFACE:absl::time>
-            nlohmann_json::nlohmann_json a11::warnings)
+            nlohmann_json::nlohmann_json ${CMAKE_DL_LIBS} a11::warnings)
+
+    if (APPLE)
+        enable_language(OBJCXX)
+        add_executable(
+                a11_web_render_helper
+                helpers/web_render/macos/main.mm
+                sdk/http/render/protocol.cc)
+        set_target_properties(
+                a11_web_render_helper PROPERTIES
+                OUTPUT_NAME a11-web-render-webkit)
+        if (NOT SKBUILD)
+            set_target_properties(
+                    a11_web_render_helper PROPERTIES
+                    RUNTIME_OUTPUT_DIRECTORY
+                    "${CMAKE_CURRENT_SOURCE_DIR}/../a11/libexec")
+        endif ()
+        target_compile_options(
+                a11_web_render_helper PRIVATE
+                $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
+        target_include_directories(
+                a11_web_render_helper PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+        target_link_libraries(
+                a11_web_render_helper PRIVATE
+                a11::concurrency a11::core
+                absl::status absl::statusor absl::strings absl::time
+                nlohmann_json::nlohmann_json a11::warnings
+                "-framework AppKit" "-framework Foundation"
+                "-framework WebKit")
+        a11_disallow_exceptions(a11_web_render_helper)
+        install(
+                TARGETS a11_web_render_helper
+                RUNTIME DESTINATION a11/libexec
+                COMPONENT python)
+        install(
+                TARGETS a11_web_render_helper
+                RUNTIME DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/a11
+                COMPONENT runtime)
+    elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND A11_BUILD_WEB_RENDER_WPE)
+        find_package(PkgConfig REQUIRED)
+        pkg_check_modules(
+                WPE_WEBKIT REQUIRED IMPORTED_TARGET wpe-webkit-2.0>=2.52)
+        pkg_check_modules(
+                WPE_PLATFORM REQUIRED IMPORTED_TARGET wpe-platform-2.0)
+        pkg_check_modules(
+                WPE_PLATFORM_HEADLESS REQUIRED IMPORTED_TARGET
+                wpe-platform-headless-2.0)
+        find_package(ZLIB REQUIRED)
+        add_executable(
+                a11_web_render_helper
+                helpers/web_render/linux/main.cc
+                sdk/http/render/protocol.cc)
+        set_target_properties(
+                a11_web_render_helper PROPERTIES
+                OUTPUT_NAME a11-web-render-wpe)
+        if (NOT SKBUILD)
+            set_target_properties(
+                    a11_web_render_helper PROPERTIES
+                    RUNTIME_OUTPUT_DIRECTORY
+                    "${CMAKE_CURRENT_SOURCE_DIR}/../a11/libexec")
+        endif ()
+        target_include_directories(
+                a11_web_render_helper PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+        target_link_libraries(
+                a11_web_render_helper PRIVATE
+                a11::concurrency a11::core
+                absl::status absl::statusor absl::strings absl::time
+                nlohmann_json::nlohmann_json a11::warnings
+                PkgConfig::WPE_WEBKIT PkgConfig::WPE_PLATFORM
+                PkgConfig::WPE_PLATFORM_HEADLESS ZLIB::ZLIB)
+        a11_disallow_exceptions(a11_web_render_helper)
+        install(
+                TARGETS a11_web_render_helper
+                RUNTIME DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/a11
+                COMPONENT runtime)
+    endif ()
 endif ()
 
 if (A11_BUILD_FLOW_ACTIONS)

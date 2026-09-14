@@ -83,46 +83,54 @@ class CodingAgent:
         )
         http_options = http.WEB_FETCH_SCHEMA.inputs["options"]
         http_options.description = "Optional request and response bounds."
-        http_options.json_schema = json.dumps({
-            "type": "object",
-            "properties": {
-                "max_redirects": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "description": ("Maximum redirects to follow; default 5."),
+        http_options.json_schema = json.dumps(
+            {
+                "type": "object",
+                "properties": {
+                    "max_redirects": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": (
+                            "Maximum redirects to follow; default 5."
+                        ),
+                    },
+                    "timeout": {
+                        "type": "number",
+                        "exclusiveMinimum": 0,
+                        "description": "Whole-request timeout in seconds.",
+                    },
+                    "http_version": {
+                        "type": "string",
+                        "description": "Preferred HTTP protocol version.",
+                    },
+                    "headers": {
+                        "type": "object",
+                        "additionalProperties": {"type": "string"},
+                        "description": "HTTP request headers.",
+                    },
+                    "max_body_bytes": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": (
+                            "Maximum response bytes; default 32 MiB."
+                        ),
+                    },
+                    "user_agent": {
+                        "type": "string",
+                        "description": "User-Agent header value.",
+                    },
+                    "omit": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Output ports to close without producing."
+                        ),
+                    },
                 },
-                "timeout": {
-                    "type": "number",
-                    "exclusiveMinimum": 0,
-                    "description": "Whole-request timeout in seconds.",
-                },
-                "http_version": {
-                    "type": "string",
-                    "description": "Preferred HTTP protocol version.",
-                },
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": {"type": "string"},
-                    "description": "HTTP request headers.",
-                },
-                "max_body_bytes": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "description": ("Maximum response bytes; default 32 MiB."),
-                },
-                "user_agent": {
-                    "type": "string",
-                    "description": "User-Agent header value.",
-                },
-                "omit": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": ("Output ports to close without producing."),
-                },
-            },
-            "additionalProperties": False,
-        })
-        http.register(registry, low_level=False, adapter=True)
+                "additionalProperties": False,
+            }
+        )
+        http.register(registry, low_level=False, adapter=True, renderer=True)
         context = CodingContext(
             workspace=workspace,
             policy=policy,
@@ -135,7 +143,7 @@ class CodingAgent:
             command_tools=command_tools,
             flow_tools=flow_tools,
         )
-        names.append(http.WEB_FETCH)
+        names.extend((http.WEB_FETCH, http.WEB_RENDER))
 
         prompt = system_prompt(workspace, approval_mode)
         context.system_prompt = prompt

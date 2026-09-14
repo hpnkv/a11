@@ -101,6 +101,7 @@ def test_structured_action_inputs_have_json_schemas(tmp_path):
 
     assert registry.is_registered("run_command")
     assert registry.is_registered("web-fetch")
+    assert registry.is_registered("web-render")
     fetch_options = json.loads(
         registry.get_schema("web-fetch").inputs["options"].json_schema
     )
@@ -178,6 +179,7 @@ def test_structured_action_inputs_have_json_schemas(tmp_path):
     assert "Do not run curl, wget" in agent.prompt
     assert "Put known independent URLs" in agent.prompt
     assert "run_flow so the web-fetch calls run concurrently" in agent.prompt
+    assert "Use web-render when scripts or browser lifecycle" in agent.prompt
     assert "Start with the configured workspace" in agent.prompt
     assert "authoritative remote sources after local evidence" in agent.prompt
     assert "Explore relevant workspace sources first" in agent.prompt
@@ -207,6 +209,17 @@ def test_structured_action_inputs_have_json_schemas(tmp_path):
     )
     assert "Do not use curl, wget" in (
         registry.get_schema("run_command").inputs["command"].description
+    )
+    write_schema = registry.get_schema("write_file")
+    assert "`file.bytes -> write.content`" in write_schema.description
+    assert "`file.bytes -> write.content`" in (
+        write_schema.inputs["content"].description
+    )
+    assert "filter or bound `stdout_lines`" in (
+        registry.get_schema("spawn_process").description
+    )
+    assert "filter or truncate `text`" in (
+        registry.get_schema("web-render").description
     )
     assert "A11 Flow — a composition" not in agent.prompt
     assert "struct NAME" not in agent.prompt
@@ -248,6 +261,7 @@ async def test_studio_can_configure_gateway_agent_permissions(tmp_path):
     assert info["approval_mode"] == "suggest"
     assert "run_command" in info["tool_names"]
     assert "web-fetch" in info["tool_names"]
+    assert "web-render" in info["tool_names"]
     assert "configure_coding_agent" not in info["tool_names"]
     assert configured == {
         "approval_mode": "auto",

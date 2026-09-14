@@ -53,6 +53,7 @@
 #include "a11/nodes/async_node.h"
 #include "a11/nodes/node_map.h"
 #include "a11/status.h"
+#include "sdk/http/render/web_render.h"
 #include "thread/concurrency.h"
 
 namespace a11::sdk::http {
@@ -203,6 +204,20 @@ class Outputs {
   /// Writes a port's single value and closes it.
   absl::Status PutOnly(std::string_view name, const nlohmann::json& value) {
     ABSL_ASSIGN_OR_RETURN(data::Chunk chunk, JsonChunk(value));
+    ABSL_RETURN_IF_ERROR(Put(name, std::move(chunk), /*final=*/true));
+    return Close(name);
+  }
+
+  /// Writes one UTF-8 text value and closes its port.
+  absl::Status PutOnlyText(std::string_view name, std::string_view value) {
+    if (!a11::IsValidUtf8(value)) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("The ", name, " output is not valid UTF-8"));
+    }
+    data::Chunk chunk;
+    chunk.metadata =
+        data::ChunkMetadata{.mimetype = std::string(data::kTextMimetype)};
+    chunk.data = std::string(value);
     ABSL_RETURN_IF_ERROR(Put(name, std::move(chunk), /*final=*/true));
     return Close(name);
   }
@@ -1313,7 +1328,7 @@ absl::Status RunFetch(const std::shared_ptr<Action>& action) {
     }
 
     nlohmann::json parsed = nlohmann::json::parse(whole, nullptr, false);
-    ABSL_RETURN_IF_ERROR(outputs.PutOnly("text", whole));
+    ABSL_RETURN_IF_ERROR(outputs.PutOnlyText("text", whole));
     if (parsed.is_discarded()) {
       // Not JSON. The port closes with nothing in it rather than failing the
       // run: a caller asking for `json` from a page is asking a question, and
@@ -1330,6 +1345,221 @@ absl::Status RunFetch(const std::shared_ptr<Action>& action) {
       }
     }
     return outputs.Close("items");
+  }();
+
+  const absl::Status closed = outputs.Finish();
+  return status.ok() ? closed : status;
+}
+
+// ---------------------------------------------------------------------------
+// web-render: a rendered document from the platform WebKit helper
+// ---------------------------------------------------------------------------
+
+const std::vector<std::string>& WebRenderOutputNames() {
+  static const std::vector<std::string>* const names =
+      new std::vector<std::string>{
+          "final_url", "status_code", "ok", "headers", "html", "text", "image"};
+  return *names;
+}
+
+struct WebRenderOptions {
+  int max_redirects = 5;
+  absl::Duration timeout = absl::Minutes(1);
+  size_t max_body_bytes = 8 * 1024 * 1024;
+  bool include_image = false;
+  int image_screen_heights = 1;
+  size_t max_image_bytes = 8 * 1024 * 1024;
+  std::string user_agent{"a11-web-render/1"};
+  HttpHeaders extra_headers;
+  std::vector<std::string> omit;
+};
+
+absl::StatusOr<WebRenderOptions> ParseWebRenderOptions(
+    const nlohmann::json& object) {
+  WebRenderOptions options;
+  if (object.is_null()) {
+    return options;
+  }
+  if (!object.is_object()) {
+    return absl::InvalidArgumentError("options must be a JSON object");
+  }
+
+  ABSL_ASSIGN_OR_RETURN(const std::int64_t redirects,
+                        JsonInt(object, "max_redirects", 5));
+  if (redirects < 0 || redirects > 100) {
+    return absl::InvalidArgumentError(
+        "options.max_redirects must be between 0 and 100");
+  }
+  options.max_redirects = static_cast<int>(redirects);
+
+  if (object.contains("timeout")) {
+    const nlohmann::json& value = object.at("timeout");
+    if (!value.is_number() || value.get<double>() <= 0) {
+      return absl::InvalidArgumentError(
+          "options.timeout must be a positive number of seconds");
+    }
+    options.timeout = absl::Seconds(value.get<double>());
+  }
+
+  ABSL_ASSIGN_OR_RETURN(
+      const std::int64_t max_body,
+      JsonInt(object, "max_body_bytes",
+              static_cast<std::int64_t>(options.max_body_bytes)));
+  if (max_body <= 0 || max_body > 64 * 1024 * 1024) {
+    return absl::InvalidArgumentError(
+        "options.max_body_bytes must be between 1 and 67108864");
+  }
+  options.max_body_bytes = static_cast<size_t>(max_body);
+
+  ABSL_ASSIGN_OR_RETURN(options.include_image,
+                        JsonBool(object, "include_image", false));
+  ABSL_ASSIGN_OR_RETURN(const std::int64_t heights,
+                        JsonInt(object, "image_screen_heights", 1));
+  if (heights < 1 || heights > 10) {
+    return absl::InvalidArgumentError(
+        "options.image_screen_heights must be between 1 and 10");
+  }
+  options.image_screen_heights = static_cast<int>(heights);
+
+  const std::int64_t default_image_bytes =
+      std::min<std::int64_t>(64 * 1024 * 1024, heights * 8 * 1024 * 1024);
+  ABSL_ASSIGN_OR_RETURN(
+      const std::int64_t max_image,
+      JsonInt(object, "max_image_bytes", default_image_bytes));
+  if (max_image <= 0 || max_image > 64 * 1024 * 1024) {
+    return absl::InvalidArgumentError(
+        "options.max_image_bytes must be between 1 and 67108864");
+  }
+  options.max_image_bytes = static_cast<size_t>(max_image);
+  ABSL_ASSIGN_OR_RETURN(
+      options.user_agent,
+      JsonString(object, "user_agent", std::move(options.user_agent)));
+
+  if (object.contains("headers")) {
+    const nlohmann::json& headers = object.at("headers");
+    if (!headers.is_object()) {
+      return absl::InvalidArgumentError(
+          "options.headers must be a JSON object");
+    }
+    for (const auto& [name, value] : headers.items()) {
+      if (!value.is_string()) {
+        return absl::InvalidArgumentError(
+            "options.headers values must be strings");
+      }
+      options.extra_headers.emplace_back(absl::AsciiStrToLower(name),
+                                         value.get<std::string>());
+    }
+  }
+
+  if (object.contains("omit")) {
+    const nlohmann::json& omit = object.at("omit");
+    if (!omit.is_array()) {
+      return absl::InvalidArgumentError(
+          "options.omit must be an array of output port names");
+    }
+    for (const nlohmann::json& value : omit) {
+      if (!value.is_string() ||
+          std::find(WebRenderOutputNames().begin(),
+                    WebRenderOutputNames().end(),
+                    value.is_string() ? value.get<std::string>() : "") ==
+              WebRenderOutputNames().end()) {
+        return absl::InvalidArgumentError(
+            "options.omit contains an unknown output port");
+      }
+      options.omit.push_back(value.get<std::string>());
+    }
+  }
+  return options;
+}
+
+data::Chunk MediaChunk(std::string bytes, std::string mimetype) {
+  data::Chunk chunk;
+  chunk.metadata = data::ChunkMetadata{.mimetype = std::move(mimetype)};
+  chunk.data = std::move(bytes);
+  return chunk;
+}
+
+class WebRenderOutputs final : public WebRenderResponseObserver {
+ public:
+  explicit WebRenderOutputs(Outputs* absl_nonnull outputs)
+      : outputs_(outputs) {}
+
+  absl::Status OnResponse(const WebRenderResponse& response) override {
+    ABSL_RETURN_IF_ERROR(
+        outputs_->PutOnlyText("final_url", response.final_url));
+    ABSL_RETURN_IF_ERROR(
+        outputs_->PutOnly("status_code", response.status_code));
+    ABSL_RETURN_IF_ERROR(outputs_->PutOnly("ok", response.status_code < 400));
+    return outputs_->PutOnly("headers", HeaderObject(response.headers));
+  }
+
+ private:
+  Outputs* absl_nonnull outputs_;
+};
+
+absl::Status RunWebRender(const std::shared_ptr<Action>& action) {
+  ABSL_ASSIGN_OR_RETURN(const std::shared_ptr<AsyncNode> options_node,
+                        action->GetInput("options"));
+  ABSL_ASSIGN_OR_RETURN(std::optional<nlohmann::json> raw_options,
+                        ReadJson(options_node));
+  ABSL_ASSIGN_OR_RETURN(
+      WebRenderOptions options,
+      ParseWebRenderOptions(raw_options.value_or(nlohmann::json::object())));
+  ABSL_ASSIGN_OR_RETURN(
+      Outputs outputs,
+      Outputs::Open(action, WebRenderOutputNames(), options.omit));
+
+  const absl::Status status = [&]() -> absl::Status {
+    ABSL_ASSIGN_OR_RETURN(const std::shared_ptr<AsyncNode> url_node,
+                          action->GetInput("url"));
+    ABSL_ASSIGN_OR_RETURN(std::optional<std::string> url, ReadText(url_node));
+    if (!url.has_value() || url->empty()) {
+      return absl::InvalidArgumentError("A url is required");
+    }
+    ABSL_ASSIGN_OR_RETURN(const ParsedUrl parsed, a11::net::ParseUrl(*url));
+    if (parsed.scheme != "http" && parsed.scheme != "https") {
+      return absl::InvalidArgumentError(
+          "web-render requires an http or https URL");
+    }
+
+    RequestOptions header_options;
+    header_options.extra_headers = options.extra_headers;
+    header_options.user_agent = options.user_agent;
+    WebRenderRequest request;
+    request.url = std::move(*url);
+    request.headers = RequestHeadersFor(action, header_options);
+    request.user_agent = options.user_agent;
+    request.max_redirects = options.max_redirects;
+    request.max_body_bytes = options.max_body_bytes;
+    request.include_image =
+        options.include_image && outputs.Get("image") != nullptr;
+    request.image_screen_heights = options.image_screen_heights;
+    request.max_image_bytes = options.max_image_bytes;
+    WebRenderOutputs response_outputs(&outputs);
+    request.response_observer = &response_outputs;
+    ABSL_ASSIGN_OR_RETURN(request.deadline,
+                          DeadlineFromAction(action, options.timeout));
+    if (request.deadline <= absl::Now()) {
+      return absl::DeadlineExceededError(
+          "The web-render deadline has already passed");
+    }
+
+    ABSL_ASSIGN_OR_RETURN(WebRenderResult result, RenderWebPage(request));
+    ABSL_RETURN_IF_ERROR(outputs.PutOnlyText("html", result.html));
+    ABSL_RETURN_IF_ERROR(outputs.PutOnlyText("text", result.text));
+
+    if (request.include_image) {
+      data::Chunk image = MediaChunk(std::move(result.image_png), "image/png");
+      image.metadata->attributes.emplace("width",
+                                         std::to_string(result.image_width));
+      image.metadata->attributes.emplace("height",
+                                         std::to_string(result.image_height));
+      image.metadata->attributes.emplace(
+          "tile_count", std::to_string(result.image_tile_count));
+      ABSL_RETURN_IF_ERROR(
+          outputs.Put("image", std::move(image), /*final=*/true));
+    }
+    return outputs.Close("image");
   }();
 
   const absl::Status closed = outputs.Finish();
@@ -1367,12 +1597,13 @@ void AddSharedHeaders(ActionSchema& schema) {
 }
 
 void AddRequestInputs(ActionSchema& schema, std::string_view options_help) {
-  schema.inputs.emplace(
-      "url", Port("url", "string", "Absolute http or https URL to request.",
-                  /*required=*/true, /*unary=*/true));
-  schema.inputs.emplace(
-      "method", Port("method", "string", "Request method; GET when omitted.",
-                     /*required=*/false, /*unary=*/true));
+  schema.inputs.emplace("url", Port("url", std::string(data::kTextMimetype),
+                                    "Absolute http or https URL to request.",
+                                    /*required=*/true, /*unary=*/true));
+  schema.inputs.emplace("method",
+                        Port("method", std::string(data::kTextMimetype),
+                             "Request method; GET when omitted.",
+                             /*required=*/false, /*unary=*/true));
   // Not "body": the response body is a port too, and a port name means one node
   // whichever direction it faces, so the two would be the same stream.
   schema.inputs.emplace(
@@ -1497,9 +1728,9 @@ ActionSchema WebFetchSchema() {
       "headers", Port("headers", JsonType(),
                       "Response header fields as an object, lower-cased.",
                       /*required=*/false, /*unary=*/true));
-  schema.outputs.emplace("text",
-                         Port("text", "string", "The whole body as text.",
-                              /*required=*/false, /*unary=*/true));
+  schema.outputs.emplace("text", Port("text", std::string(data::kTextMimetype),
+                                      "The whole body as text.",
+                                      /*required=*/false, /*unary=*/true));
   schema.outputs.emplace(
       "json",
       Port("json", JsonType(),
@@ -1523,6 +1754,73 @@ ActionSchema WebFetchSchema() {
   return schema;
 }
 
+ActionSchema WebRenderSchema() {
+  ActionSchema schema;
+  schema.name = std::string(kWebRenderAction);
+  schema.description =
+      "Render an HTTP(S) page with the platform WebKit engine and return the "
+      "post-script HTML and rendered page text. Set options.include_image for "
+      "a bounded PNG snapshot. In Flow, omit large representations that are "
+      "not needed and filter or truncate `text` before routing it to a flow "
+      "output. "
+      "Use web-fetch when raw HTTP content is sufficient.";
+  schema.inputs.emplace("url", Port("url", std::string(data::kTextMimetype),
+                                    "Absolute HTTP(S) URL to render.",
+                                    /*required=*/true, /*unary=*/true));
+  ActionPortSchema options =
+      Port("options", JsonType(),
+           "Rendering settings: headers, user_agent, timeout, max_redirects, "
+           "max_body_bytes, include_image, image_screen_heights (1 through "
+           "10), max_image_bytes, and omit.",
+           /*required=*/false, /*unary=*/true);
+  options.json_schema = R"({
+    "type":"object",
+    "properties":{
+      "headers":{"type":"object","additionalProperties":{"type":"string"},"description":"Headers for the initial top-frame HTTP request."},
+      "user_agent":{"type":"string","description":"Browser User-Agent override; defaults to a11-web-render/1."},
+      "timeout":{"type":"number","exclusiveMinimum":0,"description":"Total deadline in seconds for startup, navigation, rendering, output, and cleanup; default 60."},
+      "max_redirects":{"type":"integer","minimum":0,"maximum":100,"description":"Maximum top-frame redirects to follow; default 5."},
+      "max_body_bytes":{"type":"integer","minimum":1,"maximum":67108864,"description":"Maximum UTF-8 bytes in either the rendered HTML or extracted text; default 8 MiB."},
+      "include_image":{"type":"boolean","default":false,"description":"Capture a PNG snapshot in addition to the rendered DOM."},
+      "image_screen_heights":{"type":"integer","minimum":1,"maximum":10,"default":1,"description":"Maximum number of 1280 by 720 viewport heights in the PNG."},
+      "max_image_bytes":{"type":"integer","minimum":1,"maximum":67108864,"description":"Maximum encoded PNG bytes; default 8 MiB per requested screen height, capped at 64 MiB."},
+      "omit":{"type":"array","items":{"enum":["final_url","status_code","ok","headers","html","text","image"]},"description":"Output ports to close without values; omitting image also skips capture."}
+    },
+    "additionalProperties":false
+  })";
+  schema.inputs.emplace("options", std::move(options));
+
+  schema.outputs.emplace("final_url",
+                         Port("final_url", std::string(data::kTextMimetype),
+                              "Final top-frame URL.",
+                              /*required=*/false, /*unary=*/true));
+  schema.outputs.emplace(
+      "status_code",
+      Port("status_code", "integer", "Final top-frame HTTP status code.",
+           /*required=*/false, /*unary=*/true));
+  schema.outputs.emplace(
+      "ok", Port("ok", "bool", "Whether the HTTP status is below 400.",
+                 /*required=*/false, /*unary=*/true));
+  schema.outputs.emplace("headers",
+                         Port("headers", JsonType(),
+                              "Final top-frame response headers, lower-cased.",
+                              /*required=*/false, /*unary=*/true));
+  schema.outputs.emplace("html", Port("html", std::string(data::kTextMimetype),
+                                      "Serialized post-render document HTML.",
+                                      /*required=*/false, /*unary=*/true));
+  schema.outputs.emplace("text",
+                         Port("text", std::string(data::kTextMimetype),
+                              "Visible page text extracted by the browser DOM.",
+                              /*required=*/false, /*unary=*/true));
+  schema.outputs.emplace(
+      "image", Port("image", "image/png",
+                    "Optional rendered PNG, with pixel dimensions in chunk "
+                    "attributes.",
+                    /*required=*/false, /*unary=*/true));
+  AddSharedHeaders(schema);
+  return schema;
+}
+
 ActionHandler MakeHttpRequestHandler() {
   return [](std::shared_ptr<Action> action) {
     return a11::SubmitTask(
@@ -1537,12 +1835,21 @@ ActionHandler WebFetchHandler() {
   };
 }
 
+ActionHandler WebRenderHandler() {
+  return [](std::shared_ptr<Action> action) {
+    return a11::SubmitTask(
+        [action = std::move(action)]() { return RunWebRender(action); });
+  };
+}
+
 absl::Status RegisterHttpActions(a11::actions::ActionRegistry& registry) {
   ABSL_RETURN_IF_ERROR(registry.Register(std::string(kMakeHttpRequestAction),
                                          MakeHttpRequestSchema(),
                                          MakeHttpRequestHandler()));
-  return registry.Register(std::string(kWebFetchAction), WebFetchSchema(),
-                           WebFetchHandler());
+  ABSL_RETURN_IF_ERROR(registry.Register(std::string(kWebFetchAction),
+                                         WebFetchSchema(), WebFetchHandler()));
+  return registry.Register(std::string(kWebRenderAction), WebRenderSchema(),
+                           WebRenderHandler());
 }
 
 }  // namespace a11::sdk::http

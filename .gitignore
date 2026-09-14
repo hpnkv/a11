@@ -12,6 +12,7 @@ cmake-build-release/
 cmake-build-relwithdebinfo/
 install/
 CMakeUserPresets.json
+a11/libexec/a11-web-render-webkit
 
 **/.gradle/
 **/.intellijPlatform/
@@ -25,3 +26,5 @@ intellij-plugin/
 
 vscode-plugin/dist/
 vscode-plugin/node_modules/
+
+.a11/docs/

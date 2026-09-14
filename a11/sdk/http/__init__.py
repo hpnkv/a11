@@ -14,7 +14,7 @@
 
 """HTTP as A11 Actions: one protocol-faithful, one shaped like `fetch()`.
 
-Two Actions over one engine in C++:
+Three HTTP Actions in C++:
 
 * ``make_http_request`` -- HTTP with nothing hidden. Every concern the protocol
   keeps separate gets a port of its own: the status, the header fields, the
@@ -23,6 +23,8 @@ Two Actions over one engine in C++:
 * ``web-fetch`` -- the same machinery with the protocol turned down: a status, a
   header map, and the body as text, as JSON, as bytes, or decoded into a stream
   of items.
+* ``web-render`` -- a platform WebKit load returning post-script HTML and an
+  optional bounded PNG.
 
 Why an Action rather than a function. An ordinary HTTP client hands back one
 `Response` object because its language gives it nothing better to hand back:
@@ -70,6 +72,9 @@ from a11.sdk.http.actions import (
     WEB_FETCH,
     WEB_FETCH_HANDLER,
     WEB_FETCH_SCHEMA,
+    WEB_RENDER,
+    WEB_RENDER_HANDLER,
+    WEB_RENDER_SCHEMA,
     register,
 )
 from a11.sdk.http.client import Response, fetch, request
@@ -82,6 +87,9 @@ __all__ = [
     "WEB_FETCH",
     "WEB_FETCH_HANDLER",
     "WEB_FETCH_SCHEMA",
+    "WEB_RENDER",
+    "WEB_RENDER_HANDLER",
+    "WEB_RENDER_SCHEMA",
     "Response",
     "fetch",
     "register",

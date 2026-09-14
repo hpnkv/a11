@@ -121,7 +121,7 @@ if (A11_BUILD_SQLITE)
 endif ()
 
 if (A11_BUILD_HTTP)
-  # The two HTTP Actions, against a real Http2Server. Its own executable because
+  # The HTTP Actions, against a real Http2Server. Its own executable because
   # a11::http_actions is the only thing under test and a focused link line is
   # what proves that.
   add_executable(a11_http_actions_test
@@ -131,6 +131,15 @@ if (A11_BUILD_HTTP)
                                   a11::data a11::net a11::nodes a11::stores
                                   GTest::gtest_main a11::warnings)
   add_test(NAME a11_http_actions_test COMMAND a11_http_actions_test)
+
+  # Pins the renderer pipe wait to cooperative behavior with one worker.
+  add_executable(a11_web_render_concurrency_test
+    web_render_concurrency_test.cc)
+  target_link_libraries(
+    a11_web_render_concurrency_test PRIVATE a11::http_actions a11::concurrency
+                                            GTest::gtest a11::warnings)
+  add_test(NAME a11_web_render_concurrency_test
+           COMMAND a11_web_render_concurrency_test)
 endif ()
 
 if (A11_BUILD_FLOW_ACTIONS)

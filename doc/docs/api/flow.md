@@ -409,6 +409,12 @@ could escape sandboxing for untrusted expressions. A printf conversion operates
 only on supplied values. A conversion with no corresponding value remains
 unchanged to expose the invalid conversion.
 
+`utf8encode(text)` produces bytes for an `application/octet-stream` input.
+`utf8decode(bytes)` produces text for a `text/plain` input and fails with
+`invalid_argument` when the bytes are malformed. These operations preserve the
+distinction between binary ports and text ports; use `b64encode` and
+`b64decode` when the representation itself is Base64.
+
 Durations are written the way a timeout is — `500ns`, `250ms`, `30s`, `2m`,
 `1h`, and compounded as `1m30s500ms` — and are ordinary values. `now()` is the
 clock, and the arithmetic is the arithmetic A11's own types allow:

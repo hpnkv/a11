@@ -362,7 +362,7 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
         {
           "description": "Request method; GET when omitted.",
           "name": "method",
-          "type": "string"
+          "type": "text/plain"
         },
         {
           "description": "Request settings, all optional: max_redirects (5), timeout (seconds), request_body (\"buffer\" | \"stream\"), http_version (\"auto\" | \"2\" | \"1.1\"), accept_pushes (false), reuse_connection (true), max_body_bytes, user_agent, headers (an object, merged over the action's own headers and the way to send an x-a11- one), tls {verify_peer, ca_file, certificate_file, key_file}, and omit -- output port names to close immediately rather than write.",
@@ -379,7 +379,7 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
           "description": "Absolute http or https URL to request.",
           "name": "url",
           "required": true,
-          "type": "string"
+          "type": "text/plain"
         }
       ],
       "name": "make_http_request",
@@ -578,7 +578,7 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
         {
           "description": "Request method; GET when omitted.",
           "name": "method",
-          "type": "string"
+          "type": "text/plain"
         },
         {
           "description": "Request settings, all optional: max_redirects (5), timeout (seconds), request_body (\"buffer\" | \"stream\"), http_version, headers (an object), tls {verify_peer, ca_file, certificate_file, key_file}, max_body_bytes, user_agent, and omit -- output port names to close immediately rather than write.",
@@ -595,7 +595,7 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
           "description": "Absolute http or https URL to request.",
           "name": "url",
           "required": true,
-          "type": "string"
+          "type": "text/plain"
         }
       ],
       "name": "web-fetch",
@@ -635,7 +635,68 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
         {
           "description": "The whole body as text.",
           "name": "text",
+          "type": "text/plain"
+        }
+      ]
+    },
+    {
+      "description": "Render an HTTP(S) page with the platform WebKit engine and return the post-script HTML and rendered page text. Set options.include_image for a bounded PNG snapshot. In Flow, omit large representations that are not needed and filter or truncate `text` before routing it to a flow output. Use web-fetch when raw HTTP content is sufficient.",
+      "headers": [
+        {
+          "description": "Absolute execution deadline: a base-10 count of milliseconds since the Unix epoch, or nanoseconds with an 'ns' suffix. Whichever of it and options.timeout is tighter bounds the request.",
+          "name": "x-a11-deadline",
           "type": "string"
+        }
+      ],
+      "inputs": [
+        {
+          "description": "Rendering settings: headers, user_agent, timeout, max_redirects, max_body_bytes, include_image, image_screen_heights (1 through 10), max_image_bytes, and omit.",
+          "name": "options",
+          "type": "application/json"
+        },
+        {
+          "description": "Absolute HTTP(S) URL to render.",
+          "name": "url",
+          "required": true,
+          "type": "text/plain"
+        }
+      ],
+      "name": "web-render",
+      "outputs": [
+        {
+          "description": "Final top-frame URL.",
+          "name": "final_url",
+          "type": "text/plain"
+        },
+        {
+          "description": "Final top-frame response headers, lower-cased.",
+          "name": "headers",
+          "type": "application/json"
+        },
+        {
+          "description": "Serialized post-render document HTML.",
+          "name": "html",
+          "type": "text/plain"
+        },
+        {
+          "description": "Optional rendered PNG, with pixel dimensions in chunk attributes.",
+          "name": "image",
+          "type": "image/png"
+        },
+        {
+          "description": "Whether the HTTP status is below 400.",
+          "name": "ok",
+          "type": "bool"
+        },
+        {
+          "description": "Final top-frame HTTP status code.",
+          "name": "status_code",
+          "type": "integer"
+        },
+        {
+          "description": "Visible page text extracted by the browser DOM.",
+          "name": "text",
+          "type": "text/plain"
         }
       ]
     }

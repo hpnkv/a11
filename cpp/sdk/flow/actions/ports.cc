@@ -52,6 +52,13 @@ absl::Status NotEncodableAsJson(std::string_view what) {
       "read the `bytes` port, which is exact by construction."));
 }
 
+absl::Status NotEncodableAsText(std::string_view what) {
+  return absl::InvalidArgumentError(absl::StrCat(
+      what,
+      " holds bytes that are not valid UTF-8. Set options.encoding to "
+      "\"msgpack\", which carries them exactly, or read the `bytes` port."));
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -248,15 +255,14 @@ absl::Status Sink::PutText(std::string_view text, bool final) const {
   }
   if (!IsValidUtf8(text)) {
     // Named, because this is a file the caller can perfectly well read -- just
-    // not as JSON text.
-    return NotEncodableAsJson(absl::StrCat("the port '", entry_->name, "'"));
+    // not as UTF-8 text.
+    return NotEncodableAsText(absl::StrCat("the port '", entry_->name, "'"));
   }
-  absl::StatusOr<data::Chunk> chunk =
-      ValueChunk(nlohmann::json(text), Encoding::kJson);
-  if (!chunk.ok()) {
-    return chunk.status();
-  }
-  return Put(*std::move(chunk), final);
+  data::Chunk chunk;
+  chunk.metadata =
+      data::ChunkMetadata{.mimetype = std::string(data::kTextMimetype)};
+  chunk.data = std::string(text);
+  return Put(std::move(chunk), final);
 }
 
 absl::Status Sink::PutBytes(std::string bytes, bool final) const {

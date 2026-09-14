@@ -1032,9 +1032,11 @@ ActionSchema ReadFileSchema() {
       "metadata -- which is written before any content, so a composition can "
       "act on the size while the reading is still going on. Reading streams, "
       "so "
-      "a file larger than memory costs a chunk at a time.";
+      "a file larger than memory costs a chunk at a time. In Flow, pipe "
+      "`bytes` straight into a streaming consumer, or filter and bound "
+      "`lines` before routing only the useful selection to a flow output.";
   schema.inputs.emplace("path",
-                        Port("path", "string",
+                        Port("path", kTextPlain,
                              "File to read; relative paths use the current "
                              "directory.",
                              /*required=*/true, /*unary=*/true));
@@ -1056,12 +1058,12 @@ ActionSchema ReadFileSchema() {
       Port("bytes", kOctetStream, "The contents, in order, as they are read.",
            /*required=*/false, /*unary=*/false));
   schema.outputs.emplace(
-      "text", Port("text", "string",
+      "text", Port("text", kTextPlain,
                    "The whole file as one text value. Held in memory, so "
                    "`bytes` or `lines` is what a large file wants.",
                    /*required=*/false, /*unary=*/true));
   schema.outputs.emplace(
-      "lines", Port("lines", "string",
+      "lines", Port("lines", kTextPlain,
                     "One value per line, without its line ending. A trailing "
                     "line with no newline after it is still a line.",
                     /*required=*/false, /*unary=*/false));
@@ -1079,10 +1081,12 @@ ActionSchema WriteFileSchema() {
       "in one piece. Atomic by default: the content goes to a temporary beside "
       "the destination and is renamed into place at the end, so a reader sees "
       "either the old contents or the new ones and a cancelled write leaves "
-      "neither a partial file nor a temporary. Appending cannot be atomic and "
-      "says so.";
+      "neither a partial file nor a temporary. In Flow, connect a producer "
+      "directly, for example `file.bytes -> write.content`, to avoid exposing "
+      "or buffering intermediate bytes. Appending cannot be atomic and says "
+      "so.";
   schema.inputs.emplace("path",
-                        Port("path", "string",
+                        Port("path", kTextPlain,
                              "File to write; relative paths use the current "
                              "directory.",
                              /*required=*/true, /*unary=*/true));
@@ -1093,7 +1097,8 @@ ActionSchema WriteFileSchema() {
       Port("content", kOctetStream,
            "The contents, in order. Read to its end; the write is the "
            "backpressure point, so a producer is held behind the disk rather "
-           "than buffered ahead of it.",
+           "than buffered ahead of it. A Flow can pipe a byte stream here "
+           "with `file.bytes -> write.content`.",
            /*required=*/false, /*unary=*/false));
   schema.inputs.emplace(
       "options",
@@ -1105,7 +1110,7 @@ ActionSchema WriteFileSchema() {
            /*required=*/false, /*unary=*/true));
   schema.outputs.emplace(
       "resolved",
-      Port("resolved", "string",
+      Port("resolved", kTextPlain,
            "The absolute path that was written. Named `resolved` rather than "
            "`path` because a port name is one node whichever way it faces.",
            /*required=*/false, /*unary=*/true));
@@ -1130,8 +1135,9 @@ ActionSchema ListDirectorySchema() {
       "with a million files in it costs a composition one entry of memory, and "
       "its first entry arrives before the walk has finished. `truncated` says "
       "whether a limit cut the listing short, because a partial listing that "
-      "looks complete is worse than no listing.";
-  schema.inputs.emplace("path", Port("path", "string",
+      "looks complete is worse than no listing. In Flow, apply `where`, "
+      "`first`, or `map` to `entries` before routing the bounded result out.";
+  schema.inputs.emplace("path", Port("path", kTextPlain,
                                      "Directory to list; relative paths use "
                                      "the current directory.",
                                      /*required=*/true, /*unary=*/true));
@@ -1170,7 +1176,7 @@ ActionSchema StatPathSchema() {
       "Read one path's metadata. A path that is not there is an answer -- "
       "`exists` is false -- rather than a failure, so a composition can ask "
       "without wrapping the question in a `try`.";
-  schema.inputs.emplace("path", Port("path", "string",
+  schema.inputs.emplace("path", Port("path", kTextPlain,
                                      "Path to inspect; relative paths use the "
                                      "current directory.",
                                      /*required=*/true, /*unary=*/true));
@@ -1195,7 +1201,7 @@ ActionSchema MakeDirectorySchema() {
       "Create a directory, and by default its parents. Finding it already "
       "there is a success with `created` false, because a composition that "
       "wants a directory to exist has got what it wanted.";
-  schema.inputs.emplace("path", Port("path", "string",
+  schema.inputs.emplace("path", Port("path", kTextPlain,
                                      "Directory to create; relative paths use "
                                      "the current directory.",
                                      /*required=*/true, /*unary=*/true));
@@ -1203,7 +1209,7 @@ ActionSchema MakeDirectorySchema() {
                         Port("options", JsonType(), "Optional: parents (true).",
                              /*required=*/false, /*unary=*/true));
   schema.outputs.emplace("resolved",
-                         Port("resolved", "string", "The absolute path.",
+                         Port("resolved", kTextPlain, "The absolute path.",
                               /*required=*/false, /*unary=*/true));
   schema.outputs.emplace(
       "created",
@@ -1222,7 +1228,7 @@ ActionSchema RemovePathSchema() {
       "otherwise -- a recursive delete nobody asked for is the most expensive "
       "way for this library to be convenient. A path that is not there is a "
       "success by default, since the composition wanted it gone.";
-  schema.inputs.emplace("path", Port("path", "string",
+  schema.inputs.emplace("path", Port("path", kTextPlain,
                                      "Path to remove; relative paths use the "
                                      "current directory.",
                                      /*required=*/true, /*unary=*/true));
@@ -1244,20 +1250,20 @@ ActionSchema MovePathSchema() {
       "Rename a path. Atomic within one filesystem and refused across two, "
       "where a move requires copying and deleting. Use copy_path followed by "
       "remove_path for that operation.";
-  schema.inputs.emplace("path", Port("path", "string",
+  schema.inputs.emplace("path", Port("path", kTextPlain,
                                      "Path to move; relative paths use the "
                                      "current directory.",
                                      /*required=*/true, /*unary=*/true));
-  schema.inputs.emplace("to", Port("to", "string",
+  schema.inputs.emplace("to", Port("to", kTextPlain,
                                    "Destination; relative paths use the "
                                    "current directory.",
                                    /*required=*/true, /*unary=*/true));
   schema.inputs.emplace(
       "options", Port("options", JsonType(), "Optional: overwrite (false).",
                       /*required=*/false, /*unary=*/true));
-  schema.outputs.emplace("resolved",
-                         Port("resolved", "string", "The absolute destination.",
-                              /*required=*/false, /*unary=*/true));
+  schema.outputs.emplace(
+      "resolved", Port("resolved", kTextPlain, "The absolute destination.",
+                       /*required=*/false, /*unary=*/true));
   AddDeadlineHeader(schema, "The call fails once it is reached.");
   return schema;
 }
@@ -1269,11 +1275,11 @@ ActionSchema CopyPathSchema() {
       "Copy a file or, with options.recursive, a tree. For a copy whose "
       "progress a composition wants to watch, read_file into write_file gives "
       "the same result one chunk at a time.";
-  schema.inputs.emplace("path", Port("path", "string",
+  schema.inputs.emplace("path", Port("path", kTextPlain,
                                      "Path to copy; relative paths use the "
                                      "current directory.",
                                      /*required=*/true, /*unary=*/true));
-  schema.inputs.emplace("to", Port("to", "string",
+  schema.inputs.emplace("to", Port("to", kTextPlain,
                                    "Destination; relative paths use the "
                                    "current directory.",
                                    /*required=*/true, /*unary=*/true));
@@ -1281,9 +1287,9 @@ ActionSchema CopyPathSchema() {
                         Port("options", JsonType(),
                              "Optional: recursive (false), overwrite (false).",
                              /*required=*/false, /*unary=*/true));
-  schema.outputs.emplace("resolved",
-                         Port("resolved", "string", "The absolute destination.",
-                              /*required=*/false, /*unary=*/true));
+  schema.outputs.emplace(
+      "resolved", Port("resolved", kTextPlain, "The absolute destination.",
+                       /*required=*/false, /*unary=*/true));
   AddDeadlineHeader(schema, "The call fails once it is reached.");
   return schema;
 }
@@ -1305,7 +1311,7 @@ ActionSchema MakeTempSchema() {
            "directory).",
            /*required=*/false, /*unary=*/true));
   schema.outputs.emplace("path",
-                         Port("path", "string", "The path that was made.",
+                         Port("path", kTextPlain, "The path that was made.",
                               /*required=*/false, /*unary=*/true));
   AddDeadlineHeader(schema, "The call fails once it is reached.");
   return schema;

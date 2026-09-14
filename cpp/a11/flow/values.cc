@@ -40,6 +40,7 @@
 #include "a11/flow/internal/pattern.h"
 #include "a11/flow/vocabulary.h"
 #include "a11/time.h"
+#include "a11/utf8.h"
 #include "absl/strings/match.h"
 
 namespace a11::flow {
@@ -1395,6 +1396,17 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
           absl::StrCat(name, " was given text that is not base64."));
     }
     return Value::Bytes(data::Bytes(std::move(decoded)));
+  }
+  if (name == "utf8encode") {
+    return Value::Bytes(data::Bytes(AsText(first)));
+  }
+  if (name == "utf8decode") {
+    const std::string decoded = AsText(first);
+    if (!utf8::IsValid(decoded)) {
+      return absl::InvalidArgumentError(
+          "utf8decode was given bytes that are not valid UTF-8.");
+    }
+    return Value::String(decoded);
   }
   if (name == "text") {
     return Value::String(AsText(first));

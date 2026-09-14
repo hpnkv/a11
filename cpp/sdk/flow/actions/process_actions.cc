@@ -957,9 +957,11 @@ ActionSchema SpawnProcessSchema() {
       "rather than failing the action: the program ran, and this is what it "
       "said. Cancelling the action sends SIGTERM, waits options.grace, and "
       "then "
-      "sends SIGKILL.";
+      "sends SIGKILL. In Flow, pipe `stdin` from an upstream byte stream and "
+      "filter or bound `stdout_lines` and `stderr_lines`; leave unneeded "
+      "outputs unrouted so they do not reach the caller.";
   schema.inputs.emplace("program",
-                        Port("program", "string", "The program to run.",
+                        Port("program", kTextPlain, "The program to run.",
                              /*required=*/true, /*unary=*/true));
   schema.inputs.emplace(
       "arguments",
@@ -974,7 +976,8 @@ ActionSchema SpawnProcessSchema() {
       Port("stdin", kOctetStream,
            "What to write to the program's standard input, in order. Closed "
            "when the stream ends, which is what a program reading to EOF waits "
-           "for. A program that stops reading early is not an error.",
+           "for. A program that stops reading early is not an error. In Flow, "
+           "connect an upstream byte output directly to `process.stdin`.",
            /*required=*/false, /*unary=*/false));
   schema.inputs.emplace(
       "options",
@@ -1005,7 +1008,7 @@ ActionSchema SpawnProcessSchema() {
                      /*required=*/false, /*unary=*/false));
   schema.outputs.emplace(
       "stdout_lines",
-      Port("stdout_lines", "string",
+      Port("stdout_lines", kTextPlain,
            "Standard output, one value per line, without its line ending.",
            /*required=*/false, /*unary=*/false));
   schema.outputs.emplace(
@@ -1015,7 +1018,7 @@ ActionSchema SpawnProcessSchema() {
                      /*required=*/false, /*unary=*/false));
   schema.outputs.emplace(
       "stderr_lines",
-      Port("stderr_lines", "string",
+      Port("stderr_lines", kTextPlain,
            "Standard error, one value per line, without its line ending.",
            /*required=*/false, /*unary=*/false));
   // Named `exit_code` rather than `status` because Flow reads `x.status` as the
@@ -1027,7 +1030,7 @@ ActionSchema SpawnProcessSchema() {
            /*required=*/false, /*unary=*/true));
   schema.outputs.emplace(
       "signal",
-      Port("signal", "string",
+      Port("signal", kTextPlain,
            "The name of the signal that ended it, or nothing when it exited of "
            "its own accord.",
            /*required=*/false, /*unary=*/true));
@@ -1045,7 +1048,7 @@ ActionSchema SpawnProcessSchema() {
   // Reported rather than assumed.
   schema.outputs.emplace(
       "sandbox",
-      Port("sandbox", "string",
+      Port("sandbox", kTextPlain,
            "What confinement was applied to the child: a Landlock ruleset on "
            "Linux, a Seatbelt profile on macOS, or why neither was.",
            /*required=*/false, /*unary=*/true));

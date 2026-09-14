@@ -73,6 +73,16 @@ def _bytes_chunk(data: bytes) -> types.Chunk:
     )
 
 
+def _decode_value(chunk: types.Chunk) -> Any:
+    """Decode a scalar according to the representation named by its chunk."""
+    mimetype = chunk.get_mimetype().split(";", 1)[0].lower()
+    if mimetype == "application/json" or mimetype.endswith("+json"):
+        return json.loads(chunk.data)
+    if mimetype == "text/plain" or mimetype.startswith("text/"):
+        return bytes(chunk.data).decode("utf-8")
+    return bytes(chunk.data)
+
+
 async def _feed_body(
     action: Action, body: bytes | Iterable[bytes] | None
 ) -> None:
@@ -117,7 +127,7 @@ class Response:
         async for chunk in self._action[port].iter_chunks():
             if chunk.is_null():
                 continue
-            value = json.loads(chunk.data)
+            value = _decode_value(chunk)
             break
         # Read to the end even after taking the value: a port left part-read
         # holds its writer open.
@@ -132,7 +142,7 @@ class Response:
         self._read.add(port)
         async for chunk in self._action[port].iter_chunks():
             if not chunk.is_null():
-                yield json.loads(chunk.data)
+                yield _decode_value(chunk)
 
     # --- Shared by both actions ---------------------------------------------
 

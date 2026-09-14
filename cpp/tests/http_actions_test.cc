@@ -14,6 +14,7 @@
 
 #include "sdk/http/actions/http_actions.h"
 
+#include <cstdlib>
 #include <memory>
 #include <optional>
 #include <string>
@@ -36,9 +37,11 @@
 #include "a11/concurrency/future.h"
 #include "a11/data/serialization.h"
 #include "a11/data/types.h"
+#include "a11/json_codec.h"
 #include "a11/net/http2.h"
 #include "a11/nodes/async_node.h"
 #include "a11/nodes/node_map.h"
+#include "sdk/http/render/web_render.h"
 
 namespace a11::sdk::http {
 namespace {
@@ -273,7 +276,16 @@ std::optional<nlohmann::json> ReadOne(const std::shared_ptr<Action>& action,
   if (values.empty()) {
     return std::nullopt;
   }
-  return nlohmann::json::parse(values.front(), nullptr, false);
+  nlohmann::json parsed = nlohmann::json::parse(values.front(), nullptr, false);
+  return parsed.is_discarded() ? nlohmann::json(values.front())
+                               : std::move(parsed);
+}
+
+std::optional<std::string> ReadTextOutput(const std::shared_ptr<Action>& action,
+                                          std::string_view port) {
+  const std::vector<std::string> values = ReadAll(action, port);
+  return values.empty() ? std::nullopt
+                        : std::optional<std::string>(values.front());
 }
 
 std::string Concat(const std::vector<std::string>& pieces) {
@@ -289,15 +301,75 @@ std::string Concat(const std::vector<std::string>& pieces) {
 TEST(HttpActionsTest, SchemasValidate) {
   EXPECT_TRUE(MakeHttpRequestSchema().Validate().ok());
   EXPECT_TRUE(WebFetchSchema().Validate().ok());
+  EXPECT_TRUE(WebRenderSchema().Validate().ok());
 }
 
-TEST(HttpActionsTest, RegistersBothActions) {
+TEST(HttpActionsTest, RegistersAllActions) {
   ActionRegistry registry;
   ASSERT_TRUE(RegisterHttpActions(registry).ok());
   EXPECT_TRUE(registry.IsRegistered(kMakeHttpRequestAction));
   EXPECT_TRUE(registry.IsRegistered(kWebFetchAction));
+  EXPECT_TRUE(registry.IsRegistered(kWebRenderAction));
   EXPECT_TRUE(RegisterHttpActions(registry).ok());
 }
+
+#if !defined(__APPLE__) && !defined(__linux__)
+TEST(HttpActionsTest, WebRenderReportsUnimplementedOnUnsupportedPlatforms) {
+  const absl::StatusOr<WebRenderResult> result =
+      RenderWebPage(WebRenderRequest{});
+  EXPECT_EQ(result.status().code(), absl::StatusCode::kUnimplemented);
+}
+#endif
+
+TEST(HttpActionsTest, WebRenderDeclaresUtf8OutputsAsText) {
+  const actions::ActionSchema schema = WebRenderSchema();
+  EXPECT_EQ(schema.inputs.at("url").type, data::kTextMimetype);
+  EXPECT_EQ(schema.outputs.at("final_url").type, data::kTextMimetype);
+  EXPECT_EQ(schema.outputs.at("html").type, data::kTextMimetype);
+  EXPECT_EQ(schema.outputs.at("text").type, data::kTextMimetype);
+  EXPECT_EQ(schema.outputs.at("image").type, "image/png");
+}
+
+TEST(HttpActionsTest, WebRenderDescribesEveryOption) {
+  const actions::ActionSchema schema = WebRenderSchema();
+  const absl::StatusOr<nlohmann::json> options = a11::ParseJson(
+      schema.inputs.at("options").json_schema, "web-render options schema");
+  ASSERT_TRUE(options.ok()) << options.status();
+  const auto properties = options->find("properties");
+  ASSERT_NE(properties, options->end());
+  ASSERT_TRUE(properties->is_object());
+  for (const auto& [name, property] : properties->items()) {
+    const auto description = property.find("description");
+    ASSERT_NE(description, property.end()) << name;
+    EXPECT_TRUE(description->is_string()) << name;
+    EXPECT_FALSE(description->get_ref<const std::string&>().empty()) << name;
+  }
+}
+
+#if defined(__linux__)
+TEST(HttpActionsTest, WebRenderWpeHelperConformsWhenConfigured) {
+  const char* url = std::getenv("A11_WEB_RENDER_TEST_URL");
+  if (url == nullptr || *url == '\0') {
+    GTEST_SKIP() << "A11_WEB_RENDER_TEST_URL is not configured";
+  }
+  WebRenderRequest request;
+  request.url = url;
+  request.deadline = absl::Now() + absl::Seconds(30);
+  request.include_image = true;
+  request.image_screen_heights = 2;
+  request.max_image_bytes = 16 * 1024 * 1024;
+  const absl::StatusOr<WebRenderResult> result = RenderWebPage(request);
+  ASSERT_TRUE(result.ok()) << result.status();
+  EXPECT_EQ(result->status_code, 200);
+  EXPECT_NE(result->html.find("data-rendered=\"yes\""), std::string::npos);
+  EXPECT_NE(result->text.find("A11 WPE marker"), std::string::npos);
+  EXPECT_TRUE(result->image_png.starts_with("\x89PNG\r\n\x1a\n"));
+  EXPECT_EQ(result->image_width, 1280);
+  EXPECT_GT(result->image_height, 720);
+  EXPECT_LE(result->image_height, 1440);
+  EXPECT_EQ(result->image_tile_count, 2);
+}
+#endif
 
 TEST(HttpActionsTest, MakeHttpRequestDeclaresAPortPerConcern) {
   const a11::actions::ActionSchema schema = MakeHttpRequestSchema();
@@ -685,7 +757,15 @@ TEST(HttpActionsTest, WebFetchHandsBackTextAndJson) {
 
   EXPECT_EQ(ReadOne(action, "status_code"), 200);
   EXPECT_EQ(ReadOne(action, "ok"), true);
-  EXPECT_EQ(ReadOne(action, "text"), R"({"name": "a11", "count": 2})");
+  absl::StatusOr<std::shared_ptr<AsyncNode>> text_node =
+      action->GetOutput("text");
+  ASSERT_TRUE(text_node.ok());
+  absl::StatusOr<std::optional<data::Chunk>> text_chunk =
+      (*text_node)->NextChunk(kPatience).Await();
+  ASSERT_TRUE(text_chunk.ok());
+  ASSERT_TRUE(text_chunk->has_value());
+  EXPECT_EQ((**text_chunk).GetMimetype(), data::kTextMimetype);
+  EXPECT_EQ((**text_chunk).data, R"({"name": "a11", "count": 2})");
   const std::optional<nlohmann::json> parsed = ReadOne(action, "json");
   ASSERT_TRUE(parsed.has_value());
   EXPECT_EQ((*parsed)["name"], "a11");
@@ -701,7 +781,7 @@ TEST(HttpActionsTest, WebFetchClosesJsonEmptyForAPageThatIsNotJson) {
   ASSERT_TRUE(action->Run().ok());
   ASSERT_TRUE(action->Wait(kPatience).Await().ok())
       << action->Wait(kPatience).Await().status();
-  EXPECT_EQ(ReadOne(action, "text"), "a plain body");
+  EXPECT_EQ(ReadTextOutput(action, "text"), "a plain body");
   // "It is not JSON" is an answer, not a failure.
   EXPECT_TRUE(ReadAll(action, "json").empty());
   EXPECT_TRUE(ReadAll(action, "items").empty());
@@ -719,7 +799,7 @@ TEST(HttpActionsTest, WebFetchReportsAnErrorResponseAsData) {
       << action->Wait(kPatience).Await().status();
   EXPECT_EQ(ReadOne(action, "status_code"), 404);
   EXPECT_EQ(ReadOne(action, "ok"), false);
-  EXPECT_EQ(ReadOne(action, "text"), "no such thing");
+  EXPECT_EQ(ReadTextOutput(action, "text"), "no such thing");
 }
 
 TEST(HttpActionsTest, WebFetchStreamsTheElementsOfAJsonArray) {
@@ -789,7 +869,7 @@ TEST(HttpActionsTest, WebFetchFollowsRedirects) {
   ASSERT_TRUE(action->Wait(kPatience).Await().ok())
       << action->Wait(kPatience).Await().status();
   EXPECT_EQ(ReadOne(action, "status_code"), 200);
-  EXPECT_EQ(ReadOne(action, "text"), "a plain body");
+  EXPECT_EQ(ReadTextOutput(action, "text"), "a plain body");
 }
 
 TEST(HttpActionsTest, WebFetchStreamsTheBodyForACallerThatWantsBytes) {

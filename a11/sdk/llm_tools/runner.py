@@ -128,9 +128,10 @@ def output_definition_from_schema(entry: dict[str, Any]) -> dict[str, Any]:
     if not properties:
         return {}
 
-    return organise_and_deduplicate_jsonschema(
-        {"type": "object", "properties": properties}
-    )
+    return organise_and_deduplicate_jsonschema({
+        "type": "object",
+        "properties": properties,
+    })
 
 
 def whole_json_port(mapping: Mapping[str, str]) -> str | None:
@@ -205,6 +206,7 @@ async def collect_tools(
 
     registry = action.get_registry()
     if registry is None:
+        tools.sort(key=lambda tool: tool["name"])
         return tools
 
     await _ask_the_peer(action)
@@ -213,12 +215,14 @@ async def collect_tools(
     local = sorted(
         name
         for name in registry.list_registered_actions()
-        if name not in requested and name != action.get_schema().name
+        if name not in requested
+        and name != action.get_schema().name
         # A11's reserved actions are protocol operations, not model tools.
         and not describe.is_reserved_action(name)
         and action_name_matches_allowed(name, allowed_patterns)
     )
     tools.extend(get_tool_definitions(registry, local))
+    tools.sort(key=lambda tool: tool["name"])
     return tools
 
 
@@ -277,16 +281,12 @@ class ExecutedActions:
         if self.logs:
             metadata[TOOL_LOGS_METADATA_KEY] = json.dumps(self.logs).encode()
         if self.outputs:
-            metadata[TOOL_STATUSES_METADATA_KEY] = json.dumps(
-                {
-                    call_id: (
-                        self.errors.get(call_id, Status()).model_dump(
-                            mode="json"
-                        )
-                    )
-                    for call_id in self.outputs
-                }
-            ).encode()
+            metadata[TOOL_STATUSES_METADATA_KEY] = json.dumps({
+                call_id: (
+                    self.errors.get(call_id, Status()).model_dump(mode="json")
+                )
+                for call_id in self.outputs
+            }).encode()
         return metadata
 
     def error_message(self, call_id: str) -> str | None:
@@ -349,9 +349,9 @@ async def user_facing_log_entries(
 
 async def user_facing_log(node: a11.AsyncNode, timeout: a11.Duration) -> str:
     """What a call logged for the person watching, as one block of text."""
-    return "".join(
-        [text async for text in user_facing_log_entries(node, timeout)]
-    )
+    return "".join([
+        text async for text in user_facing_log_entries(node, timeout)
+    ])
 
 
 async def relay_user_facing_logs(
@@ -572,7 +572,8 @@ async def execute_actions_from_interaction(
                 ).to_exception()
 
             nested_action = (
-                action.make_nested(registry.get_schema(call.name))
+                action
+                .make_nested(registry.get_schema(call.name))
                 .set_id(call.id)
                 .bind_stream(None)
                 .bind_handler(registry.get_handler(call.name))

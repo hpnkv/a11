@@ -37,6 +37,21 @@ class CreateMessageConfig(BaseModel):
         default=10240,
         description="Maximum number of tokens to generate.",
     )
+    stable_cache_ttl: Literal["5m", "1h"] = Field(
+        default="1h",
+        description=(
+            "How long Anthropic retains the stable tools and system prefix."
+            " One-hour writes cost more and suit prefixes reused after idle"
+            " periods."
+        ),
+    )
+    conversation_cache_ttl: Literal["5m", "1h"] = Field(
+        default="5m",
+        description=(
+            "How long Anthropic retains the growing conversation prefix."
+            " Five minutes keeps each moving suffix write inexpensive."
+        ),
+    )
     thinking: bool = Field(
         default=False,
         description=(
@@ -174,12 +189,10 @@ class ClaudeInteractionAdapter(InteractionAdapter):
         return Interaction(
             role=Role.USER,
             content=[
-                a11.to_chunk(
-                    {
-                        "role": role_str,
-                        "content": [{"type": "text", "text": text}],
-                    }
-                )
+                a11.to_chunk({
+                    "role": role_str,
+                    "content": [{"type": "text", "text": text}],
+                })
             ],
             system_instructions=system_instructions,
         )

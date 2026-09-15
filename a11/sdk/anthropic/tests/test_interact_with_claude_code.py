@@ -189,7 +189,8 @@ async def _run(
     registry.register("get_info", _GET_INFO, _get_info)
 
     action = (
-        a11.Action(INTERACT_WITH_CLAUDE_CODE_SCHEMA)
+        a11
+        .Action(INTERACT_WITH_CLAUDE_CODE_SCHEMA)
         .bind_handler(mod.interact_with_claude_code)
         .bind_registry(registry)
         .set_header(LlmHeaders.MODEL.value, b"claude-sonnet-4-6")
@@ -368,9 +369,7 @@ async def test_tool_call_runs_the_registry_action(monkeypatch):
 
     # The SDK ran the call, so the interaction records it without offering it
     # to the caller to run again.
-    assert not any(
-        interaction.action_calls for interaction in new_interactions
-    )
+    assert not any(interaction.action_calls for interaction in new_interactions)
 
 
 @pytest.mark.asyncio
@@ -588,12 +587,10 @@ async def test_history_resumes_the_recorded_session(monkeypatch):
         previous_interaction_id=first.id,
         role=Role.ASSISTANT,
         content=[
-            a11.to_chunk(
-                {
-                    "role": "assistant",
-                    "content": [{"type": "text", "text": "hi there"}],
-                }
-            )
+            a11.to_chunk({
+                "role": "assistant",
+                "content": [{"type": "text", "text": "hi there"}],
+            })
         ],
         backend_specific_metadata={
             "backend": b"claude_code",
@@ -606,14 +603,43 @@ async def test_history_resumes_the_recorded_session(monkeypatch):
         content=[a11.to_chunk({"role": "user", "content": "and now?"})],
     )
 
-    await _run(
-        script, monkeypatch, interactions=[first, answered, follow_up]
-    )
+    await _run(script, monkeypatch, interactions=[first, answered, follow_up])
 
     client = _FakeClient.last
     assert client.options.resume == "sess-7"
     # Only the turn the resumed session has not seen is sent.
     assert client.prompt[0]["message"]["content"] == "and now?"
+
+
+@pytest.mark.asyncio
+async def test_explicit_resume_sends_only_the_newest_interaction(monkeypatch):
+    async def script():
+        return [_result("sess-explicit")]
+
+    interactions = [
+        Interaction(
+            role=Role.USER,
+            content=[a11.to_chunk({"role": "user", "content": "old"})],
+        ),
+        Interaction(
+            role=Role.ASSISTANT,
+            content=[a11.to_chunk({"role": "assistant", "content": "seen"})],
+        ),
+        Interaction(
+            role=Role.USER,
+            content=[a11.to_chunk({"role": "user", "content": "new"})],
+        ),
+    ]
+    await _run(
+        script,
+        monkeypatch,
+        interactions=interactions,
+        config=CreateSessionConfig(resume="sess-explicit"),
+    )
+
+    client = _FakeClient.last
+    assert client.options.resume == "sess-explicit"
+    assert client.prompt[0]["message"]["content"] == "new"
 
 
 @pytest.mark.asyncio
@@ -629,12 +655,10 @@ async def test_history_without_a_session_is_replayed(monkeypatch):
         previous_interaction_id=first.id,
         role=Role.ASSISTANT,
         content=[
-            a11.to_chunk(
-                {
-                    "role": "assistant",
-                    "content": [{"type": "text", "text": "hi there"}],
-                }
-            )
+            a11.to_chunk({
+                "role": "assistant",
+                "content": [{"type": "text", "text": "hi there"}],
+            })
         ],
     )
     follow_up = Interaction(
@@ -643,9 +667,7 @@ async def test_history_without_a_session_is_replayed(monkeypatch):
         content=[a11.to_chunk({"role": "user", "content": "and now?"})],
     )
 
-    await _run(
-        script, monkeypatch, interactions=[first, answered, follow_up]
-    )
+    await _run(script, monkeypatch, interactions=[first, answered, follow_up])
 
     client = _FakeClient.last
     assert client.options.resume is None
@@ -670,12 +692,10 @@ async def test_a_resumed_session_needs_a_new_turn(monkeypatch):
         previous_interaction_id=first.id,
         role=Role.ASSISTANT,
         content=[
-            a11.to_chunk(
-                {
-                    "role": "assistant",
-                    "content": [{"type": "text", "text": "hi there"}],
-                }
-            )
+            a11.to_chunk({
+                "role": "assistant",
+                "content": [{"type": "text", "text": "hi there"}],
+            })
         ],
         backend_specific_metadata={
             "backend": b"claude_code",

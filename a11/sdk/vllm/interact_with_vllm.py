@@ -715,6 +715,8 @@ def _build_extra_body(config: CreateChatCompletionConfig) -> dict[str, Any]:
             extra_body[field] = value
     if config.chat_template_kwargs:
         extra_body["chat_template_kwargs"] = dict(config.chat_template_kwargs)
+    if config.cache_salt is not None:
+        extra_body["cache_salt"] = config.cache_salt
     extra_body.update(config.extra_body)
     return extra_body
 

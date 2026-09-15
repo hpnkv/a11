@@ -100,6 +100,30 @@ def _image_block(image: llm.NormalizedPart) -> dict[str, Any]:
     }
 
 
+def _cached_prefix(
+    system_prompt: str,
+    tools: list[dict[str, Any]],
+    ttl: str,
+) -> tuple[str | list[dict[str, Any]], list[dict[str, Any]]]:
+    """Mark the stable system-and-tool prefix as an Anthropic cache boundary."""
+    cache_control = {"type": "ephemeral", "ttl": ttl}
+    cached_tools = [dict(tool) for tool in tools]
+    if system_prompt:
+        return (
+            [
+                {
+                    "type": "text",
+                    "text": system_prompt,
+                    "cache_control": cache_control,
+                }
+            ],
+            cached_tools,
+        )
+    if cached_tools:
+        cached_tools[-1]["cache_control"] = cache_control
+    return anthropic.Omit(), cached_tools
+
+
 def _build_usage_metadata(
     usage: anthropic.types.Usage | None,
 ) -> llm.UsageMetadata | None:
@@ -187,9 +211,10 @@ def _build_server_tools(config: CreateMessageConfig) -> list[dict[str, Any]]:
     if config.web_fetch:
         tools.append({"type": "web_fetch_20260209", "name": "web_fetch"})
     if config.code_execution:
-        tools.append(
-            {"type": "code_execution_20260521", "name": "code_execution"}
-        )
+        tools.append({
+            "type": "code_execution_20260521",
+            "name": "code_execution",
+        })
     return tools
 
 
@@ -232,12 +257,10 @@ async def interact_with_claude(action: a11.Action):
             action.set_span_name("Claude interaction")
             action.set_span_attribute("gen_ai.system", "anthropic")
             action.set_span_attribute("gen_ai.request.model", model)
-            action.set_span_input(
-                [
-                    {"role": message["role"], "content": message["content"]}
-                    for message in conversation.messages
-                ]
-            )
+            action.set_span_input([
+                {"role": message["role"], "content": message["content"]}
+                for message in conversation.messages
+            ])
         except Exception:
             logging.debug("failed to record LLM span input", exc_info=True)
 
@@ -245,6 +268,10 @@ async def interact_with_claude(action: a11.Action):
 
     tools = await runner.collect_tools(action, deadline)
     tools.extend(_build_server_tools(config))
+    tools.sort(key=lambda tool: tool["name"])
+    system, tools = _cached_prefix(
+        conversation.system_prompt, tools, config.stable_cache_ttl
+    )
 
     thinking = _build_thinking(config, model, bool(tools))
     output_config = _build_output_config(config, model)
@@ -262,8 +289,11 @@ async def interact_with_claude(action: a11.Action):
                     max_tokens=config.max_tokens,
                     messages=messages,
                     model=model,
-                    cache_control={"type": "ephemeral", "ttl": "1h"},
-                    system=conversation.system_prompt or anthropic.Omit(),
+                    cache_control={
+                        "type": "ephemeral",
+                        "ttl": config.conversation_cache_ttl,
+                    },
+                    system=system,
                     stream=True,
                     tool_choice=(
                         {"type": "auto"} if tools else anthropic.Omit()
@@ -373,14 +403,12 @@ async def interact_with_claude(action: a11.Action):
                     **executed.log_metadata(),
                 },
                 content=[
-                    a11.to_chunk(
-                        {
-                            "role": "user",
-                            "content": await _build_tool_results_from_outputs(
-                                executed
-                            ),
-                        }
-                    )
+                    a11.to_chunk({
+                        "role": "user",
+                        "content": await _build_tool_results_from_outputs(
+                            executed
+                        ),
+                    })
                 ],
             )
             previous_interaction_id = tool_output_interaction.id

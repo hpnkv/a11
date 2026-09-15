@@ -289,9 +289,6 @@ def _resume_point(
     whole history each turn. Where the history names a session this provider
     produced, that session is resumed and only the turns after it are sent.
     """
-    if config.resume:
-        return config.resume, list(conversation.messages)
-
     for index in range(len(conversation.interactions) - 1, -1, -1):
         interaction = conversation.interactions[index]
         backend = llm.interaction_backend(interaction)
@@ -304,8 +301,12 @@ def _resume_point(
             continue
         if isinstance(session_id, bytes):
             session_id = session_id.decode()
+        if config.resume and session_id != config.resume:
+            continue
         return session_id, list(conversation.messages[index + 1 :])
 
+    if config.resume:
+        return config.resume, list(conversation.messages[-1:])
     return None, list(conversation.messages)
 
 
@@ -554,12 +555,10 @@ async def interact_with_claude_code(action: a11.Action):
             action.set_span_attribute("gen_ai.system", "claude_code")
             if model:
                 action.set_span_attribute("gen_ai.request.model", model)
-            action.set_span_input(
-                [
-                    {"role": message["role"], "content": message["content"]}
-                    for message in conversation.messages
-                ]
-            )
+            action.set_span_input([
+                {"role": message["role"], "content": message["content"]}
+                for message in conversation.messages
+            ])
         except Exception:
             logging.debug("failed to record LLM span input", exc_info=True)
 
@@ -655,15 +654,12 @@ async def interact_with_claude_code(action: a11.Action):
                     ),
                     model=message.model,
                     content=[
-                        a11.to_chunk(
-                            {
-                                "role": "assistant",
-                                "content": [
-                                    _block_dict(block)
-                                    for block in message.content
-                                ],
-                            }
-                        )
+                        a11.to_chunk({
+                            "role": "assistant",
+                            "content": [
+                                _block_dict(block) for block in message.content
+                            ],
+                        })
                     ],
                     backend_specific_metadata=_backend_metadata(
                         session_id,
@@ -695,9 +691,7 @@ async def interact_with_claude_code(action: a11.Action):
                     created_at_millis=(
                         a11.now().nanoseconds_since_epoch // 1000000
                     ),
-                    content=[
-                        a11.to_chunk({"role": "user", "content": blocks})
-                    ],
+                    content=[a11.to_chunk({"role": "user", "content": blocks})],
                     backend_specific_metadata=_backend_metadata(
                         session_id,
                         {"parent_tool_use_id": message.parent_tool_use_id},
@@ -731,9 +725,7 @@ async def interact_with_claude_code(action: a11.Action):
             try:
                 action.set_span_output(_as_event(last_message))
             except Exception:
-                logging.debug(
-                    "failed to record LLM span output", exc_info=True
-                )
+                logging.debug("failed to record LLM span output", exc_info=True)
 
     except StatusException:
         raise

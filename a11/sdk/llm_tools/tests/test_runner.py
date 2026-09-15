@@ -309,18 +309,48 @@ async def test_collect_tools_adds_the_registered_actions_the_caller_allows(
     host.set_header(LlmHeaders.ALLOWED_LLM_ACTIONS.value, patterns)
     host.run()
 
-    await host["tools"].finalize(
-        {
-            "name": "caller_tool",
-            "description": "A tool the caller serves itself.",
-            "input_schema": {"type": "object", "properties": {}},
-        }
-    )
+    await host["tools"].finalize({
+        "name": "caller_tool",
+        "description": "A tool the caller serves itself.",
+        "input_schema": {"type": "object", "properties": {}},
+    })
     await host["interactions"].finalize()
     await host["config"].finalize()
     await host.wait()
 
     assert [tool["name"] for tool in collected[0]] == expected
+
+
+@pytest.mark.asyncio
+async def test_collect_tools_has_a_stable_name_order():
+    collected: list[list[dict]] = []
+
+    async def host_handler(action: a11.Action) -> None:
+        collected.append(await runner.collect_tools(action))
+
+    registry = a11.ActionRegistry()
+    registry.register(
+        INTERACT_WITH_LLM_SCHEMA.name, INTERACT_WITH_LLM_SCHEMA, host_handler
+    )
+    host = registry.make_action(INTERACT_WITH_LLM_SCHEMA.name)
+    host.set_header(LlmHeaders.ALLOWED_LLM_ACTIONS.value, b"alpha,middle,zebra")
+    host.run()
+    for name in ("zebra", "alpha", "middle"):
+        await host["tools"].put({
+            "name": name,
+            "description": name,
+            "input_schema": {"type": "object"},
+        })
+    await host["tools"].finalize()
+    await host["interactions"].finalize()
+    await host["config"].finalize()
+    await host.wait()
+
+    assert [tool["name"] for tool in collected[0]] == [
+        "alpha",
+        "middle",
+        "zebra",
+    ]
 
 
 _QUIET_SCHEMA = ActionSchema(

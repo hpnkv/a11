@@ -89,7 +89,7 @@ def _chunk(
     )
 
 
-def _usage_chunk(prompt=7, completion=11):
+def _usage_chunk(prompt=7, completion=11, cached=None):
     """The final chunk `stream_options.include_usage` asks for."""
     return ChatCompletionChunk(
         id="chatcmpl-1",
@@ -101,6 +101,9 @@ def _usage_chunk(prompt=7, completion=11):
             prompt_tokens=prompt,
             completion_tokens=completion,
             total_tokens=prompt + completion,
+            prompt_tokens_details=(
+                {"cached_tokens": cached} if cached is not None else None
+            ),
         ),
     )
 
@@ -381,7 +384,7 @@ async def test_usage_and_tools_reach_the_request(monkeypatch):
         [
             _chunk(content="Hi."),
             _chunk(finish_reason="stop"),
-            _usage_chunk(prompt=13, completion=5),
+            _usage_chunk(prompt=13, completion=5, cached=8),
         ],
     ]
 
@@ -400,6 +403,12 @@ async def test_usage_and_tools_reach_the_request(monkeypatch):
     assert usage.input_tokens == 13
     assert usage.output_tokens == 5
     assert usage.total_tokens == 18
+    assert usage.cached_input_tokens == 8
+
+
+def test_cache_salt_reaches_vllm_extra_body():
+    config = mod.CreateChatCompletionConfig(cache_salt="tenant-stable")
+    assert mod._build_extra_body(config)["cache_salt"] == "tenant-stable"
 
 
 @pytest.mark.asyncio

@@ -14,8 +14,45 @@
 
 import hashlib
 import os
+from typing import Any
 
-from ollama import AsyncClient
+from ollama import AsyncClient, ChatResponse
+from ollama._types import ChatRequest
+
+
+class _CacheAwareChatResponse(ChatResponse):
+    """Ollama response fields used by A11 ahead of an SDK release."""
+
+    prompt_eval_cached_count: int | None = None
+
+
+class _CacheAwareAsyncClient(AsyncClient):
+    """Keep Ollama's cached prompt count in streamed response objects."""
+
+    async def chat(self, *args: Any, **kwargs: Any) -> Any:
+        if "prompt_eval_cached_count" in ChatResponse.model_fields:
+            return await super().chat(*args, **kwargs)
+
+        bound = {
+            "model": args[0] if args else kwargs.pop("model", ""),
+            "messages": (
+                args[1] if len(args) > 1 else kwargs.pop("messages", None)
+            ),
+            "tools": kwargs.pop("tools", None),
+            "stream": kwargs.pop("stream", False),
+            "think": kwargs.pop("think", None),
+            "format": kwargs.pop("format", None),
+            "options": kwargs.pop("options", None),
+            "keep_alive": kwargs.pop("keep_alive", None),
+        }
+        request = ChatRequest(**bound, **kwargs)
+        return await self._request(
+            _CacheAwareChatResponse,
+            "POST",
+            "/api/chat",
+            json=request.model_dump(exclude_none=True),
+            stream=bound["stream"],
+        )
 
 
 def get_ollama_client(
@@ -35,13 +72,11 @@ def get_ollama_client(
     if not hasattr(get_ollama_client, "_clients"):
         get_ollama_client._clients = {}
 
-    cache_key = hashlib.sha256(
-        f"{host or ''}\0{api_key}".encode()
-    ).hexdigest()
+    cache_key = hashlib.sha256(f"{host or ''}\0{api_key}".encode()).hexdigest()
 
     if cache_key not in get_ollama_client._clients:
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else None
-        get_ollama_client._clients[cache_key] = AsyncClient(
+        get_ollama_client._clients[cache_key] = _CacheAwareAsyncClient(
             host=host, headers=headers
         )
 

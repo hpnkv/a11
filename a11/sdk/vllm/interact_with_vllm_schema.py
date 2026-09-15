@@ -34,7 +34,9 @@ class CreateChatCompletionConfig(BaseModel):
     `chat_template_kwargs` are vLLM's own sampling and templating extensions,
     sent in the request's ``extra_body``. vLLM hosts no server-side tools,
     so registry-backed A11 actions surfaced through the `tools` input port are
-    the only tools available.
+    the only tools available. Start the deployment with
+    ``--enable-prefix-caching`` and ``--enable-prompt-tokens-details`` so cache
+    reuse is active and appears in interaction usage.
     """
 
     A11_SERIAL_TAG: ClassVar[str] = serial_tags.INTERACT_WITH_VLLM_CONFIG
@@ -121,6 +123,15 @@ class CreateChatCompletionConfig(BaseModel):
             " reasoning (vLLM `extra_body.chat_template_kwargs`)."
         ),
         exclude_if=lambda x: not x,
+    )
+    cache_salt: str | None = Field(
+        default=None,
+        description=(
+            "Stable vLLM prefix-cache namespace. Reuse a value for prompts"
+            " allowed to share cached prefixes; use distinct values to"
+            " isolate tenants."
+        ),
+        exclude_if=lambda x: x is None,
     )
     extra_body: dict[str, Any] = Field(
         default_factory=dict,

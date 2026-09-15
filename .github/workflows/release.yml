@@ -46,9 +46,11 @@ jobs:
           - runner: ubuntu-24.04-arm
             platform: linux
             arch: aarch64
-          - runner: macos-15-intel
-            platform: macos
-            arch: x86_64
+          # macOS x86 wheel releases are paused. Keep this entry ready to
+          # restore when Intel release builds are needed again.
+          # - runner: macos-15-intel
+          #   platform: macos
+          #   arch: x86_64
           - runner: macos-15
             platform: macos
             arch: arm64

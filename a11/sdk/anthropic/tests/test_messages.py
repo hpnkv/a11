@@ -17,6 +17,8 @@ import json
 import a11
 
 from a11.sdk.anthropic.messages import Conversation
+from a11.sdk.anthropic import interact_with_claude as claude
+from a11.sdk.anthropic.interact_with_claude_schema import CreateMessageConfig
 from a11.sdk.llm import Interaction, Role
 
 
@@ -61,3 +63,39 @@ def test_a_bare_text_chunk_becomes_a_json_encodable_message():
         {"role": "user", "content": "what is this?"}
     ]
     assert json.dumps(conversation.messages)
+
+
+def test_cache_boundary_follows_the_stable_system_and_tools_prefix():
+    system, tools = claude._cached_prefix(
+        "Permanent instructions.",
+        [{"name": "lookup", "input_schema": {"type": "object"}}],
+        "5m",
+    )
+
+    assert system == [
+        {
+            "type": "text",
+            "text": "Permanent instructions.",
+            "cache_control": {"type": "ephemeral", "ttl": "5m"},
+        }
+    ]
+    assert "cache_control" not in tools[0]
+
+
+def test_cache_ttls_keep_the_stable_prefix_longer_than_the_conversation():
+    config = CreateMessageConfig()
+
+    assert config.stable_cache_ttl == "1h"
+    assert config.conversation_cache_ttl == "5m"
+
+
+def test_tools_form_the_cache_boundary_without_a_system_prompt():
+    system, tools = claude._cached_prefix(
+        "", [{"name": "lookup", "input_schema": {}}], "1h"
+    )
+
+    assert system is not None
+    assert tools[0]["cache_control"] == {
+        "type": "ephemeral",
+        "ttl": "1h",
+    }

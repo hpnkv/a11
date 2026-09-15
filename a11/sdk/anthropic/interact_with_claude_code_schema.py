@@ -157,8 +157,9 @@ class CreateSessionConfig(BaseModel):
     resume: str | None = Field(
         default=None,
         description=(
-            "Claude Code session id to continue. Also read from the newest"
-            " assistant interaction's metadata when unset."
+            "Claude Code session id to continue with the newest supplied"
+            " interaction. Also read from the newest assistant interaction's"
+            " metadata when unset."
         ),
         exclude_if=lambda x: x is None,
     )
@@ -280,12 +281,10 @@ class ClaudeCodeInteractionAdapter(InteractionAdapter):
         return Interaction(
             role=Role.USER,
             content=[
-                a11.to_chunk(
-                    {
-                        "role": role_str,
-                        "content": [{"type": "text", "text": text}],
-                    }
-                )
+                a11.to_chunk({
+                    "role": role_str,
+                    "content": [{"type": "text", "text": text}],
+                })
             ],
             system_instructions=system_instructions,
         )

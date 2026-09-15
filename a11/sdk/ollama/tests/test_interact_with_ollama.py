@@ -30,7 +30,9 @@ from a11.status import StatusException
 ollama = pytest.importorskip("ollama")
 
 from a11.sdk.ollama import interact_with_ollama as mod
+from a11.sdk.ollama.client import _CacheAwareChatResponse
 from a11.sdk.ollama.interact_with_ollama_schema import (
+    CreateChatConfig,
     INTERACT_WITH_OLLAMA_SCHEMA,
 )
 
@@ -56,9 +58,9 @@ def _chunk(message=None, done=False):
     return ollama.ChatResponse(
         model="fake",
         done=done,
-        message=message if message is not None else ollama.Message(
-            role="assistant"
-        ),
+        message=message
+        if message is not None
+        else ollama.Message(role="assistant"),
         prompt_eval_count=1,
         eval_count=1,
     )
@@ -84,11 +86,27 @@ class _FakeClient:
     def __init__(self, rounds):
         self._rounds = list(rounds)
         self._n = 0
+        self.requests = []
 
     async def chat(self, **kwargs):
+        self.requests.append(kwargs)
         chunks = self._rounds[self._n]
         self._n += 1
         return _FakeStream(chunks)
+
+
+def test_cache_defaults_and_usage_are_visible():
+    assert CreateChatConfig().keep_alive == "5m"
+    response = _CacheAwareChatResponse(
+        model="fake",
+        done=True,
+        message=ollama.Message(role="assistant"),
+        prompt_eval_count=19,
+        prompt_eval_cached_count=13,
+        eval_count=2,
+    )
+    usage = mod._build_usage_metadata(response)
+    assert usage.cached_input_tokens == 13
 
 
 # -- a trivial registry tool the model can call -------------------------------
@@ -134,7 +152,8 @@ async def _run(
     registry.register("get_info", _GET_INFO, _get_info)
 
     action = (
-        a11.Action(INTERACT_WITH_OLLAMA_SCHEMA)
+        a11
+        .Action(INTERACT_WITH_OLLAMA_SCHEMA)
         .bind_handler(mod.interact_with_ollama)
         .bind_registry(registry)
         .set_header(LlmHeaders.MODEL.value, b"fake")
@@ -218,9 +237,7 @@ async def test_multi_round_tool_calls_get_unique_ids(monkeypatch):
 
     # All three assistant text segments streamed through, in order.
     assert "".join(text) == (
-        "Let me look at your home folder."
-        "Now your projects."
-        "You build software."
+        "Let me look at your home folder.Now your projects.You build software."
     )
     # 3 assistant interactions + 2 tool-result interactions.
     assert len(new_interactions) == 5
@@ -335,11 +352,13 @@ async def test_thoughts_flush_once_before_first_text(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_a_combined_chunk_cannot_split_the_visible_answer(monkeypatch):
-    rounds = [[
-        _chunk(_message(thinking="considering ", content="Hello")),
-        _chunk(_message(thinking="late", content=" world")),
-        _chunk(done=True),
-    ]]
+    rounds = [
+        [
+            _chunk(_message(thinking="considering ", content="Hello")),
+            _chunk(_message(thinking="late", content=" world")),
+            _chunk(done=True),
+        ]
+    ]
 
     thoughts, _ = await _run(rounds, monkeypatch, read="thoughts")
     text, _ = await _run(rounds, monkeypatch, read="text_output")
@@ -421,33 +440,29 @@ def test_a_claude_tool_result_is_named_for_ollama():
 
     conversation = mod.Conversation()
     conversation.feed_next_interaction(
-        claude(
-            {
-                "role": "assistant",
-                "content": [
-                    {
-                        "type": "tool_use",
-                        "id": "toolu_01",
-                        "name": "get_info",
-                        "input": {"path": "~"},
-                    }
-                ],
-            }
-        )
+        claude({
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01",
+                    "name": "get_info",
+                    "input": {"path": "~"},
+                }
+            ],
+        })
     )
     conversation.feed_next_interaction(
-        claude(
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": "toolu_01",
-                        "content": "listing of ~",
-                    }
-                ],
-            }
-        )
+        claude({
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01",
+                    "content": "listing of ~",
+                }
+            ],
+        })
     )
 
     assistant, tool_result = conversation.messages

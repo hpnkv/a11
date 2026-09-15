@@ -76,12 +76,12 @@ class CreateChatConfig(BaseModel):
         exclude_if=lambda x: x is None,
     )
     keep_alive: str | float | None = Field(
-        default=None,
+        default="5m",
         description=(
             "How long to keep the model loaded in memory after the request"
-            " (e.g. `5m`, or seconds as a number)."
+            " so its prompt cache remains available (e.g. `5m`, or seconds"
+            " as a number). Set null to use the server default."
         ),
-        exclude_if=lambda x: x is None,
     )
     json_output: bool = Field(
         default=False,

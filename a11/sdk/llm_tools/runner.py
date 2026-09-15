@@ -537,6 +537,8 @@ async def execute_actions_from_interaction(
     action: a11.Action,
     registry: a11.ActionRegistry | None = None,
     rejected: Mapping[str, Status] | None = None,
+    *,
+    max_output_bytes: int | None = MAX_MODEL_TOOL_OUTPUT_BYTES,
 ) -> ExecutedActions:
     """Run an interaction's tool calls and collect a result for each of them.
 
@@ -634,7 +636,7 @@ async def execute_actions_from_interaction(
 
     for nested_action in nested_actions:
         fragments, failure = await collect_action_outputs(
-            nested_action, deadline, max_bytes=MAX_MODEL_TOOL_OUTPUT_BYTES
+            nested_action, deadline, max_bytes=max_output_bytes
         )
         all_outputs[nested_action.id] = fragments
         if failure is not None:

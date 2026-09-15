@@ -12,24 +12,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Drive one conversational turn through `codex exec --json`."""
+"""Drive one conversational turn through the Codex app-server protocol."""
 
 import asyncio
 import base64
 import binascii
 import contextlib
+import hashlib
 import json
 import mimetypes
 import os
+import re
 import tempfile
 import traceback
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
 from absl import logging
 
 import a11
-
 from a11.sdk import llm
 from a11.sdk.llm_tools import runner
 from a11.sdk.openai.interact_with_codex_schema import (
@@ -41,6 +43,11 @@ from a11.sdk.vllm import interact_with_vllm as chat
 from a11.status import Status, StatusCode, StatusException
 
 
+CODEX_TRANSPORT_METADATA_KEY = "codex_transport"
+CODEX_TRANSPORT = b"app-server-dynamic-tools/v1"
+CODEX_TOOLS_METADATA_KEY = "codex_tools_sha256"
+
+
 def _codex_to_normalized(interaction: llm.Interaction) -> llm.NormalizedMessage:
     return chat._vllm_to_normalized(interaction)
 
@@ -49,12 +56,15 @@ llm.register_interaction_normalizer(llm.Backend.CODEX, _codex_to_normalized)
 
 
 def _latest_thread(
-    interactions: list[llm.Interaction],
+    interactions: list[llm.Interaction], tools_digest: bytes
 ) -> tuple[str | None, int]:
     for index in range(len(interactions) - 1, -1, -1):
-        interaction = interactions[index]
-        metadata = interaction.backend_specific_metadata
+        metadata = interactions[index].backend_specific_metadata
         if metadata.get(llm.BACKEND_METADATA_KEY) != b"codex":
+            continue
+        if metadata.get(CODEX_TRANSPORT_METADATA_KEY) != CODEX_TRANSPORT:
+            continue
+        if metadata.get(CODEX_TOOLS_METADATA_KEY, b"") != tools_digest:
             continue
         if value := metadata.get(THREAD_ID_METADATA_KEY):
             return value.decode(), index
@@ -74,6 +84,24 @@ def _message_text(interaction: llm.Interaction) -> str:
     return "\n".join(pieces)
 
 
+def _system_instructions(interactions: list[llm.Interaction]) -> str | None:
+    if not interactions:
+        raise Status(
+            code=StatusCode.INVALID_ARGUMENT,
+            message="At least one interaction is required.",
+        ).to_exception()
+    values: list[str] = []
+    for chunk in interactions[0].system_instructions:
+        value = a11.from_chunk(chunk)
+        if not isinstance(value, str):
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT,
+                message="Only text system instructions are allowed.",
+            ).to_exception()
+        values.append(value)
+    return "\n\n".join(values) or None
+
+
 def _build_prompt(
     interactions: list[llm.Interaction], resume: str | None
 ) -> str:
@@ -82,85 +110,13 @@ def _build_prompt(
             code=StatusCode.INVALID_ARGUMENT,
             message="At least one interaction is required.",
         ).to_exception()
-    system: list[str] = []
-    if not resume:
-        for chunk in interactions[0].system_instructions:
-            value = a11.from_chunk(chunk)
-            if not isinstance(value, str):
-                raise Status(
-                    code=StatusCode.INVALID_ARGUMENT,
-                    message="Only text system instructions are allowed.",
-                ).to_exception()
-            system.append(value)
-    if resume:
-        body = "\n\n".join(_message_text(item) for item in interactions)
-    else:
-        turns = []
-        for interaction in interactions:
-            role = (
-                "Assistant"
-                if interaction.role == llm.Role.ASSISTANT
-                else "User"
-            )
-            turns.append(f"{role}: {_message_text(interaction)}")
-        body = "\n\n".join(turns)
-    return "\n\n".join([*system, body])
-
-
-def _tool_protocol_schema(tools: list[dict[str, Any]]) -> dict[str, Any]:
-    return {
-        "type": "object",
-        "properties": {
-            "type": {"type": "string", "enum": ["tool_call", "response"]},
-            "name": {
-                "type": "string",
-                "enum": ["", *(t["name"] for t in tools)],
-            },
-            "arguments": {"type": "string"},
-            "response": {"type": "string"},
-        },
-        "required": ["type", "name", "arguments", "response"],
-        "additionalProperties": False,
-    }
-
-
-def _tool_protocol_prompt(
-    tools: list[dict[str, Any]], final_schema: dict[str, Any] | None
-) -> str:
-    definitions = json.dumps(tools, separators=(",", ":"))
-    final = (
-        " The response string must contain JSON matching this schema: "
-        + json.dumps(final_schema, separators=(",", ":"))
-        if final_schema
-        else ""
-    )
-    return (
-        "A11 actions are available as external tools. Return all four envelope"
-        " fields. For a tool call, set type to tool_call, name to the action"
-        " name, arguments to its JSON-encoded argument object, and response to"
-        " an empty string. Then wait for the result. When the answer is"
-        " complete, set type to response, name and arguments to empty strings,"
-        " and response to the answer. Available actions: "
-        + definitions
-        + final
-    )
-
-
-def _tool_arguments(value: Any) -> dict[str, Any]:
-    if isinstance(value, str):
-        try:
-            value = json.loads(value)
-        except json.JSONDecodeError as exc:
-            raise Status(
-                code=StatusCode.INTERNAL,
-                message=f"Codex tool arguments are not valid JSON: {exc}",
-            ).to_exception() from exc
-    if not isinstance(value, dict):
-        raise Status(
-            code=StatusCode.INTERNAL,
-            message="Codex tool arguments are not a JSON object.",
-        ).to_exception()
-    return value
+    if resume or len(interactions) == 1:
+        return "\n\n".join(_message_text(item) for item in interactions)
+    turns = []
+    for interaction in interactions:
+        role = "Assistant" if interaction.role == llm.Role.ASSISTANT else "User"
+        turns.append(f"{role}: {_message_text(interaction)}")
+    return "\n\n".join(turns)
 
 
 def _toml_value(value: Any) -> str:
@@ -171,48 +127,108 @@ def _toml_value(value: Any) -> str:
     return json.dumps(value, separators=(",", ":"))
 
 
-def _options(
-    config: CreateCodexSessionConfig,
-    model: str,
-    schema_path: str | None,
-    image_paths: list[str] | None = None,
-    *,
-    resume: bool = False,
+def _app_server_command(config: CreateCodexSessionConfig) -> list[str]:
+    command = [config.cli_path]
+    if config.profile:
+        command.extend(["--profile", config.profile])
+    command.append("app-server")
+    for key, value in config.config_overrides.items():
+        command.extend(["-c", f"{key}={_toml_value(value)}"])
+    return command
+
+
+def _tool_name(name: str, used: set[str]) -> str:
+    candidate = re.sub(r"[^A-Za-z0-9_-]", "_", name)[:128] or "a11_tool"
+    if candidate == "mcp" or candidate.startswith("mcp__"):
+        candidate = f"a11_{candidate}"
+    if candidate not in used:
+        used.add(candidate)
+        return candidate
+    suffix = hashlib.sha256(name.encode()).hexdigest()[:10]
+    candidate = f"{candidate[:117]}_{suffix}"
+    while candidate in used:
+        suffix = hashlib.sha256((name + suffix).encode()).hexdigest()[:10]
+        candidate = f"{candidate[:117]}_{suffix}"
+    used.add(candidate)
+    return candidate
+
+
+def _dynamic_tools(
+    definitions: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, str], bytes]:
+    used: set[str] = set()
+    result: list[dict[str, Any]] = []
+    names: dict[str, str] = {}
+    for definition in definitions:
+        original = definition["name"]
+        exposed = _tool_name(original, used)
+        names[exposed] = original
+        result.append(
+            {
+                "type": "function",
+                "name": exposed,
+                "description": definition.get("description") or "",
+                "inputSchema": definition.get("input_schema")
+                or {"type": "object", "properties": {}},
+            }
+        )
+    encoded = json.dumps(result, sort_keys=True, separators=(",", ":")).encode()
+    return result, names, hashlib.sha256(encoded).hexdigest().encode()
+
+
+def _write_prompt_images(
+    interactions: list[llm.Interaction], directory: str
 ) -> list[str]:
-    result = ["--json"]
-    if not resume:
-        result.extend(["--color", "never", "--sandbox", config.sandbox])
-    if model:
-        result.extend(["--model", model])
-    for image_path in image_paths or []:
-        result.extend(["--image", image_path])
-    if config.profile and not resume:
-        result.extend(["--profile", config.profile])
-    if config.cwd and not resume:
-        result.extend(["--cd", config.cwd])
-    if not resume:
-        for directory in config.add_dirs:
-            result.extend(["--add-dir", directory])
-    for flag, enabled in (
-        ("--ephemeral", config.ephemeral),
-        ("--skip-git-repo-check", config.skip_git_repo_check),
-        ("--ignore-user-config", config.ignore_user_config),
-        ("--ignore-rules", config.ignore_rules),
-    ):
-        if enabled:
-            result.append(flag)
-    overrides = dict(config.config_overrides)
-    if config.reasoning_effort:
-        overrides["model_reasoning_effort"] = config.reasoning_effort
-    for key, value in overrides.items():
-        result.extend(["-c", f"{key}={_toml_value(value)}"])
-    if schema_path:
-        result.extend(["--output-schema", schema_path])
-    return result
+    """Materialize inline prompt images for Codex local-image inputs."""
+    parts: list[llm.NormalizedPart] = []
+    for interaction in interactions:
+        parts.extend(llm.normalize_interaction(interaction).parts)
+    paths: list[str] = []
+    for part in parts:
+        if part.type != llm.NormalizedContentType.IMAGE or not part.data:
+            continue
+        try:
+            data = base64.b64decode(part.data, validate=True)
+        except (ValueError, binascii.Error) as exc:
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT,
+                message="A Codex image is not valid base64.",
+            ).to_exception() from exc
+        suffix = mimetypes.guess_extension(part.mime_type or "") or ".img"
+        path = Path(directory) / f"prompt-image-{len(paths)}{suffix}"
+        path.write_bytes(data)
+        paths.append(str(path))
+    return paths
 
 
 async def _read_stderr(stream: asyncio.StreamReader) -> str:
     return (await stream.read()).decode(errors="replace")
+
+
+async def _read_jsonl_line(stream: asyncio.StreamReader) -> bytes:
+    """Read one app-server message without asyncio's 64 KiB line bound."""
+    chunks: list[bytes] = []
+    while True:
+        try:
+            chunks.append(await stream.readuntil(b"\n"))
+            return b"".join(chunks)
+        except asyncio.LimitOverrunError as error:
+            chunks.append(await stream.readexactly(error.consumed))
+        except asyncio.IncompleteReadError as error:
+            chunks.append(error.partial)
+            return b"".join(chunks)
+
+
+def _rpc_error(message: dict[str, Any]) -> StatusException:
+    error = message.get("error") or {}
+    return Status(
+        code=StatusCode.INTERNAL,
+        message=error.get("message") or "Codex app-server request failed.",
+        details=[error] if error else [],
+    ).to_exception()
+
+
+ToolHandler = Callable[[dict[str, Any], str], Awaitable[dict[str, Any]]]
 
 
 async def _run_codex(
@@ -221,26 +237,16 @@ async def _run_codex(
     model: str,
     prompt: str,
     resume: str | None,
-    schema_path: str | None,
+    developer_instructions: str | None,
+    dynamic_tools: list[dict[str, Any]],
+    tool_handler: ToolHandler,
     env: dict[str, str],
     image_paths: list[str] | None = None,
-) -> tuple[str, str | None, llm.UsageMetadata | None]:
-    output = llm.OrderedOutputStreams(action)
-    options = _options(
-        config,
-        model,
-        schema_path,
-        image_paths,
-        resume=resume is not None,
-    )
-    command = [config.cli_path, "exec"]
-    if resume:
-        command.extend(["resume", *options, resume, "-"])
-    else:
-        command.extend([*options, "-"])
+) -> tuple[str, str, llm.UsageMetadata | None]:
+    """Run one turn over Codex's JSONL stdio app-server protocol."""
     try:
         process = await asyncio.create_subprocess_exec(
-            *command,
+            *_app_server_command(config),
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -258,60 +264,189 @@ async def _run_codex(
     assert process.stdin is not None
     assert process.stdout is not None
     assert process.stderr is not None
-    process.stdin.write(prompt.encode())
-    await process.stdin.drain()
-    process.stdin.close()
+    write_lock = asyncio.Lock()
+    next_id = 1
+
+    async def send(message: dict[str, Any]) -> None:
+        async with write_lock:
+            process.stdin.write(
+                json.dumps(message, separators=(",", ":")).encode() + b"\n"
+            )
+            await process.stdin.drain()
+
+    async def request(method: str, params: dict[str, Any]) -> int:
+        nonlocal next_id
+        request_id = next_id
+        next_id += 1
+        await send({"method": method, "id": request_id, "params": params})
+        return request_id
+
     stderr_task = asyncio.create_task(_read_stderr(process.stderr))
-    thread_id = resume
+    pending_calls: set[asyncio.Task[None]] = set()
+    responses: dict[int, dict[str, Any]] = {}
     final_text = ""
+    streamed_text = False
     usage = None
-    try:
-        async for line in process.stdout:
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise Status(
-                    code=StatusCode.INTERNAL,
-                    message=f"Codex emitted invalid JSONL: {exc}",
-                ).to_exception() from exc
-            await action["event_stream"].put(event)
-            event_type = event.get("type")
-            if event_type == "thread.started":
-                thread_id = event.get("thread_id") or thread_id
-            elif event_type == "item.completed":
-                item = event.get("item") or {}
-                text = item.get("text") or ""
-                if item.get("type") == "agent_message":
-                    final_text = text
-                elif item.get("type") == "reasoning" and text:
-                    await output.put(thought=text)
-            elif event_type == "turn.completed":
-                values = event.get("usage") or {}
-                usage = llm.UsageMetadata(
-                    input_tokens=values.get("input_tokens"),
-                    output_tokens=values.get("output_tokens"),
-                    cached_input_tokens=values.get("cached_input_tokens"),
-                    total_tokens=(
-                        (values.get("input_tokens") or 0)
-                        + (values.get("output_tokens") or 0)
-                    ),
-                )
-            elif event_type == "turn.failed":
-                error = event.get("error") or {}
-                raise Status(
-                    code=StatusCode.INTERNAL,
-                    message=error.get("message") or "Codex turn failed.",
-                ).to_exception()
-        return_code = await process.wait()
-        stderr = await stderr_task
-        if return_code != 0:
+    turn_done = False
+
+    async def answer_tool(message: dict[str, Any], thread_id: str) -> None:
+        try:
+            result = await tool_handler(message.get("params") or {}, thread_id)
+            await send({"id": message["id"], "result": result})
+        except Exception as exc:
+            logging.debug("Codex dynamic tool call failed", exc_info=True)
+            await send(
+                {
+                    "id": message["id"],
+                    "result": {
+                        "contentItems": [
+                            {"type": "inputText", "text": str(exc)}
+                        ],
+                        "success": False,
+                    },
+                }
+            )
+
+    async def read_one(thread_id: str = "") -> None:
+        nonlocal final_text, streamed_text, usage, turn_done
+        line = await _read_jsonl_line(process.stdout)
+        if not line:
             raise Status(
                 code=StatusCode.INTERNAL,
-                message=stderr.strip()
-                or f"Codex exited with status {return_code}.",
+                message="Codex app-server ended before the turn completed.",
             ).to_exception()
+        try:
+            message = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise Status(
+                code=StatusCode.INTERNAL,
+                message=f"Codex emitted invalid JSONL: {exc}",
+            ).to_exception() from exc
+        await action["event_stream"].put(message)
+        if "id" in message and "method" not in message:
+            responses[message["id"]] = message
+        method = message.get("method")
+        params = message.get("params") or {}
+        if method == "item/tool/call":
+            task = asyncio.create_task(answer_tool(message, thread_id))
+            pending_calls.add(task)
+            task.add_done_callback(pending_calls.discard)
+        elif method == "item/agentMessage/delta":
+            if delta := params.get("delta"):
+                streamed_text = True
+                await action["text_output"].put(delta)
+        elif method in (
+            "item/reasoning/summaryTextDelta",
+            "item/reasoning/textDelta",
+        ):
+            if delta := params.get("delta"):
+                await action["thoughts"].put(delta)
+        elif method == "item/completed":
+            item = params.get("item") or {}
+            if item.get("type") == "agentMessage":
+                final_text = item.get("text") or final_text
+        elif method == "thread/tokenUsage/updated":
+            values = (params.get("tokenUsage") or {}).get("last") or {}
+            usage = llm.UsageMetadata(
+                input_tokens=values.get("inputTokens"),
+                output_tokens=values.get("outputTokens"),
+                cached_input_tokens=values.get("cachedInputTokens"),
+                total_tokens=values.get("totalTokens"),
+            )
+        elif method == "turn/completed":
+            turn = params.get("turn") or {}
+            if turn.get("status") != "completed":
+                error = turn.get("error") or {}
+                raise Status(
+                    code=StatusCode.INTERNAL,
+                    message=(
+                        error.get("message")
+                        or f"Codex turn ended as {turn.get('status')}."
+                    ),
+                ).to_exception()
+            turn_done = True
+
+    async def wait_response(
+        request_id: int, thread_id: str = ""
+    ) -> dict[str, Any]:
+        while request_id not in responses:
+            await read_one(thread_id)
+        response = responses.pop(request_id)
+        if "error" in response:
+            raise _rpc_error(response)
+        return response.get("result") or {}
+
+    try:
+        initialize_id = await request(
+            "initialize",
+            {
+                "clientInfo": {"name": "a11", "title": "A11", "version": "1"},
+                "capabilities": {"experimentalApi": True},
+            },
+        )
+        await wait_response(initialize_id)
+        await send({"method": "initialized", "params": {}})
+        workspace_roots = [
+            str(Path(path).resolve())
+            for path in ([config.cwd] if config.cwd else []) + config.add_dirs
+        ]
+        common: dict[str, Any] = {
+            "model": model or None,
+            "cwd": config.cwd,
+            "sandbox": config.sandbox,
+            "approvalPolicy": "never",
+        }
+        if workspace_roots:
+            common["runtimeWorkspaceRoots"] = workspace_roots
+        if resume:
+            thread_request = await request(
+                "thread/resume", {"threadId": resume, **common}
+            )
+        else:
+            thread_request = await request(
+                "thread/start",
+                {
+                    **common,
+                    "developerInstructions": developer_instructions,
+                    "ephemeral": config.ephemeral,
+                    "dynamicTools": dynamic_tools,
+                },
+            )
+        thread_result = await wait_response(thread_request)
+        thread_id = (thread_result.get("thread") or {}).get("id") or resume
+        if not thread_id:
+            raise Status(
+                code=StatusCode.INTERNAL,
+                message="Codex did not return a thread id.",
+            ).to_exception()
+        turn_input = [{"type": "text", "text": prompt}]
+        turn_input.extend(
+            {"type": "localImage", "path": path}
+            for path in image_paths or []
+        )
+        turn_request = await request(
+            "turn/start",
+            {
+                "threadId": thread_id,
+                "input": turn_input,
+                "model": model or None,
+                "effort": config.reasoning_effort,
+                "outputSchema": config.output_schema,
+            },
+        )
+        await wait_response(turn_request, thread_id)
+        while not turn_done:
+            await read_one(thread_id)
+        if pending_calls:
+            await asyncio.gather(*pending_calls)
+        if final_text and not streamed_text:
+            await action["text_output"].put(final_text)
         return final_text, thread_id, usage
     finally:
+        for task in pending_calls:
+            task.cancel()
+        if pending_calls:
+            await asyncio.gather(*pending_calls, return_exceptions=True)
         if process.returncode is None:
             process.terminate()
             await process.wait()
@@ -321,59 +456,17 @@ async def _run_codex(
                 await stderr_task
 
 
-def _response_text(value: Any) -> str:
-    if isinstance(value, str):
-        return value
-    return json.dumps(value, separators=(",", ":"))
-
-
-def _write_prompt_images(
-    interactions: list[llm.Interaction], directory: str
-) -> list[str]:
-    """Materialize inline prompt images for Codex's `--image` arguments."""
-    parts: list[llm.NormalizedPart] = []
-    for interaction in interactions:
-        message = llm.normalize_interaction(interaction)
-        parts.extend(message.parts)
-    return _write_images(parts, directory, "prompt")
-
-
-def _write_images(
-    parts: list[llm.NormalizedPart], directory: str, label: str
-) -> list[str]:
-    paths: list[str] = []
-    for part in parts:
-        if part.type != llm.NormalizedContentType.IMAGE or not part.data:
-            continue
-        try:
-            data = base64.b64decode(part.data, validate=True)
-        except (ValueError, binascii.Error) as exc:
-            raise Status(
-                code=StatusCode.INVALID_ARGUMENT,
-                message="A Codex image is not valid base64.",
-            ).to_exception() from exc
-        suffix = mimetypes.guess_extension(part.mime_type or "") or ".img"
-        path = Path(directory) / f"{label}-image-{len(paths)}{suffix}"
-        path.write_bytes(data)
-        paths.append(str(path))
-    return paths
-
-
-async def _write_tool_images(
-    executed: runner.ExecutedActions, directory: str
-) -> list[str]:
-    images: list[llm.NormalizedPart] = []
-    for call_id, fragments in executed.outputs.items():
-        if executed.error_message(call_id) is not None:
-            continue
-        _, call_images = await llm.decoded_output_content(fragments)
-        images.extend(call_images)
-    return _write_images(images, directory, "tool-result")
+def _metadata(thread_id: str, tools_digest: bytes) -> dict[str, bytes]:
+    return {
+        llm.BACKEND_METADATA_KEY: b"codex",
+        THREAD_ID_METADATA_KEY: thread_id.encode(),
+        CODEX_TRANSPORT_METADATA_KEY: CODEX_TRANSPORT,
+        CODEX_TOOLS_METADATA_KEY: tools_digest,
+    }
 
 
 async def interact_with_codex(action: a11.Action) -> None:
-    """Run a Codex CLI turn, including schema-guided A11 tool calls."""
-    output = llm.OrderedOutputStreams(action)
+    """Run a Codex turn with A11 actions exposed as native dynamic tools."""
     deadline = a11.get_deadline(action)
     config = await action["config"].consume(
         CreateCodexSessionConfig,
@@ -381,12 +474,22 @@ async def interact_with_codex(action: a11.Action) -> None:
         allow_none=True,
     )
     config = config or CreateCodexSessionConfig()
+    if config.ignore_user_config or config.ignore_rules:
+        raise Status(
+            code=StatusCode.INVALID_ARGUMENT,
+            message=(
+                "ignore_user_config and ignore_rules are not supported by"
+                " Codex app-server. Use config_overrides for Codex settings."
+            ),
+        ).to_exception()
     model = (
         action.get_header(llm.LlmHeaders.MODEL.value, decode=True)
         or DEFAULT_MODEL
     )
     interactions = [interaction async for interaction in action["interactions"]]
-    recorded_thread, recorded_at = _latest_thread(interactions)
+    definitions = await runner.collect_tools(action, deadline)
+    dynamic_tools, tool_names, tools_digest = _dynamic_tools(definitions)
+    recorded_thread, recorded_at = _latest_thread(interactions, tools_digest)
     resume = config.resume or recorded_thread
     if config.resume:
         prompt_interactions = interactions[-1:]
@@ -400,12 +503,9 @@ async def interact_with_codex(action: a11.Action) -> None:
     else:
         prompt_interactions = interactions
     prompt = _build_prompt(prompt_interactions, resume)
-    definitions = await runner.collect_tools(action, deadline)
-    if definitions and config.ephemeral:
-        raise Status(
-            code=StatusCode.INVALID_ARGUMENT,
-            message="Codex A11 tools need a resumable, non-ephemeral thread.",
-        ).to_exception()
+    developer_instructions = (
+        None if resume else _system_instructions(interactions)
+    )
     env = dict(os.environ)
     if api_key := action.get_header(llm.LlmHeaders.API_KEY.value, decode=True):
         env["CODEX_API_KEY"] = api_key
@@ -420,171 +520,133 @@ async def interact_with_codex(action: a11.Action) -> None:
             logging.debug("failed to record LLM span input", exc_info=True)
 
     previous_id = interactions[-1].id if interactions else ""
+    failed_rounds = llm.FailedToolRounds()
+    tool_lock = asyncio.Lock()
+    current_thread = resume or ""
+
+    async def handle_tool(
+        params: dict[str, Any], thread_id: str
+    ) -> dict[str, Any]:
+        nonlocal previous_id, current_thread
+        current_thread = thread_id
+        exposed_name = params.get("tool") or ""
+        call = llm.ToolCall(
+            name=tool_names.get(exposed_name, exposed_name),
+            id=params.get("callId") or f"call_{os.urandom(8).hex()}",
+            params=params.get("arguments") or {},
+        )
+        async with tool_lock:
+            interaction = llm.Interaction(
+                previous_interaction_id=previous_id,
+                role=llm.Role.ASSISTANT,
+                created_at_millis=a11.now().nanoseconds_since_epoch // 1000000,
+                model=model,
+                content=[
+                    a11.to_chunk(
+                        {
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": call.id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": call.name,
+                                        "arguments": json.dumps(call.params),
+                                    },
+                                }
+                            ],
+                        }
+                    )
+                ],
+                backend_specific_metadata=_metadata(thread_id, tools_digest),
+            )
+            rejected = await llm.add_tool_calls_to_interaction(
+                [call], interaction, action.get_registry()
+            )
+            previous_id = interaction.id
+            await action["new_interactions"].put(interaction)
+        executed = await runner.execute_actions_from_interaction(
+            interaction,
+            action,
+            action.get_registry(),
+            rejected=rejected,
+            max_output_bytes=None,
+        )
+        failure = executed.error_message(call.id)
+        text = failure or ""
+        images: list[llm.NormalizedPart] = []
+        if failure is None:
+            text, images = await llm.decoded_output_content(
+                executed.outputs.get(call.id, [])
+            )
+        result_content = [{"type": "inputText", "text": text}]
+        result_content.extend(
+            {
+                "type": "inputImage",
+                "imageUrl": f"data:{image.mime_type};base64,{image.data}",
+            }
+            for image in images
+            if image.data and image.mime_type
+        )
+        async with tool_lock:
+            result = llm.Interaction(
+                previous_interaction_id=previous_id,
+                role=llm.Role.USER,
+                created_at_millis=a11.now().nanoseconds_since_epoch // 1000000,
+                action_outputs=executed.outputs,
+                content=[a11.to_chunk({"role": "user", "content": text})],
+                backend_specific_metadata={
+                    **_metadata(thread_id, tools_digest),
+                    **executed.log_metadata(),
+                },
+            )
+            previous_id = result.id
+            await action["new_interactions"].put(result)
+            if not failed_rounds.record(executed):
+                return {
+                    "contentItems": [
+                        {
+                            "type": "inputText",
+                            "text": (
+                                "A11 stopped after repeated failed tool calls."
+                            ),
+                        }
+                    ],
+                    "success": False,
+                }
+        return {"contentItems": result_content, "success": failure is None}
+
     try:
         with tempfile.TemporaryDirectory(prefix="a11-codex-") as directory:
             image_paths = _write_prompt_images(prompt_interactions, directory)
-            schema = (
-                _tool_protocol_schema(definitions)
-                if definitions
-                else config.output_schema
+            answer, current_thread, usage = await _run_codex(
+                action,
+                config,
+                model,
+                prompt,
+                resume,
+                developer_instructions,
+                dynamic_tools,
+                handle_tool,
+                env,
+                image_paths,
             )
-            schema_path = None
-            if schema is not None:
-                path = Path(directory) / "output-schema.json"
-                path.write_text(json.dumps(schema), encoding="utf-8")
-                schema_path = str(path)
-            if definitions:
-                protocol_prompt = _tool_protocol_prompt(
-                    definitions, config.output_schema
-                )
-                prompt = f"{protocol_prompt}\n\n{prompt}"
-
-            failed_rounds = llm.FailedToolRounds()
-            while True:
-                text, thread_id, usage = await _run_codex(
-                    action,
-                    config,
-                    model,
-                    prompt,
-                    resume,
-                    schema_path,
-                    env,
-                    image_paths,
-                )
-                image_paths = []
-                resume = thread_id
-                protocol = None
-                if definitions:
-                    try:
-                        protocol = json.loads(text)
-                    except json.JSONDecodeError as exc:
-                        raise Status(
-                            code=StatusCode.INTERNAL,
-                            message=(
-                                f"Codex tool response is not valid JSON: {exc}"
-                            ),
-                        ).to_exception() from exc
-
-                if not definitions or protocol.get("type") == "response":
-                    answer = (
-                        text
-                        if not definitions
-                        else _response_text(protocol.get("response"))
-                    )
-                    await output.put(text=answer)
-                    interaction = llm.Interaction(
-                        previous_interaction_id=previous_id,
-                        role=llm.Role.ASSISTANT,
-                        created_at_millis=(
-                            a11.now().nanoseconds_since_epoch // 1000000
-                        ),
-                        model=model,
-                        content=[
-                            a11.to_chunk(
-                                {
-                                    "role": "assistant",
-                                    "content": answer,
-                                }
-                            )
-                        ],
-                        backend_specific_metadata={
-                            llm.BACKEND_METADATA_KEY: b"codex",
-                            **(
-                                {THREAD_ID_METADATA_KEY: thread_id.encode()}
-                                if thread_id
-                                else {}
-                            ),
-                        },
-                        usage_metadata=usage,
-                    )
-                    await action["new_interactions"].put(interaction)
-                    if action.trace_id:
-                        try:
-                            action.set_span_output(answer)
-                        except Exception:
-                            logging.debug(
-                                "failed to record LLM span output",
-                                exc_info=True,
-                            )
-                    break
-
-                call = llm.ToolCall(
-                    name=protocol.get("name", ""),
-                    id=f"call_{os.urandom(8).hex()}",
-                    params=_tool_arguments(protocol.get("arguments", "")),
-                )
-                interaction = llm.Interaction(
-                    previous_interaction_id=previous_id,
-                    role=llm.Role.ASSISTANT,
-                    created_at_millis=a11.now().nanoseconds_since_epoch
-                    // 1000000,
-                    model=model,
-                    content=[
-                        a11.to_chunk(
-                            {
-                                "role": "assistant",
-                                "content": "",
-                                "tool_calls": [
-                                    {
-                                        "id": call.id,
-                                        "type": "function",
-                                        "function": {
-                                            "name": call.name,
-                                            "arguments": json.dumps(
-                                                call.params
-                                            ),
-                                        },
-                                    }
-                                ],
-                            }
-                        )
-                    ],
-                    backend_specific_metadata={
-                        llm.BACKEND_METADATA_KEY: b"codex",
-                        **(
-                            {THREAD_ID_METADATA_KEY: thread_id.encode()}
-                            if thread_id
-                            else {}
-                        ),
-                    },
-                    usage_metadata=usage,
-                )
-                previous_id = interaction.id
-                rejected = await llm.add_tool_calls_to_interaction(
-                    [call], interaction, action.get_registry()
-                )
-                await action["new_interactions"].put(interaction)
-                executed = await runner.execute_actions_from_interaction(
-                    interaction,
-                    action,
-                    action.get_registry(),
-                    rejected=rejected,
-                )
-                results = await chat._build_tool_results_from_outputs(executed)
-                result_text = llm.stringify_content(results)
-                image_paths = await _write_tool_images(executed, directory)
-                result = llm.Interaction(
-                    previous_interaction_id=previous_id,
-                    role=llm.Role.USER,
-                    created_at_millis=a11.now().nanoseconds_since_epoch
-                    // 1000000,
-                    action_outputs=executed.outputs,
-                    content=[
-                        a11.to_chunk({"role": "user", "content": result_text})
-                    ],
-                    backend_specific_metadata={
-                        llm.BACKEND_METADATA_KEY: b"codex",
-                        **executed.log_metadata(),
-                    },
-                )
-                previous_id = result.id
-                await action["new_interactions"].put(result)
-                if not failed_rounds.record(executed):
-                    break
-                prompt = (
-                    f"A11 tool result for {call.name} ({call.id}):\n"
-                    f"{result_text}\nContinue the task using the same protocol."
-                )
+        interaction = llm.Interaction(
+            previous_interaction_id=previous_id,
+            role=llm.Role.ASSISTANT,
+            created_at_millis=a11.now().nanoseconds_since_epoch // 1000000,
+            model=model,
+            content=[a11.to_chunk({"role": "assistant", "content": answer})],
+            backend_specific_metadata=_metadata(current_thread, tools_digest),
+            usage_metadata=usage,
+        )
+        await action["new_interactions"].put(interaction)
+        if action.trace_id:
+            try:
+                action.set_span_output(answer)
+            except Exception:
+                logging.debug("failed to record LLM span output", exc_info=True)
     except StatusException:
         raise
     except Exception as exc:

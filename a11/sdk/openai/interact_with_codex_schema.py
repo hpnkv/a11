@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Describe one non-interactive Codex CLI session turn."""
+"""Describe one non-interactive Codex app-server session turn."""
 
 from typing import Any, ClassVar, Literal
 
@@ -25,7 +25,7 @@ from a11.status import Status, StatusCode
 
 
 class CreateCodexSessionConfig(BaseModel):
-    """Options for a `codex exec --json` session."""
+    """Options for a Codex app-server session over stdio."""
 
     A11_SERIAL_TAG: ClassVar[str] = serial_tags.INTERACT_WITH_CODEX_CONFIG
 
@@ -107,7 +107,7 @@ THREAD_ID_METADATA_KEY = "thread_id"
 
 INTERACT_WITH_CODEX_SCHEMA = a11.ActionSchema(
     name="interact_with_codex",
-    description="Run a conversational turn through the Codex CLI.",
+    description="Run a structured conversational turn through the Codex CLI.",
     inputs={
         "interactions": a11.ActionPortSchema(
             "interactions",

@@ -21,10 +21,36 @@ from a11 import timing
 from a11.data import types
 from a11.status import Status, StatusCode, StatusException
 from a11.stores.local_chunk_store import LocalChunkStore
+from a11.stores.s2_chunk_store import S2ChunkStore
 from a11.stores.sqlite_chunk_store import SQLiteChunkStoreFactory
 
 
-@pytest.fixture(params=["local", "sqlite"])
+class _MemoryS2Backend:
+    def __init__(self, records: list[bytes]):
+        self.records = records
+
+    async def ensure(self):
+        pass
+
+    async def tail(self):
+        return len(self.records)
+
+    async def read(self, start, count):
+        return list(enumerate(self.records[start : start + count], start))
+
+    async def append(self, body, expected_tail):
+        from a11.stores.s2_chunk_store import _Conflict
+
+        if expected_tail != len(self.records):
+            raise _Conflict
+        self.records.append(body)
+        return len(self.records)
+
+    async def close(self):
+        pass
+
+
+@pytest.fixture(params=["local", "sqlite", "s2"])
 def make_store(request, tmp_path):
     """Build a store from each backend so the contract is tested on both.
 
@@ -35,6 +61,18 @@ def make_store(request, tmp_path):
     """
     if request.param == "local":
         return LocalChunkStore
+    if request.param == "s2":
+        streams = {}
+
+        def open_s2(node_id):
+            records = streams.setdefault(node_id, [])
+            return S2ChunkStore(
+                node_id,
+                "test-basin",
+                _backend=_MemoryS2Backend(records),
+            )
+
+        return open_s2
     factory = SQLiteChunkStoreFactory(str(tmp_path))
     return factory.open
 

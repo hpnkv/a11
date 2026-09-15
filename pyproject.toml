@@ -70,6 +70,7 @@ claude = ["anthropic>=0.120.0"]
 claude-code = ["claude-agent-sdk>=0.2.140"]
 gemini = ["google-genai>=1.55.0"]
 openai = ["openai>=2.0.0"]
+s2 = ["s2-sdk>=0.10.0,<1"]
 codex = []
 ollama = ["ollama>=0.6.0"]
 vllm = ["openai>=2.0.0"]
@@ -224,6 +225,9 @@ gemini = [
 ]
 openai = [
     "openai>=2.0.0",
+]
+s2 = [
+    "s2-sdk>=0.10.0,<1",
 ]
 codex = []
 ollama = [

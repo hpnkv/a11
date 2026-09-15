@@ -314,3 +314,6 @@ def from_chunk(
     return get_global_serialization_registry().from_chunk(
         chunk, mimetype_patterns, obj_type
     )
+
+
+from . import sdk as sdk

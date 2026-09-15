@@ -11,3 +11,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+from a11.stores.s2_chunk_store import S2ChunkStore, S2ChunkStoreFactory
+
+S2ChunkStore.__module__ = __name__
+S2ChunkStoreFactory.__module__ = __name__
+
+__all__ = ["S2ChunkStore", "S2ChunkStoreFactory"]

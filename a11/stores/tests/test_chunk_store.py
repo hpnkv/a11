@@ -26,25 +26,36 @@ from a11.stores.sqlite_chunk_store import SQLiteChunkStoreFactory
 
 
 class _MemoryS2Backend:
-    def __init__(self, records: list[bytes]):
+    def __init__(self, records, state_records=None):
         self.records = records
+        self.state_records = [] if state_records is None else state_records
 
-    async def ensure(self):
+    def _records(self, state):
+        return self.state_records if state else self.records
+
+    async def ensure(self, state=False):
         pass
 
-    async def tail(self):
-        return len(self.records)
+    async def tail(self, state=False):
+        return len(self._records(state))
 
-    async def read(self, start, count):
-        return list(enumerate(self.records[start : start + count], start))
+    async def read(self, start, count, state=False):
+        from a11.stores.s2_chunk_store import _Record
 
-    async def append(self, body, expected_tail):
+        records = self._records(state)
+        return [
+            (index, value if isinstance(value, _Record) else _Record(value))
+            for index, value in enumerate(records[start : start + count], start)
+        ]
+
+    async def append(self, records, expected_tail, state=False):
         from a11.stores.s2_chunk_store import _Conflict
 
-        if expected_tail != len(self.records):
+        destination = self._records(state)
+        if expected_tail != len(destination):
             raise _Conflict
-        self.records.append(body)
-        return len(self.records)
+        destination.extend(records)
+        return len(destination)
 
     async def close(self):
         pass
@@ -65,11 +76,11 @@ def make_store(request, tmp_path):
         streams = {}
 
         def open_s2(node_id):
-            records = streams.setdefault(node_id, [])
+            records, state_records = streams.setdefault(node_id, ([], []))
             return S2ChunkStore(
                 node_id,
                 "test-basin",
-                _backend=_MemoryS2Backend(records),
+                _backend=_MemoryS2Backend(records, state_records),
             )
 
         return open_s2

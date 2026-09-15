@@ -14,11 +14,10 @@
 
 """Persist chunk streams in S2.
 
-`S2ChunkStore` uses one S2 stream as an atomic transaction log for one node.
-Every mutation occupies one S2 record and uses the stream tail as an optimistic
-lock. This gives batches, implicit sequence assignment, the shared `next`
-cursor, tombstones, and write closure the same all-or-nothing behaviour as the
-other ChunkStore backends.
+`S2ChunkStore` uses a data stream and an auxiliary state stream for one node.
+Each fragment occupies one data record. S2 sequence numbers represent arrival
+order and ordinary implicit A11 sequence numbers directly. Atomic append
+batches and optimistic tail checks serialize mutations across processes.
 
 Install the optional dependency with ``a11-kit[s2]``. The module remains
 importable without it; constructing a store reports an `UNIMPLEMENTED` status
@@ -28,6 +27,7 @@ with the installation command.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import importlib
 import os
 import uuid
@@ -45,7 +45,22 @@ _FORMAT = "a11.chunk-store/v1"
 _MAX_UINT32 = (1 << 32) - 1
 _MAX_UINT64 = (1 << 64) - 1
 _MAX_S2_BATCH_BYTES = 1024 * 1024
+_MAX_S2_BATCH_RECORDS = 1000
 _POLL_SECONDS = 0.05
+
+_HEADER_FORMAT = b"a11-format"
+_HEADER_TRANSACTION = b"a11-transaction"
+_HEADER_SEQUENCE = b"a11-sequence"
+_HEADER_FINAL = b"a11-final"
+_HEADER_CHUNK = b"a11-chunk"
+_HEADER_NODE_REF = b"a11-node-ref"
+_HEADER_PREVIOUS = b"a11-previous"
+_HEADER_CURSOR = b"a11-cursor"
+
+_CHUNK_FORMAT = b"chunk/v2"
+_CLEAR_FORMAT = b"clear/v2"
+_ADVANCE_FORMAT = b"advance/v2"
+_CLOSE_FORMAT = b"close/v2"
 
 T = TypeVar("T")
 
@@ -54,14 +69,27 @@ class _Conflict(Exception):
     pass
 
 
+@dataclasses.dataclass(frozen=True)
+class _Record:
+    body: bytes
+    headers: tuple[tuple[bytes, bytes], ...] = ()
+
+
 class _Backend(Protocol):
-    async def ensure(self) -> None: ...
+    async def ensure(self, state: bool = False) -> None: ...
 
-    async def tail(self) -> int: ...
+    async def tail(self, state: bool = False) -> int: ...
 
-    async def read(self, start: int, count: int) -> list[tuple[int, bytes]]: ...
+    async def read(
+        self, start: int, count: int, state: bool = False
+    ) -> list[tuple[int, _Record]]: ...
 
-    async def append(self, body: bytes, expected_tail: int) -> int: ...
+    async def append(
+        self,
+        records: Sequence[_Record],
+        expected_tail: int,
+        state: bool = False,
+    ) -> int: ...
 
     async def close(self) -> None: ...
 
@@ -204,44 +232,70 @@ class _SdkBackend:
             self._basin = client.basin(basin)
             self._stream_name = stream
             self._stream = self._basin.stream(stream)
+            self._state_stream_name = f"{stream}.state"
+            self._state_stream = self._basin.stream(self._state_stream_name)
         except StatusException:
             raise
         except Exception as error:
             raise _sdk_status(error) from None
 
-    async def ensure(self) -> None:
+    async def ensure(self, state: bool = False) -> None:
         try:
-            await self._basin.ensure_stream(self._stream_name)
+            await self._basin.ensure_stream(
+                self._state_stream_name if state else self._stream_name
+            )
         except asyncio.CancelledError:
             raise
         except Exception as error:
             raise _sdk_status(error) from None
 
-    async def tail(self) -> int:
+    async def tail(self, state: bool = False) -> int:
         try:
-            return (await self._stream.check_tail()).seq_num
+            stream = self._state_stream if state else self._stream
+            return (await stream.check_tail()).seq_num
         except asyncio.CancelledError:
             raise
         except Exception as error:
             raise _sdk_status(error) from None
 
-    async def read(self, start: int, count: int) -> list[tuple[int, bytes]]:
+    async def read(
+        self, start: int, count: int, state: bool = False
+    ) -> list[tuple[int, _Record]]:
         try:
-            batch = await self._stream.read(
+            stream = self._state_stream if state else self._stream
+            batch = await stream.read(
                 start=self._sdk.SeqNum(start),
                 limit=self._sdk.ReadLimit(count=count),
             )
-            return [(record.seq_num, record.body) for record in batch.records]
+            return [
+                (
+                    record.seq_num,
+                    _Record(record.body, tuple(record.headers)),
+                )
+                for record in batch.records
+            ]
         except asyncio.CancelledError:
             raise
         except Exception as error:
             raise _sdk_status(error) from None
 
-    async def append(self, body: bytes, expected_tail: int) -> int:
+    async def append(
+        self,
+        records: Sequence[_Record],
+        expected_tail: int,
+        state: bool = False,
+    ) -> int:
         try:
-            ack = await self._stream.append(
+            stream = self._state_stream if state else self._stream
+            ack = await stream.append(
                 self._sdk.AppendInput(
-                    records=[self._sdk.Record(body=body)],
+                    records=[
+                        self._sdk.Record(
+                            body=record.body,
+                            headers=list(record.headers),
+                        )
+                        for record in records
+                    ],
                     match_seq_num=expected_tail,
                 )
             )
@@ -265,7 +319,7 @@ class _SdkBackend:
 
 
 class S2ChunkStore(ChunkStore):
-    """A durable, multi-process ChunkStore backed by one S2 stream.
+    """A durable, multi-process ChunkStore backed by S2 streams.
 
     Args:
         id: Node identifier exposed by `get_id`.
@@ -273,8 +327,8 @@ class S2ChunkStore(ChunkStore):
         access_token: S2 access token. Omit it to read ``S2_ACCESS_TOKEN``.
         stream_prefix: Prefix placed before the node id in the stream name.
         client: Shared ``s2_sdk.S2`` client. The caller retains ownership.
-        ensure_stream: Create the stream when needed. Set this to `False` for
-            an existing stream and a data-plane-only access token.
+        ensure_stream: Create the data and state streams when needed. Set this
+            to `False` when both exist and the token is data-plane-only.
 
     The S2 stream must retain its complete history. A retention policy or a
     manual trim removes transaction-log state and is reported as `DATA_LOSS`.
@@ -313,10 +367,10 @@ class S2ChunkStore(ChunkStore):
                 "ensure_stream must be a boolean.",
             )
         stream = f"{stream_prefix}{id}"
-        if len(stream.encode("utf-8")) > 512:
+        if len(f"{stream}.state".encode("utf-8")) > 512:
             raise _status(
                 StatusCode.INVALID_ARGUMENT,
-                "The S2 stream name exceeds 512 UTF-8 bytes.",
+                "The S2 data or state stream name exceeds 512 UTF-8 bytes.",
             )
         super().__init__()
         self._id = id
@@ -326,10 +380,13 @@ class S2ChunkStore(ChunkStore):
             basin, stream, access_token, client
         )
         self._lock = asyncio.Lock()
-        self._ensured = not ensure_stream
+        self._data_ensured = not ensure_stream
+        self._state_ensured = not ensure_stream
         self._log_tail = 0
+        self._state_tail = 0
         self._chunks: dict[int, types.Chunk | types.NodeRef] = {}
         self._arrivals: list[int] = []
+        self._cleared: set[int] = set()
         self._cursor = 0
         self._final_seq: int | None = None
         self._closed_status: Status | None = None
@@ -381,13 +438,19 @@ class S2ChunkStore(ChunkStore):
     async def __aexit__(self, *_: object) -> None:
         await self.aclose()
 
-    async def _ensure(self, deadline: timing.Time | None = None) -> None:
-        if self._ensured:
+    async def _ensure(
+        self, state: bool, deadline: timing.Time | None = None
+    ) -> None:
+        ensured = self._state_ensured if state else self._data_ensured
+        if ensured:
             return
-        await _before_deadline(self._backend.ensure(), deadline)
-        self._ensured = True
+        await _before_deadline(self._backend.ensure(state), deadline)
+        if state:
+            self._state_ensured = True
+        else:
+            self._data_ensured = True
 
-    def _apply(self, body: bytes, physical_seq: int) -> None:
+    def _apply_legacy(self, body: bytes, physical_seq: int) -> None:
         try:
             event = msgpack.unpackb(body, raw=False, strict_map_key=False)
         except (TypeError, ValueError, msgpack.UnpackException) as error:
@@ -425,16 +488,9 @@ class S2ChunkStore(ChunkStore):
                         self._final_seq = seq
             elif operation == "clear":
                 seq = event["seq"]
-                chunk = self._chunks[seq]
-                self._chunks[seq] = types.Chunk(
-                    data=b"",
-                    metadata=(
-                        chunk.metadata
-                        if isinstance(chunk, types.Chunk)
-                        else None
-                    ),
-                    ref="__tombstone__",
-                )
+                if seq not in self._chunks:
+                    raise ValueError("clear refers to a missing sequence")
+                self._cleared.add(seq)
             elif operation == "advance":
                 previous = event["previous"]
                 cursor = event["cursor"]
@@ -455,52 +511,283 @@ class S2ChunkStore(ChunkStore):
             ) from None
         self._transactions.add(transaction)
 
-    async def _sync(self, deadline: timing.Time | None = None) -> None:
-        await self._ensure(deadline)
-        tail = await _before_deadline(self._backend.tail(), deadline)
-        if tail < self._log_tail:
+    @staticmethod
+    def _headers(record: _Record, physical_seq: int) -> dict[bytes, bytes]:
+        result: dict[bytes, bytes] = {}
+        for name, value in record.headers:
+            if name in result:
+                raise _status(
+                    StatusCode.DATA_LOSS,
+                    f"S2 record {physical_seq} repeats header {name!r}.",
+                )
+            result[name] = value
+        return result
+
+    @staticmethod
+    def _header_int(
+        headers: dict[bytes, bytes], name: bytes, physical_seq: int
+    ) -> int | None:
+        value = headers.get(name)
+        if value is None:
+            return None
+        try:
+            return int(value.decode("ascii"))
+        except (UnicodeDecodeError, ValueError):
+            raise _status(
+                StatusCode.DATA_LOSS,
+                f"S2 record {physical_seq} has invalid header {name!r}.",
+            ) from None
+
+    def _decode_chunk(
+        self, record: _Record, physical_seq: int
+    ) -> types.NodeFragment | None:
+        headers = self._headers(record, physical_seq)
+        if headers.get(_HEADER_FORMAT) != _CHUNK_FORMAT:
+            return None
+        seq = self._header_int(headers, _HEADER_SEQUENCE, physical_seq)
+        seq = physical_seq if seq is None else seq
+        if seq < 0 or seq > _MAX_UINT32:
+            raise _status(
+                StatusCode.DATA_LOSS,
+                f"S2 record {physical_seq} has an invalid logical sequence.",
+            )
+        try:
+            if _HEADER_NODE_REF in headers:
+                if record.body or _HEADER_CHUNK in headers:
+                    raise ValueError("invalid node-reference record")
+                data: types.Chunk | types.NodeRef = types.NodeRef.from_msgpack(
+                    headers[_HEADER_NODE_REF]
+                )
+            elif _HEADER_CHUNK in headers:
+                data = types.Chunk.from_msgpack(headers[_HEADER_CHUNK])
+                data.data = record.body
+            else:
+                data = types.Chunk(data=record.body)
+        except (TypeError, ValueError, StatusException) as error:
+            raise _status(
+                StatusCode.DATA_LOSS,
+                f"S2 record {physical_seq} has invalid chunk metadata: {error}",
+            ) from None
+        return types.NodeFragment(
+            id=self._id,
+            data=data,
+            seq=seq,
+            continued=_HEADER_FINAL not in headers,
+        )
+
+    def _apply_record(
+        self, record: _Record, physical_seq: int, state: bool
+    ) -> None:
+        headers = self._headers(record, physical_seq)
+        wire_format = headers.get(_HEADER_FORMAT)
+        if wire_format is None:
+            if state:
+                raise _status(
+                    StatusCode.DATA_LOSS,
+                    f"S2 state record {physical_seq} has no format header.",
+                )
+            self._apply_legacy(record.body, physical_seq)
+            return
+        transaction_bytes = headers.get(_HEADER_TRANSACTION)
+        transaction = None
+        if transaction_bytes is not None:
+            try:
+                transaction = transaction_bytes.decode("ascii")
+            except UnicodeDecodeError:
+                transaction = ""
+            if not transaction or transaction in self._transactions:
+                raise _status(
+                    StatusCode.DATA_LOSS,
+                    f"S2 record {physical_seq} has an invalid transaction id.",
+                )
+        try:
+            if wire_format == _CHUNK_FORMAT and not state:
+                fragment = self._decode_chunk(record, physical_seq)
+                assert fragment is not None and fragment.seq is not None
+                if fragment.seq in self._chunks:
+                    raise ValueError("duplicate sequence")
+                self._chunks[fragment.seq] = fragment.data
+                self._arrivals.append(fragment.seq)
+                if not fragment.continued:
+                    if self._final_seq not in (None, fragment.seq):
+                        raise ValueError("conflicting final sequence")
+                    self._final_seq = fragment.seq
+            elif wire_format == _CLOSE_FORMAT and not state:
+                if self._closed_status is not None:
+                    raise ValueError("duplicate write closure")
+                value = msgpack.unpackb(
+                    record.body, raw=False, strict_map_key=False
+                )
+                self._closed_status = Status.model_validate(value)
+            elif wire_format == _CLEAR_FORMAT and state:
+                seq = self._header_int(headers, _HEADER_SEQUENCE, physical_seq)
+                if seq is None or seq < 0 or seq > _MAX_UINT32:
+                    raise ValueError("invalid clear sequence")
+                self._cleared.add(seq)
+            elif wire_format == _ADVANCE_FORMAT and state:
+                previous = self._header_int(
+                    headers, _HEADER_PREVIOUS, physical_seq
+                )
+                cursor = self._header_int(headers, _HEADER_CURSOR, physical_seq)
+                if (
+                    previous is None
+                    or cursor is None
+                    or previous != self._cursor
+                    or cursor < previous
+                ):
+                    raise ValueError("invalid shared cursor transition")
+                self._cursor = cursor
+            else:
+                raise ValueError(f"unexpected record format {wire_format!r}")
+        except (
+            KeyError,
+            TypeError,
+            ValueError,
+            msgpack.UnpackException,
+        ) as error:
+            raise _status(
+                StatusCode.DATA_LOSS,
+                f"S2 record {physical_seq} has invalid chunk-store state: "
+                f"{error}",
+            ) from None
+        if transaction is not None:
+            self._transactions.add(transaction)
+
+    async def _sync_stream(
+        self, state: bool, deadline: timing.Time | None = None
+    ) -> None:
+        await self._ensure(state, deadline)
+        current = self._state_tail if state else self._log_tail
+        tail = await _before_deadline(self._backend.tail(state), deadline)
+        if tail < current:
             raise _status(
                 StatusCode.DATA_LOSS,
                 "The S2 chunk-store stream was trimmed or replaced.",
             )
-        while self._log_tail < tail:
+        while current < tail:
             records = await _before_deadline(
-                self._backend.read(
-                    self._log_tail, min(1000, tail - self._log_tail)
-                ),
+                self._backend.read(current, min(1000, tail - current), state),
                 deadline,
             )
             if not records:
                 raise _status(
                     StatusCode.DATA_LOSS,
-                    f"S2 record {self._log_tail} is missing.",
+                    f"S2 record {current} is missing.",
                 )
-            for physical_seq, body in records:
-                if physical_seq != self._log_tail:
+            for physical_seq, record in records:
+                if physical_seq != current:
                     raise _status(
                         StatusCode.DATA_LOSS,
-                        f"Expected S2 record {self._log_tail}, got "
-                        f"{physical_seq}.",
+                        f"Expected S2 record {current}, got {physical_seq}.",
                     )
-                self._apply(body, physical_seq)
-                self._log_tail += 1
+                self._apply_record(record, physical_seq, state)
+                current += 1
+        if state:
+            self._state_tail = current
+        else:
+            self._log_tail = current
 
-    def _encode(self, event: dict[str, Any]) -> bytes:
-        try:
-            body = msgpack.packb(event, use_bin_type=True)
-        except (TypeError, ValueError, OverflowError) as error:
+    async def _sync(self, deadline: timing.Time | None = None) -> None:
+        await self._sync_stream(False, deadline)
+        await self._sync_stream(True, deadline)
+
+    def _encode_records(
+        self,
+        event: dict[str, Any],
+        transaction: str,
+        physical_start: int,
+    ) -> tuple[list[_Record], bool]:
+        operation = event["operation"]
+        records: list[_Record] = []
+        state = operation in ("clear", "advance")
+        if operation == "put":
+            for index, fragment in enumerate(event["fragments"]):
+                assert isinstance(fragment, types.NodeFragment)
+                assert fragment.seq is not None
+                headers: list[tuple[bytes, bytes]] = [
+                    (_HEADER_FORMAT, _CHUNK_FORMAT)
+                ]
+                if index == 0:
+                    headers.append(
+                        (_HEADER_TRANSACTION, transaction.encode("ascii"))
+                    )
+                if fragment.seq != physical_start + index:
+                    headers.append(
+                        (_HEADER_SEQUENCE, str(fragment.seq).encode("ascii"))
+                    )
+                if not fragment.continued:
+                    headers.append((_HEADER_FINAL, b""))
+                if isinstance(fragment.data, types.NodeRef):
+                    body = b""
+                    headers.append(
+                        (_HEADER_NODE_REF, fragment.data.to_msgpack())
+                    )
+                else:
+                    chunk = fragment.data
+                    body = bytes(chunk.data)
+                    if chunk.metadata is not None or chunk.ref is not None:
+                        descriptor = types.Chunk(
+                            data=b"", metadata=chunk.metadata, ref=chunk.ref
+                        )
+                        headers.append((_HEADER_CHUNK, descriptor.to_msgpack()))
+                records.append(_Record(body, tuple(headers)))
+        elif operation == "clear":
+            records = [
+                _Record(
+                    b"",
+                    (
+                        (_HEADER_FORMAT, _CLEAR_FORMAT),
+                        (_HEADER_TRANSACTION, transaction.encode("ascii")),
+                        (_HEADER_SEQUENCE, str(event["seq"]).encode("ascii")),
+                    ),
+                )
+            ]
+        elif operation == "advance":
+            records = [
+                _Record(
+                    b"",
+                    (
+                        (_HEADER_FORMAT, _ADVANCE_FORMAT),
+                        (_HEADER_TRANSACTION, transaction.encode("ascii")),
+                        (
+                            _HEADER_PREVIOUS,
+                            str(event["previous"]).encode("ascii"),
+                        ),
+                        (_HEADER_CURSOR, str(event["cursor"]).encode("ascii")),
+                    ),
+                )
+            ]
+        elif operation == "close":
+            records = [
+                _Record(
+                    msgpack.packb(event["status"], use_bin_type=True),
+                    (
+                        (_HEADER_FORMAT, _CLOSE_FORMAT),
+                        (_HEADER_TRANSACTION, transaction.encode("ascii")),
+                    ),
+                )
+            ]
+        else:
+            raise AssertionError(operation)
+        if len(records) > _MAX_S2_BATCH_RECORDS:
             raise _status(
-                StatusCode.INVALID_ARGUMENT,
-                f"Chunk-store transaction cannot be encoded: {error}",
-            ) from None
-        # S2 meters eight bytes of framing for a record with no headers.
-        if len(body) + 8 > _MAX_S2_BATCH_BYTES:
+                StatusCode.RESOURCE_EXHAUSTED,
+                "Chunk-store transaction exceeds S2's 1000-record atomic "
+                "append limit.",
+            )
+        metered = sum(
+            len(record.body)
+            + 8
+            + sum(len(name) + len(value) + 4 for name, value in record.headers)
+            for record in records
+        )
+        if metered > _MAX_S2_BATCH_BYTES:
             raise _status(
                 StatusCode.RESOURCE_EXHAUSTED,
                 "Chunk-store transaction exceeds S2's 1 MiB atomic append "
                 "limit.",
             )
-        return body
+        return records, state
 
     async def _mutate(
         self,
@@ -514,41 +801,166 @@ class S2ChunkStore(ChunkStore):
                 event, result = build(transaction)
                 if event is None:
                     return result
-                event["format"] = _FORMAT
-                event["transaction"] = transaction
-                body = self._encode(event)
-                expected_tail = self._log_tail
+                records, state = self._encode_records(
+                    event,
+                    transaction,
+                    (
+                        self._state_tail
+                        if event["operation"] in ("clear", "advance")
+                        else self._log_tail
+                    ),
+                )
+                expected_tail = self._state_tail if state else self._log_tail
                 try:
                     end = await _before_deadline(
-                        self._backend.append(body, expected_tail), deadline
+                        self._backend.append(records, expected_tail, state),
+                        deadline,
                     )
                 except _Conflict:
-                    await self._sync()
+                    await self._sync_stream(state)
                     if transaction in self._transactions:
                         return result
                     continue
                 except StatusException:
                     # A timed-out append may be durable even without its ack.
-                    await self._sync()
+                    await self._sync_stream(state)
                     if transaction in self._transactions:
                         return result
                     raise
-                if end != expected_tail + 1:
+                if end != expected_tail + len(records):
                     raise _status(
                         StatusCode.DATA_LOSS,
                         "S2 returned an invalid append acknowledgement.",
                     )
-                self._apply(body, expected_tail)
-                self._log_tail = end
+                for index, record in enumerate(records):
+                    self._apply_record(record, expected_tail + index, state)
+                if state:
+                    self._state_tail = end
+                else:
+                    self._log_tail = end
                 return result
 
     def _fragment(self, seq: int) -> types.NodeFragment:
+        data = self._chunks[seq]
+        if seq in self._cleared:
+            data = types.Chunk(
+                data=b"",
+                metadata=(
+                    data.metadata if isinstance(data, types.Chunk) else None
+                ),
+                ref="__tombstone__",
+            )
         return types.NodeFragment(
             id=self._id,
-            data=self._chunks[seq],
+            data=data,
             seq=seq,
             continued=self._final_seq is None or seq < self._final_seq,
         )
+
+    def _visible(self, fragment: types.NodeFragment) -> types.NodeFragment:
+        assert fragment.seq is not None
+        if fragment.seq not in self._cleared:
+            return fragment
+        data = fragment.data
+        return types.NodeFragment(
+            id=self._id,
+            data=types.Chunk(
+                data=b"",
+                metadata=(
+                    data.metadata if isinstance(data, types.Chunk) else None
+                ),
+                ref="__tombstone__",
+            ),
+            seq=fragment.seq,
+            continued=fragment.continued,
+        )
+
+    async def _native_fragment(
+        self, position: int, deadline: timing.Time | None
+    ) -> types.NodeFragment | None:
+        await self._sync_stream(True, deadline)
+        await self._ensure(False, deadline)
+        tail = await _before_deadline(self._backend.tail(False), deadline)
+        if position >= tail:
+            return None
+        records = await _before_deadline(
+            self._backend.read(position, 1, False), deadline
+        )
+        if not records or records[0][0] != position:
+            raise _status(
+                StatusCode.DATA_LOSS,
+                f"S2 record {position} is missing.",
+            )
+        fragment = self._decode_chunk(records[0][1], position)
+        return self._visible(fragment) if fragment is not None else None
+
+    async def _try_native_claim(
+        self, limit: int, deadline: timing.Time | None
+    ) -> tuple[list[types.NodeFragment], bool] | None:
+        async with self._lock:
+            await self._sync_stream(True, deadline)
+            await self._ensure(False, deadline)
+            previous = self._cursor
+            tail = await _before_deadline(self._backend.tail(False), deadline)
+            if previous >= tail:
+                return None
+            records = await _before_deadline(
+                self._backend.read(
+                    previous, min(limit, tail - previous), False
+                ),
+                deadline,
+            )
+            fragments: list[types.NodeFragment] = []
+            ended = False
+            for physical_seq, record in records:
+                if physical_seq != previous + len(fragments):
+                    raise _status(
+                        StatusCode.DATA_LOSS,
+                        f"Expected S2 record {previous + len(fragments)}, got "
+                        f"{physical_seq}.",
+                    )
+                fragment = self._decode_chunk(record, physical_seq)
+                if fragment is None:
+                    break
+                if fragment.seq != physical_seq:
+                    return None
+                fragments.append(self._visible(fragment))
+                if not fragment.continued:
+                    ended = True
+                    break
+            if not fragments:
+                return None
+            transaction = uuid.uuid4().hex
+            event = {
+                "operation": "advance",
+                "previous": previous,
+                "cursor": previous + len(fragments),
+            }
+            encoded, state = self._encode_records(
+                event, transaction, self._state_tail
+            )
+            assert state
+            try:
+                end = await _before_deadline(
+                    self._backend.append(encoded, self._state_tail, True),
+                    deadline,
+                )
+            except _Conflict:
+                await self._sync_stream(True, deadline)
+                return [], False
+            except StatusException:
+                await self._sync_stream(True, deadline)
+                if transaction not in self._transactions:
+                    raise
+                return fragments, ended
+            if end != self._state_tail + 1:
+                raise _status(
+                    StatusCode.DATA_LOSS,
+                    "S2 returned an invalid append acknowledgement.",
+                )
+            self._apply_record(encoded[0], self._state_tail, True)
+            self._state_tail = end
+            return fragments, ended
 
     async def _wait_for(
         self,
@@ -587,6 +999,10 @@ class S2ChunkStore(ChunkStore):
     ) -> types.NodeFragment:
         """Wait for and return a fragment by logical sequence number."""
         value = _unsigned(seq, "seq", _MAX_UINT32)
+        async with self._lock:
+            fragment = await self._native_fragment(value, deadline)
+            if fragment is not None and fragment.seq == value:
+                return fragment
         return await self._wait_for(
             lambda: self._fragment(value) if value in self._chunks else None,
             deadline,
@@ -600,6 +1016,10 @@ class S2ChunkStore(ChunkStore):
     ) -> types.NodeFragment:
         """Wait for a fragment by its zero-based ingestion order."""
         value = _unsigned(arrival_order, "arrival_order", _MAX_UINT64)
+        async with self._lock:
+            fragment = await self._native_fragment(value, deadline)
+            if fragment is not None:
+                return fragment
         return await self._wait_for(
             lambda: (
                 self._fragment(self._arrivals[value])
@@ -621,6 +1041,27 @@ class S2ChunkStore(ChunkStore):
             )
         collected: list[types.NodeFragment | None] = []
         while True:
+            try:
+                native = await self._try_native_claim(
+                    maximum - len(collected), deadline
+                )
+            except StatusException as error:
+                if (
+                    collected
+                    and error.status.code is StatusCode.DEADLINE_EXCEEDED
+                ):
+                    return collected
+                raise
+            if native is not None:
+                fragments, ended = native
+                collected.extend(fragments)
+                if ended:
+                    collected.append(None)
+                    return collected
+                if len(collected) == maximum:
+                    return collected
+                if fragments:
+                    continue
 
             def build(transaction: str):
                 del transaction
@@ -803,7 +1244,7 @@ class S2ChunkStore(ChunkStore):
                     data=fragment.data,
                     seq=seq,
                     continued=fragment.continued,
-                ).to_msgpack()
+                )
                 for fragment, seq in zip(values, sequences, strict=True)
             ]
             return {"operation": "put", "fragments": stored}, sequences
@@ -830,6 +1271,10 @@ class S2ChunkStore(ChunkStore):
         """Translate a zero-based ingestion position to its sequence number."""
         value = _unsigned(arrival_order, "arrival_order", _MAX_UINT64)
         async with self._lock:
+            fragment = await self._native_fragment(value, None)
+            if fragment is not None:
+                assert fragment.seq is not None
+                return fragment.seq
             await self._sync()
             if value >= len(self._arrivals):
                 raise _status(

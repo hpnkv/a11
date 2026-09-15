@@ -15,6 +15,7 @@
 import asyncio
 import builtins
 
+import msgpack
 import pytest
 
 from a11.data.types import Chunk, NodeFragment, NodeRef
@@ -56,11 +57,16 @@ def test_s2_errors_map_to_public_statuses(s2_code, http_status, expected):
 @pytest.mark.asyncio
 async def test_two_instances_serialize_implicit_writes_and_shared_next():
     records = []
+    state_records = []
     first = S2ChunkStore(
-        "shared", "test-basin", _backend=_MemoryS2Backend(records)
+        "shared",
+        "test-basin",
+        _backend=_MemoryS2Backend(records, state_records),
     )
     second = S2ChunkStore(
-        "shared", "test-basin", _backend=_MemoryS2Backend(records)
+        "shared",
+        "test-basin",
+        _backend=_MemoryS2Backend(records, state_records),
     )
 
     seqs = await asyncio.gather(
@@ -77,8 +83,8 @@ class _LostAckBackend(_MemoryS2Backend):
         super().__init__(records)
         self.lose_ack = True
 
-    async def append(self, body, expected_tail):
-        end = await super().append(body, expected_tail)
+    async def append(self, records, expected_tail, state=False):
+        end = await super().append(records, expected_tail, state)
         if self.lose_ack:
             self.lose_ack = False
             raise Status(
@@ -89,15 +95,135 @@ class _LostAckBackend(_MemoryS2Backend):
 
 
 @pytest.mark.asyncio
-async def test_lost_append_ack_does_not_duplicate_transaction():
+async def test_lost_append_ack_does_not_duplicate_transaction_records():
     records = []
     store = S2ChunkStore(
         "lost-ack", "test-basin", _backend=_LostAckBackend(records)
     )
 
-    assert await store.put(_fragment("once")) == 0
-    assert await store.size() == 1
-    assert len(records) == 1
+    assert await store.put_many(
+        [_fragment("first"), _fragment("second"), _fragment("third")]
+    ) == [0, 1, 2]
+    assert await store.size() == 3
+    assert len(records) == 3
+
+
+class _CountingBackend(_MemoryS2Backend):
+    def __init__(self, records):
+        super().__init__(records)
+        self.batch_sizes = []
+        self.reads = []
+
+    async def read(self, start, count, state=False):
+        self.reads.append((start, count, state))
+        return await super().read(start, count, state)
+
+    async def append(self, records, expected_tail, state=False):
+        self.batch_sizes.append(len(records))
+        return await super().append(records, expected_tail, state)
+
+
+@pytest.mark.asyncio
+async def test_put_many_uses_one_atomic_batch_with_one_record_per_fragment():
+    records = []
+    backend = _CountingBackend(records)
+    store = S2ChunkStore("visible", "test-basin", _backend=backend)
+
+    assert await store.put_many(
+        [_fragment("first"), _fragment("second"), _fragment("third")]
+    ) == [0, 1, 2]
+
+    assert backend.batch_sizes == [3]
+    assert len(records) == 3
+    assert [record.body for record in records] == [
+        b"first",
+        b"second",
+        b"third",
+    ]
+    assert all(b"operation" not in record.body for record in records)
+
+
+@pytest.mark.asyncio
+async def test_getters_read_native_s2_positions_without_prefix_replay():
+    records = []
+    state_records = []
+    writer = S2ChunkStore(
+        "native",
+        "test-basin",
+        _backend=_MemoryS2Backend(records, state_records),
+    )
+    await writer.put_many(
+        [_fragment("zero"), _fragment("one"), _fragment("two")]
+    )
+    backend = _CountingBackend(records)
+    backend.state_records = state_records
+    reader = S2ChunkStore("native", "test-basin", _backend=backend)
+
+    assert (await reader.get(2)).get_chunk().data == b"two"
+    assert await reader.get_seq_for_arrival_order(1) == 1
+    assert [call for call in backend.reads if not call[2]] == [
+        (2, 1, False),
+        (1, 1, False),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_next_claims_native_s2_positions_without_prefix_replay():
+    records = []
+    state_records = []
+    writer = S2ChunkStore(
+        "native-cursor",
+        "test-basin",
+        _backend=_MemoryS2Backend(records, state_records),
+    )
+    await writer.put_many(
+        [_fragment("zero"), _fragment("one"), _fragment("two")]
+    )
+    backend = _CountingBackend(records)
+    backend.state_records = state_records
+    reader = S2ChunkStore("native-cursor", "test-basin", _backend=backend)
+
+    assert (await reader.next(limit=1))[0].get_chunk().data == b"zero"
+    assert [call for call in backend.reads if not call[2]] == [(0, 1, False)]
+
+
+@pytest.mark.asyncio
+async def test_more_than_1000_fragments_cannot_form_one_atomic_append():
+    records = []
+    store = S2ChunkStore(
+        "too-many", "test-basin", _backend=_MemoryS2Backend(records)
+    )
+
+    with pytest.raises(StatusException) as raised:
+        await store.put_many([_fragment(str(index)) for index in range(1001)])
+
+    assert raised.value.status.code is StatusCode.RESOURCE_EXHAUSTED
+    assert records == []
+
+
+@pytest.mark.asyncio
+async def test_existing_multi_fragment_v1_records_remain_readable():
+    fragments = [
+        NodeFragment(
+            data=Chunk(data=value), seq=index, continued=True
+        ).to_msgpack()
+        for index, value in enumerate((b"first", b"second"))
+    ]
+    record = msgpack.packb(
+        {
+            "operation": "put",
+            "fragments": fragments,
+            "format": "a11.chunk-store/v1",
+            "transaction": "legacy",
+        },
+        use_bin_type=True,
+    )
+    store = S2ChunkStore(
+        "legacy", "test-basin", _backend=_MemoryS2Backend([record])
+    )
+
+    assert (await store.get(0)).get_chunk().data == b"first"
+    assert (await store.get(1)).get_chunk().data == b"second"
 
 
 @pytest.mark.asyncio

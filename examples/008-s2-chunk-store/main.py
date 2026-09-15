@@ -26,6 +26,12 @@ import os
 import uuid
 
 import a11
+from pydantic import BaseModel
+
+
+class User(BaseModel):
+    name: str
+    age: int
 
 
 async def main() -> None:
@@ -35,36 +41,30 @@ async def main() -> None:
     )
     store = a11.sdk.S2ChunkStore(node_id, basin)
     node = a11.AsyncNode(store)
-    chunks = [
-        b"Hello ",
-        b"world. ",
-        b"A11 is streaming ",
-        b"this message through S2.",
+    pieces = [
+        "Hello ",
+        "world. ",
+        "A11 is streaming ",
+        "this message through S2.",
+        " This is a piece of structured data: ",
+        User(name="Alice", age=30),
+        ".",
     ]
 
-    async def write() -> None:
-        for chunk in chunks[:-1]:
-            await node.put(chunk)
-        await node.finalize(chunks[-1], wait=True)
+    async def _write():
+        for piece in pieces[:-1]:
+            await node.put(piece)
+        await node.finalize(pieces[-1], wait=True)
 
-    async def read() -> list[a11.NodeFragment]:
-        received = []
-        async for fragment in node.iter_fragments():
-            received.append(fragment)
-            print(
-                fragment.get_chunk().data.decode("utf-8"),
-                end="",
-                flush=True,
-            )
+    async def _read():
+        async for piece in node:
+            print(piece, end="", flush=True)
         print()
-        return received
 
     try:
-        _, received = await asyncio.gather(write(), read())
-        assert len(received) == len(chunks)
-        assert [fragment.seq for fragment in received] == list(
-            range(len(chunks))
-        )
+        # The writer and reader run simultaneously, so pieces stream through
+        # S2 without either side waiting for the whole message.
+        _, received = await asyncio.gather(_write(), _read())
         print(f"Stored in s2://{basin}/{store.stream_name}")
     finally:
         await store.aclose()

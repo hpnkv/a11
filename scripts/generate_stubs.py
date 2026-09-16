@@ -444,6 +444,9 @@ def _normalise_annotations(stub: str, submodule: str | None = None) -> str:
         "_get_authorization_reference(action: ...)": (
             "_get_authorization_reference(action: Action)"
         ),
+        "_get_authorization_reference(action: Action) -> typing.Any": (
+            "_get_authorization_reference(action: Action) -> bytes | None"
+        ),
         "_set_authorization(action: ...": "_set_authorization(action: Action",
         "_set_authorization_reference(action: ...": (
             "_set_authorization_reference(action: Action"
@@ -454,7 +457,7 @@ def _normalise_annotations(stub: str, submodule: str | None = None) -> str:
         ),
         set_authorization_reference_signature: (
             "_set_authorization_reference(action: Action, context_id:"
-            " typing.Any) -> Action"
+            " bytes | None) -> Action"
         ),
         "provenance: collections.abc.Sequence[str] = [],": (
             "provenance: collections.abc.Sequence[str] = (),"
@@ -465,6 +468,9 @@ def _normalise_annotations(stub: str, submodule: str | None = None) -> str:
         ),
         "def grants(self) -> tuple:": (
             "def grants(self) -> tuple[typing.Any, ...]:"
+        ),
+        "def restrictions(self) -> typing.Any:": (
+            "def restrictions(self) -> dict[str, typing.Any]:"
         ),
         "http2_options(self) -> ...": "http2_options(self) -> Http2Options",
         "http2_options(self, arg0: ...)": (

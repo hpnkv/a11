@@ -56,7 +56,7 @@ dependencies = [
 ]
 
 [project.scripts]
-a11 = "a11.cli.__main__:main"
+a11 = "a11.cli.__main__:_entry"
 
 [project.urls]
 Homepage = "https://docs.a11.to/"
@@ -96,7 +96,7 @@ llm = [
 cmake.source-dir = "cpp"
 cmake.version = ">=3.28"
 build-dir = "build/{state}/{wheel_tag}"
-wheel.packages = ["a11", "pybind11_abseil"]
+wheel.packages = ["a11", "pybind11_abseil", "editors", "testdata"]
 wheel.exclude = [
     "**/__pycache__/**",
     "**/*.pyc",
@@ -116,14 +116,18 @@ sdist.include = [
     "CMakeLists.txt",
     "cpp/**",
     "a11/**",
+    "editors/**",
     "pybind11_abseil/__init__.py",
     "scripts/**",
+    "testdata/**",
 ]
 sdist.inclusion-mode = "explicit"
 sdist.exclude = [
     "**/__pycache__/**",
     "**/*.pyc",
     "**/*.pyo",
+    "a11/_allocator/**",
+    "a11/libexec/**",
     "a11/_native*.so",
     "a11/_native*.dylib",
     "a11/_native*.pyd",

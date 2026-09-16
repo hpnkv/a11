@@ -18,7 +18,9 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import importlib
+import importlib.metadata
 import re
 import subprocess
 import sys
@@ -137,6 +139,95 @@ def _audit_typing_files(root: Path) -> None:
         if declaration not in source:
             raise RuntimeError(f"native stub is missing {declaration}")
 
+    for relative in (
+        "editors/pygments/a11flow_lexer.py",
+        "testdata/flow/codes.json",
+    ):
+        if not (root / relative).is_file():
+            raise RuntimeError(f"wheel does not contain {relative}")
+
+
+def _audit_installed_behavior() -> None:
+    """Exercise resources and native callbacks from the installed wheel."""
+    import a11
+    from a11.cli.flow_highlighting import register_flow_lexer
+    from a11.flow import diagnostics, loads
+
+    register_flow_lexer()
+    if not diagnostics.known_codes():
+        raise RuntimeError("installed Flow diagnostic table is empty")
+    loads(
+        "flow {\n"
+        "  in value: string\n"
+        "  out result: string\n"
+        "  value -> result\n"
+        "}\n"
+    )
+
+    entry_points = importlib.metadata.entry_points(group="console_scripts")
+    entry = next((item for item in entry_points if item.name == "a11"), None)
+    if entry is None or entry.value != "a11.cli.__main__:_entry":
+        raise RuntimeError(
+            "a11 console script bypasses its process entry point"
+        )
+
+    class PythonWireStream(a11.WireStream):
+        def __init__(self) -> None:
+            super().__init__()
+
+        async def start(self, on_message, on_done):
+            await on_message(a11.WireMessage())
+            await on_message(None)
+            await on_done()
+
+        async def accept(self, on_message, on_done):
+            await self.start(on_message, on_done)
+
+        def send(self, message):
+            return None
+
+        def half_close(self, trailers=None):
+            return None
+
+        async def drain_outgoing_messages(self):
+            return None
+
+        def abort(self, status):
+            return None
+
+        def set_deadline(self, deadline=None):
+            return None
+
+        @property
+        def deadline(self):
+            return a11.infinite_future()
+
+        def get_status(self):
+            return a11.Status.ok()
+
+        def get_trailers(self):
+            return {}
+
+        def get_id(self):
+            return "wheel-audit"
+
+        def get_impl(self):
+            return self
+
+    async def exercise_pull_adapter() -> None:
+        adapter = a11.WireStreamWithRecv(PythonWireStream())
+        started = asyncio.ensure_future(adapter.start())
+        if (
+            await asyncio.wait_for(adapter.receive(), timeout=10)
+            != a11.WireMessage()
+        ):
+            raise RuntimeError("installed pull adapter changed a message")
+        if await asyncio.wait_for(adapter.receive(), timeout=10) is not None:
+            raise RuntimeError("installed pull adapter did not deliver EOF")
+        await asyncio.wait_for(started, timeout=10)
+
+    asyncio.run(exercise_pull_adapter())
+
 
 def main() -> None:
     if len(sys.argv) != 2:
@@ -174,6 +265,7 @@ def main() -> None:
 
     importlib.import_module("a11._native")
     importlib.import_module("pybind11_abseil.status")
+    _audit_installed_behavior()
 
 
 if __name__ == "__main__":

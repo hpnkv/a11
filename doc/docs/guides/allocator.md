@@ -13,7 +13,8 @@ A11 in another process must preload it before startup.
 allocator directly.
 
 **The `a11` command** re-executes itself once at startup with the allocator
-preloaded, so commands such as `a11 gateway` use it automatically.
+preloaded, so commands such as `a11 gateway` use it automatically. CPython
+3.14 and newer on macOS use the interpreter's allocator instead.
 
 ## Preload for applications that embed A11
 
@@ -76,6 +77,11 @@ the allocator was not loaded.
 interpreters. A Homebrew or `uv`-managed Python normally keeps it; the system
 `/usr/bin/python3` strips it without an error. Use `is_active()` to verify the
 result.
+
+**CPython 3.14 and newer on macOS does not load A11's bundled mimalloc.** The
+interpreter contains its own mimalloc instance, and preloading another instance
+corrupts allocator state during interpreter shutdown. `library_path()` returns
+`None` for this combination.
 
 **The change applies to native allocations.** It replaces the allocator used by
 A11's C++ runtime, while CPython retains its object allocator. The effect depends

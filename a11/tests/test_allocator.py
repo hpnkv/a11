@@ -51,6 +51,15 @@ def test_a_missing_library_is_not_an_error():
     assert path is None or path.is_file()
 
 
+def test_cpython_314_on_macos_does_not_preload_a_second_mimalloc():
+    if (
+        sys.implementation.name == "cpython"
+        and sys.platform == "darwin"
+        and sys.version_info >= (3, 14)
+    ):
+        assert allocator.library_path() is None
+
+
 def test_activity_is_read_from_the_loader_not_the_environment():
     """The environment says what was asked; only the loader says what is."""
     environment = allocator.environ_with_preload({"PATH": "/usr/bin"})
@@ -76,9 +85,9 @@ def test_an_existing_preload_is_kept():
 
 
 def test_the_guard_stops_a_second_preload():
-    environment = allocator.environ_with_preload({
-        allocator.PRELOAD_GUARD_ENV: "1"
-    })
+    environment = allocator.environ_with_preload(
+        {allocator.PRELOAD_GUARD_ENV: "1"}
+    )
     variable = allocator.preload_variable()
     if variable is not None:
         assert variable not in environment, "preloaded twice"
@@ -134,8 +143,10 @@ def test_a_preloaded_subprocess_reports_itself_active():
         [
             sys.executable,
             "-c",
-            "import os, sys, a11.allocator as a;"
-            f" print(bool(os.environ.get({variable!r})), a.is_active())",
+            (
+                "import os, sys, a11.allocator as a;"
+                f" print(bool(os.environ.get({variable!r})), a.is_active())"
+            ),
         ],
         capture_output=True,
         text=True,
@@ -151,6 +162,6 @@ def test_a_preloaded_subprocess_reports_itself_active():
             " (macOS System Integrity Protection does this to signed"
             " interpreters); nothing about A11 to test here"
         )
-    assert is_active == "True", (
-        f"{variable} reached the child but the allocator did not load"
-    )
+    assert (
+        is_active == "True"
+    ), f"{variable} reached the child but the allocator did not load"

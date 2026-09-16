@@ -283,11 +283,14 @@ EXPR: literals, it (the value a where/map sees), .field, [i], (pipe | count),
       len lower upper trim text number bool keys values get join split merge
       contains starts-with ends-with replace slice default to_chunk from_chunk
       strformat b64encode b64decode b64urlencode b64urldecode
+      utf8encode utf8decode
       now duration time seconds
       A list or object literal may spread another in: [...xs, y] and
       {...it, "tags": [..]}, where a later key wins.
       b64encode/b64urlencode give text and b64decode/b64urldecode give bytes;
       the url pair uses the web-safe alphabet and does not insist on padding.
+      utf8encode gives bytes and utf8decode gives text; decoding rejects
+      malformed UTF-8 rather than replacing it.
       starts-with/ends-with take one ending or a list of them; to_chunk(v[,
       mime]) makes a Chunk, from_chunk(c) reads one back.
       strformat("%s of %s", a, b) is printf: %s as text, %d %f %x as numbers,

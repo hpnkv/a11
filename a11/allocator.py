@@ -34,7 +34,8 @@ Automatic setup
 
 The ``a11`` command re-executes itself once with the allocator preloaded, so
 commands run through the CLI use mimalloc without additional configuration.
-:func:`is_active` reports whether it is active.
+CPython 3.14 and newer on macOS keep the interpreter's allocator instead.
+:func:`is_active` reports whether mimalloc is active.
 
 What you must do yourself
 -------------------------
@@ -120,8 +121,16 @@ def library_path() -> Path | None:
 
     Absent is normal in several cases -- a source build whose deps prefix
     predates the shared mimalloc, a platform A11 does not bundle one for, or a
-    sanitizer build, which must keep its own allocator.
+    sanitizer build, which must keep its own allocator. CPython 3.14 and newer
+    on macOS also keep the interpreter's allocator: loading a second mimalloc
+    instance there corrupts allocator state during interpreter shutdown.
     """
+    if (
+        sys.implementation.name == "cpython"
+        and sys.platform == "darwin"
+        and sys.version_info >= (3, 14)
+    ):
+        return None
     directory = Path(__file__).resolve().parent / _LIBRARY_DIRECTORY
     if not directory.is_dir():
         return None

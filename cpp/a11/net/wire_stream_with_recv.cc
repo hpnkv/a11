@@ -223,7 +223,7 @@ a11::Future<std::optional<data::WireMessage>> WireStreamWithRecv::Receive(
         thread::MutexLock lock(&state->mu);
         cancellation->requested = true;
       },
-      {.stack_size = 256});
+      {.stack_size = 256 * 1024});
 }
 
 a11::Task WireStreamWithRecv::HandleMessage(
@@ -277,7 +277,7 @@ a11::Task WireStreamWithRecv::HandleMessage(
         }
         return observer(message).Await().status();
       },
-      {.stack_size = 256});
+      {.stack_size = 256 * 1024});
 }
 
 a11::Task WireStreamWithRecv::HandleDone(OnDone observer) {
@@ -304,7 +304,7 @@ a11::Task WireStreamWithRecv::HandleDone(OnDone observer) {
         }
         return observer().Await().status();
       },
-      {.stack_size = 256});
+      {.stack_size = 256 * 1024});
 }
 
 void WireStreamWithRecv::RecordCurrentStatus() const {

@@ -649,7 +649,7 @@ def test_a_named_flow_can_still_be_run_out_of_a_file_with_a_program(
         "flow shout {\n  in a: string\n  out b: string\n"
         "  a | map upper(it) -> b\n}\n"
         "flow {\n  nodes s\n  unused = node() in s\n"
-        "  argv | first 1 -> unused\n  skip unused\n}\n",
+        "  argv | first 1 -> unused\n}\n",
     )
     assert run("flow", "run", path, "--flow", "shout", "--input", "a=hi") == 0
     assert "b: HI" in capsys.readouterr().out

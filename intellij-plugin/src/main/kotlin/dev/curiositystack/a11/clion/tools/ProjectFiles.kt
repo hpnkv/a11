@@ -26,6 +26,7 @@ import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiManager
 import com.intellij.psi.search.FilenameIndex
 import com.intellij.psi.search.GlobalSearchScope
+import java.io.File
 
 /**
  * A file something works on: its PSI, the document its text lives in, and the
@@ -47,6 +48,18 @@ internal class TargetFile(val psiFile: PsiFile, val document: Document, val file
  * it, whichever of the two spellings below it used.
  */
 internal object ProjectFiles {
+
+    /** Resolve a path that may not exist yet and keep it inside the project. */
+    fun localPath(project: Project, path: String): String {
+        val base = project.basePath
+            ?: throw IllegalArgumentException("This project has no local root for '$path'.")
+        val root = File(base).canonicalFile
+        val requested = File(path).let { if (it.isAbsolute) it else File(root, path) }.canonicalFile
+        require(FileUtil.isAncestor(root, requested, false)) {
+            "'$path' is outside the project."
+        }
+        return FileUtil.toSystemIndependentName(requested.path)
+    }
 
     /**
      * Resolve a requested path to a file to work on. Call under a read action.

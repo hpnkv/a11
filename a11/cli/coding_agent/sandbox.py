@@ -20,6 +20,7 @@ import asyncio
 import json
 import os
 import pathlib
+import tempfile
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from enum import StrEnum
@@ -316,10 +317,92 @@ def _install_native_json_schemas(registry: a11.ActionRegistry) -> None:
             "control_events": "Cooperative stop and signal events.",
         },
     }
+    action_descriptions = {
+        "read_file": (
+            "Read one file named by required plain-text `path`, relative to the"
+            " coding current directory unless absolute. Optional `options` is"
+            " one JSON object, not line numbers at top level. This action has"
+            " no `result` port: outputs are separate unary `info` and `text`,"
+            " streaming `lines` (without newline characters), and streaming"
+            " `bytes`. For bounded text use options `{offset, length,"
+            " max_bytes}`; `offset` and `length` are byte counts. In Flow pipe"
+            " and bound `file.lines`, or consume `file.text` only for a"
+            " suitably small file."
+        ),
+        "list_directory": (
+            "Walk the required plain-text directory `path`. Optional"
+            " `options` is one JSON object containing traversal controls such"
+            " as `recursive`, `max_depth`, `hidden`, `match`, `kinds`, and"
+            " `max_entries`. This action has no `result` object: it streams one"
+            " metadata object per `entries` value and separately returns unary"
+            " integer `count` and boolean `truncated`. Each entry is"
+            " `{path, name, kind, exists, size, modified, mode, depth}`. In"
+            " Flow filter and bound `step.entries` before routing it out."
+        ),
+        "stat_path": (
+            "Inspect required plain-text `path`; absence is not an error. This"
+            " action has no `result` object and returns two separate unary"
+            " outputs: boolean `exists` and metadata object `info` with"
+            " `{path, name, kind, exists, size, modified, mode}`."
+        ),
+        "write_file": (
+            "Write required plain-text `path` from the streaming binary"
+            " `content` input. `content` is not a text field inside `options`;"
+            " the stream must be connected and closed. Optional `options` is"
+            " one JSON object controlling `append`, `atomic`,"
+            " `create_parents`, `sync`, `mode`, and `max_bytes`. There is no"
+            " `result` object: unary outputs are `bytes_written`, file metadata"
+            " `info`, and absolute path `resolved`. In Flow connect bytes or a"
+            " string value with `file.bytes -> write.content` or"
+            " `value -> write.content`."
+        ),
+        "make_directory": (
+            "Create required plain-text directory `path`. Optional `options`"
+            " is `{parents: bool}` and defaults to creating missing parents."
+            " Outputs are separate unary ports, not a `result` object:"
+            " `created` says whether a directory was newly made and `resolved`"
+            " is its absolute path."
+        ),
+        "remove_path": (
+            "Remove required plain-text `path`. Optional JSON `options` accepts"
+            " `recursive` for a directory tree and `missing_ok` for an absent"
+            " path; both default false. A nonempty directory requires"
+            " `recursive: true`. The sole unary output is integer `removed`,"
+            " not a `result` object."
+        ),
+        "move_path": (
+            "Move required plain-text source `path` to required plain-text"
+            " destination `to`. Optional JSON `options` is"
+            " `{overwrite: bool}`; overwrite defaults false. The sole unary"
+            " output is absolute destination `resolved`, not a `result`"
+            " object."
+        ),
+        "copy_path": (
+            "Copy required plain-text source `path` to required plain-text"
+            " destination `to`. Optional JSON `options` accepts `recursive`"
+            " for directories and `overwrite` for an existing destination;"
+            " both default false. The sole unary output is absolute destination"
+            " `resolved`, not a `result` object."
+        ),
+        "spawn_process": (
+            "Start required plain-text executable `program` directly, without"
+            " a shell. Optional JSON `arguments` is a string or array of"
+            " strings and is never shell-split; use `run_command` when shell"
+            " syntax is required. Optional `options` controls cwd, environment,"
+            " and bounds. `stdin` and `control_events` are streams and must be"
+            " connected or closed. Outputs are separate ports, not a `result`"
+            " object: streaming `stdout_lines`, `stderr_lines`, `stdout`, and"
+            " `stderr`, plus unary `pid`, `exit_code`, `signal`, `usage`,"
+            " `sandbox`, and `output_truncated`. In Flow filter or bound"
+            " `stdout_lines` and `stderr_lines` before routing them out."
+        ),
+    }
     for action_name, ports in schemas.items():
         if not registry.is_registered(action_name):
             continue
         schema = registry.get_schema(action_name)
+        if action_name in action_descriptions:
+            schema.description = action_descriptions[action_name]
         for port_name, json_schema in ports.items():
             port = schema.inputs[port_name]
             port.json_schema = json.dumps(json_schema)
@@ -335,12 +418,31 @@ class SandboxMode(StrEnum):
 
     READ_ONLY = "read-only"
     WORKSPACE_WRITE = "workspace-write"
+    UNRESTRICTED = "unrestricted"
 
 
 def safe_environment() -> dict[str, str]:
     """Return the non-credential environment supplied to child processes."""
-    allowed = {"LANG", "LC_ALL", "LC_CTYPE", "PATH", "TERM", "TZ"}
-    return {key: value for key, value in os.environ.items() if key in allowed}
+    allowed = {
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "PATH",
+        "TEMP",
+        "TERM",
+        "TMP",
+        "TMPDIR",
+        "TZ",
+        "XDG_RUNTIME_DIR",
+    }
+    environment = {
+        key: value for key, value in os.environ.items() if key in allowed
+    }
+    temporary = tempfile.gettempdir()
+    environment["TMPDIR"] = temporary
+    environment["TMP"] = temporary
+    environment["TEMP"] = temporary
+    return environment
 
 
 def register_native_actions(
@@ -350,23 +452,29 @@ def register_native_actions(
     cwd: pathlib.Path,
     mode: SandboxMode,
     allow_run: bool = True,
-) -> None:
-    """Register native file and process actions with required confinement."""
-    sandbox_roots = [path.resolve() for path in roots]
-    temporary_root = pathlib.Path("/tmp").resolve()
-    if temporary_root not in sandbox_roots:
-        sandbox_roots.append(temporary_root)
+    read_only: bool = False,
+) -> set[str]:
+    """Install native actions under a policy and return their names."""
+    native = a11.ActionRegistry()
+    builtins = set(native.list_registered_actions())
     flow.register_standard_actions(
-        registry,
-        [str(path) for path in sandbox_roots],
-        allow_write=mode == SandboxMode.WORKSPACE_WRITE,
+        native,
+        [str(path.resolve()) for path in roots],
+        allow_write=mode != SandboxMode.READ_ONLY and not read_only,
         allow_run=allow_run,
         require_sandbox=True,
         inherit_environment=False,
         max_seconds=600,
         current_directory=str(cwd),
+        unrestricted=mode == SandboxMode.UNRESTRICTED,
     )
-    _install_native_json_schemas(registry)
+    _install_native_json_schemas(native)
+    names = set(native.list_registered_actions()) - builtins
+    for name in names:
+        registry.register(
+            name, native.get_schema(name), native.get_handler(name)
+        )
+    return names
 
 
 async def _finalize_process_inputs(

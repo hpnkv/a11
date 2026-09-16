@@ -51,6 +51,15 @@ interface Hunk {
   hintLine?: number;
 }
 
+/** Normalize the two transport details required by unified-diff parsers. */
+export function normalizePatch(patch: string): string {
+  return `${patch
+    .split(/\r?\n/)
+    .map((line) => (/^[+-]/.test(line) ? line.replace(/\s+$/, '') : line))
+    .join('\n')
+    .replace(/\n+$/, '')}\n`;
+}
+
 /** The lines a hunk expects to find. */
 function before(hunk: Hunk): PatchLine[] {
   return hunk.lines.filter((line) => line.kind !== '+');
@@ -105,11 +114,7 @@ function parseHunks(patch: string, indented: boolean): Hunk[] {
       continue;
     }
     if (!current) {
-      // A hunk with no `@@` header at all: the whole patch is one hunk, placed
-      // by its context alone.
-      if (line === '') continue;
-      current = {lines: []};
-      hunks.push(current);
+      continue;
     }
     const marker = line.charAt(0);
     if (marker === '+' || marker === '-') {
@@ -125,6 +130,37 @@ function parseHunks(patch: string, indented: boolean): Hunk[] {
     }
   }
   return hunks.filter((hunk) => hunk.lines.length > 0);
+}
+
+export type PatchOperation =
+  | {kind: 'update'; path: string}
+  | {kind: 'create'; path: string}
+  | {kind: 'delete'; path: string}
+  | {kind: 'rename'; path: string; newPath: string};
+
+/** File lifecycle encoded by standard unified-diff headers. */
+export function patchOperation(patch: string, fallbackPath: string): PatchOperation {
+  const lines = patch.split(/\r?\n/);
+  const value = (prefix: string): string | undefined => {
+    const line = lines.find((candidate) => candidate.startsWith(prefix));
+    if (!line) return undefined;
+    const raw = line.slice(prefix.length).split('\t', 1)[0].trim();
+    if (raw.startsWith('"') && raw.endsWith('"')) {
+      try {
+        return JSON.parse(raw);
+      } catch {
+        return raw.slice(1, -1);
+      }
+    }
+    return raw.replace(/^[ab]\//, '');
+  };
+  const oldPath = value('--- ');
+  const newPath = value('+++ ');
+  if (oldPath === '/dev/null') return {kind: 'create', path: newPath || fallbackPath};
+  if (newPath === '/dev/null') return {kind: 'delete', path: fallbackPath};
+  const renamed = value('rename to ');
+  if (renamed) return {kind: 'rename', path: fallbackPath, newPath: renamed};
+  return {kind: 'update', path: fallbackPath};
 }
 
 /** One hunk, where it was found, and the lines to leave there. */
@@ -172,14 +208,10 @@ function locateHunk(file: string[], hunk: Hunk, searchFrom: number): Placed {
   const expected = before(hunk);
   if (expected.length === 0) {
     if (hunk.hintLine === undefined) {
-      throw new Error(
-        "A hunk that only adds lines needs an '@@' header to say where they go.",
-      );
+      throw new Error("A hunk that only adds lines needs an '@@' header to say where they go.");
     }
     if (hunk.hintLine > file.length) {
-      throw new Error(
-        `The hunk at line ${hunk.hintLine + 1} is past the end of the file.`,
-      );
+      throw new Error(`The hunk at line ${hunk.hintLine + 1} is past the end of the file.`);
     }
     return {
       hunk,
@@ -213,9 +245,7 @@ function locateHunk(file: string[], hunk: Hunk, searchFrom: number): Placed {
   throw new Error(
     'This hunk does not match the file, so nothing was applied:\n\n' +
       wanted +
-      (found
-        ? `\n\nWhat is at line ${(hunk.hintLine ?? 0) + 1} instead:\n\n${found}`
-        : '') +
+      (found ? `\n\nWhat is at line ${(hunk.hintLine ?? 0) + 1} instead:\n\n${found}` : '') +
       '\n\nRead the file again and patch what is there.',
   );
 }
@@ -252,6 +282,7 @@ export interface PatchOutcome {
  * to support diffs copied from a list or quoted block.
  */
 export function applyPatch(text: string, patch: string): PatchOutcome {
+  patch = normalizePatch(patch);
   const newline = text.includes('\r\n') ? '\r\n' : '\n';
   const file = text.split(/\r?\n/);
   // A trailing newline makes an empty last element, which is the end of the
@@ -282,8 +313,14 @@ export function applyPatch(text: string, patch: string): PatchOutcome {
   for (const one of [...placed].reverse()) {
     out.splice(one.at, before(one.hunk).length, ...one.replacement);
   }
-  const added = placed.reduce((sum, one) => sum + after(one.hunk).length, 0);
-  const removed = placed.reduce((sum, one) => sum + before(one.hunk).length, 0);
+  const added = placed.reduce(
+    (sum, one) => sum + one.hunk.lines.filter((line) => line.kind === '+').length,
+    0,
+  );
+  const removed = placed.reduce(
+    (sum, one) => sum + one.hunk.lines.filter((line) => line.kind === '-').length,
+    0,
+  );
   return {
     text: out.join(newline) + (trailing ? newline : ''),
     added,

@@ -101,6 +101,28 @@ pip install "a11-kit[llm]"
 a11 chat --provider ollama --no-voice --no-shell-tools
 ```
 
+`a11 chat` reuses a gateway at the default endpoint, or starts one for the
+duration of the chat with the current directory as its coding workspace.
+`--cwd PATH` selects another workspace for a new gateway. An explicit
+`--gateway URL` must be reachable.
+
+In a coding chat, `/sandbox unrestricted` grants host filesystem access and
+disables kernel process confinement. `/sandbox workspace-write` or
+`/sandbox read-only` restores confinement. Approval remains a separate setting
+(`/approval suggest|auto`). Sandbox changes affect subsequent tool calls for
+all clients of that gateway, not already-running processes.
+
+Studio and IDE clients can call the UI-only `configure_coding_agent` action
+with `sandbox_mode` (`read-only`, `workspace-write`, or `unrestricted`) and/or
+`approval_mode` (`suggest` or `auto`). Omitted fields keep their current values;
+the result contains `approval_mode`, `sandbox_ceiling`, and `network`. This
+control is excluded from the coding agent's model-facing action list.
+
+Input questions appear above the TUI composer. Use Up/Down to select and Enter
+to answer, or type a response when free text is allowed. An output-area status
+line shows `Working` during model calls and `Waiting for input` while a
+question is pending.
+
 ## Add capabilities incrementally
 
 **Streaming.** An asynchronous iterator yields values before it finishes.

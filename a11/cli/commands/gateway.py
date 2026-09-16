@@ -123,7 +123,7 @@ def _add_serving_flags(
     )
     parser.add_argument(
         "--coding-sandbox",
-        choices=("read-only", "workspace-write"),
+        choices=("read-only", "workspace-write", "unrestricted"),
         default=argparse.SUPPRESS if inherit_defaults else "workspace-write",
         help="A11 native sandbox mode for coding actions.",
     )

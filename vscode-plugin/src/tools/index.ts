@@ -26,7 +26,7 @@
  * Two conventions carried over exactly, because a mismatch would be silent:
  *
  * * **Lines are 0-based and `end_line` is inclusive.** A highlight's own numbers
- *   read back the lines it sits on with `read_file` and no arithmetic.
+ *   read back the lines it sits on with `ide__read_file` and no arithmetic.
  * * **An output flagged `user_facing` is the run log**, written for the person
  *   watching and never part of the tool result. The gateway's LLM tool runner is
  *   what holds it back; this side only has to flag it.
@@ -34,7 +34,7 @@
 
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import {applyPatch} from './patch.js';
+import {applyPatch, patchOperation} from './patch.js';
 
 /**
  * The key every tool's result map carries its narration under, for the user's
@@ -81,11 +81,7 @@ function required(name: string, description: string): PortDescriptor {
   return {name, type: 'text/plain', required: true, unary: true, description};
 }
 
-function json(
-  name: string,
-  description: string,
-  schema?: Record<string, unknown>,
-): PortDescriptor {
+function json(name: string, description: string, schema?: Record<string, unknown>): PortDescriptor {
   return {
     name,
     type: 'application/json',
@@ -121,9 +117,16 @@ function activeDocument(): vscode.TextDocument | undefined {
  */
 function resolvePath(given: string): string | undefined {
   if (!given) return undefined;
-  if (path.isAbsolute(given)) return given;
-  const root = vscode.workspace.workspaceFolders?.[0];
-  return root ? path.join(root.uri.fsPath, given) : undefined;
+  const roots = vscode.workspace.workspaceFolders ?? [];
+  const candidates = path.isAbsolute(given)
+    ? [path.resolve(given)]
+    : roots.map((root) => path.resolve(root.uri.fsPath, given));
+  return candidates.find((candidate) =>
+    roots.some((root) => {
+      const relative = path.relative(path.resolve(root.uri.fsPath), candidate);
+      return relative === '' || (!relative.startsWith('..' + path.sep) && relative !== '..');
+    }),
+  );
 }
 
 async function openDocument(given: string): Promise<vscode.TextDocument> {
@@ -199,7 +202,7 @@ const RANGE_INPUT = json(
 function activeFileTool(): Tool {
   return {
     descriptor: {
-      name: 'get_active_file',
+      name: 'ide__get_active_file',
       description:
         'Return the path of the file in the active editor and its text. Pass a request to' +
         ' read only part of a large file; with none, the whole file is returned.',
@@ -253,12 +256,10 @@ function activeFileTool(): Tool {
 function openEditorsTool(): Tool {
   return {
     descriptor: {
-      name: 'get_open_editors',
+      name: 'ide__get_open_editors',
       description: 'List the paths of all files open in editors.',
       inputs: [],
-      outputs: [
-        text('files', 'Absolute path of each file open in an editor.', false),
-      ],
+      outputs: [text('files', 'Absolute path of each file open in an editor.', false)],
     },
     async run() {
       // Every tab of every group, not only the visible editors: "open" is what a
@@ -285,21 +286,24 @@ function openEditorsTool(): Tool {
 function selectionTool(): Tool {
   return {
     descriptor: {
-      name: 'get_selection',
-      description:
-        'Return the current editor selection: where it sits, and the lines it covers.',
+      name: 'ide__get_selection',
+      description: 'Return the current editor selection: where it sits, and the lines it covers.',
       inputs: [],
       outputs: [
-        json('metadata', 'Where the selection is: path, start_line, start_column, end_line, end_column.', {
-          type: 'object',
-          properties: {
-            path: {type: 'string'},
-            start_line: {type: 'integer'},
-            start_column: {type: 'integer'},
-            end_line: {type: 'integer'},
-            end_column: {type: 'integer'},
+        json(
+          'metadata',
+          'Where the selection is: path, start_line, start_column, end_line, end_column.',
+          {
+            type: 'object',
+            properties: {
+              path: {type: 'string'},
+              start_line: {type: 'integer'},
+              start_column: {type: 'integer'},
+              end_line: {type: 'integer'},
+              end_column: {type: 'integer'},
+            },
           },
-        }),
+        ),
         text('lines', 'The selected lines, one value per line.', false),
       ],
     },
@@ -359,7 +363,7 @@ function flattenSymbols(
 function fileSymbolsTool(): Tool {
   return {
     descriptor: {
-      name: 'get_file_symbols',
+      name: 'ide__get_file_symbols',
       description:
         "List the named symbols declared in a file, with each one's kind and position." +
         ' Give a `path` for any file of the project, or omit it for the one in the' +
@@ -402,11 +406,11 @@ function fileSymbolsTool(): Tool {
 function readFileTool(): Tool {
   return {
     descriptor: {
-      name: 'read_file',
+      name: 'ide__read_file',
       description:
         'Read a range of lines from any file of the project, open in an editor or not.' +
         ' Lines are 0-based and `end_line` is inclusive, the same coordinates' +
-        ' `get_error_highlights` reports, so a highlight reads back the lines it sits on.',
+        ' `ide__get_error_highlights` reports, so a highlight reads back the lines it sits on.',
       inputs: [
         required('path', 'Absolute or project-relative path of the file to read.'),
         RANGE_INPUT,
@@ -447,16 +451,38 @@ function readFileTool(): Tool {
 function applyPatchTool(): Tool {
   return {
     descriptor: {
-      name: 'apply_patch',
+      name: 'ide__apply_patch',
       description:
-        'Apply a unified diff to one file of the project. The edit lands as a single IDE' +
+        'Apply a standard unified diff to one file of the project. The edit lands as a single IDE' +
         ' command, so one Undo takes it back and the user can see exactly what' +
-        ' changed. Hunks are placed by their context rather than by the numbers in' +
+        ' changed. Preface this call, or a series of tool calls involving it, with a brief' +
+        ' user-facing description of what is being changed.' +
+        ' Hunks are placed by their context rather than by the numbers in' +
         ' their @@ header, and a hunk that does not match the file is refused with' +
-        ' what is there instead: nothing is applied on a near miss.',
+        ' what is there instead: nothing is applied on a near miss. Hunk counts are' +
+        ' inferred from their lines. Before invoking the tool, strip trailing whitespace' +
+        ' from every line beginning with `+` or `-`, so empty added or removed lines are' +
+        ' exactly their marker. Ensure the patch ends with a newline; append `\\n` when' +
+        ' necessary. Every hunk starts with' +
+        ' `@@ -oldStart,oldCount +newStart,newCount @@`; every following line starts' +
+        ' with exactly one syntax marker: space for context, `-` to remove, or `+`' +
+        ' to add. The content after that marker is literal. Thus an empty added line' +
+        ' is exactly `+`, an empty removed line is exactly `-`, and an empty context' +
+        ' line is one space. Create and delete use `/dev/null` in the `---` or `+++`' +
+        ' header; rename uses `rename from` and `rename to` headers.',
       inputs: [
-        required('path', 'Absolute or project-relative path of the file to patch.'),
-        required('patch', 'The unified diff to apply.'),
+        required(
+          'path',
+          'Absolute or project-relative target path; for delete or rename, the existing source path.',
+        ),
+        required(
+          'patch',
+          'Raw unified diff, without Markdown fences or `*** Begin Patch` wrappers. An update may start' +
+            ' directly with `@@`. Create uses `--- /dev/null` then `+++ b/path`; delete uses' +
+            ' `--- a/path` then `+++ /dev/null`; rename uses `rename from old` then `rename to new`.' +
+            ' Hunk count numbers may be approximate. Normalize changed lines and the final newline' +
+            ' exactly as the tool description requires.',
+        ),
       ],
       outputs: [
         json('result', 'What was applied: hunks, lines added and lines removed.', {
@@ -473,23 +499,45 @@ function applyPatchTool(): Tool {
     async run(inputs) {
       const given = string_(inputs, 'path');
       const patch = string_(inputs, 'patch');
-      if (!patch.trim()) throw new Error('apply_patch needs a patch to apply.');
-      const document = await openDocument(given);
-      const outcome = applyPatch(document.getText(), patch);
+      if (!patch.trim()) throw new Error('ide__apply_patch needs a patch to apply.');
+      const operation = patchOperation(patch, given);
+      const sourcePath = resolvePath(operation.path);
+      if (!sourcePath) throw new Error(`Path is outside the project: ${operation.path}`);
+      const sourceUri = vscode.Uri.file(sourcePath);
+      const document = operation.kind === 'create' ? undefined : await openDocument(operation.path);
+      const outcome =
+        operation.kind === 'rename' && !patch.includes('@@')
+          ? {text: document!.getText(), hunks: 0, added: 0, removed: 0}
+          : applyPatch(document?.getText() ?? '', patch);
 
-      // One edit over the whole file, which is what makes one Undo reverse the
-      // whole patch — the guarantee the JetBrains tool gets from running inside a
-      // single IDE command.
       const edit = new vscode.WorkspaceEdit();
-      const whole = new vscode.Range(
-        document.positionAt(0),
-        document.positionAt(document.getText().length),
-      );
-      edit.replace(document.uri, whole, outcome.text);
+      let resultPath = sourcePath;
+      if (operation.kind === 'create') {
+        edit.createFile(sourceUri, {ignoreIfExists: false});
+        edit.insert(sourceUri, new vscode.Position(0, 0), outcome.text);
+      } else if (operation.kind === 'delete') {
+        if (outcome.text.length !== 0) {
+          throw new Error('A delete patch must remove all content from the file.');
+        }
+        edit.deleteFile(sourceUri, {ignoreIfNotExists: false});
+      } else {
+        const whole = new vscode.Range(
+          document!.positionAt(0),
+          document!.positionAt(document!.getText().length),
+        );
+        edit.replace(sourceUri, whole, outcome.text);
+        if (operation.kind === 'rename') {
+          const destination = resolvePath(operation.newPath);
+          if (!destination) throw new Error(`Path is outside the project: ${operation.newPath}`);
+          const destinationUri = vscode.Uri.file(destination);
+          edit.renameFile(sourceUri, destinationUri, {overwrite: false});
+          resultPath = destination;
+        }
+      }
       if (!(await vscode.workspace.applyEdit(edit))) {
         throw new Error(`Could not apply the patch to ${given}.`);
       }
-      const where = document.uri.fsPath;
+      const where = resultPath;
       return {
         result: {
           path: where,
@@ -511,7 +559,7 @@ function applyPatchTool(): Tool {
 function errorHighlightsTool(): Tool {
   return {
     descriptor: {
-      name: 'get_error_highlights',
+      name: 'ide__get_error_highlights',
       description:
         "Report the problems the IDE's code analysis finds in a range of lines of a file:" +
         ' every red (error) and yellow (warning) underline, with its position, the text it' +
@@ -528,10 +576,14 @@ function errorHighlightsTool(): Tool {
         }),
       ],
       outputs: [
-        json('highlights', 'One entry per underline: severity, position, the text and the message.', {
-          type: 'array',
-          items: {type: 'object'},
-        }),
+        json(
+          'highlights',
+          'One entry per underline: severity, position, the text and the message.',
+          {
+            type: 'array',
+            items: {type: 'object'},
+          },
+        ),
       ],
     },
     async run(inputs) {
@@ -552,8 +604,7 @@ function errorHighlightsTool(): Tool {
         )
         .filter((one) => one.range.end.line >= from && one.range.start.line <= to)
         .map((one) => ({
-          severity:
-            one.severity === vscode.DiagnosticSeverity.Error ? 'error' : 'warning',
+          severity: one.severity === vscode.DiagnosticSeverity.Error ? 'error' : 'warning',
           start_line: one.range.start.line,
           start_column: one.range.start.character,
           end_line: one.range.end.line,
@@ -579,25 +630,23 @@ function errorHighlightsTool(): Tool {
 function renameSymbolTool(): Tool {
   return {
     descriptor: {
-      name: 'rename_symbol',
+      name: 'ide__rename_symbol',
       description: 'Rename a symbol in the active file, updating the references to it.',
       inputs: [
         required('name', 'The symbol to rename, as it is written now.'),
         required('new_name', 'What to rename it to.'),
         text('path', 'Absolute or project-relative path; omit for the active file.'),
       ],
-      outputs: [
-        json('result', 'What was renamed, and in how many files.', {type: 'object'}),
-      ],
+      outputs: [json('result', 'What was renamed, and in how many files.', {type: 'object'})],
     },
     async run(inputs) {
       const given = string_(inputs, 'path');
       const document = given ? await openDocument(given) : activeDocument();
-      if (!document) throw new Error('rename_symbol needs a file.');
+      if (!document) throw new Error('ide__rename_symbol needs a file.');
       const name = string_(inputs, 'name');
       const renamed = string_(inputs, 'new_name');
       if (!name || !renamed) {
-        throw new Error('rename_symbol needs both `name` and `new_name`.');
+        throw new Error('ide__rename_symbol needs both `name` and `new_name`.');
       }
 
       // Find the symbol's own declaration to rename *at*: renaming at an
@@ -623,19 +672,14 @@ function renameSymbolTool(): Tool {
       }
       return {
         result: {name, new_name: renamed, files},
-        [RUN_LOG_KEY]: log(
-          `Renamed \`${name}\` to \`${renamed}\` across ${files} file(s)`,
-        ),
+        [RUN_LOG_KEY]: log(`Renamed \`${name}\` to \`${renamed}\` across ${files} file(s)`),
       };
     },
   };
 }
 
 /** Where a whole-word `name` first appears in the document. */
-function firstOccurrence(
-  document: vscode.TextDocument,
-  name: string,
-): vscode.Position | undefined {
+function firstOccurrence(document: vscode.TextDocument, name: string): vscode.Position | undefined {
   const pattern = new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
   for (let line = 0; line < document.lineCount; line += 1) {
     const found = pattern.exec(document.lineAt(line).text);
@@ -647,16 +691,14 @@ function firstOccurrence(
 function findFileTool(): Tool {
   return {
     descriptor: {
-      name: 'find_file',
+      name: 'ide__find_file',
       description: 'Find project files by exact file name.',
       inputs: [required('name', 'The file name to look for, without a directory.')],
-      outputs: [
-        text('paths', 'Absolute path of each matching file.', false),
-      ],
+      outputs: [text('paths', 'Absolute path of each matching file.', false)],
     },
     async run(inputs) {
       const name = string_(inputs, 'name');
-      if (!name) throw new Error('find_file needs a `name`.');
+      if (!name) throw new Error('ide__find_file needs a `name`.');
       const found = await vscode.workspace.findFiles(
         `**/${name}`,
         '**/{node_modules,.git,.venv,build,dist,__pycache__}/**',
@@ -679,16 +721,14 @@ function findFileTool(): Tool {
 function searchProjectTool(): Tool {
   return {
     descriptor: {
-      name: 'search_project',
+      name: 'ide__search_project',
       description: 'Find project files whose name contains a query substring.',
       inputs: [required('query', 'The substring to look for in file names.')],
-      outputs: [
-        text('paths', 'Absolute path of each matching file.', false),
-      ],
+      outputs: [text('paths', 'Absolute path of each matching file.', false)],
     },
     async run(inputs) {
       const query = string_(inputs, 'query');
-      if (!query) throw new Error('search_project needs a `query`.');
+      if (!query) throw new Error('ide__search_project needs a `query`.');
       const found = await vscode.workspace.findFiles(
         `**/*${query}*`,
         '**/{node_modules,.git,.venv,build,dist,__pycache__}/**',

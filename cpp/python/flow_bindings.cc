@@ -1160,7 +1160,8 @@ merges over the embedded snapshot itself.
       [](const std::shared_ptr<actions::ActionRegistry>& registry,
          const std::vector<std::string>& roots, bool allow_write,
          bool allow_run, bool require_sandbox, bool inherit_environment,
-         std::int64_t max_seconds, const std::string& current_directory) {
+         std::int64_t max_seconds, const std::string& current_directory,
+         bool unrestricted) {
         namespace sdk_flow = a11::sdk::flow;
         if (registry == nullptr) {
           ThrowStatus(absl::InvalidArgumentError("a registry is required"));
@@ -1173,13 +1174,15 @@ merges over the embedded snapshot itself.
             allow_write ? sdk_flow::WorkspaceCapabilities(std::move(where))
                         : sdk_flow::ReadOnlyCapabilities(std::move(where));
         capabilities->filesystem.current_directory = current_directory;
+        capabilities->filesystem.unrestricted = unrestricted;
         capabilities->process.enabled = allow_run;
         capabilities->process.any_program = allow_run;
         capabilities->process.inherit_environment = inherit_environment;
         capabilities->process.max_seconds = max_seconds;
         capabilities->process.sandbox =
-            require_sandbox ? sdk_flow::SandboxRequest::kRequired
-                            : sdk_flow::SandboxRequest::kPreferred;
+            unrestricted ? sdk_flow::SandboxRequest::kNever
+            : require_sandbox ? sdk_flow::SandboxRequest::kRequired
+                              : sdk_flow::SandboxRequest::kPreferred;
         const auto add_runtime_root = [&capabilities](std::string path) {
           std::error_code error;
           if (std::filesystem::exists(path, error) && !error) {
@@ -1214,7 +1217,7 @@ merges over the embedded snapshot itself.
       py::arg("registry"), py::arg("roots"), py::arg("allow_write") = false,
       py::arg("allow_run") = false, py::arg("require_sandbox") = true,
       py::arg("inherit_environment") = false, py::arg("max_seconds") = 600,
-      py::arg("current_directory") = ".",
+      py::arg("current_directory") = ".", py::arg("unrestricted") = false,
       R"doc(Register the native filesystem and process actions on a registry.
 
 The policy is captured by the handlers at registration. A caller may narrow one
@@ -1222,6 +1225,8 @@ run through action options but cannot widen the roots, write access, process
 access, environment inheritance, deadline ceiling, or kernel-sandbox requirement.
 Relative filesystem paths resolve against ``current_directory``. Spawned
 processes may make outbound network connections by default.
+``unrestricted=True`` disables filesystem containment and the kernel sandbox;
+write and process permissions, environment filtering, and limits still apply.
 )doc");
 
   flow.def(

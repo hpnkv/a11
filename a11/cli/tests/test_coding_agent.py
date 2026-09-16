@@ -21,6 +21,7 @@ import datetime
 import json
 import pathlib
 import subprocess
+import tempfile
 import uuid
 
 import pytest
@@ -29,7 +30,7 @@ import a11
 from a11 import flow
 from a11.cli.coding_agent import ApprovalMode, CodingAgent, SandboxMode
 from a11.cli.coding_agent import tools as tools_mod
-from a11.cli.coding_agent.sandbox import run_native_process
+from a11.cli.coding_agent.sandbox import run_native_process, safe_environment
 from a11.cli.coding_agent.session import SessionRecord, SessionStore
 from a11.sdk.llm import Interaction, Role
 from a11.status import StatusCode, StatusException
@@ -84,6 +85,12 @@ def test_prompt_names_instruction_files_without_embedding_repository_state(
     assert instructions not in agent.prompt
     assert "untracked.txt" not in agent.prompt
     assert "workspace_info" in agent.prompt
+    assert "Before each meaningful tool call or series" in agent.prompt
+    assert "request_user_input with 2–4 concise options" in agent.prompt
+    assert (
+        "user-requested interactive tasks, not just clarification"
+        in agent.prompt
+    )
 
 
 def test_prompt_includes_the_current_date(tmp_path):
@@ -137,6 +144,26 @@ def test_structured_action_inputs_have_json_schemas(tmp_path):
     )
     assert "relative paths use the current directory" in (
         registry.get_schema("read_file").inputs["path"].description
+    )
+    assert (
+        "has no `result` port" in registry.get_schema("read_file").description
+    )
+    assert (
+        "separate unary `info` and `text`"
+        in registry.get_schema("read_file").description
+    )
+    assert (
+        "has no `result` object"
+        in registry.get_schema("list_directory").description
+    )
+    assert "boolean `exists`" in registry.get_schema("stat_path").description
+    assert (
+        "must be connected and closed"
+        in registry.get_schema("write_file").description
+    )
+    assert (
+        "not a `result` object"
+        in registry.get_schema("spawn_process").description
     )
     assert process_arguments["oneOf"][1]["items"] == {"type": "string"}
     assert flow_inputs == {"type": "object", "additionalProperties": True}
@@ -199,13 +226,51 @@ def test_structured_action_inputs_have_json_schemas(tmp_path):
     assert "Use web-fetch for HTTP retrieval" in (
         registry.get_schema("run_command").description
     )
+    assert "not an argv array" in registry.get_schema("run_command").description
+    assert "`result.output_lines` is an integer count" in (
+        registry.get_schema("run_command").description
+    )
+    assert (
+        "does not stream entries"
+        in registry.get_schema("list_files").description
+    )
+    assert (
+        "metacharacters are literal"
+        in registry.get_schema("search_text").description
+    )
+    assert (
+        "`{diff: string, truncated: bool}`"
+        in registry.get_schema("file_diff").description
+    )
     patch_schema = registry.get_schema("apply_patch")
     assert "git-format unified diff" in patch_schema.description
+    assert "description of what is being changed" in patch_schema.description
     assert "diff --git" in patch_schema.description
     assert "--- /dev/null" in patch_schema.description
     assert "Never use `*** Begin Patch`" in patch_schema.description
+    assert "Hunk counts are inferred" in patch_schema.description
+    assert "final-newline normalization" in patch_schema.description
+    assert "trailing whitespace" in patch_schema.description
+    assert "@@ -oldStart,oldCount +newStart,newCount @@" in (
+        patch_schema.description
+    )
+    assert "empty added line is exactly `+`" in patch_schema.description
+    assert "strip trailing whitespace" in patch_schema.description
+    assert "ends with a newline" in patch_schema.description
     assert (
         "Do not wrap it in Markdown" in patch_schema.inputs["patch"].description
+    )
+    assert "preflighted before any" in patch_schema.description
+    assert "`{changed_files: [workspace-relative path]}`" in (
+        patch_schema.description
+    )
+    assert (
+        "Do not pass a single object"
+        in registry.get_schema("report_completion").description
+    )
+    assert (
+        "is not an array of strings"
+        in registry.get_schema("request_user_input").description
     )
     assert "Do not use curl, wget" in (
         registry.get_schema("run_command").inputs["command"].description
@@ -247,6 +312,13 @@ def test_structured_action_inputs_have_json_schemas(tmp_path):
     ]
 
 
+def test_sandbox_environment_supplies_platform_temporary_directories():
+    environment = safe_environment()
+
+    for name in ("TMPDIR", "TMP", "TEMP"):
+        assert pathlib.Path(environment[name]).is_dir()
+
+
 @pytest.mark.asyncio
 async def test_studio_can_configure_gateway_agent_permissions(tmp_path):
     registry, agent = _agent(tmp_path, ApprovalMode.SUGGEST)
@@ -274,6 +346,96 @@ async def test_studio_can_configure_gateway_agent_permissions(tmp_path):
         "type": "string",
         "enum": ["suggest", "auto"],
     }
+
+
+@pytest.mark.asyncio
+async def test_ui_can_enable_and_restore_sandbox(tmp_path):
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("original")
+    registry, agent = _agent(workspace)
+
+    with pytest.raises(StatusException):
+        agent.context.workspace.resolve(outside, write=True)
+    await _invoke(
+        registry,
+        "configure_coding_agent",
+        {
+            "sandbox_mode": "unrestricted",
+        },
+    )
+    assert agent.context.workspace.resolve(outside, write=True) == outside
+    result = await _invoke(
+        registry,
+        "run_command",
+        {
+            "command": f"printf updated > '{outside}'",
+        },
+    )
+    assert result["exit_code"] == 0
+    assert outside.read_text() == "updated"
+    read = await _invoke(
+        registry,
+        "run_flow",
+        {
+            "source": "flow inspect {\n in path: string required\n"
+            "out result: string required\n"
+            "file = run read_file(path: path)\n file.text -> result\n}",
+            "inputs": {"path": str(outside)},
+        },
+    )
+    assert read == {"result": "updated"}
+    assert agent.context.policy.mode == ApprovalMode.AUTO
+    assert "unrestricted" in agent.context.system_prompt
+    info = await _invoke(registry, "coding_agent_info", {})
+    assert info["sandbox"] == "unrestricted"
+    assert "configure_coding_agent" not in info["tool_names"]
+    await _invoke(
+        registry,
+        "configure_coding_agent",
+        {
+            "sandbox_mode": "read-only",
+        },
+    )
+    with pytest.raises(StatusException):
+        agent.context.workspace.resolve(outside)
+    with pytest.raises(StatusException) as denied:
+        await _invoke(
+            registry,
+            "run_flow",
+            {
+                "source": "flow change { w = run write_file("
+                'path: "forbidden.txt", bytes: "blocked") }',
+            },
+        )
+    assert denied.value.status.code == StatusCode.NOT_FOUND
+    assert not registry.is_registered("write_file")
+    assert not (workspace / "forbidden.txt").exists()
+    await _invoke(
+        registry,
+        "configure_coding_agent",
+        {
+            "sandbox_mode": "workspace-write",
+        },
+    )
+    assert agent.context.sandbox_mode == SandboxMode.WORKSPACE_WRITE
+
+
+@pytest.mark.asyncio
+async def test_invalid_sandbox_update_preserves_policy(tmp_path):
+    registry, agent = _agent(tmp_path, ApprovalMode.SUGGEST)
+    with pytest.raises(StatusException):
+        await _invoke(
+            registry,
+            "configure_coding_agent",
+            {
+                "approval_mode": "auto",
+                "sandbox_mode": "typo",
+            },
+        )
+    assert agent.context.policy.mode == ApprovalMode.SUGGEST
+    assert agent.context.sandbox_mode == SandboxMode.WORKSPACE_WRITE
 
 
 @pytest.mark.asyncio
@@ -323,7 +485,7 @@ async def test_native_process_is_confined_and_reports_the_kernel_policy(
     tmp_path,
 ):
     registry, _ = _agent(tmp_path)
-    outside = tmp_path.parent / f"outside-{uuid.uuid4().hex}"
+    outside = pathlib.Path.cwd() / f"outside-{uuid.uuid4().hex}"
     output = a11.AsyncNode(
         a11.LocalChunkStore(f"coding-sandbox-{uuid.uuid4().hex}")
     )
@@ -381,7 +543,9 @@ async def test_native_process_is_confined_and_reports_the_kernel_policy(
     assert denied["exit_code"] != 0
     assert not outside.exists()
 
-    temporary = pathlib.Path("/tmp") / f"a11-agent-{uuid.uuid4().hex}"
+    temporary = (
+        pathlib.Path(tempfile.gettempdir()) / f"a11-agent-{uuid.uuid4().hex}"
+    )
     temporary_output = a11.AsyncNode(
         a11.LocalChunkStore(f"coding-temporary-{uuid.uuid4().hex}")
     )
@@ -746,6 +910,158 @@ async def test_auto_mode_applies_a_checked_patch_inside_the_sandbox(tmp_path):
     assert result == {"changed_files": ["original.txt"]}
     assert target.read_text(encoding="utf-8") == "new\n"
     assert agent.context.workspace.changed_files == {"original.txt"}
+
+
+@pytest.mark.asyncio
+async def test_apply_patch_infers_counts_preserves_content_and_is_atomic(
+    tmp_path,
+):
+    first = tmp_path / "first.txt"
+    second = tmp_path / "second.txt"
+    first.write_text("alpha\nbeta\n", encoding="utf-8")
+    second.write_text("gamma\n", encoding="utf-8")
+    registry, _ = _agent(tmp_path)
+
+    result = await _invoke(
+        registry,
+        "apply_patch",
+        {
+            "patch": (
+                "diff --git a/first.txt b/first.txt\n"
+                "--- a/first.txt\n"
+                "+++ b/first.txt\n"
+                "@@ -1,99 +1,99 @@\n"
+                " alpha\n"
+                "-beta\n"
+                "+beta  "
+            )
+        },
+    )
+
+    assert result == {"changed_files": ["first.txt"]}
+    assert first.read_text(encoding="utf-8") == "alpha\nbeta\n"
+
+    with pytest.raises(StatusException):
+        await _invoke(
+            registry,
+            "apply_patch",
+            {
+                "patch": """diff --git a/first.txt b/first.txt
+--- a/first.txt
++++ b/first.txt
+@@ -1 +1 @@
+-alpha
++ALPHA
+diff --git a/second.txt b/second.txt
+--- a/second.txt
++++ b/second.txt
+@@ -1 +1 @@
+-not-gamma
++GAMMA
+"""
+            },
+        )
+    assert first.read_text(encoding="utf-8") == "alpha\nbeta\n"
+
+
+@pytest.mark.asyncio
+async def test_apply_patch_creates_deletes_and_renames_files(tmp_path):
+    deleted = tmp_path / "deleted.txt"
+    renamed = tmp_path / "before.txt"
+    deleted.write_text("gone\n", encoding="utf-8")
+    renamed.write_text("kept\n", encoding="utf-8")
+    registry, _ = _agent(tmp_path)
+
+    result = await _invoke(
+        registry,
+        "apply_patch",
+        {
+            "patch": """diff --git a/created.txt b/created.txt
+new file mode 100644
+--- /dev/null
++++ b/created.txt
+@@ -0,0 +1 @@
++created
+diff --git a/deleted.txt b/deleted.txt
+deleted file mode 100644
+--- a/deleted.txt
++++ /dev/null
+@@ -1 +0,0 @@
+-gone
+diff --git a/before.txt b/after.txt
+similarity index 100%
+rename from before.txt
+rename to after.txt
+"""
+        },
+    )
+
+    assert result == {
+        "changed_files": [
+            "after.txt",
+            "before.txt",
+            "created.txt",
+            "deleted.txt",
+        ]
+    }
+    assert (tmp_path / "created.txt").read_text(encoding="utf-8") == (
+        "created\n"
+    )
+    assert not deleted.exists()
+    assert not renamed.exists()
+    assert (tmp_path / "after.txt").read_text(encoding="utf-8") == "kept\n"
+
+
+@pytest.mark.asyncio
+async def test_apply_patch_canonicalizes_common_dev_null_spellings(tmp_path):
+    deleted = tmp_path / "deleted.txt"
+    deleted.write_text("gone\n", encoding="utf-8")
+    registry, _ = _agent(tmp_path)
+
+    result = await _invoke(
+        registry,
+        "apply_patch",
+        {
+            "patch": """diff --git a/created.txt b/created.txt
+new file mode 100644
+--- a/dev/null
++++ b/created.txt
+@@ -0,0 +1 @@
++created
+diff --git a/deleted.txt b/deleted.txt
+deleted file mode 100644
+--- a/deleted.txt
++++ b/dev/null
+@@ -1 +0,0 @@
+-gone"""
+        },
+    )
+
+    assert result == {"changed_files": ["created.txt", "deleted.txt"]}
+    assert (tmp_path / "created.txt").read_text(encoding="utf-8") == "created\n"
+    assert not deleted.exists()
+
+
+@pytest.mark.asyncio
+async def test_apply_patch_adds_missing_git_file_mode_for_created_file(
+    tmp_path,
+):
+    registry, _ = _agent(tmp_path)
+
+    result = await _invoke(
+        registry,
+        "apply_patch",
+        {
+            "patch": """diff --git a/created.txt b/created.txt
+--- /dev/null
++++ b/created.txt
+@@ -0,0 +1 @@
++created"""
+        },
+    )
+
+    assert result == {"changed_files": ["created.txt"]}
+    assert (tmp_path / "created.txt").read_text(encoding="utf-8") == "created\n"
 
 
 def test_session_round_trip_is_private_and_preserves_interactions(tmp_path):

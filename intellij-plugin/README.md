@@ -203,12 +203,17 @@ implementation of the check, and would corrupt a file the day the two disagreed.
   gateway (`__register_tools__`) and served here; the gateway's own — its
   `shell_*` tools — are added by the gateway for every registered name the
   **allowed-tools header** matches, and run there. That header is the IDE tool
-  names plus the patterns from the *Extra allowed tools* setting. Its defaults
-  cover the Gateway's coding-agent, Flow, and shell actions and can be narrowed.
+  names, the coding agent's advertised `tool_names`, and patterns from the
+  *Extra allowed tools* setting. Those patterns also provide the fallback for a
+  general Gateway without `coding_agent_info`.
 - **Coding-agent Gateway parity.** When `coding_agent_info` is available, the
-  page uses its current workspace instructions for the first interaction. A
-  general Gateway falls back to the IDE prompt. `request_user_input` is rendered
-  as choices plus optional free text and answered through `respond_user_input`.
+  page uses its current system prompt for the first interaction and adds the
+  IDE, project, and editor-hosted action catalogue. Every model-facing action in
+  `tool_names` is admitted automatically, including workspace, command, web, and
+  Flow tools. In Gateway-hosted Flows, `ide__*` actions use `call` and Gateway
+  actions use `run`. A general Gateway falls back to the IDE prompt.
+  `request_user_input` is rendered as choices plus optional free text and
+  answered through `respond_user_input`.
 - **A tool's run log reaches the gateway but never the model.** Every action has
   a reserved log port that no schema declares, and a handler narrates itself onto
   it with `log()`. The IDE tools return their narration under `RUN_LOG_KEY` and
@@ -300,13 +305,13 @@ a11 gateway               # ws://127.0.0.1:8011/a11
 Configure under **Preferences → Tools → A11 Chat**:
 - **Gateway URL**: defaults to `ws://127.0.0.1:8011/a11`; a bare `host:port` is
   accepted and completed.
-- **Extra allowed tools**: comma-separated names or patterns for Gateway tools;
-  defaults enable its coding-agent, Flow, and shell actions.
+- **Extra allowed tools**: additional comma-separated names or patterns for
+  Gateway tools, also used as the fallback for a general Gateway.
 - **Provider / model / base URL** and the **API key** (stored in PasswordSafe).
 
 Open the **A11 Chat** tool window (right dock), type a prompt, and the reply
 streams in. Ask something like *"what file am I looking at?"* to exercise the
-`get_active_file` tool. Press **Stop** to cancel an active turn. **History**
+`ide__get_active_file` tool. Press **Stop** to cancel an active turn. **History**
 lists the conversations recorded under
 `~/.cache/a11/gateway/conversations` — pick one to reopen it and keep going in it — and
 **+ New chat** starts a fresh one. Deleting that directory clears the history;
@@ -317,20 +322,20 @@ pick an action, fill in the fields its input schema declares, hit **Run**, and
 inspect the result — no provider key or gateway needed, since it calls the IDE
 handlers straight through the bridge. The view builds itself from
 `IdeTools.listDescriptors()`, so a tool added there shows up here with no UI
-change. `get_error_highlights` is a good one to try: give it a `path` (absolute
+change. `ide__get_error_highlights` is a good one to try: give it a `path` (absolute
 or project-relative) and, optionally, a 0-based `start_line`/`end_line`, and it
 streams one entry per red or yellow underline in that range — position, the text
 underlined, and the explanation the tooltip gives. A file already open in an
 editor is read straight from the analysis the daemon has done for it; any other
 file is analyzed on demand.
 
-`read_file` takes the same 0-based, `end_line`-inclusive range, so a highlight's
+`ide__read_file` takes the same 0-based, `end_line`-inclusive range, so a highlight's
 own coordinates read back the lines it sits on; `include_line_numbers` prefixes
 each line with its number, which is for reasoning about positions rather than for
-quoting text back. `get_file_symbols` takes an optional `path` too, so it is not
-limited to the active editor. And `apply_patch` takes two plain-text inputs — a
+quoting text back. `ide__get_file_symbols` takes an optional `path` too, so it is not
+limited to the active editor. And `ide__apply_patch` takes two plain-text inputs — a
 `path` and a unified diff — and applies it as **one IDE command**, so a single
-Undo reverses the whole patch, exactly as it does for `rename_symbol`. Hunks are
+Undo reverses the whole patch, exactly as it does for `ide__rename_symbol`. Hunks are
 placed by their context rather than by the numbers in their `@@` header, and a
 hunk that does not match the file is refused with what is there instead: nothing
 is applied on a near miss, because a fuzzy match is how a tool silently rewrites
@@ -381,7 +386,7 @@ override `traverseUI`.
   checks that the generated Sublime grammar is current and that no word list has
   crept back into this plugin.
 - Plugin: `IdeToolsTest` (`BasePlatformTestCase`) builds the tool registry,
-  drives `get_active_file` through an A11 action, and exercises the direct
+  drives `ide__get_active_file` through an A11 action, and exercises the direct
   `IdeTools.runByName` / `listDescriptors` path the JCEF bridge uses, plus the
   reverse-dispatch proxy's handling of a tool's run log.
 - Webview: `cd ../webview && npm run typecheck` type-checks the shared UI, and

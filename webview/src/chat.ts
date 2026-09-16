@@ -27,9 +27,9 @@
  * (a code block, a markdown re-render) and silently stop following.
  */
 
-import { A11ChatSession } from './a11client.js';
-import { clearSuggestions, highlightFlow, suggestOnHighlight } from './bridge.js';
-import type { MountedView } from './mount.js';
+import {A11ChatSession} from './a11client.js';
+import {clearSuggestions, highlightFlow, suggestOnHighlight} from './bridge.js';
+import type {MountedView} from './mount.js';
 import {
   interactionText,
   isToolResultCarrier,
@@ -37,7 +37,7 @@ import {
   toolOutputs,
   type ConversationSummary,
 } from './conversations.js';
-import { renderMarkdown } from './markdown.js';
+import {renderMarkdown} from './markdown.js';
 import {renderFlowSource} from './flowRunner.js';
 import {createConnectionStatus} from './connectionStatus.js';
 import {renderDebugValue} from './outputPresentation.js';
@@ -49,8 +49,12 @@ import {
   toolStatuses,
   type Interaction,
 } from '@curiositystack/a11';
-import type { ToolActivity } from './ideTools.js';
-import {describeChatTool, FollowTailController} from '@curiositystack/a11/presentation';
+import type {ToolActivity} from './ideTools.js';
+import {
+  describeChatTool,
+  FollowTailController,
+  type PatchPresentation,
+} from '@curiositystack/a11/presentation';
 
 /** How far from the bottom still counts as "following the stream". */
 const NEAR_BOTTOM_PX = 48;
@@ -66,10 +70,7 @@ const COMPOSER_ROWS = 3;
 const COMPOSER_MAX_PX = 260;
 
 /** A completed unary report input, as readable text. */
-function completionText(
-  arguments_: Record<string, unknown> | undefined,
-  name: string,
-): string {
+function completionText(arguments_: Record<string, unknown> | undefined, name: string): string {
   const value = arguments_?.[name];
   if (typeof value === 'string') return value.trim();
   if (Array.isArray(value)) return value.map(String).join('\n').trim();
@@ -89,11 +90,7 @@ function completionSection(title: string, value: string): HTMLElement {
 }
 
 /** One expandable Inputs, Outputs, or Logs section in a tool card. */
-function toolDetailSection(
-  label: string,
-  value: unknown,
-  empty: string,
-): HTMLElement {
+function toolDetailSection(label: string, value: unknown, empty: string): HTMLElement {
   const section = document.createElement('section');
   section.className = 'tool-detail-section';
   const heading = document.createElement('strong');
@@ -125,9 +122,52 @@ function toolIcon(): SVGElement {
   icon.setAttribute('stroke-linecap', 'round');
   icon.setAttribute('stroke-linejoin', 'round');
   const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  path.setAttribute('d', 'M14.7 6.3a4 4 0 0 0-5-5L7 4l3 3 2.7-2.7a4 4 0 0 0 5 5L7.6 19.4a2 2 0 0 1-3-3Z');
+  path.setAttribute(
+    'd',
+    'M14.7 6.3a4 4 0 0 0-5-5L7 4l3 3 2.7-2.7a4 4 0 0 0 5 5L7.6 19.4a2 2 0 0 1-3-3Z',
+  );
   icon.append(path);
   return icon;
+}
+
+function renderPatch(patch: PatchPresentation): HTMLElement {
+  const result = document.createElement('div');
+  result.className = 'patch-result';
+  for (const file of patch.files) {
+    const section = document.createElement('section');
+    section.className = 'patch-file';
+    const header = document.createElement('header');
+    const path = document.createElement('code');
+    path.textContent = file.path;
+    const counts = document.createElement('span');
+    counts.className = 'patch-counts';
+    counts.innerHTML = `<b>+${file.added}</b><i>−${file.removed}</i>`;
+    header.append(path, counts);
+    section.append(header);
+    const table = document.createElement('div');
+    table.className = 'patch-lines';
+    for (const hunk of file.hunks) {
+      for (const line of hunk.lines) {
+        const row = document.createElement('div');
+        row.className = `patch-line ${line.kind}`;
+        const number = document.createElement('span');
+        number.className = 'patch-line-number';
+        number.textContent = String(
+          line.kind === 'removed' ? (line.oldLine ?? '') : (line.newLine ?? ''),
+        );
+        const marker = document.createElement('span');
+        marker.className = 'patch-line-marker';
+        marker.textContent = line.kind === 'added' ? '+' : line.kind === 'removed' ? '−' : ' ';
+        const content = document.createElement('code');
+        content.textContent = line.text || ' ';
+        row.append(number, marker, content);
+        table.append(row);
+      }
+    }
+    section.append(table);
+    result.append(section);
+  }
+  return result;
 }
 
 /**
@@ -138,8 +178,8 @@ function toolIcon(): SVGElement {
  * The turn is one continuous stream interrupted by tool calls, so characters are
  * accumulated into the *current* block and anything else closes it: the next
  * token opens a fresh one below. That keeps "I'll check the selection" →
- * [get_selection] → "it defines a model class" reading in that order, rather
- * than collecting every box at the bottom.
+ * [ide__get_selection] → "it defines a model class" reading in that order,
+ * rather than collecting every box at the bottom.
  *
  * Thinking is a block like any other, not a panel pinned to the top, because
  * models do not all think first: some answer, then think, then answer again, and
@@ -160,26 +200,37 @@ export class AssistantBubble {
    * between blocks — after a tool run, or when the kind of stream changed —
    * which is what makes the next character open a fresh block.
    */
-  private sink: { element: HTMLElement; text: string[]; markdown: boolean } | null = null;
+  private sink: {
+    element: HTMLElement;
+    text: string[];
+    markdown: boolean;
+  } | null = null;
   /** The thinking panel the turn is inside, while it is thinking. */
-  private thinking: { details: HTMLDetailsElement; summary: HTMLElement; tools: number } | null = null;
+  private thinking: {
+    details: HTMLDetailsElement;
+    summary: HTMLElement;
+    tools: number;
+  } | null = null;
   private wroteAnything = false;
   /** Pending paint (a `requestAnimationFrame` handle), or 0 when up to date. */
   private frame = 0;
-  private readonly toolElements = new Map<string, {
-    box: HTMLElement;
-    summary: HTMLSpanElement;
-    body: HTMLDivElement;
-    activity?: ToolActivity;
-    state?: HTMLSpanElement;
-    heading?: HTMLSpanElement;
-    preview?: HTMLElement;
-    failurePreview?: HTMLElement;
-    completionState?: HTMLSpanElement;
-    requestState?: HTMLSpanElement;
-    requestTitle?: HTMLElement;
-    requestButtons?: HTMLButtonElement[];
-  }>();
+  private readonly toolElements = new Map<
+    string,
+    {
+      box: HTMLElement;
+      summary: HTMLSpanElement;
+      body: HTMLDivElement;
+      activity?: ToolActivity;
+      state?: HTMLSpanElement;
+      heading?: HTMLSpanElement;
+      preview?: HTMLElement;
+      failurePreview?: HTMLElement;
+      completionState?: HTMLSpanElement;
+      requestState?: HTMLSpanElement;
+      requestTitle?: HTMLElement;
+      requestButtons?: HTMLButtonElement[];
+    }
+  >();
 
   constructor(
     private readonly element: HTMLElement,
@@ -189,7 +240,8 @@ export class AssistantBubble {
     // A working indicator shown until the first thought or answer token arrives.
     this.indicator = document.createElement('div');
     this.indicator.className = 'thinking';
-    this.indicator.innerHTML = '<span class="dot"></span><span class="dot"></span><span class="dot"></span>';
+    this.indicator.innerHTML =
+      '<span class="dot"></span><span class="dot"></span><span class="dot"></span>';
     element.append(this.indicator);
   }
 
@@ -198,7 +250,7 @@ export class AssistantBubble {
     const element = document.createElement('div');
     element.className = className;
     parent.append(element);
-    this.sink = { element, text: [], markdown };
+    this.sink = {element, text: [], markdown};
   }
 
   appendToken(text: string): void {
@@ -395,7 +447,9 @@ export class AssistantBubble {
       toolArgumentsComplete: run.arguments !== undefined,
     });
     const isFlow = isOk(described) && described.kind === 'flow';
+    const isPatch = isOk(described) && described.kind === 'patch';
     entry.box.classList.toggle('flow-run', isFlow);
+    entry.box.classList.toggle('patch-run', isPatch);
     const failed = run.status !== undefined && !isOk(run.status);
     entry.box.classList.toggle('failed', failed);
     entry.state!.textContent = failed
@@ -406,9 +460,12 @@ export class AssistantBubble {
     const source = isOk(described) ? described.flowSource : '';
     const inputs = isOk(described) ? described.detailInputs : run.arguments;
     const summary = (run.log ?? '').split('\n')[0]?.trim();
-    entry.summary.textContent = failed && !isFlow
-      ? run.status?.message || summary || 'The action failed.'
-      : summary || (isOk(described) ? described.inputPreview : '');
+    entry.summary.textContent =
+      isPatch && isOk(described) && described.patch
+        ? `${described.patch.files.length === 1 ? described.patch.files[0]!.path : `${described.patch.files.length} files`} · +${described.patch.added} −${described.patch.removed}`
+        : failed && !isFlow
+          ? run.status?.message || summary || 'The action failed.'
+          : summary || (isOk(described) ? described.inputPreview : '');
 
     entry.preview?.remove();
     entry.preview = undefined;
@@ -421,12 +478,14 @@ export class AssistantBubble {
       preview.textContent = source;
       entry.preview = preview;
       entry.heading?.append(preview);
-      void highlightFlow(source).then((tokens) => {
-        if (entry.activity?.arguments?.source === source) {
-          renderFlowSource(preview, source, tokens);
-          this.onGrow();
-        }
-      }).catch(() => undefined);
+      void highlightFlow(source)
+        .then((tokens) => {
+          if (entry.activity?.arguments?.source === source) {
+            renderFlowSource(preview, source, tokens);
+            this.onGrow();
+          }
+        })
+        .catch(() => undefined);
     }
 
     if (source && failed) {
@@ -440,11 +499,27 @@ export class AssistantBubble {
     }
 
     entry.body.innerHTML = '';
-    entry.body.append(
-      toolDetailSection('Inputs', inputs, source ? 'Flow source shown in the highlighted preview above.' : 'No input values.'),
-      toolDetailSection('Outputs', run.outputs, run.phase === 'started' ? 'Waiting for output…' : 'No output values.'),
-      toolDetailSection('Logs', run.log, run.phase === 'started' ? 'Waiting for logs…' : 'Nothing logged.'),
-    );
+    if (isPatch && isOk(described) && described.patch) {
+      (entry.box as HTMLDetailsElement).open = true;
+      entry.body.append(renderPatch(described.patch));
+    } else
+      entry.body.append(
+        toolDetailSection(
+          'Inputs',
+          inputs,
+          source ? 'Flow source shown in the highlighted preview above.' : 'No input values.',
+        ),
+        toolDetailSection(
+          'Outputs',
+          run.outputs,
+          run.phase === 'started' ? 'Waiting for output…' : 'No output values.',
+        ),
+        toolDetailSection(
+          'Logs',
+          run.log,
+          run.phase === 'started' ? 'Waiting for logs…' : 'Nothing logged.',
+        ),
+      );
     if (failed) {
       const failure = document.createElement('div');
       failure.className = 'tool-run-failure';
@@ -650,7 +725,7 @@ export class AssistantBubble {
       summary.textContent = 'Thinking...';
       details.append(summary);
       this.element.append(details);
-      this.thinking = { details, summary, tools: 0 };
+      this.thinking = {details, summary, tools: 0};
     }
     if (!this.sink) this.openSink(this.thinking.details, 'thoughts-body', false);
     this.sink!.text.push(text);
@@ -665,7 +740,7 @@ export class AssistantBubble {
   private closeThinking(): void {
     if (!this.thinking) return;
     this.flushPaint();
-    const { details, summary, tools } = this.thinking;
+    const {details, summary, tools} = this.thinking;
     details.open = false;
     summary.textContent = tools
       ? `Thoughts · ${tools} tool call${tools === 1 ? '' : 's'}`
@@ -718,7 +793,7 @@ export class ChatView {
   private historyOpen = false;
   /** The turn currently streaming, so tool runs land in the right bubble. */
   private active: AssistantBubble | null = null;
-  private pendingInput: ({ id: string } & Record<string, unknown>) | null = null;
+  private pendingInput: ({id: string} & Record<string, unknown>) | null = null;
 
   constructor(root: HTMLElement) {
     this.root = root;
@@ -758,7 +833,8 @@ export class ChatView {
     composer.className = 'composer';
     this.textarea = document.createElement('textarea');
     this.textarea.rows = COMPOSER_ROWS;
-    this.textarea.placeholder = 'Ask A11 about your project...  (Enter to send, Shift+Enter for newline)';
+    this.textarea.placeholder =
+      'Ask A11 about your project...  (Enter to send, Shift+Enter for newline)';
     this.sendButton = document.createElement('button');
     this.sendButton.type = 'submit';
     this.sendButton.textContent = 'Send';
@@ -790,8 +866,12 @@ export class ChatView {
     this.textarea.style.height = `${Math.min(this.textarea.scrollHeight, COMPOSER_MAX_PX)}px`;
   }
 
-  private scrollMetrics(): {scrollTop: number; scrollHeight: number; clientHeight: number} {
-    const { scrollTop, scrollHeight, clientHeight } = this.transcript;
+  private scrollMetrics(): {
+    scrollTop: number;
+    scrollHeight: number;
+    clientHeight: number;
+  } {
+    const {scrollTop, scrollHeight, clientHeight} = this.transcript;
     return {scrollTop, scrollHeight, clientHeight};
   }
 
@@ -826,27 +906,31 @@ export class ChatView {
       // No config passed: the session reads the settings itself, before every
       // turn, so a provider or model changed mid-conversation takes effect on the
       // next message instead of on the next IDE restart.
-      this.session = new A11ChatSession((run) => {
-        this.active?.addToolRun(run);
-        if (run.tool === 'request_user_input' && run.phase === 'started' && run.arguments) {
-          this.pendingInput = {id: run.id, ...run.arguments};
-          this.textarea.disabled = false;
-          this.sendButton.disabled = false;
-          this.sendButton.textContent = 'Send';
-          this.sendButton.classList.remove('stop');
-          this.textarea.placeholder = String(run.arguments.question ?? 'Type your answer…');
-          this.textarea.focus();
-        }
-        if (
-          run.tool === 'request_user_input' &&
-          run.phase === 'finished' &&
-          this.pendingInput?.id === run.id
-        ) {
-          this.pendingInput = null;
-          this.textarea.placeholder = 'Ask A11 about your project...  (Enter to send, Shift+Enter for newline)';
-          this.setBusy(this.busy);
-        }
-      }, (notice) => this.connection.update(notice));
+      this.session = new A11ChatSession(
+        (run) => {
+          this.active?.addToolRun(run);
+          if (run.tool === 'request_user_input' && run.phase === 'started' && run.arguments) {
+            this.pendingInput = {id: run.id, ...run.arguments};
+            this.textarea.disabled = false;
+            this.sendButton.disabled = false;
+            this.sendButton.textContent = 'Send';
+            this.sendButton.classList.remove('stop');
+            this.textarea.placeholder = String(run.arguments.question ?? 'Type your answer…');
+            this.textarea.focus();
+          }
+          if (
+            run.tool === 'request_user_input' &&
+            run.phase === 'finished' &&
+            this.pendingInput?.id === run.id
+          ) {
+            this.pendingInput = null;
+            this.textarea.placeholder =
+              'Ask A11 about your project...  (Enter to send, Shift+Enter for newline)';
+            this.setBusy(this.busy);
+          }
+        },
+        (notice) => this.connection.update(notice),
+      );
     }
     return this.session;
   }
@@ -1086,7 +1170,8 @@ export class ChatView {
       await (await this.ensureSession()).respondUserInput(id, answer);
       if (this.pendingInput?.id === id) {
         this.pendingInput = null;
-        this.textarea.placeholder = 'Ask A11 about your project...  (Enter to send, Shift+Enter for newline)';
+        this.textarea.placeholder =
+          'Ask A11 about your project...  (Enter to send, Shift+Enter for newline)';
         this.setBusy(this.busy);
       }
     } catch (error) {
@@ -1208,12 +1293,16 @@ let unkeyed = 0;
 function summarize(marked: number, refused: number): string {
   if (marked === 0 && refused === 0) return '\n_Nothing in the file was worth a suggestion._\n';
   if (marked === 0) {
-    return `\n_The model made ${refused} suggestion${refused === 1 ? '' : 's'},` +
-      ' but none could be attached to the editor._\n';
+    return (
+      `\n_The model made ${refused} suggestion${refused === 1 ? '' : 's'},` +
+      ' but none could be attached to the editor._\n'
+    );
   }
   const note = refused > 0 ? ` (${refused} could not be attached)` : '';
-  return `\n_Marked ${marked} place${marked === 1 ? '' : 's'} in the editor${note}.` +
-    ' Hover one for the comment and the fix._\n';
+  return (
+    `\n_Marked ${marked} place${marked === 1 ? '' : 's'} in the editor${note}.` +
+    ' Hover one for the comment and the fix._\n'
+  );
 }
 
 /**
@@ -1229,8 +1318,8 @@ function formatWhen(startedAtMillis: number): string {
     when.getMonth() === now.getMonth() &&
     when.getDate() === now.getDate();
   return sameDay
-    ? when.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
-    : when.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    ? when.toLocaleTimeString(undefined, {hour: 'numeric', minute: '2-digit'})
+    : when.toLocaleDateString(undefined, {month: 'short', day: 'numeric'});
 }
 
 /** Mount the chat view into `root`. */

@@ -321,6 +321,7 @@ def register_standard_actions(
     inherit_environment: bool = False,
     max_seconds: typing.SupportsInt | typing.SupportsIndex = 600,
     current_directory: str = ".",
+    unrestricted: bool = False,
 ) -> None:
     """
     Register the native filesystem and process actions on a registry.
@@ -330,6 +331,8 @@ def register_standard_actions(
     access, environment inheritance, deadline ceiling, or kernel-sandbox requirement.
     Relative filesystem paths resolve against ``current_directory``. Spawned
     processes may make outbound network connections by default.
+    ``unrestricted=True`` disables filesystem containment and the kernel sandbox;
+    write and process permissions, environment filtering, and limits still apply.
     """
 
 def request(request: dict[str, typing.Any]) -> dict[str, typing.Any]:

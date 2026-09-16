@@ -113,7 +113,11 @@ async def test_something_that_is_not_a_gateway_is_treated_as_absent(tmp_path):
             # the usual one: the peer never answers it. What must not happen is
             # a *successful* probe.
             return
-        with pytest.raises((StatusException, TimeoutError, asyncio.TimeoutError)):
+        with pytest.raises((
+            StatusException,
+            TimeoutError,
+            asyncio.TimeoutError,
+        )):
             await connection.probe(timeout=short)
         await connection.aclose()
     finally:
@@ -123,7 +127,9 @@ async def test_something_that_is_not_a_gateway_is_treated_as_absent(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_no_gateway_anywhere_starts_a_websocket_gateway(monkeypatch):
+async def test_no_gateway_anywhere_starts_a_websocket_gateway(
+    monkeypatch, tmp_path
+):
     # Point the default endpoint at a port nothing listens on, so the fallback
     # path is taken without depending on whether the developer happens to have a
     # gateway running.
@@ -131,10 +137,18 @@ async def test_no_gateway_anywhere_starts_a_websocket_gateway(monkeypatch):
         "a11.client.connection.DEFAULT_GATEWAY_URL",
         "ws://127.0.0.1:49151/a11",
     )
-    async with open_gateway(None) as connection:
+    local_config = config.GatewayConfig(coding_cwd=str(tmp_path))
+    async with open_gateway(None, local_config=local_config) as connection:
         assert not connection.embedded
         assert connection.description.startswith("ws://127.0.0.1:")
         await connection.probe()
+        from a11.cli.coding_agent.tools import CODING_AGENT_INFO_SCHEMA
+
+        call = connection.action("coding_agent_info", CODING_AGENT_INFO_SCHEMA)
+        await call.call()
+        info = await call["result"].consume(dict)
+        await call.wait()
+        assert info["cwd"] == str(tmp_path.resolve())
 
 
 @pytest.mark.asyncio

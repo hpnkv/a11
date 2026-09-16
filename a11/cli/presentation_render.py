@@ -24,8 +24,15 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
+from dataclasses import dataclass
 
-from rich.console import Group, RenderableType
+from rich.console import (
+    Console,
+    ConsoleOptions,
+    Group,
+    RenderableType,
+    RenderResult,
+)
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.syntax import Syntax
@@ -35,6 +42,40 @@ from a11.cli.flow_highlighting import register_flow_lexer
 from a11.sdk.presentation import BlockKind, PresentationBlock
 
 register_flow_lexer()
+
+
+@dataclass(frozen=True)
+class _PatchRow:
+    """One Codex-style numbered diff row, expanded to the terminal width."""
+
+    kind: str
+    number: int | None
+    number_width: int
+    content: str
+    path: str
+
+    def __rich_console__(
+        self, console: Console, options: ConsoleOptions
+    ) -> RenderResult:
+        number = self.number or ""
+        row = Text()
+        row.append(f"{number:>{self.number_width + 4}}", style="dim")
+        marker = {"added": "+", "removed": "-"}.get(self.kind, " ")
+        marker_style = {"added": "green", "removed": "red"}.get(self.kind)
+        row.append(f" {marker} ", style=marker_style)
+        row.append_text(_highlight_patch_line(self.content, self.path))
+        background = {
+            "added": "on #173b2d",
+            "removed": "on #56251f",
+        }.get(self.kind)
+        if background:
+            # A line exactly as wide as prompt-toolkit's Window becomes a
+            # second wrapped display row when its newline arrives.
+            row.truncate(
+                max(1, options.max_width - 1), overflow="ellipsis", pad=True
+            )
+            row.stylize(background, 0, len(row))
+        yield row
 
 
 def render_block(
@@ -103,6 +144,10 @@ def _tool_panel(block: PresentationBlock) -> RenderableType:
     """
     if block.tool_name == "run_flow":
         return _flow_panel(block)
+    if block.tool_name in {"apply_patch", "ide__apply_patch"}:
+        patch = _argument(block.tool_arguments or {}, "patch", "")
+        if isinstance(patch, str) and patch.strip():
+            return _patch_panel(block, patch)
     if block.tool_name == "request_user_input":
         return _user_input_panel(block)
     if (
@@ -140,6 +185,108 @@ def _tool_panel(block: PresentationBlock) -> RenderableType:
     return Group(*body)
 
 
+def _patch_panel(block: PresentationBlock, patch: str) -> RenderableType:
+    """Draw an applied patch with Codex-style file summaries and diff rows."""
+    files = _parse_patch(patch)
+    if not files:
+        return Group(Text("• Applied patch", style="bold green"))
+    verb = "Applying" if block.partial else "Edited"
+    rows: list[RenderableType] = []
+    for index, (path, file_added, file_removed, lines) in enumerate(files):
+        if index:
+            rows.append(Text())
+        heading = Text()
+        heading.append(f"{'◦' if block.partial else '•'} ", style="dim")
+        heading.append(f"{verb} ", style="bold")
+        heading.append(path, style="dim")
+        heading.append(" (")
+        heading.append(f"+{file_added}", style="green")
+        heading.append(" ")
+        heading.append(f"-{file_removed}", style="red")
+        heading.append(")")
+        rows.append(heading)
+        width = max(
+            (len(str(line[1] or line[2] or 0)) for line in lines), default=1
+        )
+        for kind, old_line, new_line, content in lines:
+            number = old_line if kind == "removed" else new_line
+            rows.append(_PatchRow(kind, number, width, content, path))
+    if block.status is not None and not block.status.is_ok():
+        rows.append(_indented_detail(block.status.message or "failed", "red"))
+    rows.append(Text())
+    return Group(*rows)
+
+
+def _highlight_patch_line(content: str, path: str) -> Text:
+    """Syntax-highlight one diff line using the edited file's extension."""
+    try:
+        highlighted = Syntax(
+            content,
+            path.rsplit(".", 1)[-1],
+            theme="monokai",
+            word_wrap=False,
+        ).highlight(content)
+        if highlighted.plain.endswith("\n"):
+            highlighted.right_crop(1)
+        return highlighted
+    except Exception:
+        return Text(content)
+
+
+def _parse_patch(
+    patch: str,
+) -> list[tuple[str, int, int, list[tuple[str, int | None, int | None, str]]]]:
+    files: list[list[object]] = []
+    current: list[object] | None = None
+    old_line = new_line = 0
+    in_hunk = False
+    for raw in patch.replace("\r\n", "\n").splitlines():
+        if raw.startswith("--- "):
+            path = raw[4:].split("\t", 1)[0].strip()
+            if path.startswith("a/"):
+                path = path[2:]
+            current = [path, 0, 0, []]
+            files.append(current)
+            in_hunk = False
+            continue
+        if raw.startswith("+++ ") and current is not None:
+            path = raw[4:].split("\t", 1)[0].strip()
+            if path.startswith("b/"):
+                path = path[2:]
+            if path != "/dev/null":
+                current[0] = path
+            continue
+        if raw.startswith("@@ ") and current is not None:
+            try:
+                ranges = raw.split("@@", 2)[1].strip().split()
+                old_line = int(ranges[0][1:].split(",", 1)[0])
+                new_line = int(ranges[1][1:].split(",", 1)[0])
+                in_hunk = True
+            except (IndexError, ValueError):
+                in_hunk = False
+            continue
+        if current is None or not in_hunk or raw.startswith("\\ No newline"):
+            continue
+        lines = current[3]
+        assert isinstance(lines, list)
+        if raw.startswith("+"):
+            lines.append(("added", None, new_line, raw[1:]))
+            current[1] = int(current[1]) + 1
+            new_line += 1
+        elif raw.startswith("-"):
+            lines.append(("removed", old_line, None, raw[1:]))
+            current[2] = int(current[2]) + 1
+            old_line += 1
+        elif raw.startswith(" "):
+            lines.append(("context", old_line, new_line, raw[1:]))
+            old_line += 1
+            new_line += 1
+    return [
+        (str(path), int(added), int(removed), lines)  # type: ignore[arg-type]
+        for path, added, removed, lines in files
+    ]
+
+
 def _completion_panel(block: PresentationBlock) -> RenderableType:
     """Draw the coding agent's structured completion as a final report."""
     arguments = block.tool_arguments or {}
@@ -153,12 +300,10 @@ def _completion_panel(block: PresentationBlock) -> RenderableType:
     if remaining:
         body.extend((Text("Remaining", style="bold yellow"), Text(remaining)))
     if failed:
-        body.extend(
-            (
-                Text("Report error", style="bold red"),
-                Text(block.status.message or "failed", style="red"),
-            )
-        )
+        body.extend((
+            Text("Report error", style="bold red"),
+            Text(block.status.message or "failed", style="red"),
+        ))
     return Panel(
         Group(*body),
         title="Completion report failed" if failed else "✓ Task completed",
@@ -197,7 +342,9 @@ def _user_input_panel(block: PresentationBlock) -> RenderableType:
         title=(
             "Input request failed"
             if failed
-            else "? Input required" if block.partial else "✓ Input received"
+            else "? Input required"
+            if block.partial
+            else "✓ Input received"
         ),
         title_align="left",
         border_style=(

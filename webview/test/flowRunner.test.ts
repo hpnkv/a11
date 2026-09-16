@@ -15,6 +15,7 @@
  */
 
 import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
 import {beforeEach, test} from 'node:test';
 import {JSDOM} from 'jsdom';
 import {FlowRunnerView, renderFlowSource, type RunnableFlow} from '../src/flowRunner.js';
@@ -147,6 +148,22 @@ test('binary values use a bounded byte presentation', () => {
   renderDebugValue(target, new Uint8Array([65, 0, 66]), 'application/octet-stream');
   assert.match(target.textContent ?? '', /3 B/);
   assert.match(target.textContent ?? '', /\\x41\\x00\\x42/);
+});
+
+test('Flow source and output regions retain reachable scroll containers', async () => {
+  const page = await readFile(new URL('../index.html', import.meta.url), 'utf8');
+
+  assert.match(page, /\.flow-editor-surface\s*{[^}]*height: clamp\(/s);
+  assert.match(page, /\.flow-editor-input\s*{[^}]*resize: none/s);
+  assert.match(page, /\.runner-value-body\s*{[^}]*overflow: auto/s);
+  assert.match(
+    page,
+    /\.runner-output-panel, \.runner-log-panel\s*{[^}]*height: clamp\(/s,
+  );
+  assert.match(
+    page,
+    /#app\.flow-runner-view\s*{[^}]*height: auto[^}]*overflow: visible/s,
+  );
 });
 
 function flow(inputs: string[]): RunnableFlow {

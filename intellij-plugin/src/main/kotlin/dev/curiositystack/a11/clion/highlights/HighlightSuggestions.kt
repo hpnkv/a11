@@ -69,7 +69,7 @@ class Suggestion internal constructor(
     var comment: String = comment
         internal set
 
-    /** A unified diff accepted by `apply_patch`. Empty until it arrives. */
+    /** A unified diff accepted by `ide__apply_patch`. */
     var patch: String = patch
         internal set
 
@@ -293,9 +293,9 @@ class HighlightSuggestions(private val project: Project) : Disposable {
  * Where a suggestion's range came from, which decides how it is drawn.
  *
  * [REPORTED] is a range the IDE's own analysis underlined and the flow asked
- * about, so its numbers are `get_error_highlights`' own. [FOUND] is a range the
- * model selected from the file without an IDE diagnostic, so its coordinates
- * come from the model and only this plugin marks the range.
+ * about, so its numbers are `ide__get_error_highlights`' own. [FOUND] is a
+ * range the model selected from the file without an IDE diagnostic, so its
+ * coordinates come from the model and only this plugin marks the range.
  */
 enum class Origin {
     REPORTED,
@@ -311,8 +311,8 @@ enum class Origin {
  * tied together by [id]. Carrying both fields at once is still legal and is
  * what a single record with no counterpart looks like.
  *
- * Lines and columns are 0-based, as `get_error_highlights` reports them and as
- * the flow passes them on; `end_column` is exclusive.
+ * Lines and columns are 0-based, as `ide__get_error_highlights` reports them
+ * and as the flow passes them on; `end_column` is exclusive.
  */
 data class HighlightNote(
     val path: String,

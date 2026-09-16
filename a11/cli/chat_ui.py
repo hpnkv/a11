@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import html
 import json
 from collections.abc import Callable
 from pathlib import Path
@@ -49,6 +50,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
+from rich.text import Text
 
 from a11 import observability
 from a11.cli.backends import (
@@ -66,6 +68,7 @@ from a11.cli.coding_agent.tools import (
 )
 from a11.cli.chat_settings import ChatSettings, ChatSettingsStore
 from a11.cli.chat_screen import ChatScreen
+from a11.cli.chat_tokens import ChatTokens
 from a11.cli.presentation_render import render_blocks
 from a11.client.connection import GatewayConnection, open_gateway
 from a11.client.turn import TurnConfig, run_turn
@@ -77,6 +80,70 @@ from a11.status import Status, StatusCode, StatusException
 
 if TYPE_CHECKING:
     from a11.sdk.audio import SpeechRecognizer
+
+_WELCOME_RING = (
+    "      #######      ",
+    "   #####   #####   ",
+    "  ###         ###  ",
+    " ###           ### ",
+    "  ###         ###  ",
+    "   #####   #####   ",
+    "      #######      ",
+)
+_WELCOME_WORD = (
+    "       ###             ###      ###",
+    "      #####          #####    #####",
+    "     ### ###        ## ###   ## ###",
+    "    ###   ###          ###      ###",
+    "   ###     ###         ###      ###",
+    "  #############        ###      ###",
+    " ###         ###       ###      ###",
+    "###           ###      ###      ###",
+)
+_WELCOME_ARROW = {
+    6: "        ###",
+    7: "        ###",
+    8: "        ###",
+    9: "        ###",
+    10: "        ###         ###",
+    11: "         ####         ###",
+    12: "           #################",
+    13: "             ############",
+    14: "                    ###",
+}
+
+
+def _welcome_banner() -> Text:
+    """Render two nodes and an elbow arrow beside the centred wordmark."""
+    banner = Text()
+    for row in range(16):
+        node = _WELCOME_RING[row] if row < 7 else ""
+        if row >= 9:
+            node = " " * 20 + _WELCOME_RING[row - 9]
+        arrow = _WELCOME_ARROW.get(row, "").ljust(39)
+        for column, char in enumerate(node.ljust(39)):
+            if arrow[column] != " ":
+                banner.append(arrow[column], style="bold #43c6b5")
+            else:
+                if (
+                    row >= 9
+                    and column >= 20
+                    and any(
+                        arrow[x] != " "
+                        for x in range(max(0, column - 1), min(39, column + 2))
+                    )
+                ):
+                    char = " "
+                banner.append(char, style="bold #8b83ff")
+        if 4 <= row < 12:
+            banner.append("     ")
+            banner.append(_WELCOME_WORD[row - 4], style="bold #b4e6ed")
+        if row < 15:
+            banner.append("\n")
+    return banner
+
+
+_WELCOME = _welcome_banner().plain
 
 _HELP = (
     "Commands:\n"
@@ -90,6 +157,8 @@ _HELP = (
     " current agent diff\n"
     "  /approval <suggest|auto>                                change effect"
     " permissions\n"
+    "  /sandbox <read-only|workspace-write|unrestricted>        change"
+    " sandbox\n"
     "  /config [key [JSON]|clear]                              inspect or set"
     " provider options\n"
     "  /cancel                                                 stop the active"
@@ -105,6 +174,7 @@ _COMMANDS = (
     "/status",
     "/diff",
     "/approval",
+    "/sandbox",
     "/config",
     "/cancel",
     "/help",
@@ -144,6 +214,10 @@ class _ChatCompleter(Completer):
                 yield from self._matching(current, (provider.default_model,))
         elif command == "/approval":
             yield from self._matching(current, ("suggest", "auto"))
+        elif command == "/sandbox":
+            yield from self._matching(
+                current, ("read-only", "workspace-write", "unrestricted")
+            )
         elif command == "/config" and len(parts) <= 2:
             yield from self._matching(
                 current,
@@ -215,6 +289,7 @@ class ChatUI:
         max_turns: int = 50,
         timeout_seconds: int = 600,
         non_interactive: bool = False,
+        no_banner: bool = False,
         settings_store: ChatSettingsStore | None = None,
     ) -> None:
         self._connection = connection
@@ -250,6 +325,7 @@ class ChatUI:
         self._sandbox = sandbox
         self._initial_task = task
         self._non_interactive = non_interactive
+        self._no_banner = no_banner
         self._max_turns = max_turns
         self._timeout_seconds = timeout_seconds
         self._turn_count = 0
@@ -258,8 +334,11 @@ class ChatUI:
         self._message_queue: asyncio.Queue[str] = asyncio.Queue()
         self._turn_worker: asyncio.Task[None] | None = None
         self._active_turn: asyncio.Task[None] | None = None
+        self._llm_running = False
+        self._current_task = task or ""
         self._interactive_started = False
         self._pending_user_inputs: dict[str, dict[str, object]] = {}
+        self._tokens = ChatTokens()
 
         # Shell tools: their definitions, and the system prompt that teaches the
         # model to use them. The Actions themselves are registered on the
@@ -283,6 +362,9 @@ class ChatUI:
                 )
         elif shell_tools:
             self._enable_shell_tools()
+        for interaction in self._history:
+            if interaction.usage_metadata is not None:
+                self._tokens.restore_context(interaction.usage_metadata)
         self._screen = ChatScreen(
             history=self._input_history,
             completer=_ChatCompleter(self._input_choices),
@@ -290,6 +372,10 @@ class ChatUI:
             toolbar=self._bottom_toolbar,
             submit=self._handle,
             cancel=self._cancel_active_turn,
+            question=self._current_question,
+            working=lambda: self._llm_running or self._active_turn is not None,
+            activity=self._activity_message,
+            context_usage=lambda: self._tokens.context_label,
         )
         # Kept as a compatibility alias for speech input and integrations that
         # previously received PromptSession-like buffer/application access.
@@ -324,20 +410,26 @@ class ChatUI:
         # parented to it (via its traceparent), so turns nest under it.
         self._chat_span = observability.start_span("A11 Chat", kind="server")
         self._traceparent = self._chat_span.traceparent()
-        if not self._non_interactive:
+        compact_welcome = self._no_banner and not self._non_interactive
+        if not self._non_interactive and not self._no_banner:
+            self._print(_welcome_banner())
+            self._print("")
             self._print(_HELP, style="dim", markup=False)
         if self._coding:
             await self._refresh_coding_agent()
-        self._print_status()
-        self._print(
-            f"gateway: [bold]{self._connection.description}[/]",
-            style="dim",
-            highlight=False,
-        )
+        if compact_welcome:
+            self._print(self._compact_welcome())
+        else:
+            self._print_status()
+            self._print(
+                f"gateway: [bold]{self._connection.description}[/]",
+                style="dim",
+                highlight=False,
+            )
         if self._provider.api_key_env and not self._provider.api_key():
             self._warn_missing_key()
         self._report_missing_sdk()
-        if self._coding:
+        if self._coding and not compact_welcome:
             self._print(
                 f"workspace: [bold]{self._coding_status.get('root', '?')}[/] ·"
                 f" approval: [bold]"
@@ -391,19 +483,39 @@ class ChatUI:
 
     # -- command handling --------------------------------------------------
 
+    def _compact_welcome(self) -> Panel:
+        """Return a small startup card with the active model and directory."""
+        cwd = Path(str(self._coding_status.get("cwd", self._cwd)))
+        cwd = cwd.expanduser().resolve()
+        try:
+            relative = cwd.relative_to(Path.home())
+            directory = "~" if str(relative) == "." else f"~/{relative}"
+        except ValueError:
+            directory = str(cwd)
+        parts = directory.split("/")
+        while len(directory) > 60 and len(parts) > 2:
+            parts.pop(1)
+            directory = parts[0] + "/.../" + "/".join(parts[1:])
+        content = Text("A11 Chat\n\n", style="bold")
+        content.append("model:     ", style="dim")
+        content.append(self._model, style="bold #b4e6ed")
+        content.append("   /model to change\n", style="#43c6b5")
+        content.append("directory: ", style="dim")
+        content.append(directory, style="")
+        content.append("\n\n/help for commands", style="dim")
+        return Panel.fit(content, border_style="dim", padding=(0, 1))
+
     def _prompt_message(self) -> HTML:
-        """Return a prompt reflecting an approval or active background turn."""
-        if self._pending_user_inputs:
-            return HTML("<ansiyellow>answer</ansiyellow> › ")
-        states = []
-        if self._active_turn:
-            states.append("running")
-        if queued := self._message_queue.qsize():
-            states.append(f"{queued} queued")
-        activity = (
-            f" <ansigray>({' · '.join(states)})</ansigray>" if states else ""
-        )
-        return HTML(f"<ansicyan>{self._provider.name}</ansicyan>{activity} › ")
+        """Return a simple composer chevron or pending-answer prompt."""
+        return HTML("› ")
+
+    def _current_question(self) -> dict | None:
+        if not self._pending_user_inputs:
+            return None
+        request_id = next(iter(self._pending_user_inputs))
+        return self._pending_user_inputs[request_id] | {
+            "request_id": request_id
+        }
 
     def _input_choices(self) -> tuple[str, ...]:
         if not self._pending_user_inputs:
@@ -418,26 +530,53 @@ class ChatUI:
             if isinstance(option, dict) and option.get("label")
         )
 
+    def _activity_message(self) -> HTML | None:
+        if self._pending_user_inputs:
+            return HTML(
+                "<ansiyellow>• Waiting for input</ansiyellow>"
+                f" <ansigray>· {self._tokens.output_label} output</ansigray>"
+            )
+        if self._llm_running:
+            return HTML(
+                "<ansicyan>• Working</ansicyan>"
+                f" <ansigray>· {self._tokens.output_label} output</ansigray>"
+                " <ansigray>· Ctrl+C to interrupt</ansigray>"
+            )
+        return None
+
     def _bottom_toolbar(self) -> HTML:
-        """Keep the active model, policy, and shortcuts visible."""
-        policy = self._coding_status.get("approval_mode", "chat")
-        history = (
-            "  ·  ↑ history (Ctrl-End to follow)"
-            if not self._screen.following_tail
-            else ""
+        """Show model, effort, location, and task on the terminal gutter."""
+        config = self._provider_configs.get(self._provider.name, {})
+        effort = config.get("reasoning_effort") or config.get("effort")
+        cwd = Path(str(self._coding_status.get("cwd", self._cwd))).expanduser()
+        try:
+            resolved = cwd.resolve()
+            relative = resolved.relative_to(Path.home())
+            workdir = f"~/{relative}" if str(relative) != "." else "~"
+        except (OSError, ValueError):
+            workdir = str(cwd)
+        task = (
+            self._session_record.task
+            if self._session_record is not None and self._session_record.task
+            else self._current_task
         )
-        selection = (
-            "  ·  selection copied" if self._screen.selected_text else ""
-        )
-        return HTML(
-            f" <b>{self._model or 'default model'}</b>  ·  {policy}  ·  "
-            f"Tab complete  ·  drag to copy  ·  /help{history}{selection} "
-        )
+        model = html.escape(self._model or "default model")
+        fields = [f"<ansiyellow>{model}</ansiyellow>"]
+        if effort:
+            fields.append(
+                f"<ansiyellow>{html.escape(str(effort))}</ansiyellow>"
+            )
+        fields.append(f"<ansigreen>{html.escape(workdir)}</ansigreen>")
+        if task:
+            fields.append(f"<ansicyan>{html.escape(task)}</ansicyan>")
+        separator = " <ansigray>·</ansigray> "
+        return HTML(separator.join(fields))
 
     async def _run_turn_queue(self) -> None:
         """Run submitted messages sequentially while input remains available."""
         while True:
             text = await self._message_queue.get()
+            self._current_task = text
             turn = asyncio.create_task(self._turn(text))
             self._active_turn = turn
             self._screen.invalidate()
@@ -484,6 +623,7 @@ class ChatUI:
             return True
         if lowered == "/clear":
             self._history.clear()
+            self._tokens = ChatTokens()
             self._print("(conversation cleared)", style="dim")
             return True
         if lowered == "/status":
@@ -503,6 +643,9 @@ class ChatUI:
             return True
         if text.startswith("/approval"):
             await self._switch_approval(text.split())
+            return True
+        if text.startswith("/sandbox"):
+            await self._switch_sandbox(text.split())
             return True
         if text.startswith("/config"):
             self._configure_provider(text)
@@ -551,6 +694,33 @@ class ChatUI:
             highlight=False,
         )
 
+    async def _switch_sandbox(self, parts: list[str]) -> None:
+        """Set the gateway sandbox for subsequent coding actions."""
+        modes = {"read-only", "workspace-write", "unrestricted"}
+        if not self._coding or len(parts) != 2 or parts[1] not in modes:
+            self._print(
+                "usage: /sandbox <read-only|workspace-write|unrestricted>",
+                style="red",
+                markup=False,
+            )
+            return
+        result = await self._call_gateway_action(
+            CONFIGURE_CODING_AGENT_SCHEMA, {"sandbox_mode": parts[1]}
+        )
+        self._sandbox = str(result["sandbox_ceiling"])
+        await self._refresh_coding_agent()
+        self._print(
+            f"Gateway sandbox: {self._sandbox} (subsequent calls)."
+            + (
+                " Host filesystem access; kernel process confinement is off."
+                if self._sandbox == "unrestricted"
+                else ""
+            ),
+            style="yellow",
+            markup=False,
+        )
+        self._screen.invalidate()
+
     async def _call_gateway_action(
         self, schema: a11.ActionSchema, inputs: dict[str, object]
     ) -> dict[str, object]:
@@ -578,6 +748,11 @@ class ChatUI:
             str(name) for name in self._coding_status.get("tool_names", [])
         ]
         self._system_prompt = str(self._coding_status.get("system_prompt", ""))
+        self._pending_user_inputs = {
+            request["request_id"]: request
+            for request in self._coding_status.get("pending_user_inputs", [])
+            if isinstance(request, dict) and request.get("request_id")
+        }
 
     async def _print_agent_status(self) -> None:
         if not self._coding:
@@ -620,6 +795,7 @@ class ChatUI:
         provider = PROVIDERS[name]
         self._provider = provider
         self._model = parts[2] if len(parts) > 2 else provider.default_model
+        self._tokens = ChatTokens()
         self._remember_model()
         self._print_status()
         if provider.api_key_env and not provider.api_key():
@@ -685,6 +861,7 @@ class ChatUI:
             self._print("turn limit reached", style="red")
             return
         self._turn_count += 1
+        self._tokens.begin_turn()
 
         user_interaction = make_user_interaction(text)
         # The tool system prompt rides on the first interaction of the
@@ -701,6 +878,7 @@ class ChatUI:
             )
 
         def observe(block) -> None:
+            self._tokens.observe(block)
             if (
                 block.kind == BlockKind.TOOL_RUN
                 and block.tool_name == "request_user_input"
@@ -742,6 +920,9 @@ class ChatUI:
         )
 
         self._print(f"[bold green]{self._provider.name}[/]", highlight=False)
+        self._llm_running = True
+        self._screen.invalidate()
+        complete = False
         try:
             new_interactions = await run_turn(
                 self._connection,
@@ -758,6 +939,7 @@ class ChatUI:
             # History grows only on success, matching what the gateway recorded.
             self._history.append(user_interaction)
             self._history.extend(new_interactions)
+            complete = True
             self._save_session(text)
         except StatusException as exc:
             reducer.on_error(exc.status)
@@ -766,6 +948,10 @@ class ChatUI:
             reducer.on_error(Status(code=StatusCode.INTERNAL, message=str(exc)))
             paint()
         finally:
+            self._tokens.finish(complete=complete)
+            self._llm_running = False
+            self._pending_user_inputs.clear()
+            self._screen.invalidate()
             paint()
             if self._screen.is_running:
                 self._screen.commit_active()
@@ -773,6 +959,9 @@ class ChatUI:
                 self._console.print(
                     render_blocks(reducer.blocks, verbose=self._verbose)
                 )
+            self._print(
+                f"  {self._tokens.output_label} output", style="dim"
+            )
 
     def _save_session(self, task: str) -> None:
         self._remember_model()
@@ -1019,6 +1208,7 @@ async def run_chat(
     max_turns: int = 50,
     timeout_seconds: int = 600,
     non_interactive: bool = False,
+    no_banner: bool = False,
 ) -> int:
     """Run the interactive chat loop against ``provider_name``.
 
@@ -1034,6 +1224,7 @@ async def run_chat(
         shell_tools: Offer this side's shell tools to the model.
         voice: Enable speech input.
         voice_model: Transcription model shorthand or path.
+        no_banner: Show a compact welcome card instead of the ASCII logo.
         extra_headers: Headers set on every turn, overriding the defaults.
 
     Returns:
@@ -1057,6 +1248,7 @@ async def run_chat(
         return 2
 
     try:
+        cwd = str(Path(cwd).expanduser().resolve())
         local_config = GatewayConfig(
             coding_cwd=cwd,
             coding_add_dirs=add_dirs,
@@ -1086,6 +1278,7 @@ async def run_chat(
                 max_turns=max_turns,
                 timeout_seconds=timeout_seconds,
                 non_interactive=non_interactive,
+                no_banner=no_banner,
                 settings_store=settings_store,
             ).run()
     except StatusException as exc:

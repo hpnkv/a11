@@ -120,11 +120,18 @@ An **A11** container in the activity bar with two views:
   seeing what a tool actually returns.
 
 Ten tools, the same ten the JetBrains plugin has and with the same names,
-descriptions and coordinate conventions: `get_active_file`, `get_open_editors`,
-`get_selection`, `get_file_symbols`, `read_file`, `apply_patch`,
-`get_error_highlights`, `rename_symbol`, `find_file`, `search_project`.
+descriptions and coordinate conventions: `ide__get_active_file`,
+`ide__get_open_editors`, `ide__get_selection`, `ide__get_file_symbols`,
+`ide__read_file`, `ide__apply_patch`, `ide__get_error_highlights`,
+`ide__rename_symbol`, `ide__find_file`, `ide__search_project`.
 
-`apply_patch` takes a path and a unified diff and applies it as **one edit**, so a
+When the Gateway serves `coding_agent_info`, chat starts with that agent's system
+prompt and adds this editor's product, workspace, and `ide__*` action catalogue.
+Every model-facing action in `tool_names` is admitted automatically, including
+workspace, command, web, and Flow tools. A Flow hosted by the Gateway uses
+`call` for editor actions and `run` for the Gateway's actions.
+
+`ide__apply_patch` takes a path and a unified diff and applies it as **one edit**, so a
 single Undo reverses the whole patch. Hunks are placed by their context rather than
 by the numbers in their `@@` header, and a hunk that does not match is refused with
 what is there instead: nothing is applied on a near miss, because a fuzzy match is
@@ -219,7 +226,7 @@ Under **A11** in the settings UI:
 | --- | --- |
 | `a11.gatewayUrl` | Where `a11 gateway` listens. A bare `host:port` is completed. |
 | `a11.provider` / `a11.model` / `a11.baseUrl` | Which model answers. |
-| `a11.extraAllowedTools` | Names or patterns for Gateway tools. Defaults cover its coding-agent, Flow, and shell actions; remove entries to narrow them. |
+| `a11.extraAllowedTools` | Additional Gateway tool names or patterns, and the fallback allowlist for a general Gateway. Coding-agent tools are admitted from `coding_agent_info`. |
 | `a11.flow.toolPath` | Where `a11-flow` is, when it is not bundled or on the `PATH`. |
 | `a11.flow.scanWorkspace` | Read the workspace for its own actions. |
 | `a11.flow.checkFragments` | Check flows inside string literals, not only `.flow` files. |

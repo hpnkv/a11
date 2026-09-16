@@ -156,22 +156,24 @@ def _tool_name(name: str, used: set[str]) -> str:
 def _dynamic_tools(
     definitions: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], dict[str, str], bytes]:
-    used: set[str] = set()
+    used: set[str] = {"a11_request_user_input"}
     result: list[dict[str, Any]] = []
     names: dict[str, str] = {}
     for definition in definitions:
         original = definition["name"]
-        exposed = _tool_name(original, used)
-        names[exposed] = original
-        result.append(
-            {
-                "type": "function",
-                "name": exposed,
-                "description": definition.get("description") or "",
-                "inputSchema": definition.get("input_schema")
-                or {"type": "object", "properties": {}},
-            }
+        exposed = (
+            "a11_request_user_input"
+            if original == "request_user_input"
+            else _tool_name(original, used)
         )
+        names[exposed] = original
+        result.append({
+            "type": "function",
+            "name": exposed,
+            "description": definition.get("description") or "",
+            "inputSchema": definition.get("input_schema")
+            or {"type": "object", "properties": {}},
+        })
     encoded = json.dumps(result, sort_keys=True, separators=(",", ":")).encode()
     return result, names, hashlib.sha256(encoded).hexdigest().encode()
 
@@ -266,6 +268,7 @@ async def _run_codex(
     assert process.stderr is not None
     write_lock = asyncio.Lock()
     next_id = 1
+    resume_requests: set[int] = set()
 
     async def send(message: dict[str, Any]) -> None:
         async with write_lock:
@@ -274,10 +277,14 @@ async def _run_codex(
             )
             await process.stdin.drain()
 
-    async def request(method: str, params: dict[str, Any]) -> int:
+    async def request(
+        method: str, params: dict[str, Any], *, resume_turn: bool = False
+    ) -> int:
         nonlocal next_id
         request_id = next_id
         next_id += 1
+        if resume_turn:
+            resume_requests.add(request_id)
         await send({"method": method, "id": request_id, "params": params})
         return request_id
 
@@ -288,6 +295,79 @@ async def _run_codex(
     streamed_text = False
     usage = None
     turn_done = False
+    seen_questions: set[str] = set()
+    read_task: asyncio.Task[None] | None = None
+
+    async def ask_question(
+        arguments: dict[str, Any], call_id: str, thread_id: str
+    ) -> str:
+        """Ask through A11 so every client receives the same input action."""
+        if not any(
+            tool["name"] == "a11_request_user_input" for tool in dynamic_tools
+        ):
+            raise ValueError("User input is not enabled by this A11 client.")
+        result = await tool_handler(
+            {
+                "tool": "a11_request_user_input",
+                "callId": call_id,
+                "arguments": arguments,
+            },
+            thread_id,
+        )
+        content = "".join(
+            item.get("text", "")
+            for item in result["contentItems"]
+            if item.get("type") == "inputText"
+        )
+        if not result.get("success"):
+            raise ValueError(content)
+        return json.loads(content)["answer"]
+
+    async def answer_async_questions(params: dict[str, Any]) -> None:
+        """Return asynchronous question answers as input to the Codex turn."""
+        nonlocal turn_done
+        item = params["item"]
+        answers = []
+        for index, question in enumerate(item["questions"]):
+            answer = await ask_question(
+                {
+                    "question": question["title"],
+                    "options": [
+                        {"label": label}
+                        for label in question.get("options") or []
+                    ],
+                    "allow_free_text": True,
+                },
+                f"input_{item['id']}_{index}",
+                params["threadId"],
+            )
+            answers.append({"question": question["title"], "answer": answer})
+        inputs = [
+            {"type": "text", "text": "User answers:\n" + json.dumps(answers)}
+        ]
+        if turn_done:
+            turn_done = False
+            await request(
+                "turn/start",
+                {
+                    "threadId": params["threadId"],
+                    "input": inputs,
+                    "model": model or None,
+                    "effort": config.reasoning_effort,
+                    "outputSchema": config.output_schema,
+                },
+                resume_turn=True,
+            )
+        else:
+            await request(
+                "turn/steer",
+                {
+                    "threadId": params["threadId"],
+                    "expectedTurnId": params["turnId"],
+                    "input": inputs,
+                },
+                resume_turn=True,
+            )
 
     async def answer_tool(message: dict[str, Any], thread_id: str) -> None:
         try:
@@ -295,17 +375,42 @@ async def _run_codex(
             await send({"id": message["id"], "result": result})
         except Exception as exc:
             logging.debug("Codex dynamic tool call failed", exc_info=True)
-            await send(
-                {
-                    "id": message["id"],
-                    "result": {
-                        "contentItems": [
-                            {"type": "inputText", "text": str(exc)}
-                        ],
-                        "success": False,
+            await send({
+                "id": message["id"],
+                "result": {
+                    "contentItems": [{"type": "inputText", "text": str(exc)}],
+                    "success": False,
+                },
+            })
+
+    async def answer_user_input(
+        message: dict[str, Any], thread_id: str
+    ) -> None:
+        """Translate Codex questions into ordinary A11 input actions."""
+        try:
+            answers = {}
+            request_key = message["params"].get("itemId") or os.urandom(8).hex()
+            for question in message["params"]["questions"]:
+                if question.get("isSecret"):
+                    raise ValueError(
+                        "Secret input is not supported by this client."
+                    )
+                answer = await ask_question(
+                    {
+                        "question": question["question"],
+                        "options": question.get("options") or [],
+                        "allow_free_text": question.get("isOther", False),
                     },
-                }
-            )
+                    f"input_{request_key}_{question['id']}",
+                    thread_id,
+                )
+                answers[question["id"]] = {"answers": [answer]}
+            await send({"id": message["id"], "result": {"answers": answers}})
+        except Exception as exc:
+            await send({
+                "id": message["id"],
+                "error": {"code": -32603, "message": str(exc)},
+            })
 
     async def read_one(thread_id: str = "") -> None:
         nonlocal final_text, streamed_text, usage, turn_done
@@ -324,13 +429,20 @@ async def _run_codex(
             ).to_exception() from exc
         await action["event_stream"].put(message)
         if "id" in message and "method" not in message:
-            responses[message["id"]] = message
+            if message["id"] in resume_requests:
+                resume_requests.remove(message["id"])
+                if "error" in message:
+                    raise _rpc_error(message)
+            else:
+                responses[message["id"]] = message
         method = message.get("method")
         params = message.get("params") or {}
         if method == "item/tool/call":
             task = asyncio.create_task(answer_tool(message, thread_id))
             pending_calls.add(task)
-            task.add_done_callback(pending_calls.discard)
+        elif method == "item/tool/requestUserInput":
+            task = asyncio.create_task(answer_user_input(message, thread_id))
+            pending_calls.add(task)
         elif method == "item/agentMessage/delta":
             if delta := params.get("delta"):
                 streamed_text = True
@@ -341,10 +453,17 @@ async def _run_codex(
         ):
             if delta := params.get("delta"):
                 await action["thoughts"].put(delta)
-        elif method == "item/completed":
+        elif method in ("item/started", "item/completed"):
             item = params.get("item") or {}
             if item.get("type") == "agentMessage":
-                final_text = item.get("text") or final_text
+                if item.get("questions"):
+                    if item["id"] not in seen_questions:
+                        seen_questions.add(item["id"])
+                        pending_calls.add(
+                            asyncio.create_task(answer_async_questions(params))
+                        )
+                elif method == "item/completed":
+                    final_text = item.get("text") or final_text
         elif method == "thread/tokenUsage/updated":
             values = (params.get("tokenUsage") or {}).get("last") or {}
             usage = llm.UsageMetadata(
@@ -421,8 +540,7 @@ async def _run_codex(
             ).to_exception()
         turn_input = [{"type": "text", "text": prompt}]
         turn_input.extend(
-            {"type": "localImage", "path": path}
-            for path in image_paths or []
+            {"type": "localImage", "path": path} for path in image_paths or []
         )
         turn_request = await request(
             "turn/start",
@@ -435,14 +553,28 @@ async def _run_codex(
             },
         )
         await wait_response(turn_request, thread_id)
-        while not turn_done:
-            await read_one(thread_id)
-        if pending_calls:
-            await asyncio.gather(*pending_calls)
+        while not turn_done or pending_calls or resume_requests:
+            if read_task is None and (not turn_done or resume_requests):
+                read_task = asyncio.create_task(read_one(thread_id))
+            waiting = set(pending_calls)
+            if read_task is not None:
+                waiting.add(read_task)
+            done, _ = await asyncio.wait(
+                waiting, return_when=asyncio.FIRST_COMPLETED
+            )
+            for finished in done:
+                if finished is read_task:
+                    read_task = None
+                else:
+                    pending_calls.remove(finished)
+                finished.result()
         if final_text and not streamed_text:
             await action["text_output"].put(final_text)
         return final_text, thread_id, usage
     finally:
+        if read_task is not None:
+            read_task.cancel()
+            await asyncio.gather(read_task, return_exceptions=True)
         for task in pending_calls:
             task.cancel()
         if pending_calls:
@@ -542,22 +674,20 @@ async def interact_with_codex(action: a11.Action) -> None:
                 created_at_millis=a11.now().nanoseconds_since_epoch // 1000000,
                 model=model,
                 content=[
-                    a11.to_chunk(
-                        {
-                            "role": "assistant",
-                            "content": "",
-                            "tool_calls": [
-                                {
-                                    "id": call.id,
-                                    "type": "function",
-                                    "function": {
-                                        "name": call.name,
-                                        "arguments": json.dumps(call.params),
-                                    },
-                                }
-                            ],
-                        }
-                    )
+                    a11.to_chunk({
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": call.id,
+                                "type": "function",
+                                "function": {
+                                    "name": call.name,
+                                    "arguments": json.dumps(call.params),
+                                },
+                            }
+                        ],
+                    })
                 ],
                 backend_specific_metadata=_metadata(thread_id, tools_digest),
             )

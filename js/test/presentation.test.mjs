@@ -29,8 +29,8 @@
  */
 
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import {readFileSync} from 'node:fs';
+import {fileURLToPath} from 'node:url';
 import test from 'node:test';
 
 import {
@@ -47,21 +47,47 @@ import {
   presentConversation,
   valueOrThrow,
 } from '../dist/index.js';
+import {parseUnifiedPatch} from '../dist/presentation/index.js';
 
-const GOLDEN = fileURLToPath(
-  new URL('../../testdata/presentation_events.json', import.meta.url),
-);
+const GOLDEN = fileURLToPath(new URL('../../testdata/presentation_events.json', import.meta.url));
 
 const golden = JSON.parse(readFileSync(GOLDEN, 'utf8'));
 
+test('unified patches expose per-file counts and line numbers', () => {
+  const patch = parseUnifiedPatch(
+    '--- a/src/example.ts\n+++ b/src/example.ts\n@@ -3,2 +3,2 @@\n keep();\n-old();\n+newer();\n',
+  );
+
+  assert.equal(patch.added, 1);
+  assert.equal(patch.removed, 1);
+  assert.equal(patch.files[0].path, 'src/example.ts');
+  assert.deepEqual(patch.files[0].hunks[0].lines, [
+    {kind: 'context', text: 'keep();', oldLine: 3, newLine: 3},
+    {kind: 'removed', text: 'old();', oldLine: 4},
+    {kind: 'added', text: 'newer();', newLine: 4},
+  ]);
+});
+
+test('headerless IDE patches use their separate path input', () => {
+  const patch = parseUnifiedPatch('@@ -7 +7 @@\n-const n = 1;\n+const n = 2;\n', 'src/example.ts');
+
+  assert.equal(patch.files[0].path, 'src/example.ts');
+  assert.equal(patch.files[0].added, 1);
+  assert.equal(patch.files[0].removed, 1);
+});
+
 test('raw image chunks normalize and render with their bytes', async () => {
-  const interaction = valueOrThrow(makeInteraction({
-    role: 'user',
-    content: [new Chunk({
-      metadata: new ChunkMetadata({ mimetype: 'image/png' }),
-      data: new Uint8Array([1, 2, 3]),
-    })],
-  }));
+  const interaction = valueOrThrow(
+    makeInteraction({
+      role: 'user',
+      content: [
+        new Chunk({
+          metadata: new ChunkMetadata({mimetype: 'image/png'}),
+          data: new Uint8Array([1, 2, 3]),
+        }),
+      ],
+    }),
+  );
 
   const normalized = normalizeByShape(interaction);
   assert.equal(normalized.parts[0].type, 'image');
@@ -75,35 +101,45 @@ test('raw image chunks normalize and render with their bytes', async () => {
 });
 
 test('shape normalization finds images in provider step envelopes', () => {
-  const interaction = valueOrThrow(makeInteraction({
-    role: 'model',
-    content: [new Chunk({
-      metadata: new ChunkMetadata({ mimetype: 'application/json' }),
-      data: new TextEncoder().encode(JSON.stringify({
-        steps: [{
-          type: 'model_output',
-          content: [{ type: 'image', data: 'AQID', mime_type: 'image/jpeg' }],
-        }],
-      })),
-    })],
-  }));
+  const interaction = valueOrThrow(
+    makeInteraction({
+      role: 'model',
+      content: [
+        new Chunk({
+          metadata: new ChunkMetadata({mimetype: 'application/json'}),
+          data: new TextEncoder().encode(
+            JSON.stringify({
+              steps: [
+                {
+                  type: 'model_output',
+                  content: [{type: 'image', data: 'AQID', mime_type: 'image/jpeg'}],
+                },
+              ],
+            }),
+          ),
+        }),
+      ],
+    }),
+  );
 
-  assert.deepEqual(normalizeByShape(interaction).parts, [{
-    type: 'image',
-    data: 'AQID',
-    mime_type: 'image/jpeg',
-  }]);
+  assert.deepEqual(normalizeByShape(interaction).parts, [
+    {
+      type: 'image',
+      data: 'AQID',
+      mime_type: 'image/jpeg',
+    },
+  ]);
 });
 
 test('interaction status accepts failures and rejects invalid codes', () => {
   const failed = parseInteraction({
-    status: { code: StatusCode.DEADLINE_EXCEEDED, message: 'model timed out' },
+    status: {code: StatusCode.DEADLINE_EXCEEDED, message: 'model timed out'},
   });
   assert.equal(isOk(failed), true);
   assert.equal(failed.status.code, StatusCode.DEADLINE_EXCEEDED);
 
   const invalid = parseInteraction({
-    status: { code: 99, message: 'unknown' },
+    status: {code: 99, message: 'unknown'},
   });
   assert.equal(isOk(invalid), false);
   assert.equal(invalid.code, StatusCode.INVALID_ARGUMENT);
@@ -232,7 +268,7 @@ test('malformed conversation metadata becomes a status', async () => {
     {
       role: 'assistant',
       content: [],
-      backend_specific_metadata: { tool_logs: '{' },
+      backend_specific_metadata: {tool_logs: '{'},
     },
   ]);
   assert.equal(isOk(presented), false);

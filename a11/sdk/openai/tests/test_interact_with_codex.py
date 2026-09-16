@@ -132,6 +132,236 @@ class _Process:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("turn_completed", [False, True])
+@pytest.mark.parametrize("answer_fails", [False, True])
+async def test_async_agent_questions_wait_for_a11_and_resume_codex(
+    monkeypatch,
+    turn_completed,
+    answer_fails,
+):
+    process = _Process([])
+    process.stdout = asyncio.StreamReader()
+    asked = asyncio.Event()
+    answer_ready = asyncio.Event()
+    completed_seen = asyncio.Event()
+    calls = []
+
+    def emit(event):
+        process.stdout.feed_data(json.dumps(event).encode() + b"\n")
+
+    class Input(_Input):
+        def write(self, value):
+            super().write(value)
+            message = json.loads(value)
+            if message.get("method") not in {"turn/steer", "turn/start"}:
+                return
+            if message["id"] <= 3:
+                return
+            emit({"id": message["id"], "result": {}})
+            emit({
+                "method": "item/agentMessage/delta",
+                "params": {"delta": "Correct!"},
+            })
+            emit({
+                "method": "turn/completed",
+                "params": {"turn": {"status": "completed"}},
+            })
+
+    class Events(_Sink):
+        async def put(self, event):
+            await super().put(event)
+            if event.get("method") == "turn/completed":
+                completed_seen.set()
+
+    process.stdin = Input()
+    emit({"id": 1, "result": {}})
+    emit({"id": 2, "result": {"thread": {"id": "thread-1"}}})
+    emit({"id": 3, "result": {"turn": {"id": "turn-1"}}})
+    params = {
+        "threadId": "thread-1",
+        "turnId": "turn-1",
+        "item": {
+            "id": "question-1",
+            "type": "agentMessage",
+            "delivery": "async",
+            "text": "Where does Flow live?",
+            "questions": [
+                {"title": "Where does Flow live?", "options": ["C++", "Python"]}
+            ],
+        },
+    }
+    emit({"method": "item/started", "params": params})
+    emit({"method": "item/completed", "params": params})
+    if turn_completed:
+        emit({
+            "method": "turn/completed",
+            "params": {"turn": {"status": "completed"}},
+        })
+
+    async def create(*args, **kwargs):
+        return process
+
+    async def answer(arguments, thread_id):
+        calls.append((arguments, thread_id))
+        asked.set()
+        await answer_ready.wait()
+        if answer_fails:
+            raise ValueError("Input action unavailable")
+        return {
+            "success": True,
+            "contentItems": [
+                {
+                    "type": "inputText",
+                    "text": json.dumps({"answer": "C++"}),
+                }
+            ],
+        }
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create)
+    action = {
+        "event_stream": Events(),
+        "thoughts": _Sink(),
+        "text_output": _Sink(),
+    }
+    task = asyncio.create_task(
+        mod._run_codex(
+            action,
+            CreateCodexSessionConfig(),
+            "test-model",
+            "quiz",
+            None,
+            None,
+            [{"name": "a11_request_user_input"}],
+            answer,
+            {},
+        )
+    )
+    try:
+        await asyncio.wait_for(asked.wait(), 2)
+        if turn_completed:
+            await asyncio.wait_for(completed_seen.wait(), 2)
+        assert not task.done()
+        assert calls[0][0]["tool"] == "a11_request_user_input"
+        assert calls[0][0]["arguments"] == {
+            "question": "Where does Flow live?",
+            "options": [{"label": "C++"}, {"label": "Python"}],
+            "allow_free_text": True,
+        }
+        answer_ready.set()
+        if answer_fails:
+            with pytest.raises(ValueError, match="Input action unavailable"):
+                await asyncio.wait_for(task, 2)
+            return
+        await asyncio.wait_for(task, 2)
+        assert len(calls) == 1
+        messages = [
+            json.loads(line) for line in process.stdin.data.splitlines()
+        ]
+        resume = messages[-1]
+        assert resume["method"] == (
+            "turn/start" if turn_completed else "turn/steer"
+        )
+        assert "C++" in resume["params"]["input"][0]["text"]
+        if not turn_completed:
+            assert resume["params"]["expectedTurnId"] == "turn-1"
+        assert action["text_output"].values == ["Correct!"]
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_native_user_input_is_bridged_to_a11_with_question_ids(
+    monkeypatch,
+):
+    questions = [
+        {
+            "id": "q1",
+            "question": "First question?",
+            "options": [
+                {"label": "Yes", "description": "Accept"},
+                {"label": "No", "description": "Reject"},
+            ],
+        },
+        {"id": "q2", "question": "Second question?", "isOther": True},
+        {"id": "q3", "question": "Third question?"},
+    ]
+    process = _Process([
+        {"id": 1, "result": {}},
+        {"id": 2, "result": {"thread": {"id": "thread-9"}}},
+        {"id": 3, "result": {"turn": {"id": "turn-1"}}},
+        {
+            "id": 77,
+            "method": "item/tool/requestUserInput",
+            "params": {
+                "questions": questions,
+                "itemId": "item-1",
+                "threadId": "thread-9",
+                "turnId": "turn-1",
+                "isBlocking": True,
+            },
+        },
+        {
+            "method": "turn/completed",
+            "params": {"turn": {"status": "completed"}},
+        },
+    ])
+
+    async def create(*args, **kwargs):
+        return process
+
+    calls = []
+
+    async def handler(params, thread_id):
+        calls.append((params, thread_id))
+        return {
+            "success": True,
+            "contentItems": [
+                {
+                    "type": "inputText",
+                    "text": json.dumps({"answer": "Yes"}),
+                }
+            ],
+        }
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create)
+    tools, names, _ = mod._dynamic_tools([
+        {"name": "request_user_input", "input_schema": {"type": "object"}},
+    ])
+    assert names == {"a11_request_user_input": "request_user_input"}
+    await mod._run_codex(
+        {key: _Sink() for key in ("event_stream", "thoughts", "text_output")},
+        CreateCodexSessionConfig(),
+        "test-model",
+        "quiz",
+        None,
+        None,
+        tools,
+        handler,
+        {},
+    )
+    assert len(calls) == 3
+    assert all(
+        params["tool"] == "a11_request_user_input" and thread_id == "thread-9"
+        for params, thread_id in calls
+    )
+    assert calls[0][0]["arguments"]["options"] == questions[0]["options"]
+    assert calls[1][0]["arguments"]["allow_free_text"] is True
+    assert len({params["callId"] for params, _ in calls}) == 3
+    messages = [json.loads(line) for line in process.stdin.data.splitlines()]
+    assert messages[-1] == {
+        "id": 77,
+        "result": {
+            "answers": {
+                "q1": {"answers": ["Yes"]},
+                "q2": {"answers": ["Yes"]},
+                "q3": {"answers": ["Yes"]},
+            }
+        },
+    }
+
+
+@pytest.mark.asyncio
 async def test_jsonl_reader_accepts_a_multimodal_message_over_64_kib():
     stream = asyncio.StreamReader(limit=2**16)
     message = json.dumps({"imageUrl": "x" * 70000}).encode() + b"\n"
@@ -143,55 +373,51 @@ async def test_jsonl_reader_accepts_a_multimodal_message_over_64_kib():
 
 @pytest.mark.asyncio
 async def test_app_server_uses_structured_thread_turn_and_usage(monkeypatch):
-    process = _Process(
-        [
-            {"id": 1, "result": {}},
-            {"id": 2, "result": {"thread": {"id": "thread-9"}}},
-            {"id": 3, "result": {"turn": {"id": "turn-1"}}},
-            {
-                "method": "item/tool/call",
-                "id": 77,
-                "params": {
-                    "threadId": "thread-9",
-                    "turnId": "turn-1",
-                    "callId": "call-7",
-                    "tool": "lookup",
-                    "arguments": {"key": "x"},
-                },
+    process = _Process([
+        {"id": 1, "result": {}},
+        {"id": 2, "result": {"thread": {"id": "thread-9"}}},
+        {"id": 3, "result": {"turn": {"id": "turn-1"}}},
+        {
+            "method": "item/tool/call",
+            "id": 77,
+            "params": {
+                "threadId": "thread-9",
+                "turnId": "turn-1",
+                "callId": "call-7",
+                "tool": "lookup",
+                "arguments": {"key": "x"},
             },
-            {
-                "method": "item/reasoning/summaryTextDelta",
-                "params": {"delta": "considering"},
-            },
-            {
-                "method": "item/agentMessage/delta",
-                "params": {"delta": "Answer."},
-            },
-            {
-                "method": "item/completed",
-                "params": {
-                    "item": {"type": "agentMessage", "text": "Answer."}
-                },
-            },
-            {
-                "method": "thread/tokenUsage/updated",
-                "params": {
-                    "tokenUsage": {
-                        "last": {
-                            "inputTokens": 5,
-                            "cachedInputTokens": 2,
-                            "outputTokens": 3,
-                            "totalTokens": 8,
-                        }
+        },
+        {
+            "method": "item/reasoning/summaryTextDelta",
+            "params": {"delta": "considering"},
+        },
+        {
+            "method": "item/agentMessage/delta",
+            "params": {"delta": "Answer."},
+        },
+        {
+            "method": "item/completed",
+            "params": {"item": {"type": "agentMessage", "text": "Answer."}},
+        },
+        {
+            "method": "thread/tokenUsage/updated",
+            "params": {
+                "tokenUsage": {
+                    "last": {
+                        "inputTokens": 5,
+                        "cachedInputTokens": 2,
+                        "outputTokens": 3,
+                        "totalTokens": 8,
                     }
-                },
+                }
             },
-            {
-                "method": "turn/completed",
-                "params": {"turn": {"status": "completed"}},
-            },
-        ]
-    )
+        },
+        {
+            "method": "turn/completed",
+            "params": {"turn": {"status": "completed"}},
+        },
+    ])
     command = []
 
     async def create(*args, **kwargs):
@@ -244,9 +470,7 @@ async def test_app_server_uses_structured_thread_turn_and_usage(monkeypatch):
     assert messages[2]["method"] == "thread/start"
     assert messages[2]["params"]["dynamicTools"][0]["name"] == "lookup"
     assert messages[3]["method"] == "turn/start"
-    assert messages[3]["params"]["input"] == [
-        {"type": "text", "text": "hello"}
-    ]
+    assert messages[3]["params"]["input"] == [{"type": "text", "text": "hello"}]
     assert tool_calls[0][0]["callId"] == "call-7"
     assert tool_calls[0][1] == "thread-9"
     assert messages[-1] == {
@@ -258,14 +482,61 @@ async def test_app_server_uses_structured_thread_turn_and_usage(monkeypatch):
     }
 
 
-def test_dynamic_tool_names_are_codex_compatible_and_stable():
-    tools, names, digest = mod._dynamic_tools(
+@pytest.mark.asyncio
+async def test_app_server_resume_reuses_the_threads_dynamic_tools(monkeypatch):
+    process = _Process([
+        {"id": 1, "result": {}},
+        {"id": 2, "result": {"thread": {"id": "thread-9"}}},
+        {"id": 3, "result": {"turn": {"id": "turn-2"}}},
+        {
+            "method": "turn/completed",
+            "params": {"turn": {"status": "completed"}},
+        },
+    ])
+
+    async def create(*args, **kwargs):
+        return process
+
+    async def tool_handler(params, thread_id):
+        return {"contentItems": [], "success": True}
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create)
+    action = {
+        "event_stream": _Sink(),
+        "thoughts": _Sink(),
+        "text_output": _Sink(),
+    }
+    await mod._run_codex(
+        action,
+        CreateCodexSessionConfig(),
+        "gpt-test",
+        "continue",
+        "thread-9",
+        None,
         [
-            {"name": "files/read", "input_schema": {"type": "object"}},
-            {"name": "files read", "input_schema": {"type": "object"}},
-            {"name": "mcp__hidden", "input_schema": {"type": "object"}},
-        ]
+            {
+                "type": "function",
+                "name": "lookup",
+                "description": "Look up",
+                "inputSchema": {"type": "object"},
+            }
+        ],
+        tool_handler,
+        {},
     )
+
+    messages = [json.loads(line) for line in process.stdin.data.splitlines()]
+    assert messages[2]["method"] == "thread/resume"
+    assert "dynamicTools" not in messages[2]["params"]
+    assert messages[3]["method"] == "turn/start"
+
+
+def test_dynamic_tool_names_are_codex_compatible_and_stable():
+    tools, names, digest = mod._dynamic_tools([
+        {"name": "files/read", "input_schema": {"type": "object"}},
+        {"name": "files read", "input_schema": {"type": "object"}},
+        {"name": "mcp__hidden", "input_schema": {"type": "object"}},
+    ])
 
     assert [tool["name"] for tool in tools] == [
         "files_read",
@@ -297,19 +568,17 @@ def test_inline_images_become_local_image_inputs(tmp_path):
     interaction = llm.Interaction(
         role=llm.Role.USER,
         content=[
-            a11.to_chunk(
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "inspect this"},
-                        {
-                            "type": "image",
-                            "data": "QUJD",
-                            "mime_type": "image/png",
-                        },
-                    ],
-                }
-            )
+            a11.to_chunk({
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "inspect this"},
+                    {
+                        "type": "image",
+                        "data": "QUJD",
+                        "mime_type": "image/png",
+                    },
+                ],
+            })
         ],
     )
 
@@ -329,9 +598,10 @@ async def test_final_message_records_native_thread(monkeypatch):
     assert produced[0].backend_specific_metadata[THREAD_ID_METADATA_KEY] == (
         b"thread-8"
     )
-    assert produced[0].backend_specific_metadata[
-        mod.CODEX_TRANSPORT_METADATA_KEY
-    ] == mod.CODEX_TRANSPORT
+    assert (
+        produced[0].backend_specific_metadata[mod.CODEX_TRANSPORT_METADATA_KEY]
+        == mod.CODEX_TRANSPORT
+    )
     assert produced[0].usage_metadata.total_tokens == 12
 
 

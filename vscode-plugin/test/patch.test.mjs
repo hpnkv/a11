@@ -27,18 +27,14 @@
 
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {applyPatch} from "../dist/testable/tools/patch.mjs";
+import {applyPatch, patchOperation} from '../dist/testable/tools/patch.mjs';
 
 const FILE = ['def one():', '    return 1', '', 'def two():', '    return 2', ''].join('\n');
 
 test('applies a hunk placed by its @@ header', () => {
-  const patch = [
-    '@@ -1,2 +1,2 @@',
-    ' def one():',
-    '-    return 1',
-    '+    return 11',
-    '',
-  ].join('\n');
+  const patch = ['@@ -1,2 +1,2 @@', ' def one():', '-    return 1', '+    return 11', ''].join(
+    '\n',
+  );
   const out = applyPatch(FILE, patch);
   assert.match(out.text, /return 11/);
   assert.match(out.text, /return 2/);
@@ -48,26 +44,18 @@ test('applies a hunk placed by its @@ header', () => {
 test('places a hunk by its context when the header lies', () => {
   // The numbers are wrong by twenty lines; the context is right. A patch written
   // by hand or by a model against a file it read earlier looks exactly like this.
-  const patch = [
-    '@@ -21,2 +21,2 @@',
-    ' def two():',
-    '-    return 2',
-    '+    return 22',
-    '',
-  ].join('\n');
+  const patch = ['@@ -21,2 +21,2 @@', ' def two():', '-    return 2', '+    return 22', ''].join(
+    '\n',
+  );
   const out = applyPatch(FILE, patch);
   assert.match(out.text, /return 22/);
   assert.match(out.text, /return 1\n/);
 });
 
 test('refuses a hunk that does not match, and says what is there', () => {
-  const patch = [
-    '@@ -1,2 +1,2 @@',
-    ' def three():',
-    '-    return 3',
-    '+    return 33',
-    '',
-  ].join('\n');
+  const patch = ['@@ -1,2 +1,2 @@', ' def three():', '-    return 3', '+    return 33', ''].join(
+    '\n',
+  );
   assert.throws(
     () => applyPatch(FILE, patch),
     (error) => {
@@ -83,13 +71,7 @@ test('refuses a hunk that does not match, and says what is there', () => {
 test('reads a context line that lost its leading space', () => {
   // The commonest slip in a written-by-hand diff, and one only the file can
   // settle: a line of an indented file starts with a space anyway.
-  const patch = [
-    '@@ -1,2 +1,2 @@',
-    'def one():',
-    '-    return 1',
-    '+    return 11',
-    '',
-  ].join('\n');
+  const patch = ['@@ -1,2 +1,2 @@', 'def one():', '-    return 1', '+    return 11', ''].join('\n');
   const out = applyPatch(FILE, patch);
   assert.match(out.text, /return 11/);
 });
@@ -110,13 +92,9 @@ test('reads a patch whose markers are indented as a block', () => {
 test('keeps the file’s own line, not the patch’s copy of it', () => {
   // The context line differs in trailing whitespace, which is ignored; what goes
   // back is what the file had.
-  const patch = [
-    '@@ -1,2 +1,2 @@',
-    ' def one():   ',
-    '-    return 1',
-    '+    return 11',
-    '',
-  ].join('\n');
+  const patch = ['@@ -1,2 +1,2 @@', ' def one():   ', '-    return 1', '+    return 11', ''].join(
+    '\n',
+  );
   const out = applyPatch(FILE, patch);
   assert.match(out.text, /^def one\(\):\n/);
 });
@@ -154,13 +132,9 @@ test('deletes without leaving an empty line behind', () => {
 
 test('keeps the file’s newline style and its trailing newline', () => {
   const crlf = FILE.replaceAll('\n', '\r\n');
-  const patch = [
-    '@@ -1,2 +1,2 @@',
-    ' def one():',
-    '-    return 1',
-    '+    return 11',
-    '',
-  ].join('\n');
+  const patch = ['@@ -1,2 +1,2 @@', ' def one():', '-    return 1', '+    return 11', ''].join(
+    '\n',
+  );
   const out = applyPatch(crlf, patch);
   assert.ok(out.text.includes('\r\n'), 'CRLF survives');
   assert.ok(out.text.endsWith('\r\n'), 'the trailing newline survives');
@@ -176,6 +150,28 @@ test('counts what it added and removed', () => {
     '',
   ].join('\n');
   const out = applyPatch(FILE, patch);
-  assert.equal(out.removed, 2);
-  assert.equal(out.added, 3);
+  assert.equal(out.removed, 1);
+  assert.equal(out.added, 2);
+});
+
+test('reads standard file lifecycle headers', () => {
+  assert.deepEqual(
+    patchOperation('--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1 @@\n+new', 'ignored.txt'),
+    {kind: 'create', path: 'new.txt'},
+  );
+  assert.deepEqual(
+    patchOperation('--- a/old.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-old', 'old.txt'),
+    {kind: 'delete', path: 'old.txt'},
+  );
+  assert.deepEqual(patchOperation('rename from old.txt\nrename to moved.txt', 'old.txt'), {
+    kind: 'rename',
+    path: 'old.txt',
+    newPath: 'moved.txt',
+  });
+});
+
+test('requires an @@ header and normalizes changed-line whitespace', () => {
+  assert.throws(() => applyPatch(FILE, '-old\n+new'), /no hunks/i);
+  const out = applyPatch(FILE, '@@ -2 +2 @@\n-    return 1\n+    return 1  ');
+  assert.match(out.text, /return 1\n/);
 });

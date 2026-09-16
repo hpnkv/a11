@@ -355,8 +355,8 @@ class HighlightSuggestionsTest : BasePlatformTestCase() {
         Patch.apply(project, document, edits)
         assertEquals("alpha\nBETA\ngamma\n", document.text)
 
-        // The popup's Apply button and `apply_patch` land in the same command, so
-        // one Ctrl+Z takes either of them back.
+        // The popup's Apply button and `ide__apply_patch` land in the same
+        // command, so one Ctrl+Z takes either of them back.
         val undo = UndoManager.getInstance(project)
         val editor = FileEditorManager.getInstance(project).getSelectedEditor(myFixture.file.virtualFile)
         assertTrue("an applied suggestion should be undoable", undo.isUndoAvailable(editor))

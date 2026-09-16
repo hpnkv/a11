@@ -1287,6 +1287,41 @@ TEST(SandboxTest, PreferredCarriesOnWhereThereIsNothingToConfine) {
   EXPECT_FALSE((*prepared)->Describe().empty());
 }
 
+TEST(SandboxTest, DefaultPoliciesSupplyWritableProcessScratchRoots) {
+  Workspace workspace;
+  const CapabilitiesBuilder capabilities =
+      ReadOnlyCapabilities({workspace.root().string()});
+  EXPECT_FALSE(capabilities->filesystem.writable);
+  EXPECT_FALSE(capabilities->process.write_roots.empty());
+  for (const std::string& root : capabilities->process.write_roots) {
+    EXPECT_TRUE(fs::is_directory(root));
+  }
+}
+
+TEST(SandboxTest, ReadOnlyWorkspaceStillAllowsProcessScratchWrites) {
+  if (!Availability().confines_writes) {
+    GTEST_SKIP() << "no write confinement here: " << Availability().why_not;
+  }
+  Workspace workspace;
+  Workspace scratch;
+  CapabilitiesBuilder capabilities =
+      ReadOnlyCapabilities({workspace.root().string()});
+  capabilities->process.enabled = true;
+  capabilities->process.any_program = true;
+  capabilities->process.sandbox = SandboxRequest::kRequired;
+  capabilities->process.write_roots = {scratch.root().string()};
+  const std::shared_ptr<Action> action =
+      MakeSpawn(capabilities, "/usr/bin/touch",
+                nlohmann::json::array({scratch.path("made.txt")}));
+  ASSERT_NE(action, nullptr);
+  ASSERT_TRUE(action->Run().ok());
+  ASSERT_TRUE(action->Wait(kPatience).Await().ok());
+  const std::optional<nlohmann::json> exit_code = ReadOne(action, "exit_code");
+  ASSERT_TRUE(exit_code.has_value());
+  EXPECT_EQ(*exit_code, nlohmann::json(0));
+  EXPECT_TRUE(fs::exists(scratch.path("made.txt")));
+}
+
 TEST(SandboxTest, PreparesConfinementForARootedPolicy) {
   Workspace workspace;
   CapabilitiesBuilder capabilities =
@@ -1321,10 +1356,11 @@ TEST(SandboxTest, TheKernelStopsAWriteThePolicyOnlyChecked) {
     GTEST_SKIP() << "no write confinement here: " << Availability().why_not;
   }
   Workspace workspace;
-  Workspace elsewhere;
+  const fs::path escaped =
+      fs::current_path() / absl::StrCat("a11-escaped-", a11::NewUuid());
   const std::shared_ptr<Action> reaching_out =
       MakeSpawn(ConfinedIn(workspace.root()), "/usr/bin/touch",
-                nlohmann::json::array({elsewhere.path("escaped.txt")}));
+                nlohmann::json::array({escaped.string()}));
   ASSERT_NE(reaching_out, nullptr);
   ASSERT_TRUE(reaching_out->Run().ok());
   ASSERT_TRUE(reaching_out->Wait(kPatience).Await().ok());
@@ -1333,7 +1369,9 @@ TEST(SandboxTest, TheKernelStopsAWriteThePolicyOnlyChecked) {
   const std::optional<nlohmann::json> code = ReadOne(reaching_out, "exit_code");
   ASSERT_TRUE(code.has_value());
   EXPECT_NE(*code, 0);
-  EXPECT_FALSE(fs::exists(elsewhere.path("escaped.txt")));
+  EXPECT_FALSE(fs::exists(escaped));
+  std::error_code error;
+  fs::remove(escaped, error);
 
   const std::optional<nlohmann::json> describe =
       ReadOne(reaching_out, "sandbox");

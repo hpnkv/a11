@@ -129,6 +129,46 @@ const CODING_AGENT_INFO_SCHEMA = new ActionSchema({
     },
 });
 
+interface CodingAgentDefaults {
+    systemPrompt: string;
+    toolNames: string[];
+}
+
+export function parseCodingAgentDefaults(info: unknown): CodingAgentDefaults | null {
+    if (!info || typeof info !== 'object') return null;
+    const values = info as Record<string, unknown>;
+    const systemPrompt = typeof values.system_prompt === 'string' ? values.system_prompt.trim() : '';
+    const toolNames = Array.isArray(values.tool_names)
+        ? values.tool_names.filter(
+            (name): name is string => typeof name === 'string' && Boolean(name.trim()),
+        )
+        : [];
+    return {
+        systemPrompt,
+        toolNames: [...new Set(toolNames.map((name) => name.trim()))],
+    };
+}
+
+export function mergeAllowedToolNames(
+    ideTools: readonly string[],
+    configured: readonly string[],
+    gatewayTools: readonly string[],
+): string[] {
+    return [...new Set([
+        ...ideTools,
+        ...configured,
+        ...gatewayTools,
+        'request_user_input',
+    ])];
+}
+
+export function reportsToolFromInteraction(
+    toolName: string,
+    locallyHostedTools: readonly string[],
+): boolean {
+    return !locallyHostedTools.includes(toolName);
+}
+
 /**
  * The model is an assistant inside an IDE. Tell it to act through the offered
  * tools rather than only describing proposed changes.
@@ -136,55 +176,85 @@ const CODING_AGENT_INFO_SCHEMA = new ActionSchema({
  * It rides on the first interaction of the conversation — every backend reads
  * system instructions only there.
  */
-const SYSTEM_PROMPT = `You are an AI assistant embedded in a JetBrains IDE, working on the user's open project.
+const SYSTEM_PROMPT = `You are an AI assistant embedded in the user's IDE, working on the open project.
 
 You have tools that read and modify the IDE's live state: the active editor, the
-project index, and the PSI (symbols, references, refactorings). Use them.
+project index, and its language services (symbols, references, refactorings). Use
+them.
 
 - When a request can be answered or carried out with a tool, call the tool. Do not
   describe the steps you would take and stop; take them.
 - Prefer the IDE's own knowledge (symbols, references, refactorings) over guessing
   from file text. However, do not rely on the IDE's knowledge alone; use your own
-  reasoning, and common sense to apply more general tools to fill in gaps. If IDE 
+  reasoning, and common sense to apply more general tools to fill in gaps. If IDE
   tools do not provide you with information, use shell commands to recover it.
 - Chain tools as needed: inspect first, then act, then report what changed.
+- Before each meaningful tool call or series of tool calls, send one short
+  sentence saying what you are going to do. Skip this only for isolated trivial
+  reads.
 - Use run_flow for independent, repeated, concurrent, or streaming tool work;
-  expose only the bounded outputs needed for the answer.
+  expose only the bounded outputs needed for the answer. In a Flow, use call for
+  IDE actions named ide__* and run for actions hosted by the Gateway.
 - Avoid reading complete files: use search tools, pattern filters, line subset
   limiters, etc. Apply same limiters to shell commands.
 - Remember that shell commands may fail, deadlock, run for a very long time, etc.
   Use shell utilities to provide your commands with strong upper bounds on output
   size and execution time.
-- Only ask when an ambiguity cannot be resolved from project evidence. Use
-  request_user_input so the IDE can present choices or free text and resume the
-  same turn.
+- When user input is required and meaningful choices can be offered, use
+  request_user_input with 2–4 concise options rather than asking only in prose.
+  This includes user-requested interactive tasks, not just clarification.
+  Allow free text when the choices are not exhaustive; when no useful choices
+  exist, ask an open-ended question. Wait for the answer and continue the same
+  task. Resolve questions from project evidence when possible instead of asking
+  the user unnecessarily.
 `;
 
 /**
  * The system prompt for a conversation, with where the user actually is spliced
  * in: which IDE, which project, which directory on disk.
  *
- * The Kotlin host supplies current values through `getConfig`, including which
- * JetBrains IDE is running. The project path is omitted when the project has no
- * single root.
+ * Each host supplies current values through `getConfig`, including which IDE is
+ * running. The project path is omitted when the project has no single root.
  */
-function ideContext(config: A11Config): string {
+function ideContext(config: A11Config, descriptors: ActionDescriptor[]): string {
     const where = [
         `- IDE: ${config.ide} ${config.ideVersion}`.trimEnd(),
         `- Project: ${config.projectName}`,
         ...(config.projectPath ? [`- Project path: ${config.projectPath}`] : []),
     ];
-    return `The user is working on:
+    const tools = descriptors.map(({name, description}) => `- ${name}: ${description}`);
+    return `IDE-specific context:
 
 ${where.join('\n')}
 
 Paths you report or pass to tools are interpreted relative to the project path
 unless they are already absolute.
+
+Before each meaningful tool call or series of tool calls, send one short
+sentence saying what you are going to do. Skip this only for isolated trivial
+reads.
+
+Actions whose names start with \`ide__\` are hosted by ${config.ide} and operate
+on its live editor, project index, and language model. The available IDE actions
+are:
+
+${tools.join('\n')}
+
+The Gateway hosts this interaction and executes its own actions. For a Flow sent
+to this Gateway, compose an \`ide__*\` action with
+\`call ide__action_name(...)\` so it is dispatched back to the editor. Compose a
+Gateway action with \`run action_name(...)\`. Direct tool use outside a Flow uses
+the action normally.
 `;
 }
 
-function systemPrompt(config: A11Config): string {
-    return `${SYSTEM_PROMPT}\n${ideContext(config)}`;
+export function composeIdeSystemPrompt(
+    gatewayPrompt: string,
+    config: A11Config,
+    descriptors: ActionDescriptor[],
+): string {
+    const prompt = gatewayPrompt.trim() || SYSTEM_PROMPT.trim();
+    return `${prompt}\n\n${ideContext(config, descriptors)}`;
 }
 
 /** Streaming callbacks for one chat turn. */
@@ -219,6 +289,8 @@ export class A11ChatSession {
     private registry: ActionRegistry | null = null;
     private descriptors: ActionDescriptor[] = [];
     private toolNames: string[] = [];
+    /** Gateway defaults, loaded once for each connected session. */
+    private codingAgentDefaults: CodingAgentDefaults | null | undefined;
     private connecting: Promise<void> | null = null;
     private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     private connectionState: GatewayConnectionState | null = null;
@@ -541,8 +613,9 @@ export class A11ChatSession {
         });
     }
 
-    /** Use the gateway's coding-agent contract when that capability is enabled. */
-    private async systemInstructions(): Promise<string> {
+    /** Read the connected Gateway's model-facing coding-agent contract. */
+    private async loadCodingAgentDefaults(): Promise<CodingAgentDefaults | null> {
+        if (this.codingAgentDefaults !== undefined) return this.codingAgentDefaults;
         try {
             const call = need(Action.create(CODING_AGENT_INFO_SCHEMA, {
                 session: this.session!, stream: this.stream!, nodeMap: this.session!.getNodeMap(),
@@ -551,17 +624,13 @@ export class A11ChatSession {
             const result = need(await call.getOutput('result', false));
             const info = need(await result.consume({timeoutMs: 10_000, allowNone: false}));
             need(await call.wait(10_000));
-            if (info && typeof info === 'object') {
-                const prompt = (info as unknown as Record<string, unknown>).system_prompt;
-                if (typeof prompt === 'string' && prompt.trim()) {
-                    return `${prompt.trim()}\n\n${ideContext(this.config)}`;
-                }
-            }
+            this.codingAgentDefaults = parseCodingAgentDefaults(info);
         } catch {
             // A general gateway has no coding_agent_info action. Its IDE chat
             // remains fully usable with the local instructions below.
+            this.codingAgentDefaults = null;
         }
-        return systemPrompt(this.config);
+        return this.codingAgentDefaults;
     }
 
     /**
@@ -577,10 +646,10 @@ export class A11ChatSession {
      * end.
      *
      * Connecting first is not only about the socket: a flow saying
-     * `call get_active_file` is compiled against the schemas the gateway got by
-     * asking this session what it serves, which is where the port names on both
-     * sides of a pipe come from. Until it has asked, the gateway refuses the
-     * flow with `NOT_FOUND` rather than dispatching anything.
+     * `call ide__get_active_file` is compiled against the schemas the gateway
+     * got by asking this session what it serves, which is where the port names
+     * on both sides of a pipe come from. Until it has asked, the gateway refuses
+     * the flow with `NOT_FOUND` rather than dispatching anything.
      */
     async runFlow(
         name: string,
@@ -588,6 +657,7 @@ export class A11ChatSession {
         onLog?: (log: string, record: LogRecord) => void,
     ): Promise<Record<string, unknown>> {
         await this.ensureConnected();
+        const codingAgent = await this.loadCodingAgentDefaults();
         const source = await readFlow(name);
         return this.gatewayOperation(() => runFlow(this.session!, this.stream!, {
             source,
@@ -601,7 +671,7 @@ export class A11ChatSession {
                 // flow that asks a model needs `interact_with_llm` here, on top
                 // of the IDE's own tools that a chat turn allows.
                 [LlmHeaders.ALLOWED_LLM_ACTIONS]: [
-                    ...this.allowedTools(),
+                    ...this.allowedTools(codingAgent?.toolNames),
                     INTERACT_WITH_LLM_SCHEMA.name,
                 ].join(','),
             },
@@ -733,10 +803,12 @@ export class A11ChatSession {
         this.registry = null;
         this.descriptors = [];
         this.toolNames = [];
+        this.codingAgentDefaults = undefined;
     }
 
     private async runTurn(prompt: string, callbacks: ChatCallbacks): Promise<void> {
         await this.ensureConnected();
+        const codingAgent = await this.loadCodingAgentDefaults();
         const session = this.session!;
         const stream = this.stream!;
         const registry = this.registry!;
@@ -749,18 +821,26 @@ export class A11ChatSession {
         need(call.setHeader(LlmHeaders.MODEL, this.config.model));
         if (this.config.apiKey) need(call.setHeader(LlmHeaders.API_KEY, this.config.apiKey));
         if (this.config.baseUrl) need(call.setHeader(LlmHeaders.BASE_URL, this.config.baseUrl));
-        // The IDE's tools *and* the patterns the user allowed the gateway to
-        // add (`shell_.*` by default). A pattern here is what makes the gateway
-        // offer a tool of its own: it matches its registered actions against
-        // this header and adds the ones it may serve to the turn's tool list.
-        need(call.setHeader(LlmHeaders.ALLOWED_LLM_ACTIONS, this.allowedTools().join(',')));
+        // Admit the IDE tools, configured patterns, and every model-facing tool
+        // the connected coding-agent Gateway advertised. The Gateway matches
+        // this header against its registry to build the turn's tool list.
+        need(call.setHeader(
+            LlmHeaders.ALLOWED_LLM_ACTIONS,
+            this.allowedTools(codingAgent?.toolNames).join(','),
+        ));
         need(await call.call());
 
         const produced: Interaction[] = [];
         const userInteraction = need(
             await makeTextMessageInteraction(
                 prompt,
-                this.history.length === 0 ? await this.systemInstructions() : '',
+                this.history.length === 0
+                    ? composeIdeSystemPrompt(
+                        codingAgent?.systemPrompt ?? '',
+                        this.config,
+                        this.descriptors,
+                    )
+                    : '',
             ),
         );
         this.activeQuestion = userInteraction;
@@ -824,9 +904,12 @@ export class A11ChatSession {
      * The names and patterns of every tool
      * this turn may use, both ends' worth.
      */
-    private allowedTools(): string[] {
-        const extra = (this.config.allowedTools ?? []).filter((pattern) => !this.toolNames.includes(pattern));
-        return [...this.toolNames, ...extra, 'request_user_input'];
+    private allowedTools(gatewayTools: readonly string[] = []): string[] {
+        return mergeAllowedToolNames(
+            this.toolNames,
+            this.config.allowedTools ?? [],
+            gatewayTools,
+        );
     }
 
     /**
@@ -855,6 +938,11 @@ export class A11ChatSession {
                 if (block.kind !== BlockKind.TOOL_RUN) continue;
                 names.set(block.id, block.toolName);
                 this.ranTool = true;
+                // A reverse-dispatched IDE action reports its lifecycle from
+                // the local handler. Its Gateway interaction uses a different
+                // action id, so reporting this start would create a second card
+                // whose finish is intentionally ignored below.
+                if (!reportsToolFromInteraction(block.toolName, this.toolNames)) continue;
                 this.onToolRun?.({
                     id: block.id,
                     tool: block.toolName,
@@ -872,7 +960,7 @@ export class A11ChatSession {
             ]);
             for (const id of finished) {
                 const name = names.get(id);
-                if (!name || this.toolNames.includes(name)) continue;
+                if (!name || !reportsToolFromInteraction(name, this.toolNames)) continue;
                 // A gateway tool may have changed the project just as an IDE
                 // one may have, so this turn is no longer safe to retry either.
                 this.ranTool = true;

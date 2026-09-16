@@ -29,12 +29,15 @@ import com.intellij.lang.annotation.HighlightSeverity
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.editor.Document
+import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.editor.impl.DocumentMarkupModel
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.TextRange
 import com.intellij.openapi.util.text.StringUtil
+import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.openapi.vfs.VfsUtil
 import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiNameIdentifierOwner
@@ -187,8 +190,8 @@ private fun optionalStrings(json: Map<String, Any?>, field: String): List<String
 }
 
 /**
- * Request DTO for `get_active_file`: which slice of the file's text to return,
- * and how to number it.
+ * Request DTO for `ide__get_active_file`: the slice of the file's text to
+ * return, and how to number it.
  *
  * [lineLimit] is how a caller keeps a large file from flooding a model's
  * context; paging through the file means repeating the call with a bumped
@@ -239,7 +242,7 @@ data class ActiveFileRequest(
     }
 }
 
-/** Request DTO for `find_file`. */
+/** Request DTO for `ide__find_file`. */
 data class FindFileRequest(val name: String, val maxResults: Int = DEFAULT_MAX_RESULTS) {
     companion object {
         val JSON_SCHEMA: Map<String, Any?> = objectSchema(
@@ -261,7 +264,7 @@ data class FindFileRequest(val name: String, val maxResults: Int = DEFAULT_MAX_R
     }
 }
 
-/** Request DTO for `search_project`. */
+/** Request DTO for `ide__search_project`. */
 data class SearchProjectRequest(val query: String, val maxResults: Int = DEFAULT_MAX_RESULTS) {
     companion object {
         val JSON_SCHEMA: Map<String, Any?> = objectSchema(
@@ -284,7 +287,7 @@ data class SearchProjectRequest(val query: String, val maxResults: Int = DEFAULT
 }
 
 /**
- * Request DTO for `rename_symbol`.
+ * Request DTO for `ide__rename_symbol`.
  *
  * [name] alone is usually enough; [line] and [column] are there for the case
  * where one file declares several symbols with the same name, which the tool
@@ -326,7 +329,8 @@ data class RenameSymbolRequest(
 }
 
 /**
- * Request DTO for `read_file`: which file, which lines, and how to number them.
+ * Request DTO for `ide__read_file`: the file and lines to return, and how to
+ * number them.
  *
  * The same 0-based, `end_line`-inclusive range as [FileHighlightsRequest], so a
  * highlight's own coordinates can be handed straight back here to read the
@@ -386,7 +390,7 @@ data class ReadFileRequest(
 }
 
 /**
- * Request DTO for `get_error_highlights`: which file, and which lines of it.
+ * Request DTO for `ide__get_error_highlights`: the file and lines to inspect.
  *
  * Lines are 0-based here and in the results, so a highlight's `start_line` can
  * be reused as the lower bound. [endLine] is inclusive; null selects through
@@ -427,7 +431,7 @@ data class FileHighlightsRequest(val path: String, val startLine: Int, val endLi
 }
 
 /**
- * Which file `get_file_symbols` should report, and which of its symbols.
+ * Which file `ide__get_file_symbols` should report, and which of its symbols.
  *
  * Every field is optional and an omitted one narrows nothing — including
  * [path], whose absence means the file in the active editor. Filtering happens
@@ -525,7 +529,7 @@ data class FileSymbolsRequest(
     }
 }
 
-/** JSON Schema of one entry on the `get_file_symbols` `symbols` output. */
+/** JSON Schema of one entry on the `ide__get_file_symbols` `symbols` output. */
 private val SYMBOL_SCHEMA: Map<String, Any?> = objectSchema(
     "One named symbol declared in the file, after any filters.",
     linkedMapOf(
@@ -540,7 +544,7 @@ private val SYMBOL_SCHEMA: Map<String, Any?> = objectSchema(
     listOf("name", "kind", "line", "column"),
 )
 
-/** JSON Schema of the `rename_symbol` metadata object. */
+/** JSON Schema of the `ide__rename_symbol` metadata object. */
 private val RENAME_METADATA_SCHEMA: Map<String, Any?> = objectSchema(
     "What was renamed, and where.",
     linkedMapOf(
@@ -555,7 +559,7 @@ private val RENAME_METADATA_SCHEMA: Map<String, Any?> = objectSchema(
 )
 
 /**
- * The lowest severity `get_error_highlights` reports: the yellow underline.
+ * The lowest severity `ide__get_error_highlights` reports: yellow underlines.
  *
  * Everything at or above it is drawn as a warning (yellow) or an error (red)
  * squiggle; below it sit the grey weak warnings and the purely informational
@@ -571,7 +575,7 @@ private val MIN_REPORTED_SEVERITY: HighlightSeverity = HighlightSeverity.WARNING
 private const val MAX_HIGHLIGHT_TEXT = 500
 
 /**
- * JSON Schema of one entry on the `get_error_highlights` `highlights` output.
+ * One entry on `ide__get_error_highlights`'s `highlights` output.
  */
 private val HIGHLIGHT_SCHEMA: Map<String, Any?> = objectSchema(
     "One warning or error highlight — a yellow or red underline the IDE's analysis draws.",
@@ -612,7 +616,7 @@ data class FileHighlights(val path: String, val highlights: List<Map<String, Any
  */
 data class FileLines(val path: String, val lines: List<String>, val firstLine: Int)
 
-/** JSON Schema of the `apply_patch` metadata object. */
+/** JSON Schema of the `ide__apply_patch` metadata object. */
 private val PATCH_METADATA_SCHEMA: Map<String, Any?> = objectSchema(
     "What was patched, and how much of it.",
     linkedMapOf(
@@ -636,7 +640,7 @@ data class ActiveFileSlice(val path: String?, val lines: List<String>)
  */
 data class SelectionSlice(val metadata: Map<String, Any?>?, val lines: List<String>)
 
-/** JSON Schema of the `get_selection` metadata object. */
+/** JSON Schema of the `ide__get_selection` metadata object. */
 private val SELECTION_METADATA_SCHEMA: Map<String, Any?> = objectSchema(
     "Where the selection sits; absent when nothing is selected.",
     linkedMapOf(
@@ -1054,17 +1058,72 @@ class IdeTools(private val project: Project) {
      * leaves the document unchanged.
      */
     private fun applyPatch(path: String, patch: String): Map<String, Any?> = onEdt {
-        val target = ReadAction.compute<TargetFile, RuntimeException> { resolveFile(path) }
+        val operation = Patch.operation(patch, path)
+        if (operation is Patch.Operation.Create) return@onEdt createPatchedFile(operation.path, patch)
+
+        val target = ReadAction.compute<TargetFile, RuntimeException> { resolveFile(operation.path) }
         val document = target.document
         require(document.isWritable) { "'${target.path}' is not writable." }
 
-        // Located against the file as it is now, before anything has moved, and
-        // applied only if every hunk fits; see [Patch].
-        val edits = Patch.locate(document, patch)
-        Patch.apply(project, document, edits)
+        val edits = if (operation is Patch.Operation.Rename && !patch.contains("@@")) {
+            emptyList()
+        } else {
+            Patch.locate(document, patch)
+        }
+        var resultPath = target.path
+        when (operation) {
+            is Patch.Operation.Delete -> {
+                require(Patch.result(document, edits).isEmpty()) {
+                    "A delete patch must remove all content from the file."
+                }
+                Patch.command(project) { target.file.delete(this) }
+            }
+            is Patch.Operation.Rename -> {
+                val destination = ProjectFiles.localPath(project, operation.newPath)
+                require(LocalFileSystem.getInstance().findFileByPath(destination) == null) {
+                    "A file already exists at '$destination'."
+                }
+                Patch.apply(project, document, edits) {
+                    val parentPath = destination.substringBeforeLast('/')
+                    val parent = VfsUtil.createDirectoryIfMissing(parentPath)
+                        ?: throw IllegalArgumentException("Cannot create '$parentPath'.")
+                    if (target.file.parent != parent) target.file.move(this, parent)
+                    val name = destination.substringAfterLast('/')
+                    if (target.file.name != name) target.file.rename(this, name)
+                }
+                resultPath = destination
+            }
+            is Patch.Operation.Update -> Patch.apply(project, document, edits)
+            is Patch.Operation.Create -> error("handled above")
+        }
 
         linkedMapOf<String, Any?>(
-            "path" to target.path,
+            "path" to resultPath,
+            "hunks" to edits.size,
+            "first_line" to (edits.firstOrNull()?.at ?: 0),
+            "added" to Patch.added(edits),
+            "removed" to Patch.removed(edits),
+        )
+    }
+
+    /** Create a file from a `/dev/null` unified diff. */
+    private fun createPatchedFile(path: String, patch: String): Map<String, Any?> {
+        val destination = ProjectFiles.localPath(project, path)
+        require(LocalFileSystem.getInstance().findFileByPath(destination) == null) {
+            "A file already exists at '$destination'."
+        }
+        val document = EditorFactory.getInstance().createDocument("")
+        val edits = Patch.locate(document, patch)
+        val result = Patch.result(document, edits)
+        Patch.command(project) {
+            val parentPath = destination.substringBeforeLast('/')
+            val parent = VfsUtil.createDirectoryIfMissing(parentPath)
+                ?: throw IllegalArgumentException("Cannot create '$parentPath'.")
+            val file = parent.createChildData(this, destination.substringAfterLast('/'))
+            VfsUtil.saveText(file, result)
+        }
+        return linkedMapOf(
+            "path" to destination,
             "hunks" to edits.size,
             "first_line" to (edits.firstOrNull()?.at ?: 0),
             "added" to Patch.added(edits),
@@ -1386,7 +1445,7 @@ class IdeTools(private val project: Project) {
             unary = true,
         )
         return tool(
-            "get_active_file",
+            "ide__get_active_file",
             "Return the path of the file in the active editor and its text. Pass a request to" +
                 " read only part of a large file; with none, the whole file is returned.",
             inputs = listOf(request),
@@ -1415,7 +1474,7 @@ class IdeTools(private val project: Project) {
     private fun openEditorsTool(): Tool {
         val files = textOutput("files", "Absolute path of each file open in an editor.", unary = false)
         return tool(
-            "get_open_editors",
+            "ide__get_open_editors",
             "List the paths of all files open in editors.",
             inputs = emptyList(),
             outputs = listOf(files),
@@ -1430,7 +1489,7 @@ class IdeTools(private val project: Project) {
         val metadata = jsonOutput("metadata", SELECTION_METADATA_SCHEMA)
         val lines = textOutput("lines", "The selected lines, one value per line.", unary = false)
         return tool(
-            "get_selection",
+            "ide__get_selection",
             "Return the current editor selection: where it sits, and the lines it covers.",
             inputs = emptyList(),
             outputs = listOf(metadata, lines),
@@ -1461,7 +1520,7 @@ class IdeTools(private val project: Project) {
             unary = true,
         )
         return tool(
-            "get_file_symbols",
+            "ide__get_file_symbols",
             "List the named symbols declared in a file, with each one's kind and position." +
                 " Give a `path` for any file of the project, or omit it for the one in the" +
                 " active editor. Narrow by name, by kind, or to a range of lines; with nothing" +
@@ -1497,10 +1556,10 @@ class IdeTools(private val project: Project) {
         val lines = textOutput("lines", "The requested lines of the file, one value per line.", unary = false)
         val path = textOutput("path", "Absolute path of the file that was read.", unary = true)
         return tool(
-            "read_file",
+            "ide__read_file",
             "Read a range of lines from any file of the project, open in an editor or not." +
                 " Lines are 0-based and `end_line` is inclusive, the same coordinates" +
-                " `get_error_highlights` reports, so a range that came from one can be read" +
+                " `ide__get_error_highlights` reports, so a range that came from one can be read" +
                 " with the other. What comes back is what the editor holds, unsaved edits" +
                 " included. Ask for the range you need rather than the file: a range is what" +
                 " keeps a large file out of the answer.",
@@ -1526,25 +1585,33 @@ class IdeTools(private val project: Project) {
     private fun applyPatchTool(): Tool {
         val path = textInput(
             "path",
-            "Path of the file to patch: absolute, or relative to the project root.",
+            "Absolute or project-relative target path; for delete or rename, the existing source path.",
         )
         val patch = textInput(
             "patch",
-            "The patch, as a unified diff of that one file: a `@@` header, then a line per" +
-                " line of the file prefixed ' ' to keep it, '-' to remove it or '+' to add it." +
-                " Several hunks are fine, in the order they appear in the file. `---`/`+++`" +
-                " headers are allowed and ignored, since the path is a separate input. A hunk" +
-                " is found by its context, not by the numbers in its header, so the context" +
-                " lines have to be the file's own text -- read the range first and quote it" +
-                " back exactly, indentation included, without line numbers.",
+            "Raw unified diff without Markdown fences or `*** Begin Patch` wrappers. Every" +
+                " hunk starts with `@@ -oldStart,oldCount +newStart,newCount @@`; every" +
+                " following line starts with exactly one marker: space for context, `-` to" +
+                " remove, or `+` to add. Before invoking the tool, strip trailing whitespace" +
+                " from every line beginning with `+` or `-`. An empty added line is exactly" +
+                " `+`, an empty removed" +
+                " line is exactly `-`, and an empty context line is one space. Create uses" +
+                " `--- /dev/null` then `+++ b/path`; delete uses `--- a/path` then" +
+                " `+++ /dev/null`; rename uses `rename from old` then `rename to new`. Hunk" +
+                " count numbers may be approximate. Ensure the patch ends with a newline;" +
+                " append `\\n` when necessary.",
         )
         val metadata = jsonOutput("metadata", PATCH_METADATA_SCHEMA)
         return tool(
-            "apply_patch",
-            "Apply a unified diff to one file of the project. The edit lands as a single IDE" +
+            "ide__apply_patch",
+            "Apply a standard unified diff to one file of the project. The edit lands as a single IDE" +
                 " command, so one Undo takes it back and the user can see exactly what" +
-                " changed. Every hunk has to match the file as it is now; one that does not is" +
-                " refused with the text that is there instead, and nothing is applied.",
+                " changed. Preface this call, or a series of tool calls involving it, with a" +
+                " brief user-facing description of what is being changed. Every hunk has to" +
+                " match the file as it is now; one that does not is" +
+                " refused with the text that is there instead, and nothing is applied. Hunk" +
+                " counts are inferred from their lines. Changed-line trailing whitespace and" +
+                " the final newline are normalized as the patch input description specifies.",
             inputs = listOf(path, patch),
             outputs = listOf(metadata),
         ) { inputs ->
@@ -1570,7 +1637,7 @@ class IdeTools(private val project: Project) {
         val highlights = jsonOutput("highlights", HIGHLIGHT_SCHEMA, unary = false)
         val path = textOutput("path", "Absolute path of the file that was analyzed.", unary = true)
         return tool(
-            "get_error_highlights",
+            "ide__get_error_highlights",
             "Report the problems the IDE's code analysis finds in a range of lines of a file:" +
                 " every red (error) and yellow (warning) underline, with its position, the text it" +
                 " underlines, and the explanation its tooltip gives. Lines are 0-based, `end_line`" +
@@ -1603,7 +1670,7 @@ class IdeTools(private val project: Project) {
         val request = jsonInput("request", RenameSymbolRequest.JSON_SCHEMA)
         val metadata = jsonOutput("metadata", RENAME_METADATA_SCHEMA)
         return tool(
-            "rename_symbol",
+            "ide__rename_symbol",
             "Rename a symbol in the active file, updating the references to it.",
             inputs = listOf(request),
             outputs = listOf(metadata),
@@ -1627,7 +1694,7 @@ class IdeTools(private val project: Project) {
         val request = jsonInput("request", FindFileRequest.JSON_SCHEMA)
         val matches = textOutput("matches", "Absolute path of each matching file.", unary = false)
         return tool(
-            "find_file",
+            "ide__find_file",
             "Find project files by exact file name.",
             inputs = listOf(request),
             outputs = listOf(matches),
@@ -1647,7 +1714,7 @@ class IdeTools(private val project: Project) {
         val request = jsonInput("request", SearchProjectRequest.JSON_SCHEMA)
         val matches = textOutput("matches", "Absolute path of each matching file.", unary = false)
         return tool(
-            "search_project",
+            "ide__search_project",
             "Find project files whose name contains a query substring.",
             inputs = listOf(request),
             outputs = listOf(matches),

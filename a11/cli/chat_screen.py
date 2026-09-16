@@ -19,23 +19,32 @@ from __future__ import annotations
 import asyncio
 import base64
 import io
+import re
 from collections.abc import Awaitable, Callable
 
 from prompt_toolkit.application import Application
+from prompt_toolkit.application.current import get_app_session
 from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.clipboard import InMemoryClipboard
 from prompt_toolkit.formatted_text import ANSI, HTML, StyleAndTextTuples
+from prompt_toolkit.formatted_text.utils import split_lines
 from prompt_toolkit.history import History
+from prompt_toolkit.filters import Condition
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import (
     Float,
     FloatContainer,
+    ConditionalContainer,
     HSplit,
     Layout,
     VSplit,
     Window,
 )
-from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
+from prompt_toolkit.layout.controls import (
+    BufferControl,
+    FormattedTextControl,
+    UIContent,
+)
 from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.layout.menus import CompletionsMenu
 from prompt_toolkit.layout.screen import Point
@@ -46,6 +55,30 @@ from rich.console import Console, RenderableType
 from a11.status import StatusCode, StatusException
 
 
+# Prompt-toolkit parses SGR styles, but exposes OSC payloads as visible text.
+# Strip terminal metadata, including hyperlink wrappers, before that parser.
+_OSC_SEQUENCE = re.compile(
+    r"(?:\x1b\]|\x9d).*?(?:\x07|\x1b\\|\x9c|$)", re.DOTALL
+)
+
+
+class _InlineViewportOutput:
+    """Give Prompt Toolkit a full-height viewport on the main screen."""
+
+    def __init__(self, output) -> None:
+        self._output = output
+
+    def __getattr__(self, name: str):
+        return getattr(self._output, name)
+
+    def enter_alternate_screen(self) -> None:
+        self._output.cursor_goto(0, 0)
+        self._output.erase_down()
+
+    def quit_alternate_screen(self) -> None:
+        pass
+
+
 class _TranscriptControl(FormattedTextControl):
     """Route scrolling and selection over the persistent transcript."""
 
@@ -54,11 +87,34 @@ class _TranscriptControl(FormattedTextControl):
         *args,
         scroll: Callable[[int], None],
         select: Callable[[MouseEvent], None],
+        revision: Callable[[], object],
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
         self._scroll = scroll
         self._select = select
+        self._revision = revision
+        self._line_revision: object | None = None
+        self._fragment_lines: list[StyleAndTextTuples] = []
+
+    def create_content(self, width: int, height: int | None) -> UIContent:
+        """Build line geometry only when transcript content actually changes."""
+        fragments = self._get_formatted_text_cached()
+        revision = self._revision()
+        if revision != self._line_revision:
+            self._fragment_lines = [
+                [(part[0], part[1]) for part in line]
+                for line in split_lines(fragments)
+            ]
+            self._line_revision = revision
+        self._fragments = fragments
+        cursor = self.get_cursor_position()
+        return UIContent(
+            get_line=self._fragment_lines.__getitem__,
+            line_count=len(self._fragment_lines),
+            show_cursor=self.show_cursor,
+            cursor_position=cursor,
+        )
 
     def mouse_handler(self, mouse_event: MouseEvent):
         if mouse_event.event_type == MouseEventType.SCROLL_UP:
@@ -94,9 +150,18 @@ class ChatScreen:
         toolbar: Callable[[], HTML],
         submit: Callable[[str], Awaitable[bool]],
         cancel: Callable[[], None],
+        question: Callable[[], dict | None] | None = None,
+        working: Callable[[], bool] | None = None,
+        activity: Callable[[], HTML | None] | None = None,
+        context_usage: Callable[[], str] | None = None,
     ) -> None:
         self._transcript: list[str] = []
         self._active = ""
+        self._content_revision = 0
+        self._parsed_revision = -1
+        self._cached_fragments: StyleAndTextTuples = []
+        self._cached_plain = ""
+        self._cached_line_count = 1
         self._follow_tail = True
         self._scroll_top = 0
         self._selection_anchor: int | None = None
@@ -104,6 +169,13 @@ class ChatScreen:
         self._last_disconnect_error = ""
         self._previous_exception_handler = None
         self._submit = submit
+        self._cancel = cancel
+        self._question = question or (lambda: None)
+        self._working = working or (lambda: False)
+        self._activity = activity or (lambda: None)
+        self._context_usage = context_usage or (lambda: "")
+        self._question_id = None
+        self._question_index = 0
         self._tasks: set[asyncio.Task[None]] = set()
         self.buffer = Buffer(
             history=history,
@@ -115,7 +187,7 @@ class ChatScreen:
 
         @bindings.add("enter")
         def accept(event) -> None:
-            text = self.buffer.text.strip()
+            text = self.buffer.text.strip() or self._selected_answer()
             if not text:
                 return
             self.buffer.append_to_history()
@@ -126,7 +198,23 @@ class ChatScreen:
 
         @bindings.add("c-c")
         def interrupt(event) -> None:
-            cancel()
+            self._interrupt(event.app)
+
+        choosing = Condition(
+            lambda: (
+                bool(self._question_options())
+                and not self.buffer.text
+                and self.buffer.complete_state is None
+            )
+        )
+
+        @bindings.add("up", filter=choosing)
+        def previous_option(event) -> None:
+            self._move_question(-1)
+
+        @bindings.add("down", filter=choosing)
+        def next_option(event) -> None:
+            self._move_question(1)
 
         @bindings.add("c-d")
         def eof(event) -> None:
@@ -165,10 +253,15 @@ class ChatScreen:
             focusable=False,
             scroll=self._scroll_transcript,
             select=self._select_transcript,
+            revision=lambda: (
+                self._content_revision,
+                self._selection_anchor,
+                self._selection_focus,
+            ),
         )
         self._transcript_window = Window(
             transcript,
-            wrap_lines=True,
+            wrap_lines=False,
             always_hide_cursor=True,
             allow_scroll_beyond_bottom=False,
             get_vertical_scroll=self._vertical_scroll,
@@ -178,10 +271,9 @@ class ChatScreen:
                 Window(height=1, char=" ", style="class:input"),
                 VSplit(
                     [
-                        Window(width=2, char=" ", style="class:input"),
                         Window(
                             FormattedTextControl(prompt),
-                            width=Dimension(min=5, max=36),
+                            width=2,
                             dont_extend_width=True,
                             style="class:input",
                         ),
@@ -192,26 +284,68 @@ class ChatScreen:
                             style="class:input",
                         ),
                         Window(width=1, char=" ", style="class:input"),
+                        Window(
+                            FormattedTextControl(self._context_usage),
+                            width=lambda: Dimension(
+                                min=0,
+                                preferred=len(self._context_usage()),
+                                max=len(self._context_usage()),
+                            ),
+                            style="class:input #aaaaaa",
+                            dont_extend_width=True,
+                        ),
+                        Window(width=1, char=" ", style="class:input"),
                     ],
-                    height=Dimension(min=1, max=6),
+                    height=lambda: Dimension.exact(
+                        min(6, max(1, self.buffer.document.line_count))
+                    ),
                 ),
                 Window(height=1, char=" ", style="class:input"),
             ],
-            height=Dimension(min=3, max=8),
+            height=lambda: Dimension.exact(
+                min(8, max(3, self.buffer.document.line_count + 2))
+            ),
         )
         self._composer = composer
-        body = HSplit(
+        composer_row = composer
+        toolbar_row = VSplit(
             [
-                self._transcript_window,
-                Window(height=1, char="─", style="class:rule"),
-                composer,
+                Window(width=2),
                 Window(
                     FormattedTextControl(toolbar),
                     height=1,
-                    style="class:toolbar",
                 ),
-            ]
+            ],
+            height=1,
         )
+        self._composer_row = composer_row
+        self._toolbar_row = toolbar_row
+        body = HSplit([
+            self._transcript_window,
+            ConditionalContainer(
+                HSplit([
+                    Window(
+                        FormattedTextControl(lambda: self._activity() or ""),
+                        height=1,
+                    ),
+                    Window(height=1),
+                ]),
+                filter=Condition(lambda: self._activity() is not None),
+            ),
+            ConditionalContainer(
+                HSplit([
+                    Window(
+                        FormattedTextControl(self._question_fragments),
+                        wrap_lines=True,
+                        dont_extend_height=True,
+                    ),
+                    Window(height=1),
+                ]),
+                filter=Condition(lambda: self._question() is not None),
+            ),
+            composer_row,
+            toolbar_row,
+        ])
         root = FloatContainer(
             content=body,
             floats=[
@@ -227,18 +361,61 @@ class ChatScreen:
             key_bindings=bindings,
             full_screen=True,
             mouse_support=True,
+            max_render_postpone_time=0,
             clipboard=InMemoryClipboard(),
+            output=_InlineViewportOutput(get_app_session().output),
             style=Style.from_dict({
-                "toolbar": "bg:#252525 #b8b8b8",
-                "rule": "#555555",
                 "input": "bg:#3a3a3a #e4e4e4",
                 "selection": "bg:#d7d7d7 #202020",
+                "question.selected": "bg:#304744 #b4e6ed bold",
                 "completion-menu.completion": "bg:#303030 #dddddd",
                 "completion-menu.completion.current": (
                     "bg:#0060a8 #ffffff bold"
                 ),
             }),
         )
+
+    def _question_options(self) -> list[dict]:
+        request = self._question() or {}
+        if request.get("request_id") != self._question_id:
+            self._question_id = request.get("request_id")
+            self._question_index = 0
+        options = request.get("options") or []
+        self._question_index = min(
+            self._question_index, max(0, len(options) - 1)
+        )
+        return options
+
+    def _move_question(self, delta: int) -> None:
+        options = self._question_options()
+        if options:
+            self._question_index = (self._question_index + delta) % len(options)
+            self.invalidate()
+
+    def _selected_answer(self) -> str:
+        options = self._question_options()
+        return str(options[self._question_index]["label"]) if options else ""
+
+    def _question_fragments(self) -> StyleAndTextTuples:
+        request = self._question() or {}
+        fragments = [("bold ansicyan", str(request.get("question", "")) + "\n")]
+        options = self._question_options()
+        for index, option in enumerate(options):
+            selected = index == self._question_index
+            prefix = "› " if selected else "  "
+            description = str(option.get("description") or "")
+            text = prefix + str(option["label"])
+            if description:
+                text += " — " + description
+            fragments.append((
+                "class:question.selected" if selected else "",
+                text + "\n",
+            ))
+        hint = "↑/↓ select · Enter submit" if options else "Type your answer"
+        if options and request.get("allow_free_text", True):
+            hint += " · or type an answer"
+        fragments.append(("ansigray", hint))
+        return fragments
 
     @property
     def is_running(self) -> bool:
@@ -275,6 +452,13 @@ class ChatScreen:
             return
         if not keep_running:
             self.app.exit()
+
+    def _interrupt(self, app) -> None:
+        """Cancel active agent work, or close an idle chat screen."""
+        if self._working() or any(not task.done() for task in self._tasks):
+            self._cancel()
+        else:
+            app.exit()
 
     async def run(self) -> None:
         loop = asyncio.get_running_loop()
@@ -330,6 +514,7 @@ class ChatScreen:
             file=stream,
             force_terminal=True,
             color_system="truecolor",
+            no_color=False,
             width=width,
             highlight=False,
         )
@@ -338,16 +523,19 @@ class ChatScreen:
 
     def append_ansi(self, value: str) -> None:
         self._transcript.append(value)
+        self._content_revision += 1
         self.invalidate()
 
     def set_active(self, renderable: RenderableType | None) -> None:
         self._active = self.render(renderable) if renderable is not None else ""
+        self._content_revision += 1
         self.invalidate()
 
     def commit_active(self) -> None:
         if self._active:
             self._transcript.append(self._active)
         self._active = ""
+        self._content_revision += 1
         self.invalidate()
 
     def invalidate(self) -> None:
@@ -358,7 +546,7 @@ class ChatScreen:
         return "".join(self._transcript) + self._active
 
     def _formatted_transcript(self) -> StyleAndTextTuples:
-        fragments = ANSI(self._source()).__pt_formatted_text__()
+        fragments, _ = self._parsed_transcript()
         bounds = self._selection_bounds()
         if bounds is None:
             return fragments
@@ -372,25 +560,42 @@ class ChatScreen:
             if before:
                 selected.append((style, value[:before], *rest))
             if after > before:
-                selected.append(
-                    (f"{style} class:selection", value[before:after], *rest)
-                )
+                selected.append((
+                    f"{style} class:selection",
+                    value[before:after],
+                    *rest,
+                ))
             if after < len(value):
                 selected.append((style, value[after:], *rest))
             offset = next_offset
         return selected
 
     def _transcript_cursor(self) -> Point:
-        text = self._plain_transcript()
-        lines = text.split("\n")
+        _, text = self._parsed_transcript()
+        line_count = self._cached_line_count
         if self._follow_tail:
-            return Point(x=len(lines[-1]), y=max(0, len(lines) - 1))
-        line = min(self._scroll_top, max(0, len(lines) - 1))
+            last_break = text.rfind("\n")
+            return Point(
+                x=len(text) if last_break < 0 else len(text) - last_break - 1,
+                y=max(0, line_count - 1),
+            )
+        line = min(self._scroll_top, max(0, line_count - 1))
         return Point(x=0, y=line)
 
     def _plain_transcript(self) -> str:
-        fragments = ANSI(self._source()).__pt_formatted_text__()
-        return "".join(fragment[1] for fragment in fragments)
+        _, plain = self._parsed_transcript()
+        return plain
+
+    def _parsed_transcript(self) -> tuple[StyleAndTextTuples, str]:
+        """Return ANSI fragments and plain text cached by content revision."""
+        if self._parsed_revision != self._content_revision:
+            source = _OSC_SEQUENCE.sub("", self._source())
+            fragments = ANSI(source).__pt_formatted_text__()
+            self._cached_fragments = fragments
+            self._cached_plain = "".join(part[1] for part in fragments)
+            self._cached_line_count = self._cached_plain.count("\n") + 1
+            self._parsed_revision = self._content_revision
+        return self._cached_fragments, self._cached_plain
 
     def _selection_bounds(self) -> tuple[int, int] | None:
         if self._selection_anchor is None or self._selection_focus is None:
@@ -450,7 +655,8 @@ class ChatScreen:
     def _scroll_transcript(self, amount: int) -> None:
         """Move within A11's retained transcript and manage follow-tail."""
         info = self._transcript_window.render_info
-        line_count = len(self._plain_transcript().split("\n"))
+        self._plain_transcript()
+        line_count = self._cached_line_count
         window_height = info.window_height if info is not None else 10
         max_top = max(0, line_count - window_height)
         if self._follow_tail:

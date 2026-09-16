@@ -54,6 +54,7 @@ class Workspace:
     read_roots: tuple[pathlib.Path, ...]
     write_roots: tuple[pathlib.Path, ...]
     initial_status: str
+    unrestricted: bool = False
     changed_files: set[str] = field(default_factory=set)
     checks: list[dict[str, object]] = field(default_factory=list)
 
@@ -109,7 +110,9 @@ class Workspace:
         candidate = raw if raw.is_absolute() else self.cwd / raw
         candidate = candidate.resolve(strict=False)
         roots = self.write_roots if write else self.read_roots
-        if not any(_inside(candidate, root) for root in roots):
+        if not self.unrestricted and not any(
+            _inside(candidate, root) for root in roots
+        ):
             operation = "write" if write else "read"
             message = (
                 f"The {operation} path is outside the workspace: {candidate}"
@@ -152,7 +155,8 @@ class Workspace:
         target = self.resolve(value)
         parent = target if target.is_dir() else target.parent
         owning_root = next(
-            root for root in self.read_roots if _inside(parent, root)
+            (root for root in self.read_roots if _inside(parent, root)),
+            pathlib.Path(parent.anchor),
         )
         directories = [owning_root]
         if parent != owning_root:

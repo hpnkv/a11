@@ -19,6 +19,8 @@ package dev.curiositystack.a11.clion
 import a11.sdk.getToolDefinitions
 import a11.valueOrThrow
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.openapi.vfs.VfsUtilCore
 import dev.curiositystack.a11.clion.tools.IdeTools
 import dev.curiositystack.a11.clion.tools.RUN_LOG_KEY
 
@@ -43,11 +45,11 @@ class IdeToolsTest : BasePlatformTestCase() {
         val names = registry.listRegisteredActions().filterNot { it.startsWith("__") }.toSet()
         assertTrue(
             names.containsAll(
-                setOf("get_active_file", "get_open_editors", "get_selection", "find_file", "search_project"),
+                setOf("ide__get_active_file", "ide__get_open_editors", "ide__get_selection", "ide__find_file", "ide__search_project"),
             ),
         )
         assertEquals(names.size, descriptors.size)
-        assertEquals("get_active_file", descriptors.first { it["name"] == "get_active_file" }["name"])
+        assertEquals("ide__get_active_file", descriptors.first { it["name"] == "ide__get_active_file" }["name"])
     }
 
     fun testListDescriptorsMatchesRegistry() {
@@ -60,8 +62,8 @@ class IdeToolsTest : BasePlatformTestCase() {
     }
 
     fun testArgumentTakingToolsDeclareASchemaTypedRequestPort() {
-        assertTrue(inputPorts("get_open_editors").isEmpty())
-        for ((name, field) in mapOf("find_file" to "name", "search_project" to "query")) {
+        assertTrue(inputPorts("ide__get_open_editors").isEmpty())
+        for ((name, field) in mapOf("ide__find_file" to "name", "ide__search_project" to "query")) {
             val port = inputPorts(name).single()
             assertEquals("request", port["name"])
             val schema = schemaOf(port)
@@ -72,13 +74,13 @@ class IdeToolsTest : BasePlatformTestCase() {
             assertEquals(true, port["required"])
         }
 
-        // `get_active_file` reads the whole
+        // `ide__get_active_file` reads the whole
         // file when asked for nothing, so every
         // field of its request — and the request itself — is optional.
-        val slicePort = inputPorts("get_active_file").single()
+        val slicePort = inputPorts("ide__get_active_file").single()
         assertEquals(false, slicePort["required"])
         assertEquals(emptyList<String>(), schemaOf(slicePort)["required"])
-        assertTrue("max_results" in propertiesOf(schemaOf(inputPorts("find_file").single())))
+        assertTrue("max_results" in propertiesOf(schemaOf(inputPorts("ide__find_file").single())))
         // The slice bounds a model must respect are in the schema, not just in
         // prose.
         val slice = propertiesOf(schemaOf(slicePort))
@@ -113,7 +115,7 @@ class IdeToolsTest : BasePlatformTestCase() {
         val tools = IdeTools(project)
 
         val renamed = tools.runByName(
-            "rename_symbol",
+            "ide__rename_symbol",
             mapOf("request" to mapOf("name" to "bean", "new_name" to "widget")),
         )
         val log = renamed[RUN_LOG_KEY] as String
@@ -121,7 +123,7 @@ class IdeToolsTest : BasePlatformTestCase() {
         assertEquals("Renamed bean → widget", log.lineSequence().first())
         assertTrue(log, log.contains("beans.xml") && log.contains("line 2"))
 
-        val symbols = tools.runByName("get_file_symbols", emptyMap())
+        val symbols = tools.runByName("ide__get_file_symbols", emptyMap())
         val symbolLog = symbols[RUN_LOG_KEY] as String
         assertTrue(symbolLog, symbolLog.lineSequence().first().startsWith("Found "))
         assertTrue(symbolLog, symbolLog.contains("- `root"))
@@ -136,11 +138,11 @@ class IdeToolsTest : BasePlatformTestCase() {
             }
         }
         // Inputs the tool cannot run without stay required.
-        assertEquals(true, inputPorts("find_file").single()["required"])
+        assertEquals(true, inputPorts("ide__find_file").single()["required"])
     }
 
     fun testTextOutputsCarryLinesAndPaths() {
-        val activeFile = modelOutputs("get_active_file").associateBy { it["name"] as String }
+        val activeFile = modelOutputs("ide__get_active_file").associateBy { it["name"] as String }
         assertEquals(setOf("lines", "path"), activeFile.keys)
         assertEquals("text/plain", activeFile.getValue("lines")["type"])
         assertEquals(false, activeFile.getValue("lines")["unary"])
@@ -148,9 +150,9 @@ class IdeToolsTest : BasePlatformTestCase() {
         assertEquals(true, activeFile.getValue("path")["unary"])
 
         for ((tool, output) in mapOf(
-            "get_open_editors" to "files",
-            "find_file" to "matches",
-            "search_project" to "matches",
+            "ide__get_open_editors" to "files",
+            "ide__find_file" to "matches",
+            "ide__search_project" to "matches",
         )) {
             val port = modelOutputs(tool).single()
             assertEquals(output, port["name"])
@@ -160,7 +162,7 @@ class IdeToolsTest : BasePlatformTestCase() {
     }
 
     fun testSelectionSplitsMetadataFromLines() {
-        val ports = modelOutputs("get_selection").associateBy { it["name"] as String }
+        val ports = modelOutputs("ide__get_selection").associateBy { it["name"] as String }
         assertEquals(setOf("metadata", "lines"), ports.keys)
 
         val metadata = ports.getValue("metadata")
@@ -201,7 +203,7 @@ class IdeToolsTest : BasePlatformTestCase() {
         // declared JSON Schema, not a bare `{"type": "object"}` derived from
         // its MIME type.
         val (registry, _) = IdeTools(project).buildRegistry()
-        val definition = getToolDefinitions(registry, listOf("find_file")).valueOrThrow().single()
+        val definition = getToolDefinitions(registry, listOf("ide__find_file")).valueOrThrow().single()
 
         @Suppress("UNCHECKED_CAST")
         val request = ((definition["input_schema"] as Map<String, Any?>)["properties"] as Map<String, Any?>)
@@ -213,14 +215,14 @@ class IdeToolsTest : BasePlatformTestCase() {
 
     fun testMalformedRequestsAreRejected() {
         val tools = IdeTools(project)
-        assertRejected { tools.runByName("find_file", emptyMap()) }
-        assertRejected { tools.runByName("find_file", mapOf("request" to "not an object")) }
+        assertRejected { tools.runByName("ide__find_file", emptyMap()) }
+        assertRejected { tools.runByName("ide__find_file", mapOf("request" to "not an object")) }
         assertRejected {
-            tools.runByName("search_project", mapOf("request" to mapOf("query" to "widget", "max_results" to 0)))
+            tools.runByName("ide__search_project", mapOf("request" to mapOf("query" to "widget", "max_results" to 0)))
         }
-        assertRejected { tools.runByName("get_active_file", mapOf("request" to mapOf("line_offset" to -1))) }
+        assertRejected { tools.runByName("ide__get_active_file", mapOf("request" to mapOf("line_offset" to -1))) }
         assertRejected {
-            tools.runByName("get_active_file", mapOf("request" to mapOf("line_offset" to 0, "line_limit" to 0)))
+            tools.runByName("ide__get_active_file", mapOf("request" to mapOf("line_offset" to 0, "line_limit" to 0)))
         }
     }
 
@@ -242,22 +244,22 @@ class IdeToolsTest : BasePlatformTestCase() {
         myFixture.configureByText("slice.cpp", (1..5).joinToString("\n") { "line $it" })
         val tools = IdeTools(project)
 
-        val page = tools.runByName("get_active_file", mapOf("request" to mapOf("line_offset" to 1, "line_limit" to 2)))
+        val page = tools.runByName("ide__get_active_file", mapOf("request" to mapOf("line_offset" to 1, "line_limit" to 2)))
         assertEquals(listOf("line 2", "line 3"), page["lines"])
         assertTrue((page["path"] as String).endsWith("slice.cpp"))
 
         // Omitting the limit reads to the end of the file.
-        val tail = tools.runByName("get_active_file", mapOf("request" to mapOf("line_offset" to 3)))
+        val tail = tools.runByName("ide__get_active_file", mapOf("request" to mapOf("line_offset" to 3)))
         assertEquals(listOf("line 4", "line 5"), tail["lines"])
 
         // An offset past the end is not an error, it just yields no lines.
-        val past = tools.runByName("get_active_file", mapOf("request" to mapOf("line_offset" to 99)))
+        val past = tools.runByName("ide__get_active_file", mapOf("request" to mapOf("line_offset" to 99)))
         assertEquals(emptyList<String>(), past["lines"])
 
         // No offset, or no request at all: the whole file, starting at the top.
-        val all = tools.runByName("get_active_file", mapOf("request" to mapOf("line_limit" to 2)))
+        val all = tools.runByName("ide__get_active_file", mapOf("request" to mapOf("line_limit" to 2)))
         assertEquals(listOf("line 1", "line 2"), all["lines"])
-        val bare = tools.runByName("get_active_file", emptyMap())
+        val bare = tools.runByName("ide__get_active_file", emptyMap())
         assertEquals((1..5).map { "line $it" }, bare["lines"])
     }
 
@@ -266,24 +268,24 @@ class IdeToolsTest : BasePlatformTestCase() {
         val tools = IdeTools(project)
 
         val numbered = tools.runByName(
-            "get_active_file",
+            "ide__get_active_file",
             mapOf("request" to mapOf("include_line_numbers" to true)),
         )
-        // 0-based, tab-separated: the same spelling `read_file` uses, so a
+        // 0-based, tab-separated: the same spelling `ide__read_file` uses, so a
         // numbered line means one thing whichever tool produced it.
         assertEquals((1..5).map { "${it - 1}\tline $it" }, numbered["lines"])
 
         // The file's own numbers, not the slice's. A caller that paged in from
         // line 3 and got them renumbered from 0 would locate nothing with them.
         val page = tools.runByName(
-            "get_active_file",
+            "ide__get_active_file",
             mapOf("request" to mapOf("line_offset" to 3, "include_line_numbers" to true)),
         )
         assertEquals(listOf("3\tline 4", "4\tline 5"), page["lines"])
 
         // Off unless asked for: the numbers are not part of the file, and text
         // that will be quoted back into a patch has to come without them.
-        val plain = tools.runByName("get_active_file", mapOf("request" to mapOf("line_offset" to 3)))
+        val plain = tools.runByName("ide__get_active_file", mapOf("request" to mapOf("line_offset" to 3)))
         assertEquals(listOf("line 4", "line 5"), plain["lines"])
     }
 
@@ -291,7 +293,7 @@ class IdeToolsTest : BasePlatformTestCase() {
         myFixture.configureByText("pick.txt", "alpha\n<selection>beta\ngamm</selection>a\ndelta")
         val tools = IdeTools(project)
 
-        val selected = tools.runByName("get_selection", emptyMap())
+        val selected = tools.runByName("ide__get_selection", emptyMap())
         assertEquals(listOf("beta", "gamm"), selected["lines"])
         @Suppress("UNCHECKED_CAST")
         val metadata = selected["metadata"] as Map<String, Any?>
@@ -301,7 +303,7 @@ class IdeToolsTest : BasePlatformTestCase() {
 
         // Nothing selected: nothing to describe, on either port.
         myFixture.editor.selectionModel.removeSelection()
-        val empty = tools.runByName("get_selection", emptyMap())
+        val empty = tools.runByName("ide__get_selection", emptyMap())
         assertNull(empty["metadata"])
         assertEquals(emptyList<String>(), empty["lines"])
     }
@@ -312,7 +314,7 @@ class IdeToolsTest : BasePlatformTestCase() {
         // PsiNamedElements.
         myFixture.configureByText("beans.xml", "<root>\n  <bean id=\"first\"/>\n</root>")
 
-        val found = IdeTools(project).runByName("get_file_symbols", emptyMap())
+        val found = IdeTools(project).runByName("ide__get_file_symbols", emptyMap())
         assertTrue((found["path"] as String).endsWith("beans.xml"))
         @Suppress("UNCHECKED_CAST")
         val symbols = found["symbols"] as List<Map<String, Any?>>
@@ -337,7 +339,7 @@ class IdeToolsTest : BasePlatformTestCase() {
 
         fun namesWith(request: Map<String, Any?>): List<String> {
             @Suppress("UNCHECKED_CAST")
-            val symbols = tools.runByName("get_file_symbols", request)["symbols"] as List<Map<String, Any?>>
+            val symbols = tools.runByName("ide__get_file_symbols", request)["symbols"] as List<Map<String, Any?>>
             return symbols.map { it["name"] as String }
         }
 
@@ -367,13 +369,13 @@ class IdeToolsTest : BasePlatformTestCase() {
             namesWith(mapOf("request" to mapOf("name_pattern" to "bean", "line_offset" to 3))),
         )
 
-        assertRejected { tools.runByName("get_file_symbols", mapOf("request" to mapOf("name_pattern" to "[unclosed"))) }
-        assertRejected { tools.runByName("get_file_symbols", mapOf("request" to mapOf("line_offset" to -1))) }
-        assertRejected { tools.runByName("get_file_symbols", mapOf("request" to mapOf("kinds" to listOf("")))) }
+        assertRejected { tools.runByName("ide__get_file_symbols", mapOf("request" to mapOf("name_pattern" to "[unclosed"))) }
+        assertRejected { tools.runByName("ide__get_file_symbols", mapOf("request" to mapOf("line_offset" to -1))) }
+        assertRejected { tools.runByName("ide__get_file_symbols", mapOf("request" to mapOf("kinds" to listOf("")))) }
     }
 
     fun testFileSymbolFiltersAreDeclaredAsAnOptionalInput() {
-        val port = inputPorts("get_file_symbols").single()
+        val port = inputPorts("ide__get_file_symbols").single()
         assertEquals("request", port["name"])
         assertEquals(false, port["required"])
         assertEquals(true, port["unary"])
@@ -394,7 +396,7 @@ class IdeToolsTest : BasePlatformTestCase() {
 
         fun namesIn(request: Map<String, Any?>): List<String> {
             @Suppress("UNCHECKED_CAST")
-            val symbols = tools.runByName("get_file_symbols", request)["symbols"] as List<Map<String, Any?>>
+            val symbols = tools.runByName("ide__get_file_symbols", request)["symbols"] as List<Map<String, Any?>>
             return symbols.map { it["name"] as String }
         }
 
@@ -405,14 +407,14 @@ class IdeToolsTest : BasePlatformTestCase() {
         assertTrue("$named", named.containsAll(listOf("other", "thing")))
         assertFalse("$named", named.contains("root"))
         // Project-relative works too, and the reported path is the file's own.
-        val relative = tools.runByName("get_file_symbols", mapOf("request" to mapOf("path" to "other.xml")))
+        val relative = tools.runByName("ide__get_file_symbols", mapOf("request" to mapOf("path" to "other.xml")))
         assertEquals(other.virtualFile.path, relative["path"])
         // The rest of the request still narrows, on that file.
         assertEquals(
             listOf("thing"),
             namesIn(mapOf("request" to mapOf("path" to "other.xml", "name_pattern" to "thing"))),
         )
-        assertRejected { tools.runByName("get_file_symbols", mapOf("request" to mapOf("path" to "nowhere.xml"))) }
+        assertRejected { tools.runByName("ide__get_file_symbols", mapOf("request" to mapOf("path" to "nowhere.xml"))) }
     }
 
     fun testReadFileReturnsTheRequestedLines() {
@@ -421,10 +423,10 @@ class IdeToolsTest : BasePlatformTestCase() {
         val path = file.virtualFile.path
 
         fun readWith(request: Map<String, Any?>): Map<String, Any?> =
-            tools.runByName("read_file", mapOf("request" to (mapOf("path" to path) + request)))
+            tools.runByName("ide__read_file", mapOf("request" to (mapOf("path" to path) + request)))
 
-        // 0-based, end_line inclusive — the coordinates get_error_highlights
-        // uses.
+        // 0-based and end_line inclusive: the coordinates from
+        // ide__get_error_highlights.
         assertEquals(listOf("line 1", "line 2"), readWith(mapOf("start_line" to 1, "end_line" to 2))["lines"])
         // Omitting either end means "to the edge of the file".
         assertEquals((0..5).map { "line $it" }, readWith(emptyMap())["lines"])
@@ -441,11 +443,11 @@ class IdeToolsTest : BasePlatformTestCase() {
             readWith(mapOf("start_line" to 1, "end_line" to 2, "include_line_numbers" to true))["lines"],
         )
 
-        assertRejected { tools.runByName("read_file", emptyMap()) }
-        assertRejected { tools.runByName("read_file", mapOf("request" to mapOf("start_line" to 1))) }
+        assertRejected { tools.runByName("ide__read_file", emptyMap()) }
+        assertRejected { tools.runByName("ide__read_file", mapOf("request" to mapOf("start_line" to 1))) }
         assertRejected { readWith(mapOf("start_line" to 3, "end_line" to 1)) }
         assertRejected { readWith(mapOf("include_line_numbers" to "yes")) }
-        assertRejected { tools.runByName("read_file", mapOf("request" to mapOf("path" to "nowhere.txt"))) }
+        assertRejected { tools.runByName("ide__read_file", mapOf("request" to mapOf("path" to "nowhere.txt"))) }
     }
 
     fun testReadFileSeesWhatTheEditorHoldsRatherThanTheDisk() {
@@ -456,12 +458,17 @@ class IdeToolsTest : BasePlatformTestCase() {
         com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
             myFixture.editor.document.setText("first\nedited")
         }
-        val read = IdeTools(project).runByName("read_file", mapOf("request" to mapOf("path" to path)))
+        val read = IdeTools(project).runByName("ide__read_file", mapOf("request" to mapOf("path" to path)))
         assertEquals(listOf("first", "edited"), read["lines"])
     }
 
     fun testApplyPatchTakesTwoTextInputs() {
-        val ports = inputPorts("apply_patch").associateBy { it["name"] as String }
+        val description = IdeTools(project).listDescriptors()
+            .first { it["name"] == "ide__apply_patch" }["description"] as String
+        assertTrue(description.contains("Hunk counts are inferred"))
+        assertTrue(description.contains("final newline are normalized"))
+        assertTrue(description.contains("description of what is being changed"))
+        val ports = inputPorts("ide__apply_patch").associateBy { it["name"] as String }
         assertEquals(setOf("path", "patch"), ports.keys)
         for (port in ports.values) {
             assertEquals("text/plain", port["type"])
@@ -469,7 +476,7 @@ class IdeToolsTest : BasePlatformTestCase() {
             // Neither is optional: there is nothing to do without both.
             assertEquals(true, port["required"])
         }
-        val metadata = modelOutputs("apply_patch").single()
+        val metadata = modelOutputs("ide__apply_patch").single()
         assertEquals("metadata", metadata["name"])
         assertEquals(
             setOf("path", "hunks", "first_line", "added", "removed"),
@@ -484,10 +491,10 @@ class IdeToolsTest : BasePlatformTestCase() {
         val tools = IdeTools(project)
 
         val done = tools.runByName(
-            "apply_patch",
+            "ide__apply_patch",
             mapOf(
                 "path" to path,
-                "patch" to "@@ -1,3 +1,3 @@\n alpha\n-beta\n+BETA\n gamma\n",
+                "patch" to "@@ -1,3 +1,3 @@\n alpha\n-beta  \n+BETA  \n gamma",
             ),
         )
         assertEquals("alpha\nBETA\ngamma\n", document.text)
@@ -496,8 +503,8 @@ class IdeToolsTest : BasePlatformTestCase() {
         assertEquals(path, metadata["path"])
         assertEquals(1, metadata["hunks"])
         assertEquals(0, metadata["first_line"])
-        assertEquals(3, metadata["added"])
-        assertEquals(3, metadata["removed"])
+        assertEquals(1, metadata["added"])
+        assertEquals(1, metadata["removed"])
         val log = done[RUN_LOG_KEY] as String
         assertTrue(log, log.lineSequence().first().startsWith("Patched patched.txt (1 hunk"))
         assertTrue(log, log.contains("```diff"))
@@ -519,14 +526,14 @@ class IdeToolsTest : BasePlatformTestCase() {
 
         // The header says line 1; the context is at line 3. Context wins.
         tools.runByName(
-            "apply_patch",
+            "ide__apply_patch",
             mapOf("path" to path, "patch" to "@@ -1,2 +1,2 @@\n-three\n+THREE\n four\n"),
         )
         assertEquals("one\ntwo\nTHREE\nfour\nfive\n", myFixture.editor.document.text)
 
         // Several hunks, in file order, applied as one edit.
         tools.runByName(
-            "apply_patch",
+            "ide__apply_patch",
             mapOf(
                 "path" to path,
                 "patch" to "@@ -1,1 +1,1 @@\n-one\n+ONE\n@@ -5,1 +5,1 @@\n-five\n+FIVE\n",
@@ -539,7 +546,7 @@ class IdeToolsTest : BasePlatformTestCase() {
         val before = myFixture.editor.document.text
         val refused = try {
             tools.runByName(
-                "apply_patch",
+                "ide__apply_patch",
                 mapOf(
                     "path" to path,
                     "patch" to "@@ -1,1 +1,1 @@\n-two\n+TWO\n@@ -9,1 +9,1 @@\n-nothing like this\n+x\n",
@@ -555,8 +562,8 @@ class IdeToolsTest : BasePlatformTestCase() {
         assertEquals("nothing should have been applied", before, myFixture.editor.document.text)
 
         // Not a patch at all.
-        assertRejected { tools.runByName("apply_patch", mapOf("path" to path, "patch" to "just some prose")) }
-        assertRejected { tools.runByName("apply_patch", mapOf("path" to path)) }
+        assertRejected { tools.runByName("ide__apply_patch", mapOf("path" to path, "patch" to "just some prose")) }
+        assertRejected { tools.runByName("ide__apply_patch", mapOf("path" to path)) }
     }
 
     fun testApplyPatchAddsAndRemovesLines() {
@@ -566,14 +573,14 @@ class IdeToolsTest : BasePlatformTestCase() {
 
         // A hunk that only adds, placed by its header.
         tools.runByName(
-            "apply_patch",
+            "ide__apply_patch",
             mapOf("path" to path, "patch" to "@@ -1,0 +1,1 @@\n+added first\n"),
         )
         assertEquals("added first\nkeep\nremove me\nkeep too\n", myFixture.editor.document.text)
 
         // And one that only removes.
         tools.runByName(
-            "apply_patch",
+            "ide__apply_patch",
             mapOf("path" to path, "patch" to "@@ -3,1 +3,0 @@\n-remove me\n"),
         )
         assertEquals("added first\nkeep\nkeep too\n", myFixture.editor.document.text)
@@ -581,13 +588,47 @@ class IdeToolsTest : BasePlatformTestCase() {
         // `---`/`+++` headers are allowed and
         // ignored: the path is a separate input.
         tools.runByName(
-            "apply_patch",
+            "ide__apply_patch",
             mapOf(
                 "path" to path,
                 "patch" to "--- a/somewhere/else.txt\n+++ b/somewhere/else.txt\n@@ -2,1 +2,1 @@\n-keep\n+KEPT\n",
             ),
         )
         assertEquals("added first\nKEPT\nkeep too\n", myFixture.editor.document.text)
+    }
+
+    fun testApplyPatchCreatesDeletesAndRenamesFiles() {
+        val tools = IdeTools(project)
+        val created = tools.runByName(
+            "ide__apply_patch",
+            mapOf(
+                "path" to "created.txt",
+                "patch" to "--- /dev/null\n+++ b/created.txt\n@@ -0,0 +1,1 @@\n+created  ",
+            ),
+        )
+        @Suppress("UNCHECKED_CAST")
+        val createdMetadata = created["metadata"] as Map<String, Any?>
+        val createdFile = LocalFileSystem.getInstance().findFileByPath(createdMetadata["path"] as String)
+        assertNotNull(createdFile)
+        assertEquals("created  \n", VfsUtilCore.loadText(createdFile!!))
+
+        val renamed = tools.runByName(
+            "ide__apply_patch",
+            mapOf("path" to "created.txt", "patch" to "rename from created.txt\nrename to moved.txt"),
+        )
+        @Suppress("UNCHECKED_CAST")
+        val renamedPath = (renamed["metadata"] as Map<String, Any?>)["path"] as String
+        assertNull(LocalFileSystem.getInstance().findFileByPath(createdMetadata["path"] as String))
+        assertEquals("created  \n", VfsUtilCore.loadText(LocalFileSystem.getInstance().findFileByPath(renamedPath)!!))
+
+        tools.runByName(
+            "ide__apply_patch",
+            mapOf(
+                "path" to "moved.txt",
+                "patch" to "--- a/moved.txt\n+++ /dev/null\n@@ -1,1 +0,0 @@\n-created  ",
+            ),
+        )
+        assertNull(LocalFileSystem.getInstance().findFileByPath(renamedPath))
     }
 
     fun testApplyPatchTakesWhatAModelActuallyWrites() {
@@ -599,7 +640,7 @@ class IdeToolsTest : BasePlatformTestCase() {
         val path = myFixture.file.virtualFile.path
 
         tools.runByName(
-            "apply_patch",
+            "ide__apply_patch",
             mapOf("path" to path, "patch" to "@@ -4,1 +5,2 @@\n+  int y;\n  int x = y;"),
         )
         assertEquals(
@@ -608,7 +649,7 @@ class IdeToolsTest : BasePlatformTestCase() {
         )
 
         tools.runByName(
-            "apply_patch",
+            "ide__apply_patch",
             mapOf("path" to path, "patch" to "@@ -5,1 +5,1 @@\n-  return 0\n+  return 0;"),
         )
         assertEquals(
@@ -620,7 +661,7 @@ class IdeToolsTest : BasePlatformTestCase() {
         // are punctuated wrongly. Both are read for what they are, because the
         // file is what settles which line is which.
         tools.runByName(
-            "apply_patch",
+            "ide__apply_patch",
             mapOf("path" to path, "patch" to "@@ -4,1,4,1 @@\n -  int y;\n +  int y = 0;"),
         )
         assertEquals(
@@ -632,14 +673,14 @@ class IdeToolsTest : BasePlatformTestCase() {
         // tab where the file has spaces is not this file's text.
         assertRejected {
             tools.runByName(
-                "apply_patch",
+                "ide__apply_patch",
                 mapOf("path" to path, "patch" to "@@ -5,1 +5,2 @@\n+\tint z = 1;\n \tint x = y;"),
             )
         }
     }
 
     fun testErrorHighlightsDeclaresARangeRequestAndAStreamOfHighlights() {
-        val port = inputPorts("get_error_highlights").single()
+        val port = inputPorts("ide__get_error_highlights").single()
         assertEquals("request", port["name"])
         assertEquals(true, port["required"])
         val fields = propertiesOf(schemaOf(port))
@@ -650,7 +691,7 @@ class IdeToolsTest : BasePlatformTestCase() {
         assertEquals(0, (fields["start_line"] as Map<*, *>)["minimum"])
         assertEquals(0, (fields["end_line"] as Map<*, *>)["minimum"])
 
-        val outputs = modelOutputs("get_error_highlights").associateBy { it["name"] as String }
+        val outputs = modelOutputs("ide__get_error_highlights").associateBy { it["name"] as String }
         assertEquals(setOf("highlights", "path"), outputs.keys)
         // One value per highlight, streamed as they are found.
         val highlights = outputs.getValue("highlights")
@@ -678,7 +719,7 @@ class IdeToolsTest : BasePlatformTestCase() {
         myFixture.doHighlighting()
         val path = file.virtualFile.path
 
-        val all = IdeTools(project).runByName("get_error_highlights", mapOf("request" to mapOf("path" to path)))
+        val all = IdeTools(project).runByName("ide__get_error_highlights", mapOf("request" to mapOf("path" to path)))
         assertEquals(path, all["path"])
         @Suppress("UNCHECKED_CAST")
         val highlights = all["highlights"] as List<Map<String, Any?>>
@@ -714,7 +755,7 @@ class IdeToolsTest : BasePlatformTestCase() {
         fun highlightsIn(range: Map<String, Any?>): List<Map<String, Any?>> {
             val request = mapOf("request" to (mapOf("path" to path) + range))
             @Suppress("UNCHECKED_CAST")
-            return tools.runByName("get_error_highlights", request)["highlights"] as List<Map<String, Any?>>
+            return tools.runByName("ide__get_error_highlights", request)["highlights"] as List<Map<String, Any?>>
         }
 
         val everything = highlightsIn(emptyMap())
@@ -736,19 +777,19 @@ class IdeToolsTest : BasePlatformTestCase() {
         assertTrue("$onThatLine", onThatLine.isNotEmpty())
 
         // Malformed requests are rejected rather than guessed at.
-        assertRejected { tools.runByName("get_error_highlights", emptyMap()) }
-        assertRejected { tools.runByName("get_error_highlights", mapOf("request" to mapOf("start_line" to 1))) }
+        assertRejected { tools.runByName("ide__get_error_highlights", emptyMap()) }
+        assertRejected { tools.runByName("ide__get_error_highlights", mapOf("request" to mapOf("start_line" to 1))) }
         assertRejected {
-            tools.runByName("get_error_highlights", mapOf("request" to mapOf("path" to path, "start_line" to -1)))
+            tools.runByName("ide__get_error_highlights", mapOf("request" to mapOf("path" to path, "start_line" to -1)))
         }
         assertRejected {
             tools.runByName(
-                "get_error_highlights",
+                "ide__get_error_highlights",
                 mapOf("request" to mapOf("path" to path, "start_line" to 3, "end_line" to 1)),
             )
         }
         assertRejected {
-            tools.runByName("get_error_highlights", mapOf("request" to mapOf("path" to "/nowhere/at/all.xml")))
+            tools.runByName("ide__get_error_highlights", mapOf("request" to mapOf("path" to "/nowhere/at/all.xml")))
         }
     }
 
@@ -756,7 +797,7 @@ class IdeToolsTest : BasePlatformTestCase() {
         myFixture.configureByText("beans.xml", "<root>\n  <bean/>\n</root>")
 
         val renamed = IdeTools(project)
-            .runByName("rename_symbol", mapOf("request" to mapOf("name" to "bean", "new_name" to "widget")))
+            .runByName("ide__rename_symbol", mapOf("request" to mapOf("name" to "bean", "new_name" to "widget")))
         @Suppress("UNCHECKED_CAST")
         val metadata = renamed["metadata"] as Map<String, Any?>
         assertEquals("bean", metadata["previous_name"])
@@ -771,7 +812,7 @@ class IdeToolsTest : BasePlatformTestCase() {
         val tools = IdeTools(project)
 
         val ambiguous = try {
-            tools.runByName("rename_symbol", mapOf("request" to mapOf("name" to "bean", "new_name" to "widget")))
+            tools.runByName("ide__rename_symbol", mapOf("request" to mapOf("name" to "bean", "new_name" to "widget")))
             fail("Expected the repeated name to be reported as ambiguous.")
             return
         } catch (expected: IllegalArgumentException) {
@@ -782,12 +823,12 @@ class IdeToolsTest : BasePlatformTestCase() {
 
         // Which the line does; the other occurrence is left alone.
         tools.runByName(
-            "rename_symbol",
+            "ide__rename_symbol",
             mapOf("request" to mapOf("name" to "bean", "new_name" to "widget", "line" to 3, "column" to 5)),
         )
         assertEquals("<root>\n  <bean/>\n  <widget/>\n</root>", myFixture.editor.document.text)
 
-        assertRejected { tools.runByName("rename_symbol", mapOf("request" to mapOf("name" to "nope", "new_name" to "x"))) }
+        assertRejected { tools.runByName("ide__rename_symbol", mapOf("request" to mapOf("name" to "nope", "new_name" to "x"))) }
     }
 
     fun testRunByNameDrivesTheIdeImplementations() {
@@ -795,11 +836,11 @@ class IdeToolsTest : BasePlatformTestCase() {
         // keyed by port name. Add the file WITHOUT opening an editor
         // (index-only tool), so nothing needs the EDT and teardown's
         // editor-release check has nothing to wait on. (Editor-backed tools
-        // like get_active_file are exercised manually through the Action
+        // like ide__get_active_file are exercised manually through the Action
         // explorer.)
         myFixture.addFileToProject("widget.cpp", "// hello")
 
-        val found = IdeTools(project).runByName("find_file", mapOf("request" to mapOf("name" to "widget.cpp")))
+        val found = IdeTools(project).runByName("ide__find_file", mapOf("request" to mapOf("name" to "widget.cpp")))
         assertTrue((found["matches"] as List<*>).any { (it as String).endsWith("widget.cpp") })
     }
 }

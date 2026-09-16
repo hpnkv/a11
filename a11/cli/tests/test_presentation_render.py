@@ -15,6 +15,7 @@
 """Terminal presentation stays compact while retaining useful detail."""
 
 import io
+import re
 
 from rich.console import Console
 
@@ -28,6 +29,7 @@ def _render(block: PresentationBlock) -> str:
         file=stream,
         force_terminal=True,
         color_system="truecolor",
+        no_color=False,
         width=100,
     )
     console.print(render_block(block))
@@ -56,10 +58,11 @@ def test_flow_preview_shows_source_and_nested_action_lifecycle():
         )
     )
 
-    assert "Ran A11 Flow" in rendered
-    assert "flow inspect" in rendered
-    assert "search_text" in rendered
-    assert "completed" in rendered
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", rendered)
+    assert "Ran A11 Flow" in plain
+    assert "flow inspect" in plain
+    assert "search_text" in plain
+    assert "completed" in plain
     assert "\x1b[" in rendered
 
 
@@ -73,6 +76,32 @@ def test_completed_tool_without_a_log_uses_a_solid_marker():
     )
 
     assert "• Workspace info" in rendered
+
+
+def test_apply_patch_renders_file_counts_and_numbered_diff_rows():
+    rendered = _render(
+        PresentationBlock(
+            kind=BlockKind.TOOL_RUN,
+            tool_name="apply_patch",
+            tool_arguments={
+                "patch": """--- a/a11/example.py
++++ b/a11/example.py
+@@ -2,2 +2,2 @@
+ keep = True
+-answer = 41
++answer = 42
+"""
+            },
+        )
+    )
+
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", rendered)
+    assert "Edited a11/example.py (+1 -1)" in plain
+    assert "3 - answer = 41" in plain
+    assert "3 + answer = 42" in plain
+    assert "48;2;86;37;31" in rendered
+    assert "48;2;23;59;45" in rendered
+    assert max(map(len, plain.splitlines())) == 99
 
 
 def test_report_completion_uses_a_structured_final_panel():

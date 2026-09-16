@@ -15,13 +15,20 @@
  */
 
 import assert from 'node:assert/strict';
-import { beforeEach, test } from 'node:test';
+import {beforeEach, test} from 'node:test';
 
-import { JSDOM } from 'jsdom';
-import { okStatus } from '@curiositystack/a11';
+import {JSDOM} from 'jsdom';
+import {okStatus} from '@curiositystack/a11';
 
-import { A11ChatSession } from '../src/a11client.js';
-import { AssistantBubble } from '../src/chat.js';
+import {
+  A11ChatSession,
+  composeIdeSystemPrompt,
+  mergeAllowedToolNames,
+  parseCodingAgentDefaults,
+  reportsToolFromInteraction,
+} from '../src/a11client.js';
+import {AssistantBubble} from '../src/chat.js';
+import type {A11Config, ActionDescriptor} from '../src/bridge.js';
 
 beforeEach(() => {
   const window = new JSDOM('<!doctype html><body></body>').window;
@@ -31,6 +38,91 @@ beforeEach(() => {
     cancelAnimationFrame: () => {},
     requestAnimationFrame: () => 1,
   });
+});
+
+test('Gateway coding instructions gain editor context and Flow dispatch rules', () => {
+  const config: A11Config = {
+    url: 'ws://gateway/a11',
+    provider: 'claude',
+    model: '',
+    apiKey: '',
+    baseUrl: '',
+    allowedTools: [],
+    ide: 'Visual Studio Code',
+    ideVersion: '1.105.0',
+    projectName: 'a11',
+    projectPath: '/work/a11',
+  };
+  const descriptors: ActionDescriptor[] = [
+    {
+      name: 'ide__get_active_file',
+      description: 'Read the active editor.',
+      inputs: [],
+      outputs: [],
+    },
+  ];
+
+  const prompt = composeIdeSystemPrompt('Gateway system prompt.', config, descriptors);
+
+  assert.ok(prompt.startsWith('Gateway system prompt.'));
+  assert.match(prompt, /Before each meaningful tool call or series/);
+  assert.match(prompt, /Visual Studio Code 1\.105\.0/);
+  assert.match(prompt, /Project path: \/work\/a11/);
+  assert.match(prompt, /ide__get_active_file: Read the active editor\./);
+  assert.match(prompt, /call ide__action_name/);
+  assert.match(prompt, /run action_name/);
+});
+
+test('Gateway coding-agent defaults include every model-facing tool name', () => {
+  const defaults = parseCodingAgentDefaults({
+    system_prompt: 'Gateway coding-agent instructions',
+    tool_names: ['workspace_info', 'run_command', 'web-fetch', 'web-render', 'run_command'],
+  });
+
+  assert.deepEqual(defaults, {
+    systemPrompt: 'Gateway coding-agent instructions',
+    toolNames: ['workspace_info', 'run_command', 'web-fetch', 'web-render'],
+  });
+  assert.deepEqual(
+    mergeAllowedToolNames(['ide__get_active_file'], ['shell_.*'], defaults?.toolNames ?? []),
+    [
+      'ide__get_active_file',
+      'shell_.*',
+      'workspace_info',
+      'run_command',
+      'web-fetch',
+      'web-render',
+      'request_user_input',
+    ],
+  );
+});
+
+test('interaction events do not duplicate locally reported IDE tool runs', () => {
+  const local = ['ide__get_active_file', 'ide__apply_patch'];
+
+  assert.equal(reportsToolFromInteraction('ide__apply_patch', local), false);
+  assert.equal(reportsToolFromInteraction('run_command', local), true);
+});
+
+test('the general-Gateway fallback identifies the actual IDE', () => {
+  const config: A11Config = {
+    url: 'ws://gateway/a11',
+    provider: 'claude',
+    model: '',
+    apiKey: '',
+    baseUrl: '',
+    allowedTools: [],
+    ide: 'Cursor',
+    ideVersion: '2.0',
+    projectName: 'sample',
+    projectPath: null,
+  };
+
+  const prompt = composeIdeSystemPrompt('', config, []);
+
+  assert.match(prompt, /embedded in the user's IDE/);
+  assert.match(prompt, /IDE: Cursor 2\.0/);
+  assert.doesNotMatch(prompt, /JetBrains IDE/);
 });
 
 test('report_completion renders as a structured completion report', () => {
@@ -74,7 +166,7 @@ test('report_completion stays a regular tool until summary is available', () => 
   bubble.addToolRun({
     id: 'completion-2',
     tool: 'report_completion',
-    arguments: { checks: 'Input is still arriving.' },
+    arguments: {checks: 'Input is still arriving.'},
     phase: 'started',
   });
 
@@ -85,9 +177,13 @@ test('report_completion stays a regular tool until summary is available', () => 
 test('request_user_input renders choices and answers through its host', () => {
   const answers: Array<[string, string]> = [];
   const host = document.createElement('div');
-  const bubble = new AssistantBubble(host, () => {}, (id, answer) => {
-    answers.push([id, answer]);
-  });
+  const bubble = new AssistantBubble(
+    host,
+    () => {},
+    (id, answer) => {
+      answers.push([id, answer]);
+    },
+  );
 
   bubble.addToolRun({
     id: 'request-1',
@@ -95,8 +191,8 @@ test('request_user_input renders choices and answers through its host', () => {
     arguments: {
       question: 'Which implementation should I use?',
       options: [
-        { label: 'Native', description: 'Use the A11-native implementation.' },
-        { label: 'Adapter', description: 'Keep the compatibility adapter.' },
+        {label: 'Native', description: 'Use the A11-native implementation.'},
+        {label: 'Adapter', description: 'Keep the compatibility adapter.'},
       ],
       allow_free_text: true,
     },
@@ -156,6 +252,31 @@ test('tool cards expose inputs, outputs, logs, and status as they stream', () =>
   assert.match(card.textContent ?? '', /completed/);
 });
 
+test('patch tools render a numbered theme-aware diff result', () => {
+  const host = document.createElement('div');
+  const bubble = new AssistantBubble(host, () => {});
+  bubble.addToolRun({
+    id: 'patch-1',
+    tool: 'ide__apply_patch',
+    arguments: {
+      path: 'src/example.ts',
+      patch: '@@ -1 +1 @@\n-const n = 1;\n+const n = 2;\n',
+    },
+    outputs: {
+      result: {path: 'src/example.ts', hunks: 1, added: 1, removed: 1},
+    },
+    phase: 'finished',
+  });
+
+  const card = host.querySelector<HTMLDetailsElement>('.tool-run.patch-run');
+  assert.ok(card?.open);
+  assert.match(card.textContent ?? '', /src\/example\.ts · \+1 −1/);
+  assert.equal(card.querySelector('.patch-line.removed code')?.textContent, 'const n = 1;');
+  assert.equal(card.querySelector('.patch-line.added code')?.textContent, 'const n = 2;');
+  assert.equal(card.querySelector('.patch-line.added .patch-line-number')?.textContent, '1');
+  assert.doesNotMatch(card.textContent ?? '', /"patch"/);
+});
+
 test('a collapsed failed tool shows its error message', () => {
   const host = document.createElement('div');
   const bubble = new AssistantBubble(host, () => {});
@@ -163,7 +284,10 @@ test('a collapsed failed tool shows its error message', () => {
     id: 'failed-1',
     tool: 'run_command',
     arguments: {command: 'false'},
-    status: {code: 13, message: 'Permission denied by the workspace boundary'},
+    status: {
+      code: 13,
+      message: 'Permission denied by the workspace boundary',
+    },
     phase: 'finished',
   });
   const card = host.querySelector<HTMLDetailsElement>('.tool-run.failed');
@@ -264,7 +388,9 @@ test('a closed Gateway session is replaced before the next action', async () => 
   internals.session = {
     isClosed: () => true,
     getStatus: okStatus,
-    halfClose: () => { closed += 1; },
+    halfClose: () => {
+      closed += 1;
+    },
   };
   internals.stream = {getStatus: okStatus};
   internals.refreshConfig = async () => {};

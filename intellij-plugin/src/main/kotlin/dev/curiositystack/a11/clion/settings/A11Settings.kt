@@ -39,12 +39,11 @@ class A11Settings : PersistentStateComponent<A11Settings.State> {
         var gatewayUrl: String = DEFAULT_GATEWAY_URL,
         /**
          * Extra allowed-tool patterns, comma-separated, sent with every turn on
-         * top of the IDE's own tools.
+         * top of the IDE's own and Gateway-advertised coding tools.
          *
          * These are what let the model reach tools that live in the *gateway*
-         * rather than the IDE. The defaults cover its coding-agent actions. The
-         * gateway offers a tool only if a pattern here matches its name, so this
-         * is also how they are turned off: empty the field.
+         * rather than the IDE. The defaults also support a general Gateway that
+         * does not publish `coding_agent_info`.
          */
         var allowedToolPatterns: String = DEFAULT_ALLOWED_TOOL_PATTERNS,
         var provider: String = "claude",

@@ -63,13 +63,23 @@ def _port(
 WORKSPACE_INFO_SCHEMA = a11.ActionSchema(
     name="workspace_info",
     description=(
-        "Inspect the coding workspace, repository instructions, Git state,"
-        " agent changes, and completed checks. Returns them on the unary"
-        " `result` output."
+        "Inspect the coding session before making assumptions about its root"
+        " or state. This action takes no inputs. Its unary `result` object has"
+        " exactly these fields: `cwd`, `root`, `repository_root`, `read_roots`,"
+        " `write_roots`, `initial_git_status`, `current_git_status`,"
+        " `agent_changed_files`, `checks`, `instructions`, `approval_mode`,"
+        " `sandbox`, and `network`. `instructions` is an array of"
+        " `{path, text}` objects containing the AGENTS.md files that apply to"
+        " `cwd`; read and obey their text before editing. Empty Git fields do"
+        " not mean the workspace is empty."
     ),
     outputs={
         "result": _port(
-            "result", "application/json", "Workspace facts.", typeinfo=dict
+            "result",
+            "application/json",
+            "The complete workspace/session object described by this action;"
+            " fields are not nested under another key.",
+            typeinfo=dict,
         )
     },
     output_to_json_field={"result": "$"},
@@ -78,21 +88,27 @@ WORKSPACE_INFO_SCHEMA = a11.ActionSchema(
 LIST_FILES_SCHEMA = a11.ActionSchema(
     name="list_files",
     description=(
-        "List files below a workspace directory, respecting Git ignores when"
-        " available. Uses portable fallbacks when ripgrep is unavailable."
-        " The unary `result` output is `{files: [string], truncated: bool}`;"
-        " inside Flow read it as `step.result.files`."
+        "List file paths below one workspace directory. Inputs are separate"
+        " ports: optional text `path` (default `.` relative to `cwd`) and"
+        " optional integer `limit` (default 200, range 1–1000). This action"
+        " returns one unary `result` object, exactly"
+        " `{files: [string], truncated: bool}`; it does not stream entries and"
+        " has no `lines` output. Paths in `files` are workspace-relative. Git"
+        " ignores are respected when available; use `list_directory` instead"
+        " when entry metadata, recursion controls, or kind/glob filters are"
+        " needed. In Flow the array is `step.result.files`."
     ),
     inputs={
         "path": _port(
             "path",
             "text/plain",
-            "Directory relative to the current working directory; default '.'.",
+            "Directory path as plain text, relative to `cwd` unless absolute;"
+            " omit for `.`. Do not pass an object such as `{path: ...}`.",
         ),
         "limit": _port(
             "limit",
             "application/json",
-            "Maximum files from 1 to 1000.",
+            "Integer maximum from 1 to 1000; omit for 200.",
             typeinfo=int,
             json_schema={"type": "integer", "minimum": 1, "maximum": 1000},
         ),
@@ -101,7 +117,7 @@ LIST_FILES_SCHEMA = a11.ActionSchema(
         "result": _port(
             "result",
             "application/json",
-            "File list and truncation state.",
+            "Object `{files: [workspace-relative path], truncated: bool}`.",
             typeinfo=dict,
         )
     },
@@ -111,31 +127,41 @@ LIST_FILES_SCHEMA = a11.ActionSchema(
 SEARCH_TEXT_SCHEMA = a11.ActionSchema(
     name="search_text",
     description=(
-        "Search workspace text with bounded results. Uses grep when ripgrep"
-        " is unavailable. The unary `result` output is"
-        " `{matches: [string], truncated: bool}`; a Flow can select less with"
-        " `step.result.matches | flatten | first N`."
+        "Search file contents inside the workspace. Pass required plain-text"
+        " `query` plus optional `path`, boolean `regex`, and integer `limit`"
+        " as separate inputs. `regex` defaults to false, so metacharacters are"
+        " literal unless it is explicitly true; `path` defaults to `.` and"
+        " `limit` to 50 (range 1–200). No match is a successful"
+        " `{matches: [], truncated: false}` result. The only output is unary"
+        " `result`, exactly `{matches: [string], truncated: bool}`; each match"
+        " string uses `path:line:text` form. There is no separate `lines`"
+        " output. In Flow use `step.result.matches`."
     ),
     inputs={
         "query": _port(
-            "query", "text/plain", "Text or regular expression.", required=True
+            "query",
+            "text/plain",
+            "Non-empty literal text by default, or a regular expression only"
+            " when `regex` is true.",
+            required=True,
         ),
         "path": _port(
             "path",
             "text/plain",
-            "File or directory relative to the current working directory;"
-            " default '.'.",
+            "File or directory as plain text, relative to `cwd` unless"
+            " absolute; omit for `.`.",
         ),
         "regex": _port(
             "regex",
             "application/json",
-            "Interpret query as a regex.",
+            "Boolean; true interprets `query` as a regex, false or omitted"
+            " searches for the exact literal string.",
             typeinfo=bool,
         ),
         "limit": _port(
             "limit",
             "application/json",
-            "Maximum matches from 1 to 200.",
+            "Integer maximum from 1 to 200; omit for 50.",
             typeinfo=int,
             json_schema={"type": "integer", "minimum": 1, "maximum": 200},
         ),
@@ -144,7 +170,7 @@ SEARCH_TEXT_SCHEMA = a11.ActionSchema(
         "result": _port(
             "result",
             "application/json",
-            "Matches and truncation state.",
+            'Object `{matches: ["path:line:text"], truncated: bool}`.',
             typeinfo=dict,
         )
     },
@@ -156,9 +182,27 @@ APPLY_PATCH_SCHEMA = a11.ActionSchema(
     description=(
         "Apply one git-format unified diff after workspace, preimage, and"
         " permission checks. Use this action for file edits. The patch must"
-        " use `diff --git`, `--- a/path`, and `+++ b/path` headers; a new file"
-        " uses `--- /dev/null` and `+++ b/path`. Never use `*** Begin Patch`,"
-        " `*** Add File`, or similar wrapper syntax."
+        " be prefaced, along with any series of tool calls involving it, by a"
+        " brief user-facing description of what is being changed. The patch"
+        " must use `diff --git`, `--- a/path`, and `+++ b/path` headers; a new"
+        " file uses `--- /dev/null` and `+++ b/path`, and a deleted file uses"
+        " `--- a/path` and `+++ /dev/null`. Every hunk starts with"
+        " `@@ -oldStart,oldCount +newStart,newCount @@`. Each following line"
+        " starts with one syntax marker: space for unchanged context, `-` for"
+        " removed content, or `+` for added content. Everything after that"
+        " marker is literal file content. Before invoking this action, strip"
+        " trailing whitespace from every line beginning with `+` or `-`, so"
+        " empty added and removed lines contain only their marker. Ensure the"
+        " complete patch ends with a newline; append `\\n` when necessary."
+        " Thus an empty added line is exactly `+`, an empty removed line is"
+        " exactly `-`, and an empty context line is one space. Never use"
+        " `*** Begin Patch`, `*** Add File`, or similar wrapper syntax. Hunk"
+        " counts are inferred from their lines. The implementation repeats"
+        " the whitespace and final-newline normalization defensively. The"
+        " entire multi-file patch is preflighted before any"
+        " file changes; a context/preimage mismatch changes nothing. The only"
+        " output is unary `result`, exactly"
+        " `{changed_files: [workspace-relative path]}`."
     ),
     inputs={
         "patch": _port(
@@ -168,13 +212,19 @@ APPLY_PATCH_SCHEMA = a11.ActionSchema(
             " `b/` paths. Example for a new file: `diff --git a/file b/file`,"
             " `new file mode 100644`, `--- /dev/null`, `+++ b/file`,"
             " `@@ -0,0 +1 @@`, then `+content`. Do not wrap it in Markdown or"
-            " `*** Begin Patch` markers.",
+            " `*** Begin Patch` markers. Keep the leading diff marker on every"
+            " hunk line, strip trailing whitespace from changed lines, and"
+            " terminate the complete patch with a newline.",
             required=True,
         ),
     },
     outputs={
         "result": _port(
-            "result", "application/json", "Changed paths.", typeinfo=dict
+            "result",
+            "application/json",
+            "Object `{changed_files: [workspace-relative path]}`; no diff text"
+            " is returned because the submitted patch already contains it.",
+            typeinfo=dict,
         )
     },
     output_to_json_field={"result": "$"},
@@ -183,23 +233,37 @@ APPLY_PATCH_SCHEMA = a11.ActionSchema(
 FILE_DIFF_SCHEMA = a11.ActionSchema(
     name="file_diff",
     description=(
-        "Read the current Git diff for a path or the agent's files. The unary"
-        " `result` output contains `diff` text and a `truncated` flag; filter"
-        " or truncate `step.result.diff` inside Flow for an excerpt."
+        "Read a Git working-tree diff; this action never edits or stages. It"
+        " requires a Git workspace. Pass optional plain-text `path` to select"
+        " one repository path and optional boolean `staged` (default false)."
+        " Without `path`, it selects paths changed by this agent when known,"
+        " otherwise the repository-wide diff. `staged=false` reads unstaged"
+        " changes and `staged=true` reads the index. The only output is unary"
+        " `result`, exactly `{diff: string, truncated: bool}`. An empty diff"
+        " is a successful empty string. The text is capped at 128 KiB; in"
+        " Flow access it as `step.result.diff`."
     ),
     inputs={
         "path": _port(
             "path",
             "text/plain",
-            "Optional path relative to the current working directory.",
+            "One file or directory as plain text, relative to `cwd` unless"
+            " absolute; omit for the agent's changed paths or the whole repo.",
         ),
         "staged": _port(
-            "staged", "application/json", "Read the staged diff.", typeinfo=bool
+            "staged",
+            "application/json",
+            "Boolean: true reads `git diff --cached`; false or omitted reads"
+            " unstaged working-tree changes.",
+            typeinfo=bool,
         ),
     },
     outputs={
         "result": _port(
-            "result", "application/json", "Bounded diff text.", typeinfo=dict
+            "result",
+            "application/json",
+            "Object `{diff: string, truncated: bool}`.",
+            typeinfo=dict,
         )
     },
     output_to_json_field={"result": "$"},
@@ -208,32 +272,39 @@ FILE_DIFF_SCHEMA = a11.ActionSchema(
 RUN_COMMAND_SCHEMA = a11.ActionSchema(
     name="run_command",
     description=(
-        "Run a one-shot command in the kernel sandbox. Output streams by line;"
-        " the unary `result` reports exit status, timeout, and truncation."
-        " In Flow, filter `step.output_lines` and leave it undeclared when"
-        " only completion data is needed. Use web-fetch for HTTP retrieval;"
-        " do not run curl, wget, or a language HTTP client here when"
-        " web-fetch is available."
+        "Run one non-interactive Bash command in the kernel sandbox. `command`"
+        " is one shell-source string passed to `bash --noprofile --norc -c`;"
+        " it is not an argv array. Optional `cwd` is relative to the coding"
+        " `cwd`, and `timeout_seconds` defaults to 120 (range 1–600). Output"
+        " has two separate ports: streaming `output_lines` contains stdout"
+        " lines and stderr lines prefixed `stderr: `, while unary `result` is"
+        " exactly `{exit_code, signal, usage, sandbox, output_lines,"
+        " stopped_early, cwd}`. Here `result.output_lines` is an integer count,"
+        " not the text. A nonzero process exit is reported in `result` rather"
+        " than treated as a malformed tool call. In Flow, filter"
+        " `step.output_lines`; omit that output when only completion data is"
+        " needed. Use web-fetch for HTTP retrieval, not curl or wget."
     ),
     inputs={
         "command": _port(
             "command",
             "text/plain",
-            "Shell command for builds, tests, and local processing. Do not"
-            " use curl, wget, or a language HTTP client when web-fetch is"
-            " available.",
+            "Required non-empty Bash source string, not JSON and not a list of"
+            " arguments. Quote paths and values using shell syntax. Intended"
+            " for builds, tests, and local processing. Do not use curl, wget,"
+            " or a language HTTP client when web-fetch is available.",
             required=True,
         ),
         "cwd": _port(
             "cwd",
             "text/plain",
-            "Workspace directory relative to the current working directory;"
-            " default '.'.",
+            "Directory as plain text, relative to the coding `cwd` unless"
+            " absolute; omit for `.`. It must be inside an allowed root.",
         ),
         "timeout_seconds": _port(
             "timeout_seconds",
             "application/json",
-            "Wall-clock timeout from 1 to 600 seconds.",
+            "Integer wall-clock timeout from 1 to 600; omit for 120.",
             typeinfo=int,
             json_schema={"type": "integer", "minimum": 1, "maximum": 600},
         ),
@@ -242,14 +313,16 @@ RUN_COMMAND_SCHEMA = a11.ActionSchema(
         "output_lines": _port(
             "output_lines",
             "text/plain",
-            "Interleaved stdout and stderr lines.",
+            "Streaming text: stdout lines unchanged and stderr lines prefixed"
+            " `stderr: `. This is not nested inside `result`.",
             required=False,
             unary=False,
         ),
         "result": _port(
             "result",
             "application/json",
-            "Command completion data.",
+            "Object `{exit_code, signal, usage, sandbox, output_lines,"
+            " stopped_early, cwd}`; `output_lines` is the emitted-line count.",
             typeinfo=dict,
         ),
     },
@@ -258,21 +331,43 @@ RUN_COMMAND_SCHEMA = a11.ActionSchema(
 REPORT_COMPLETION_SCHEMA = a11.ActionSchema(
     name="report_completion",
     description=(
-        "Record the coding task outcome, files changed, checks, and remaining"
-        " work. Call once the repository state has been verified."
+        "Finish the coding turn after implementation and proportionate"
+        " verification. Pass required plain-text `summary` plus optional"
+        " plain-text `checks` and `remaining` as separate inputs. Do not pass"
+        " a single object and do not invent a `files` input: changed files and"
+        " recorded run_command checks come from session state. The unary"
+        " `result` is exactly `{summary, changed_files, checks,"
+        " recorded_checks, remaining}`. Call once, only when no further tool"
+        " work is needed; use `remaining` for genuine unresolved work."
     ),
     inputs={
         "summary": _port(
-            "summary", "text/plain", "Completed outcome.", required=True
+            "summary",
+            "text/plain",
+            "Required non-empty outcome in plain text: what now works or was"
+            " delivered, not a plan or tool-call transcript.",
+            required=True,
         ),
-        "checks": _port("checks", "text/plain", "Checks run and their status."),
+        "checks": _port(
+            "checks",
+            "text/plain",
+            "Optional concise verification summary. Detailed run_command"
+            " records are added automatically as `recorded_checks`.",
+        ),
         "remaining": _port(
-            "remaining", "text/plain", "Remaining work or blocker."
+            "remaining",
+            "text/plain",
+            "Optional unresolved work or blocker; omit or pass empty text when"
+            " nothing remains.",
         ),
     },
     outputs={
         "result": _port(
-            "result", "application/json", "Recorded completion.", typeinfo=dict
+            "result",
+            "application/json",
+            "Object `{summary, changed_files, checks, recorded_checks,"
+            " remaining}` assembled from inputs and session state.",
+            typeinfo=dict,
         )
     },
     output_to_json_field={"result": "$"},
@@ -281,9 +376,17 @@ REPORT_COMPLETION_SCHEMA = a11.ActionSchema(
 REQUEST_USER_INPUT_SCHEMA = a11.ActionSchema(
     name="request_user_input",
     description=(
-        "Pause for a user decision only when work cannot safely continue."
-        " Offer concise choices when possible; free text remains available"
-        " when allow_free_text is true."
+        "Pause this tool call until the user answers a decision that genuinely"
+        " blocks safe progress. Inputs are separate: required text `question`,"
+        " optional JSON array `options`, and optional boolean"
+        " `allow_free_text`. `options`, when present, contains 2–8 objects of"
+        " shape `{label: string, description?: string}` with distinct nonempty"
+        " labels; it is not an array of strings. `allow_free_text` defaults to"
+        " true and is forced true when options are omitted. The unary `result`"
+        " arrives only after an answer and is exactly"
+        " `{answer: string, selected_option: string|null}`. Do not use this"
+        " action for optional confirmation when a safe in-scope assumption"
+        " permits progress."
     ),
     inputs={
         "question": _port(
@@ -333,7 +436,8 @@ REQUEST_USER_INPUT_SCHEMA = a11.ActionSchema(
         "result": _port(
             "result",
             "application/json",
-            "The user's answer and matching option label, if one was chosen.",
+            "Object `{answer: string, selected_option: string|null}`;"
+            " `selected_option` is null for a free-text answer.",
             typeinfo=dict,
             json_schema={
                 "type": "object",
@@ -401,8 +505,11 @@ PENDING_USER_INPUTS_SCHEMA = a11.ActionSchema(
 CONFIGURE_CODING_AGENT_SCHEMA = a11.ActionSchema(
     name="configure_coding_agent",
     description=(
-        "User-facing control for the coding agent's permission level. This"
-        " changes approval policy, never the gateway's kernel-sandbox ceiling."
+        "UI-only control for the gateway coding agent. Set approval_mode"
+        " and/or sandbox_mode for subsequent calls. This affects all clients"
+        " of this gateway, not already-running processes. Unrestricted removes"
+        " filesystem containment and kernel process confinement; approval"
+        " policy and resource limits still apply. Do not expose to models."
     ),
     inputs={
         "approval_mode": _port(
@@ -411,18 +518,25 @@ CONFIGURE_CODING_AGENT_SCHEMA = a11.ActionSchema(
             "Permission level: 'suggest' lets the agent inspect and propose"
             " effects; 'auto' permits effects within the configured"
             " sandbox.",
-            required=True,
             json_schema={
                 "type": "string",
                 "enum": ["suggest", "auto"],
             },
-        )
+        ),
+        "sandbox_mode": _port(
+            "sandbox_mode",
+            "text/plain",
+            "Sandbox: read-only, workspace-write, or unrestricted (host"
+            " filesystem access and no kernel process confinement). Omit to"
+            " preserve the current mode. Only a user may select this.",
+            json_schema={"type": "string", "enum": list(SandboxMode)},
+        ),
     },
     outputs={
         "result": _port(
             "result",
             "application/json",
-            "Effective approval mode and immutable sandbox boundaries.",
+            "Effective approval_mode, sandbox_ceiling, and network access.",
             typeinfo=dict,
         )
     },
@@ -450,15 +564,21 @@ CODING_AGENT_INFO_SCHEMA = a11.ActionSchema(
 DISCOVER_ACTIONS_SCHEMA = a11.ActionSchema(
     name="discover_actions",
     description=(
-        "Get exact input and output port names, types, and stream shapes for"
-        " selected actions. Use it only for actions planned in the next Flow"
-        " whose concise descriptions lack needed port information."
+        "Get registered action contracts before writing a Flow that calls an"
+        " unfamiliar action. Pass one JSON array `names` containing at most 12"
+        " distinct action-name strings—not an object and not a comma-separated"
+        " string. The unary `result` is"
+        " `{actions: {ACTION_NAME: ACTION_SCHEMA}}`; each schema includes exact"
+        " input/output port names, media types, required flags, unary/stream"
+        " shape, descriptions, and JSON Schemas. Use it only for actions"
+        " planned in the next Flow whose existing description is insufficient."
     ),
     inputs={
         "names": _port(
             "names",
             "application/json",
-            "Planned action names whose ports are unclear (maximum 12).",
+            "JSON array of at most 12 unique registered action-name strings."
+            ' Example: `["read_file", "web-fetch"]`.',
             typeinfo=list,
             required=True,
             json_schema={
@@ -473,7 +593,8 @@ DISCOVER_ACTIONS_SCHEMA = a11.ActionSchema(
         "result": _port(
             "result",
             "application/json",
-            "Requested action schemas.",
+            "Object `{actions: {name: schema, ...}}`; unknown names fail the"
+            " entire request.",
             typeinfo=dict,
         )
     },
@@ -671,6 +792,8 @@ class CodingContext:
     policy: Policy
     registry: a11.ActionRegistry
     sandbox_mode: SandboxMode
+    command_tools: bool = True
+    native_action_names: set[str] = field(default_factory=set)
     completion: dict[str, object] | None = None
     action_log: list[dict[str, object]] = field(default_factory=list)
     system_prompt: str = ""
@@ -881,12 +1004,11 @@ async def search_text(action: a11.Action, context: CodingContext) -> None:
 
 def _patch_paths(patch: str) -> list[str]:
     paths: set[str] = set()
-    for line in patch.splitlines():
-        if not line.startswith(("--- ", "+++ ")):
-            continue
-        raw = line[4:].split("\t", 1)[0]
+
+    def add(raw: str) -> None:
+        raw = raw.split("\t", 1)[0]
         if raw == "/dev/null":
-            continue
+            return
         try:
             value = shlex.split(raw)[0]
         except (ValueError, IndexError) as error:
@@ -906,6 +1028,29 @@ def _patch_paths(patch: str) -> list[str]:
                 message=f"Patch path must be workspace-relative: {value}",
             ).to_exception()
         paths.add(value)
+
+    for line in patch.splitlines():
+        if line.startswith(("--- ", "+++ ")):
+            add(line[4:])
+        elif line.startswith("rename from "):
+            add(line[12:])
+        elif line.startswith("rename to "):
+            add(line[10:])
+        elif line.startswith("copy from "):
+            add(line[10:])
+        elif line.startswith("copy to "):
+            add(line[8:])
+        elif line.startswith("diff --git "):
+            try:
+                fields = shlex.split(line)
+            except ValueError as error:
+                raise Status(
+                    code=StatusCode.INVALID_ARGUMENT,
+                    message=f"Invalid patch header: {line}",
+                ).to_exception() from error
+            if len(fields) >= 4:
+                add(fields[2])
+                add(fields[3])
     if not paths:
         raise Status(
             code=StatusCode.INVALID_ARGUMENT,
@@ -914,23 +1059,65 @@ def _patch_paths(patch: str) -> list[str]:
     return sorted(paths)
 
 
+def _normalize_patch(patch: str) -> str:
+    """Normalize changed lines and common null-device header spellings."""
+    normalized: list[str] = []
+    null_paths = {"dev/null", "a/dev/null", "b/dev/null", "/dev/null"}
+    for line in patch.splitlines():
+        if line.startswith(("--- ", "+++ ")):
+            prefix, value = line[:4], line[4:].split("\t", 1)[0].strip()
+            if value in null_paths:
+                line = f"{prefix}/dev/null"
+        if line.startswith(("+", "-")):
+            line = line.rstrip()
+        normalized.append(line)
+
+    # A git-format block with a /dev/null header also needs its file-mode
+    # marker. Plain unified diffs do not, so add a missing marker only to
+    # blocks introduced by `diff --git`.
+    block_starts = [
+        index
+        for index, line in enumerate(normalized)
+        if line.startswith("diff --git ")
+    ]
+    for start, end in reversed(
+        list(
+            zip(
+                block_starts,
+                block_starts[1:] + [len(normalized)],
+            )
+        )
+    ):
+        block = normalized[start:end]
+        marker = None
+        if "--- /dev/null" in block and not any(
+            line.startswith("new file mode ") for line in block
+        ):
+            marker = "new file mode 100644"
+        elif "+++ /dev/null" in block and not any(
+            line.startswith("deleted file mode ") for line in block
+        ):
+            marker = "deleted file mode 100644"
+        if marker is not None:
+            normalized.insert(start + 1, marker)
+    return "\n".join(normalized) + "\n"
+
+
 async def apply_patch(action: a11.Action, context: CodingContext) -> None:
-    patch = await action["patch"].consume(str)
+    patch = _normalize_patch(await action["patch"].consume(str))
     paths = _patch_paths(patch)
     resolved = [context.workspace.resolve(path, write=True) for path in paths]
     await context.policy.authorize("workspace patch", ", ".join(paths))
     for path in resolved:
         context.workspace.resolve(path, write=True)
 
-    environment = {"TMPDIR": str(context.workspace.root)}
-    arguments = ["-p1", "--forward", "--batch"]
+    arguments = ["apply", "--recount", "--whitespace=nowarn", "-p1"]
     lines, result = await _native_lines(
         context,
-        "/usr/bin/patch",
-        [*arguments, "--dry-run"],
+        "git",
+        [*arguments, "--check"],
         context.workspace.root,
         stdin_data=patch.encode(),
-        environment=environment,
     )
     if result["exit_code"]:
         raise Status(
@@ -939,11 +1126,10 @@ async def apply_patch(action: a11.Action, context: CodingContext) -> None:
         ).to_exception()
     lines, result = await _native_lines(
         context,
-        "/usr/bin/patch",
+        "git",
         arguments,
         context.workspace.root,
         stdin_data=patch.encode(),
-        environment=environment,
     )
     if result["exit_code"]:
         raise Status(
@@ -1175,20 +1361,39 @@ async def pending_user_inputs(
 async def configure_coding_agent(
     action: a11.Action, context: CodingContext
 ) -> None:
-    """Apply a user-selected approval mode without widening the sandbox."""
-    raw_mode = await action["approval_mode"].consume(str)
+    """Apply user-selected gateway approval and sandbox settings."""
+    raw_mode = await _optional(
+        action, "approval_mode", str, context.policy.mode.value
+    )
+    raw_sandbox = await _optional(
+        action, "sandbox_mode", str, context.sandbox_mode.value
+    )
     try:
         mode = ApprovalMode(raw_mode)
+        sandbox = SandboxMode(raw_sandbox)
     except ValueError as error:
         raise Status(
             code=StatusCode.INVALID_ARGUMENT,
-            message="approval_mode must be 'suggest' or 'auto'.",
+            message="Invalid approval_mode or sandbox_mode.",
         ).to_exception() from error
-    if mode == ApprovalMode.ASK:
+    if mode == ApprovalMode.ASK and raw_mode != context.policy.mode.value:
         raise Status(
             code=StatusCode.INVALID_ARGUMENT,
             message="Studio permission mode must be 'suggest' or 'auto'.",
         ).to_exception()
+    if sandbox != context.sandbox_mode:
+        native_names = register_native_actions(
+            context.registry,
+            context.workspace.write_roots,
+            cwd=context.workspace.cwd,
+            mode=sandbox,
+            allow_run=context.command_tools,
+        )
+        for name in context.native_action_names - native_names:
+            context.registry.unregister(name)
+        context.native_action_names = native_names
+        context.sandbox_mode = sandbox
+        context.workspace.unrestricted = sandbox == SandboxMode.UNRESTRICTED
     context.policy.mode = mode
     from a11.cli.coding_agent.prompts import system_prompt
 
@@ -1196,6 +1401,7 @@ async def configure_coding_agent(
     context.action_log.append({
         "action": "configure_coding_agent",
         "approval_mode": mode.value,
+        "sandbox_mode": sandbox.value,
     })
     result = {
         "approval_mode": mode.value,
@@ -1203,7 +1409,7 @@ async def configure_coding_agent(
         "network": True,
     }
     await action.log(
-        f"Coding permission is now {mode.value}; the sandbox remains"
+        f"Coding permission is now {mode.value}; sandbox:"
         f" {context.sandbox_mode.value}."
     )
     await action["result"].finalize(result)
@@ -1306,8 +1512,9 @@ async def run_flow(action: a11.Action, context: CodingContext) -> None:
             registry,
             context.workspace.write_roots,
             cwd=context.workspace.cwd,
-            mode=(context.sandbox_mode if effectful else SandboxMode.READ_ONLY),
+            mode=context.sandbox_mode,
             allow_run=effectful,
+            read_only=not effectful,
         )
         allowed = {
             "workspace_info",

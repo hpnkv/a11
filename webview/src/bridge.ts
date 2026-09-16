@@ -75,8 +75,8 @@ export interface A11Config {
  *
  * The two ports are one suggestion split in half so the sentence need not wait for
  * the diff, and `id` is what the IDE puts back together. Lines and columns are
- * 0-based, `end_column` exclusive — `get_error_highlights`' own numbers for a
- * reported range, the model's for a range it found itself.
+ * 0-based, `end_column` exclusive — `ide__get_error_highlights`' own numbers
+ * for a reported range, the model's for a range it found itself.
  */
 export interface HighlightNote {
   path: string;
@@ -93,7 +93,7 @@ export interface HighlightNote {
   origin?: 'reported' | 'found';
   /** Short enough for a popup; may be empty when there is only a patch. */
   comment?: string;
-  /** A unified diff in the form `apply_patch` takes; may be empty. */
+  /** A unified diff in the form `ide__apply_patch` takes; may be empty. */
   patch?: string;
   start_line: number;
   start_column: number;

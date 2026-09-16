@@ -58,8 +58,9 @@ class CodingAgent:
     ) -> CodingAgent:
         """Install native and Python actions on a session registry."""
         workspace = Workspace.open(cwd, add_dirs)
+        workspace.unrestricted = sandbox_mode == SandboxMode.UNRESTRICTED
         policy = Policy(approval_mode, approve)
-        register_native_actions(
+        native_names = register_native_actions(
             registry,
             workspace.write_roots,
             cwd=workspace.cwd,
@@ -136,6 +137,8 @@ class CodingAgent:
             policy=policy,
             registry=registry,
             sandbox_mode=sandbox_mode,
+            command_tools=command_tools,
+            native_action_names=native_names,
         )
         names = install(
             registry,

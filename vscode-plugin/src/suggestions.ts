@@ -184,8 +184,8 @@ class SuggestionActions implements vscode.CodeActionProvider {
           : 'Apply the suggested patch',
         vscode.CodeActionKind.QuickFix,
       );
-      // `apply_patch` owns context matching and refusal on a near miss. Route
-      // all suggested patches through that single implementation.
+      // `ide__apply_patch` owns context matching and refusal on a near miss.
+      // Route all suggested patches through that single implementation.
       action.command = {
         command: 'a11.applySuggestion',
         title: 'Apply the suggested patch',
@@ -209,7 +209,7 @@ export function registerApply(): vscode.Disposable {
     'a11.applySuggestion',
     async (path: string, patch: string) => {
       try {
-        await runByName('apply_patch', {path, patch});
+        await runByName('ide__apply_patch', {path, patch});
       } catch (error) {
         // An edit after review may make the patch inapplicable. Show the
         // mismatch details returned by the patch tool.

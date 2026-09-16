@@ -262,7 +262,7 @@ async def test_multi_round_tool_calls_get_unique_ids(monkeypatch):
         ],
     ]
 
-    text, new_interactions, _ = await _run(rounds, monkeypatch)
+    text, new_interactions, client = await _run(rounds, monkeypatch)
 
     assert "".join(text) == (
         "Let me look at your home folder.Now your projects.You build software."
@@ -277,6 +277,8 @@ async def test_multi_round_tool_calls_get_unique_ids(monkeypatch):
     ]
     assert len(call_ids) == 2
     assert len(set(call_ids)) == 2
+    assert len(client.requests) == 3
+    assert all(request["tools"] for request in client.requests)
 
     # The arguments streamed as JSON fragments were reassembled and decoded.
     assistant = a11.from_chunk(new_interactions[0].content[0])

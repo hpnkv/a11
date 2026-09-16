@@ -278,6 +278,10 @@ async def test_tool_turn_preserves_explicit_reasoning_effort(monkeypatch):
     assert client.completions.request is None
     assert len(client.responses.requests) == 2
     assert all(
+        request["tools"][0]["name"] == "lookup"
+        for request in client.responses.requests
+    )
+    assert all(
         request["max_output_tokens"] == 321
         for request in client.responses.requests
     )

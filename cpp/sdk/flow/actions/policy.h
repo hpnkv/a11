@@ -130,6 +130,8 @@ struct ProcessPolicy {
   std::vector<std::string> programs;
   /** Read-only runtime and toolchain roots needed after the child starts. */
   std::vector<std::string> read_roots;
+  /** Writable temporary and runtime roots needed while a child runs. */
+  std::vector<std::string> write_roots;
   /** Whether any program may be run. */
   bool any_program = false;
   /** Whether a child inherits this process's environment. */

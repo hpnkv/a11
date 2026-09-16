@@ -137,7 +137,7 @@
             "report_completion",
             "request_user_input"
           ],
-          "markdownDescription": "Patterns for the gateway's own tools, added to this editor's. Defaults cover a coding-agent-enabled Gateway; remove entries to narrow its capabilities."
+          "markdownDescription": "Additional Gateway tool names or patterns. A coding-agent Gateway's model-facing tools are admitted automatically from `coding_agent_info`; these values also provide the fallback for a general Gateway."
         },
         "a11.flow.toolPath": {
           "type": "string",

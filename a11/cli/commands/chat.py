@@ -112,6 +112,11 @@ def _configure(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--task", help="Run an initial coding task.")
     parser.add_argument(
+        "--no-banner",
+        action="store_true",
+        help="Show a compact welcome card instead of the ASCII logo.",
+    )
+    parser.add_argument(
         "--cwd",
         default=".",
         help="Workspace directory (default: current directory).",
@@ -130,7 +135,7 @@ def _configure(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--sandbox",
-        choices=("read-only", "workspace-write"),
+        choices=("read-only", "workspace-write", "unrestricted"),
         default="workspace-write",
         help="A11 native sandbox filesystem mode.",
     )
@@ -248,6 +253,7 @@ async def _run(args: argparse.Namespace) -> int:
         max_turns=args.max_turns,
         timeout_seconds=args.timeout,
         non_interactive=args.non_interactive,
+        no_banner=args.no_banner,
         voice=not args.no_voice,
         voice_model=args.voice_model,
         extra_headers=[(key, value) for key, value in args.headers or []],

@@ -19,6 +19,7 @@ package dev.curiositystack.a11.clion.tools
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.command.CommandProcessor
 import com.intellij.openapi.editor.Document
+import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.TextRange
@@ -46,11 +47,43 @@ private const val PREVIEW_CONTEXT_LINES = 2
 /**
  * Reading a unified diff, placing it against a document, and applying it.
  *
- * `apply_patch` locates and applies a patch. The suggestion popup locates the
- * same patch for preview, then locates it again before applying because the
+ * `ide__apply_patch` locates and applies a patch. The suggestion popup locates
+ * the same patch for preview, then locates it again before applying because the
  * document may have changed. Both paths therefore use identical validation.
  */
 internal object Patch {
+
+    /** Normalize changed-line whitespace and the patch's final newline. */
+    fun normalize(patch: String): String =
+        patch.lineSequence().joinToString("\n") { line ->
+            if (line.startsWith('+') || line.startsWith('-')) line.trimEnd() else line
+        }.trimEnd('\n') + "\n"
+
+    sealed interface Operation {
+        val path: String
+
+        class Update(override val path: String) : Operation
+        class Create(override val path: String) : Operation
+        class Delete(override val path: String) : Operation
+        class Rename(override val path: String, val newPath: String) : Operation
+    }
+
+    /** The file lifecycle operation encoded by standard diff headers. */
+    fun operation(patch: String, fallbackPath: String): Operation {
+        fun value(prefix: String): String? {
+            val raw = patch.lineSequence().firstOrNull { it.startsWith(prefix) }
+                ?.removePrefix(prefix)?.substringBefore('\t')?.trim()
+                ?: return null
+            return raw.removeSurrounding("\"").removePrefix("a/").removePrefix("b/")
+        }
+        val oldPath = value("--- ")
+        val newPath = value("+++ ")
+        if (oldPath == "/dev/null") return Operation.Create(newPath ?: fallbackPath)
+        if (newPath == "/dev/null") return Operation.Delete(fallbackPath)
+        val renamed = value("rename to ")
+        if (renamed != null) return Operation.Rename(fallbackPath, renamed)
+        return Operation.Update(fallbackPath)
+    }
 
     /**
      * Every hunk of [patch] placed against [document], top to bottom.
@@ -65,7 +98,8 @@ internal object Patch {
      * there are no hunks, or one does not fit.
      */
     fun locate(document: Document, patch: String): List<Applied> {
-        val hunks = parseHunks(patch, indented = false)
+        val normalized = normalize(patch)
+        val hunks = parseHunks(normalized, indented = false)
         require(hunks.isNotEmpty()) {
             "No hunks in the patch: expected a unified diff, with a line per change" +
                 " prefixed ' ' to keep, '-' to remove or '+' to add."
@@ -73,7 +107,7 @@ internal object Patch {
         return try {
             locateAll(document, hunks)
         } catch (mismatch: IllegalArgumentException) {
-            val indented = parseHunks(patch, indented = true)
+            val indented = parseHunks(normalized, indented = true)
             try {
                 locateAll(document, indented)
             } catch (again: IllegalArgumentException) {
@@ -91,12 +125,18 @@ internal object Patch {
      * Edits are applied bottom to top to preserve the offsets from [locate].
      * Call on the EDT; this method enters the write action.
      */
-    fun apply(project: Project, document: Document, edits: List<Applied>) {
+    fun apply(
+        project: Project,
+        document: Document,
+        edits: List<Applied>,
+        after: (() -> Unit)? = null,
+    ) {
         CommandProcessor.getInstance().executeCommand(
             project,
             {
                 ApplicationManager.getApplication().runWriteAction {
                     for (edit in edits.asReversed()) rewrite(document, edit)
+                    after?.invoke()
                 }
             },
             PATCH_COMMAND_NAME,
@@ -104,6 +144,29 @@ internal object Patch {
         )
         PsiDocumentManager.getInstance(project).commitDocument(document)
         FileDocumentManager.getInstance().saveDocument(document)
+    }
+
+    /** The complete text produced by already-located edits. */
+    fun result(document: Document, edits: List<Applied>): String {
+        var result = ""
+        CommandProcessor.getInstance().runUndoTransparentAction {
+            ApplicationManager.getApplication().runWriteAction {
+                val copy = EditorFactory.getInstance().createDocument(document.text)
+                for (edit in edits.asReversed()) rewrite(copy, edit)
+                result = copy.text
+            }
+        }
+        return result
+    }
+
+    /** Run a file lifecycle change as the same single IDE command as an edit. */
+    fun command(project: Project, body: () -> Unit) {
+        CommandProcessor.getInstance().executeCommand(
+            project,
+            { ApplicationManager.getApplication().runWriteAction(body) },
+            PATCH_COMMAND_NAME,
+            PATCH_COMMAND_GROUP,
+        )
     }
 
     /**
@@ -209,9 +272,13 @@ internal object Patch {
      * How many lines the placed [edits]
      * leave behind, and how many they replace.
      */
-    fun added(edits: List<Applied>): Int = edits.sumOf { it.hunk.after.size }
+    fun added(edits: List<Applied>): Int = edits.sumOf { edit ->
+        edit.hunk.lines.count { it.kind == '+' }
+    }
 
-    fun removed(edits: List<Applied>): Int = edits.sumOf { it.hunk.before.size }
+    fun removed(edits: List<Applied>): Int = edits.sumOf { edit ->
+        edit.hunk.lines.count { it.kind == '-' }
+    }
 
     /**
      * Every hunk placed against the file,

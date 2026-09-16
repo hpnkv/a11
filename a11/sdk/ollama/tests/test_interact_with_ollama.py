@@ -83,7 +83,10 @@ class _FakeStream:
 class _FakeClient:
     """Replays one scripted chunk list per `chat` call (i.e. per round)."""
 
+    last = None
+
     def __init__(self, rounds):
+        type(self).last = self
         self._rounds = list(rounds)
         self._n = 0
         self.requests = []
@@ -250,6 +253,8 @@ async def test_multi_round_tool_calls_get_unique_ids(monkeypatch):
     ]
     assert len(call_ids) == 2
     assert len(set(call_ids)) == 2
+    assert len(_FakeClient.last.requests) == 3
+    assert all(request["tools"] for request in _FakeClient.last.requests)
 
 
 @pytest.mark.asyncio

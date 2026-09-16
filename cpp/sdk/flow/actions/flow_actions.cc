@@ -14,6 +14,9 @@
 
 #include "sdk/flow/actions/flow_actions.h"
 
+#include <algorithm>
+#include <cstdlib>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <utility>
@@ -32,6 +35,8 @@
 namespace a11::sdk::flow {
 namespace {
 
+namespace fs = std::filesystem;
+
 /// A size limit on a read nobody has thought about. Large enough for the files
 /// a composition actually reads, small enough that a flow pointed at a disk
 /// image fails instead of filling memory.
@@ -39,6 +44,37 @@ constexpr std::uint64_t kDefaultMaxReadBytes = 256 * 1024 * 1024;
 /// A directory listing nobody bounded. A tree walk that reaches this has
 /// almost certainly been pointed at the wrong root.
 constexpr std::uint64_t kDefaultMaxEntries = 1000000;
+
+/** Existing platform scratch locations a confined child may write. */
+std::vector<std::string> DefaultProcessWriteRoots() {
+  std::vector<std::string> roots;
+  const auto add = [&roots](const char* raw) {
+    if (raw == nullptr || *raw == '\0')
+      return;
+    std::error_code error;
+    const fs::path absolute = fs::absolute(raw, error).lexically_normal();
+    if (error || !fs::is_directory(absolute, error) || error)
+      return;
+    roots.push_back(absolute.string());
+    const fs::path canonical = fs::canonical(absolute, error);
+    if (!error)
+      roots.push_back(canonical.string());
+  };
+  std::error_code error;
+  const fs::path temporary = fs::temp_directory_path(error);
+  if (!error) {
+    const std::string temporary_string = temporary.string();
+    add(temporary_string.c_str());
+  }
+  for (const char* name : {"TMPDIR", "TMP", "TEMP", "XDG_RUNTIME_DIR"}) {
+    add(std::getenv(name));
+  }
+  add("/tmp");
+  add("/var/tmp");
+  std::sort(roots.begin(), roots.end());
+  roots.erase(std::unique(roots.begin(), roots.end()), roots.end());
+  return roots;
+}
 
 }  // namespace
 
@@ -49,6 +85,7 @@ CapabilitiesBuilder ReadOnlyCapabilities(std::vector<std::string> roots) {
   capabilities->filesystem.follow_symlinks = false;
   capabilities->filesystem.max_read_bytes = kDefaultMaxReadBytes;
   capabilities->filesystem.max_entries = kDefaultMaxEntries;
+  capabilities->process.write_roots = DefaultProcessWriteRoots();
   return capabilities;
 }
 

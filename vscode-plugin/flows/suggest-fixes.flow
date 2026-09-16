@@ -26,7 +26,7 @@ flow suggest-fixes {
 
   # --- what the client is looking at -----------------------------------------
 
-  active = call get_active_file(request: {include_line_numbers: true})
+  active = call ide__get_active_file(request: {include_line_numbers: true})
 
   file_path = node() in scratch
   active.path -> file_path
@@ -34,7 +34,7 @@ flow suggest-fixes {
   file_text = node() in scratch
   active.lines | join "\n" | truncate 40000 -> file_text
 
-  found = call get_error_highlights(
+  found = call ide__get_error_highlights(
     request: file_path | map {path: it, start_line: 0}
   )
 
@@ -55,7 +55,7 @@ flow suggest-fixes {
     | map a11.sdk.Interaction{
       role: "user",
       system_instructions: [to_chunk(join([
-        "Review one file in a JetBrains IDE: the file, then what its analysis",
+        "Review one file in the IDE: the file, then what its analysis",
         "underlines. Lines and columns are 0-based, end_column exclusive.",
         "",
         "Each line arrives as its 0-based number, a tab, then the line. Read start_line",

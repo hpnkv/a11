@@ -71,7 +71,7 @@ private const val POPUP_MAX_HEIGHT = 440
  *
  * The IDE highlight already identifies the problem, so this popup begins with
  * the explanation and proposed change. It displays the patch as a diff and
- * applies it through `apply_patch`.
+ * applies it through `ide__apply_patch`.
  *
  * The IDE tooltip remains at the bottom. The hover listener suppresses the
  * native popup only while rendering its content here; see [SuggestionHover].
@@ -434,9 +434,9 @@ internal object SuggestionPopup {
      * body, or null when the highlights contain no tooltip or description.
      *
      * Read from the daemon's markup, which is the same place
-     * `get_error_highlights` reads and therefore the same text the flow was
-     * asked about. Each tooltip arrives as a whole HTML document, so the bodies
-     * are unwrapped before being joined; a highlight with no tooltip
+     * `ide__get_error_highlights` reads and therefore the same text the flow
+     * was asked about. Each tooltip arrives as a whole HTML document, so the
+     * bodies are unwrapped before being joined; a highlight with no tooltip
      * contributes its plain description.
      */
     private fun nativeTooltip(project: Project, editor: Editor, range: TextRange): String? {

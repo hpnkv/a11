@@ -438,6 +438,43 @@
       color: var(--a11-error);
       white-space: pre-wrap;
     }
+    .tool-run.patch-run {
+      border-color: color-mix(in srgb, var(--a11-accent) 30%, var(--a11-border));
+      background: var(--a11-assistant-bg);
+    }
+    .tool-run.patch-run > summary { background: color-mix(in srgb, var(--a11-accent) 5%, transparent); }
+    .tool-run.patch-run .tool-run-icon { color: var(--a11-accent); }
+    .tool-run.patch-run .tool-run-body { padding: 0; }
+    .patch-result { display: grid; min-width: 0; }
+    .patch-file + .patch-file { border-top: 1px solid var(--a11-border); }
+    .patch-file > header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 8px 12px;
+      background: color-mix(in srgb, var(--a11-fg) 3%, transparent);
+    }
+    .patch-file > header code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .patch-counts { display: flex; gap: 7px; margin-left: auto; font-size: 10px; font-style: normal; }
+    .patch-counts b { color: var(--a11-success); }
+    .patch-counts i { color: var(--a11-error); font-style: normal; font-weight: 600; }
+    .patch-lines { max-height: 360px; overflow: auto; background: var(--a11-bg); }
+    .patch-line {
+      display: grid;
+      grid-template-columns: 4.5ch 2ch minmax(max-content, 1fr);
+      min-width: max-content;
+      font-family: var(--a11-mono);
+      font-size: 11px;
+      line-height: 19px;
+      white-space: pre;
+    }
+    .patch-line-number { padding-right: 8px; color: var(--a11-muted); text-align: right; user-select: none; }
+    .patch-line-marker { text-align: center; user-select: none; }
+    .patch-line code { padding-right: 12px; font: inherit; }
+    .patch-line.added { background: color-mix(in srgb, var(--a11-success) 13%, var(--a11-bg)); }
+    .patch-line.added .patch-line-marker { color: var(--a11-success); }
+    .patch-line.removed { background: color-mix(in srgb, var(--a11-error) 12%, var(--a11-bg)); }
+    .patch-line.removed .patch-line-marker { color: var(--a11-error); }
     .bubble-body + .completion-report,
     .tool-run + .completion-report,
     .completion-report + .bubble-body { margin-top: 8px; }
@@ -1039,16 +1076,17 @@
       --flow-editor-line-height: 18.6px;
       position: relative;
       display: grid;
-      min-height: 260px;
-      max-height: 460px;
+      height: clamp(200px, 45vh, 460px);
+      min-height: 0;
       overflow: hidden;
     }
     .flow-editor-highlight, .flow-editor-input {
       grid-area: 1 / 1;
       box-sizing: border-box;
       width: 100%;
-      min-height: 260px;
-      max-height: 460px;
+      height: 100%;
+      min-height: 0;
+      max-height: none;
       margin: 0;
       padding: 10px 12px 10px 52px !important;
       overflow: auto;
@@ -1089,7 +1127,7 @@
     .flow-editor-gutter span.warning { color: var(--a11-json-number); }
     .flow-editor-input {
       z-index: 1;
-      resize: vertical;
+      resize: none;
       outline: none;
       background: transparent;
       color: transparent;
@@ -1194,7 +1232,12 @@
       font-size: 9px;
     }
     .runner-value-control:hover { background: var(--a11-bg); color: var(--a11-fg); }
-    .runner-value-body { max-height: 256px; overflow: hidden; padding: 8px; }
+    .runner-value-body {
+      max-height: 256px;
+      overflow: auto;
+      overscroll-behavior: contain;
+      padding: 8px;
+    }
     .runner-value-body.expanded { max-height: none; overflow: visible; }
     .runner-value-body.expanded .runner-value-content,
     .runner-value-body.expanded .runner-markdown,
@@ -1221,9 +1264,7 @@
     .debug-image { display: block; max-width: 100%; max-height: 448px; margin: auto; object-fit: contain; }
     .debug-media { display: block; width: 100%; max-height: 448px; }
     .runner-value-content, .runner-log-entry > pre {
-      max-height: 320px;
       margin: 0;
-      overflow: auto;
       padding: 9px;
       color: var(--a11-fg);
       font-family: var(--a11-mono);
@@ -1232,6 +1273,8 @@
       overflow-wrap: anywhere;
       white-space: pre-wrap;
     }
+    .runner-value-content { max-height: none; overflow: visible; }
+    .runner-log-entry > pre { max-height: 320px; overflow: auto; }
     .runner-log-entry {
       border: 1px solid var(--a11-border);
       border-radius: 9px;
@@ -1298,20 +1341,24 @@
     .hljs-title, .hljs-section, .hljs-function, .hljs-variable,
     .hljs-property, .hljs-params { color: var(--a11-json-key); }
     @media (max-width: 720px) {
+      html, body { height: auto; min-height: 100%; overflow-y: auto; }
       #app.flow-runner-view {
-        height: 100vh;
-        min-height: 0;
+        height: auto;
+        min-height: 100vh;
         grid-template-columns: 1fr;
         grid-template-rows: max-content;
         grid-auto-rows: max-content;
-        overflow-y: auto;
+        overflow: visible;
       }
       .runner-controls, .runner-output-panel, .runner-log-panel {
         grid-column: 1;
         grid-row: auto;
       }
       .runner-controls { overflow: visible; }
-      .runner-output-panel, .runner-log-panel { min-height: 160px; }
+      .runner-output-panel, .runner-log-panel {
+        height: clamp(220px, 55vh, 480px);
+        min-height: 0;
+      }
     }
     .output-row { display: flex; align-items: baseline; gap: 8px; margin-top: 6px; }
     .output-name { font-family: var(--a11-mono); font-size: 12px; }

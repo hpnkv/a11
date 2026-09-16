@@ -791,6 +791,7 @@ def register_standard_actions(
     inherit_environment: bool = False,
     max_seconds: int = 600,
     current_directory: str = ".",
+    unrestricted: bool = False,
 ) -> None:
     """Register native filesystem and process actions with a fixed policy.
 
@@ -798,6 +799,8 @@ def register_standard_actions(
     ``require_sandbox=True``, registration succeeds but a process call refuses
     to start on a host where the kernel confinement is unavailable.
     Relative filesystem paths resolve against ``current_directory``.
+    ``unrestricted=True`` disables filesystem containment and the kernel
+    sandbox. Write/process permissions and resource limits still apply.
     """
     _flow.register_standard_actions(
         registry,
@@ -808,6 +811,7 @@ def register_standard_actions(
         inherit_environment=inherit_environment,
         max_seconds=max_seconds,
         current_directory=current_directory,
+        unrestricted=unrestricted,
     )
 
 

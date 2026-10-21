@@ -38,6 +38,15 @@ site is still built (the C++ pages are simply omitted). The
 uv run --group docs mkdocs serve -f doc/mkdocs.yml
 ```
 
+## Social preview images
+
+Run `node scripts/render_social_previews.mjs` from the repository root to
+render the documentation and GitHub cards at 2400 × 1260. The renderer loads
+the landing page's Noto Sans and JetBrains Mono webfonts from the sibling
+`a11x/frontend` checkout; pass another frontend path as its first argument.
+That checkout needs its dependencies and Playwright's Chromium installed.
+Rendering verifies that the hero uses the loaded `NotoSans-Bold` font.
+
 ## Analytics
 
 Set `A11_ANALYTICS_ENDPOINT` to a GoatCounter-compatible `/count` URL when

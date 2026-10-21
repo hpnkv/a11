@@ -3,9 +3,22 @@
   <title id="title">A11 Documentation</title>
   <desc id="description">Build AI applications like normal software.
     APIs, guides and runnable examples for Python, TypeScript and C++.</desc>
-  <!-- Render with Noto Sans (regular and extra bold) and JetBrains Mono:
-       rsvg-convert -o a11-docs-social-card.png a11-docs-social-card.svg -->
+  <!-- Render both PNGs at 2x with explicitly loaded a11x webfonts:
+       node scripts/render_social_previews.mjs -->
   <defs>
+    <pattern id="hero-dots" width="24" height="24"
+             patternUnits="userSpaceOnUse">
+      <circle cx="12" cy="12" r=".8" fill="#0969da" opacity=".24"/>
+    </pattern>
+    <linearGradient id="dot-fade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity="0"/>
+      <stop offset=".1" stop-color="#fff"/>
+      <stop offset=".85" stop-color="#fff"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+    <mask id="dot-mask">
+      <rect width="1200" height="630" fill="url(#dot-fade)"/>
+    </mask>
     <radialGradient id="upper-wash" gradientUnits="userSpaceOnUse"
                     cx="1056" cy="113.4" r="396">
       <stop stop-color="#218bff" stop-opacity=".17"/>
@@ -21,13 +34,15 @@
   <rect width="1200" height="630" fill="#f6f8fa"/>
   <rect width="1200" height="630" fill="url(#lower-wash)"/>
   <rect width="1200" height="630" fill="url(#upper-wash)"/>
+  <rect width="1200" height="630" fill="url(#hero-dots)"
+        mask="url(#dot-mask)"/>
   <path d="M1197.4-15.3 992.6 615.3" fill="none" stroke="#d0d7de"/>
 
   <circle cx="82" cy="78" r="7" fill="none" stroke="#0969da"
           stroke-width="6"/>
-  <text x="108" y="89" fill="#1f2328"
-        font-family="Noto Sans ExtraBold,Noto Sans,sans-serif"
-        font-size="30" font-weight="800" letter-spacing="-.8">
+  <text x="108" y="89" fill="#202e40"
+        font-family="Noto Sans,sans-serif"
+        font-size="30" font-weight="600" letter-spacing="-.8">
     A11 Documentation
   </text>
 
@@ -36,23 +51,23 @@
     <rect x="945" y="58" width="114" height="34" rx="17"/>
     <rect x="1068" y="58" width="60" height="34" rx="17"/>
   </g>
-  <g fill="#57606a" font-family="JetBrains Mono,monospace" font-size="14"
+  <g fill="#4e5c70" font-family="JetBrains Mono,monospace" font-size="14"
      text-anchor="middle">
     <text x="896" y="80">Python</text>
     <text x="1002" y="80">TypeScript</text>
     <text x="1098" y="80">C++</text>
   </g>
 
-  <text x="72" y="298" fill="#1f2328"
-        font-family="Noto Sans ExtraBold,Noto Sans,sans-serif"
-        font-size="62" font-weight="800" letter-spacing="-2.4">
+  <text x="72" y="298" fill="#202e40"
+        font-family="Noto Sans,sans-serif"
+        font-size="62" font-weight="700" letter-spacing="-3.41">
     <tspan x="72">Build AI applications</tspan>
-    <tspan x="72" dy="66.96">like normal software.</tspan>
+    <tspan x="72" dy="66.65" fill="#075fc7">like normal software.</tspan>
   </text>
 
-  <text x="72" y="568" fill="#57606a" font-family="Noto Sans,sans-serif"
+  <text x="72" y="568" fill="#4e5c70" font-family="Noto Sans,sans-serif"
         font-size="26">APIs, guides and runnable examples.</text>
-  <text x="1128" y="568" fill="#57606a"
+  <text x="1128" y="568" fill="#4e5c70"
         font-family="JetBrains Mono,monospace" font-size="17"
         text-anchor="end">docs.a11.to</text>
 </svg>

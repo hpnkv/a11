@@ -24,10 +24,17 @@
         content="{{ page.title | default(config.site_name, true) }}">
   <meta property="og:description" content="{{ config.site_description }}">
   <meta property="og:image"
-        content="{{ config.site_url }}assets/a11-social-card.png">
+        content="{{ config.site_url }}assets/a11-docs-social-card.png">
+  <meta property="og:image:type" content="image/png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt"
+        content="A11 Documentation. Build AI applications like normal software.">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:image"
-        content="{{ config.site_url }}assets/a11-social-card.png">
+        content="{{ config.site_url }}assets/a11-docs-social-card.png">
+  <meta name="twitter:image:alt"
+        content="A11 Documentation. Build AI applications like normal software.">
   <meta name="a11-analytics-endpoint"
         content="{{ config.extra.analytics_endpoint }}">
 {% endblock %}

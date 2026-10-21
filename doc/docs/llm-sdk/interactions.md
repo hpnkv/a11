@@ -195,3 +195,89 @@ usage fields, including modality and other token breakdowns. Claude Code also
 retains `model_usage`; its primary result usage overlaps that per-model map.
 Codex preserves thread snapshots and the turn delta separately. These raw
 records retain provider scopes and are not additional counters to sum.
+
+### Read revised and partial usage
+
+Presentational interfaces show usage after a completed turn, using a compact
+label such as `1,000 input (900 cached), 50 output`. The displayed input includes
+uncached input, cache reads, and separate cache writes; the cached figure counts
+cache reads within that input. Detailed counters remain available in the data.
+
+Providers emit normalized `a11.usage` events alongside their raw events. A
+`usage_id` identifies one contribution; a higher `usage_revision` replaces its
+previous snapshot. An interaction's `usage_metadata` and an event with the same
+identity describe the same contribution. Count it once. `complete=False` marks
+an unfinished report or a gap in the available source coverage. Missing figures
+remain unknown, including after a failed or cancelled run.
+
+The gateway stores these observations in the initiating interaction's
+`backend_specific_metadata["a11.usage"]`. They travel with the conversation and
+remain separate from content sent to the model. Read typed observations with
+`a11.sdk.usage.interaction_updates`; use `UsageLedger` to replace revisions when
+aggregating their consumption. The presentation reducers handle these updates
+on both the live and replay paths.
+
+Compaction and tool-result clearing preserve earlier consumption. A
+`context_only` observation changes the context display without adding tokens to
+consumption. `context_invalidated` clears an observation when history changes
+without a replacement measurement. `context_source="reported"` identifies a
+context figure supplied by the harness; `"request_estimate"` identifies the
+latest request's input-plus-output approximation. Aggregate usage alone does
+not establish context occupancy.
+
+For example, requests consuming 1,000 and 700 tokens still consume 1,700 after
+history is compacted. A harness may separately report a new context of 300
+tokens. Include any reported summarization work once, checking whether the
+harness's aggregate already includes it. Tool output removed before a model
+request contributes no input to that request; bytes removed from a tool result
+do not establish an exact token saving.
+
+### Reconcile provider and agent scopes
+
+Use `UsageLedger` when consuming updates directly. It replaces older revisions
+and excludes rows whose `contribution` is `"reconciliation"`. These rows retain
+overlapping detail for inspection; their enclosing aggregate supplies consumption.
+Each update's `scope` identifies exposed session, turn, request, and agent IDs.
+`parent_agent_id` distinguishes a child's context from the primary context.
+The `figures` map retains a value and its reported, partial, or unknown quality
+for each counter. Unknown output does not erase observed input after a crash.
+
+```python
+from a11.sdk.usage import UsageLedger, interaction_updates
+
+ledger = UsageLedger()
+for update in interaction_updates(question):
+    ledger.observe(update)
+usage = ledger.totals()
+```
+
+| Provider | Consumption source | History and interruption behavior |
+| --- | --- | --- |
+| GPT | Terminal Responses or Chat Completions usage | Keep available terminal counts on incomplete or failed responses; missing terminal usage remains unknown. |
+| Claude | All reported `usage.iterations`, or top-level usage when iterations are absent | Compaction iterations contribute once. Context edits preserve consumption and replace context observations. |
+| Codex | A delta of each thread's cumulative snapshots | Primary and child threads contribute separately. Child completion leaves the parent running. Missing baselines and counter regressions mark incomplete coverage. |
+| Claude Code | The inclusive per-model result map, or main-loop usage when that map is absent | Result usage survives errors. Observed request inputs survive a missing result; placeholder output stays unknown. |
+| Gemini | Interactions usage, including separate thought output | Continuation input can be incremental; it does not establish full context occupancy. |
+| Ollama | Terminal prompt and evaluation counts | Cache and context-shift detail is available only when the daemon exposes it. |
+| vLLM | Terminal server usage | Prefix-cache, reasoning, speculative, and modality details depend on the server's reporting. |
+| Browser Gemma | Optional `GemmaEngine.usage()` inference counters | Counts include generated text removed by stop filtering and are read before teardown on success or failure. The default MediaPipe engine lacks output-token usage counters, so exact consumption is unavailable. |
+
+Claude Code's aggregate lifecycle depends on its CLI version. Through 2.1.276,
+SDK-resumed processes start usage at zero. From 2.1.277, normal session resume
+and fork restore earlier totals. A11 subtracts the persisted source baseline
+for that session; an absent baseline or unknown CLI version marks coverage
+incomplete. Within a streaming query, later results replace the same aggregate.
+See the [Agent SDK usage contract](https://code.claude.com/docs/en/agent-sdk/cost-tracking).
+
+Claude API compaction excludes summarization from top-level input and output.
+A11 sums the iteration records and uses the final iteration separately for a
+request-context estimate. It does not add top-level usage to those iterations.
+Enable API history transformations explicitly through `betas` and
+`context_management` in `CreateMessageConfig`; usage tracking enables no policy
+by itself. See [compaction usage](https://platform.claude.com/docs/en/build-with-claude/compaction-threshold#understanding-usage).
+
+Provider streams close when a run completes, fails, or is cancelled. Reported
+usage already stored with the initiating interaction survives that termination.
+Unreported work from an interrupted request or an SDK-internal retry remains
+unknown; visible text, tool-output bytes, and configured context capacity cannot
+supply an exact replacement measurement.

@@ -35,6 +35,7 @@ from a11.sdk.ollama.interact_with_ollama_schema import (
     MAX_OUTPUT_TOKENS_HEADER,
 )
 from a11.sdk import llm
+from a11.sdk.usage import UsageReporter, provider_event, closing_stream
 from a11.sdk.llm_tools import runner
 
 
@@ -200,21 +201,25 @@ def _ollama_from_normalized(
             if part.data:
                 images.append(part.data)
         elif part.type == llm.NormalizedContentType.TOOL_CALL:
-            tool_calls.append({
-                "function": {
-                    "name": part.name or "",
-                    "arguments": part.arguments or {},
+            tool_calls.append(
+                {
+                    "function": {
+                        "name": part.name or "",
+                        "arguments": part.arguments or {},
+                    }
                 }
-            })
+            )
         elif part.type == llm.NormalizedContentType.TOOL_RESULT:
             name = part.name
             if not name and part.call_id and resolve_call_name is not None:
                 name = resolve_call_name(part.call_id)
-            tool_results.append({
-                "role": "tool",
-                "content": part.content or "",
-                "tool_name": name or part.call_id or "",
-            })
+            tool_results.append(
+                {
+                    "role": "tool",
+                    "content": part.content or "",
+                    "tool_name": name or part.call_id or "",
+                }
+            )
 
     messages: list[dict[str, Any]] = []
     if text_chunks or images or tool_calls:
@@ -449,12 +454,14 @@ class _StreamAccumulator:
                     params=dict(function.arguments or {}),
                 )
             )
-            self._raw_tool_calls.append({
-                "function": {
-                    "name": function.name,
-                    "arguments": dict(function.arguments or {}),
+            self._raw_tool_calls.append(
+                {
+                    "function": {
+                        "name": function.name,
+                        "arguments": dict(function.arguments or {}),
+                    }
                 }
-            })
+            )
 
     @property
     def content(self) -> str:
@@ -505,11 +512,13 @@ async def _build_tool_results_from_outputs(
             message["tool_name"] = call_names[call_id]
         messages = [message]
         if images:
-            messages.append({
-                "role": "user",
-                "content": _IMAGE_RESULT_NOTE,
-                "images": [image.data or "" for image in images],
-            })
+            messages.append(
+                {
+                    "role": "user",
+                    "content": _IMAGE_RESULT_NOTE,
+                    "images": [image.data or "" for image in images],
+                }
+            )
         return messages
 
     return await llm.build_tool_results(executed, as_tool_message)
@@ -732,10 +741,12 @@ async def interact_with_ollama(action: a11.Action):
             round_number += 1
             messages: list[dict[str, Any]] = []
             if conversation.system_prompt:
-                messages.append({
-                    "role": "system",
-                    "content": conversation.system_prompt,
-                })
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": conversation.system_prompt,
+                    }
+                )
             messages.extend(conversation.messages)
             await action.logf(
                 "Ollama round %d sends %d %s to %s; %d %s available.",
@@ -748,6 +759,8 @@ async def interact_with_ollama(action: a11.Action):
                 channel="model",
             )
 
+            reporter = UsageReporter(action, "ollama", model)
+            await reporter.report(llm.UsageMetadata(), complete=False)
             try:
                 with _serializing_a_raw_tool_schema():
                     stream = await client.chat(
@@ -768,24 +781,31 @@ async def interact_with_ollama(action: a11.Action):
             accumulator = _StreamAccumulator(call_id_prefix, next_tool_call_id)
             snapshot = None
 
-            async for chunk in stream:
-                await action["event_stream"].put(chunk)
+            async with closing_stream(stream):
+                async for chunk in stream:
+                    await action["event_stream"].put(provider_event(chunk))
 
-                message = getattr(chunk, "message", None)
-                if message is not None:
-                    accumulator.add(message)
-                    await output.put(
-                        thought=message.thinking or "",
-                        text=message.content or "",
-                    )
+                    message = getattr(chunk, "message", None)
+                    if message is not None:
+                        accumulator.add(message)
+                        await output.put(
+                            thought=message.thinking or "",
+                            text=message.content or "",
+                        )
 
-                if getattr(chunk, "done", False):
-                    snapshot = chunk
+                    if getattr(chunk, "done", False):
+                        snapshot = chunk
+                        await reporter.report(
+                            _build_usage_metadata(chunk),
+                            chunk.model_dump(
+                                exclude={"message"}, exclude_none=True
+                            ),
+                        )
 
             tool_calls = accumulator.tool_calls
             next_tool_call_id += len(tool_calls)
             message_dict = accumulator.message_dict()
-            usage = _build_usage_metadata(snapshot)
+            usage = reporter.usage
 
             snapshot_model = (
                 str(snapshot.model)
@@ -864,11 +884,13 @@ async def interact_with_ollama(action: a11.Action):
                     **executed.log_metadata(),
                 },
                 content=[
-                    a11.to_chunk({
-                        "messages": await _build_tool_results_from_outputs(
-                            executed, call_names
-                        )
-                    })
+                    a11.to_chunk(
+                        {
+                            "messages": await _build_tool_results_from_outputs(
+                                executed, call_names
+                            )
+                        }
+                    )
                 ],
             )
             previous_interaction_id = tool_output_interaction.id

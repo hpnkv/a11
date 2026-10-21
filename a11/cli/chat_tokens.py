@@ -24,11 +24,12 @@ class ChatTokens:
 
     def __init__(self) -> None:
         self.context: int | None = None
+        self._context_estimated = False
         self.begin_turn()
 
     def begin_turn(self) -> None:
         self._lengths: dict[int, int] = {}
-        self._usage_ids: set[int | str] = set()
+        self._usages: dict[int | str, UsageMetadata] = {}
         self._characters = 0
         self._reported_characters = 0
         self._output = 0
@@ -36,7 +37,10 @@ class ChatTokens:
         self._finished = False
 
     def restore_context(self, usage: UsageMetadata) -> None:
-        if usage.context_tokens is not None:
+        self._context_estimated = usage.context_source == "request_estimate"
+        if usage.context_invalidated:
+            self.context = None
+        elif usage.context_tokens is not None:
             self.context = usage.context_tokens
         elif (
             usage.usage_scope == "turn"
@@ -62,13 +66,22 @@ class ChatTokens:
             self._characters += max(0, length - self._lengths.get(key, 0))
             self._lengths[key] = length
         elif block.kind == BlockKind.USAGE and block.usage is not None:
-            key = block.interaction_id or key
-            if key in self._usage_ids:
+            usage = block.usage
+            key = usage.usage_id or block.interaction_id or key
+            previous = self._usages.get(key)
+            if previous is not None and (
+                usage.usage_revision <= previous.usage_revision
+            ):
                 return
-            self._usage_ids.add(key)
-            self.restore_context(block.usage)
-            if block.usage.output_tokens is not None:
-                self._output += block.usage.output_tokens
+            self._usages[key] = usage.model_copy()
+            self.restore_context(usage)
+            if (
+                not usage.context_invalidated
+                and usage.output_tokens is not None
+            ):
+                self._output += usage.output_tokens - (
+                    previous.output_tokens or 0 if previous is not None else 0
+                )
                 self._has_output = True
                 self._reported_characters = self._characters
 
@@ -78,15 +91,20 @@ class ChatTokens:
     @property
     def output_label(self) -> str:
         pending = max(0, self._characters - self._reported_characters)
-        if self._finished and self._has_output:
+        complete = all(
+            u.complete
+            for u in self._usages.values()
+            if not u.context_invalidated and not u.context_only
+        )
+        if self._finished and self._has_output and complete:
             return format_tokens(self._output)
         return format_tokens(
             self._output + (pending + 3) // 4,
-            estimated=bool(pending) or not self._has_output,
+            estimated=bool(pending) or not self._has_output or not complete,
         )
 
     @property
     def context_label(self) -> str:
         if self.context is None:
             return "— tok"
-        return format_tokens(self.context)
+        return format_tokens(self.context, estimated=self._context_estimated)

@@ -186,7 +186,7 @@ def test_working_and_waiting_states_are_outside_the_footer():
 
 
 @pytest.mark.asyncio
-async def test_turn_displays_live_and_final_tokens_and_clear_resets(
+async def test_turn_shows_final_tokens_without_running_counts(
     tmp_path, monkeypatch
 ):
     from a11.sdk.llm import Interaction, UsageMetadata
@@ -205,13 +205,13 @@ async def test_turn_displays_live_and_final_tokens_and_clear_resets(
     async def run_turn(connection, history, user, tools, config, reducer):
         assert ui._tokens.output_label == "~0 tok"
         reducer.on_text("A" * 400)
-        assert "~100 tok output" in str(ui._activity_message())
+        assert "tok output" not in str(ui._activity_message())
         result = Interaction(usage_metadata=UsageMetadata(
             input_tokens=172000, output_tokens=120, total_tokens=172120,
         ))
         reducer.on_interaction(result)
         assert ui._screen._context_usage() == "172.1K tok"
-        assert "120 tok output" in str(ui._activity_message())
+        assert "tok output" not in str(ui._activity_message())
         reducer.end_turn()
         return [result]
 

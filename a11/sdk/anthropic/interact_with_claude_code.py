@@ -24,7 +24,8 @@ rather than running tool calls between rounds itself.
 from __future__ import annotations
 
 import dataclasses
-import json
+from pydantic_core import from_json, to_json
+from pydantic import BaseModel
 import traceback
 import uuid
 from typing import Any, AsyncIterator
@@ -37,6 +38,12 @@ import claude_agent_sdk as cc
 from a11.status import Status, StatusCode, StatusException
 
 from a11.sdk import llm
+from a11.sdk.usage import (
+    UsageReporter,
+    UsageScope,
+    usage_delta,
+    interaction_updates,
+)
 from a11.sdk.anthropic.interact_with_claude_code_schema import (
     CLAUDE_CODE_PRESET,
     ClaudeCodeHeaders,
@@ -44,7 +51,6 @@ from a11.sdk.anthropic.interact_with_claude_code_schema import (
 )
 from a11.sdk.anthropic.messages import Conversation, to_normalized
 from a11.sdk.llm_tools import runner
-
 
 llm.register_interaction_normalizer(llm.Backend.CLAUDE_CODE, to_normalized)
 
@@ -94,11 +100,13 @@ def _as_mcp_result(
     if content or not images:
         blocks.append({"type": "text", "text": content})
     for image in images:
-        blocks.append({
-            "type": "image",
-            "data": image.data or "",
-            "mimeType": image.mime_type or "application/octet-stream",
-        })
+        blocks.append(
+            {
+                "type": "image",
+                "data": image.data or "",
+                "mimeType": image.mime_type or "application/octet-stream",
+            }
+        )
     result: dict[str, Any] = {"content": blocks}
     if failure is not None:
         result["is_error"] = True
@@ -250,6 +258,19 @@ def _build_options(
         resume=resume,
         fork_session=config.fork_session,
         cli_path=config.cli_path,
+        env=dict(config.env),
+        settings=(
+            config.settings.model_dump_json(by_alias=True, exclude_none=True)
+            if config.settings is not None
+            else None
+        ),
+        agents={
+            name: cc.AgentDefinition(
+                **definition.model_dump(by_alias=True, exclude_none=True)
+            )
+            for name, definition in config.agents.items()
+        }
+        or None,
         # Partial messages are what make `text_output` a token stream rather
         # than one value per completed message.
         include_partial_messages=True,
@@ -415,6 +436,14 @@ def _as_event(message: Any) -> dict[str, Any]:
     return payload
 
 
+class _PartialRequestUsage(BaseModel):
+    """Retain observed request inputs before a final harness result."""
+
+    input_tokens: int | None = None
+    cache_read_input_tokens: int | None = None
+    cache_creation_input_tokens: int | None = None
+
+
 def _build_usage_metadata(
     usage: dict[str, Any] | None,
     model_usage: dict[str, Any] | None = None,
@@ -522,7 +551,7 @@ def _tool_log_metadata(logs: dict[str, str]) -> dict[str, bytes]:
     """This round's tool narration as interaction metadata."""
     if not logs:
         return {}
-    return {llm.TOOL_LOGS_METADATA_KEY: json.dumps(logs).encode()}
+    return {llm.TOOL_LOGS_METADATA_KEY: to_json(logs)}
 
 
 def _check_assistant_error(message: cc.AssistantMessage) -> None:
@@ -588,10 +617,12 @@ async def interact_with_claude_code(action: a11.Action):
             action.set_span_attribute("gen_ai.system", "claude_code")
             if model:
                 action.set_span_attribute("gen_ai.request.model", model)
-            action.set_span_input([
-                {"role": message["role"], "content": message["content"]}
-                for message in conversation.messages
-            ])
+            action.set_span_input(
+                [
+                    {"role": message["role"], "content": message["content"]}
+                    for message in conversation.messages
+                ]
+            )
         except Exception:
             logging.debug("failed to record LLM span input", exc_info=True)
 
@@ -634,6 +665,31 @@ async def interact_with_claude_code(action: a11.Action):
     client = _new_client(options)
     session_id = resume
     last_message: Any = None
+    reporter = UsageReporter(action, "claude_code", model or "")
+    compact_context: int | None = None
+    cli_version: tuple[int, ...] | None = None
+    baseline: llm.UsageMetadata | None = None
+    if resume:
+        for previous in reversed(conversation.interactions):
+            for update in reversed(interaction_updates(previous)):
+                if (
+                    update.scope.session_id == resume
+                    and update.source_usage is not None
+                    and update.source_usage.model_extra.get("model_usage")
+                ):
+                    baseline = _build_usage_metadata(
+                        None, update.source_usage.model_extra["model_usage"]
+                    )
+                    break
+            if baseline is not None:
+                break
+            metadata = previous.backend_specific_metadata
+            if metadata.get(SESSION_ID_METADATA_KEY) != resume.encode():
+                continue
+            if raw := metadata.get("model_usage"):
+                baseline = _build_usage_metadata(None, from_json(raw))
+                break
+    partial_requests: dict[str, _PartialRequestUsage] = {}
     # The turn's token counts arrive with the closing `ResultMessage`, so the
     # assistant turn they belong to waits here for them.
     pending_assistant: llm.Interaction | None = None
@@ -656,9 +712,48 @@ async def interact_with_claude_code(action: a11.Action):
                 ),
             ).to_exception() from exc
 
+        await reporter.report(
+            llm.UsageMetadata(usage_scope="turn"),
+            complete=False,
+            coverage="awaiting_harness_result",
+        )
         async for message in client.receive_response():
             await action["event_stream"].put(_as_event(message))
             session_id = getattr(message, "session_id", None) or session_id
+
+            if (
+                isinstance(message, cc.SystemMessage)
+                and message.subtype == "init"
+            ):
+                version = message.data.get("claude_code_version", "")
+                try:
+                    cli_version = tuple(int(p) for p in version.split("."))
+                except ValueError:
+                    cli_version = None
+                reporter.scope = UsageScope(
+                    session_id=session_id,
+                    agent_id=session_id,
+                    turn_id=action.id,
+                    reporting=(
+                        "cumulative"
+                        if cli_version is not None
+                        and cli_version >= (2, 1, 277)
+                        else "snapshot"
+                    ),
+                )
+
+            if (
+                isinstance(message, cc.SystemMessage)
+                and message.subtype == "compact_boundary"
+            ):
+                compact_context = (
+                    message.data.get("compact_metadata") or {}
+                ).get("post_tokens")
+                await reporter.invalidate_context(
+                    _as_event(message),
+                    operation="compaction",
+                    context_tokens=compact_context,
+                )
 
             if isinstance(message, cc.StreamEvent):
                 # A sub-agent's deltas belong to its own trace, not to this
@@ -667,6 +762,8 @@ async def interact_with_claude_code(action: a11.Action):
                     continue
                 event = message.event or {}
                 if event.get("type") != "content_block_delta":
+                    if event.get("type") == "message_start":
+                        compact_context = None
                     continue
                 delta = event.get("delta") or {}
                 if delta.get("type") == "text_delta" and delta.get("text"):
@@ -678,6 +775,34 @@ async def interact_with_claude_code(action: a11.Action):
                 continue
 
             if isinstance(message, cc.AssistantMessage):
+                if message.message_id and message.usage:
+                    partial_requests[message.message_id] = (
+                        _PartialRequestUsage.model_validate(message.usage)
+                    )
+                    partial = {}
+                    for name in (
+                        "input_tokens",
+                        "cache_read_input_tokens",
+                        "cache_creation_input_tokens",
+                    ):
+                        values = [
+                            getattr(u, name) for u in partial_requests.values()
+                        ]
+                        partial[name] = (
+                            sum(values)
+                            if all(v is not None for v in values)
+                            else None
+                        )
+                    await reporter.report(
+                        _build_usage_metadata(
+                            _PartialRequestUsage.model_validate(
+                                partial
+                            ).model_dump()
+                        ),
+                        {"message_usage": partial_requests},
+                        complete=False,
+                        coverage="observed_request_inputs",
+                    )
                 _check_assistant_error(message)
                 interaction = llm.Interaction(
                     previous_interaction_id=previous_interaction_id,
@@ -687,12 +812,15 @@ async def interact_with_claude_code(action: a11.Action):
                     ),
                     model=message.model,
                     content=[
-                        a11.to_chunk({
-                            "role": "assistant",
-                            "content": [
-                                _block_dict(block) for block in message.content
-                            ],
-                        })
+                        a11.to_chunk(
+                            {
+                                "role": "assistant",
+                                "content": [
+                                    _block_dict(block)
+                                    for block in message.content
+                                ],
+                            }
+                        )
                     ],
                     backend_specific_metadata=_backend_metadata(
                         session_id,
@@ -741,25 +869,57 @@ async def interact_with_claude_code(action: a11.Action):
                 continue
 
             if isinstance(message, cc.ResultMessage):
-                _check_result(message)
                 last_message = message
-                if pending_assistant is not None:
-                    pending_assistant.usage_metadata = _build_usage_metadata(
-                        message.usage, message.model_usage
+                usage = _build_usage_metadata(
+                    message.usage, message.model_usage
+                )
+                if resume and usage is not None:
+                    if cli_version is not None and cli_version >= (2, 1, 277):
+                        usage = usage_delta(usage, baseline)
+                    elif cli_version is None:
+                        usage.complete = False
+                if (
+                    message.subtype == "error_during_execution"
+                    and partial_requests
+                    and reporter.usage is not None
+                    and (usage is None or not usage.total_tokens)
+                ):
+                    usage = reporter.usage.model_copy(
+                        update={"complete": False}
                     )
-                    if (
-                        message.num_turns == 1
-                        and pending_assistant.usage_metadata is not None
-                    ):
-                        primary = _build_usage_metadata(message.usage)
-                        if primary is not None:
-                            pending_assistant.usage_metadata.context_tokens = (
-                                primary.total_tokens
-                            )
+                if (
+                    message.num_turns == 1
+                    and usage is not None
+                    and cli_version is not None
+                    and cli_version < (2, 1, 277)
+                ):
+                    primary = _build_usage_metadata(message.usage)
+                    if primary is not None:
+                        usage.context_tokens = primary.total_tokens
+                        usage.context_source = "request_estimate"
+                if compact_context is not None and usage is not None:
+                    usage.context_tokens = compact_context
+                    usage.context_source = "reported"
+                usage = await reporter.report(
+                    usage,
+                    {
+                        "usage": message.usage,
+                        "model_usage": message.model_usage,
+                    },
+                    source_id=session_id,
+                    coverage=(
+                        "harness_model_usage"
+                        if message.model_usage
+                        else "main_loop_only"
+                    ),
+                )
+                if pending_assistant is not None:
+                    pending_assistant.usage_metadata = usage
                     pending_assistant.backend_specific_metadata.update(
                         _backend_metadata(session_id, _result_metadata(message))
                     )
                 await flush_assistant()
+                _check_result(message)
 
         await flush_assistant()
 

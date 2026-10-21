@@ -43,6 +43,7 @@ import { Chunk } from '../../data.js';
 import { JSON_MIMETYPE, toChunk } from '../../serialization.js';
 import {
   invalidArgumentError,
+  cancelledError,
   isOk,
   noexceptFetch,
   okStatus,
@@ -63,8 +64,10 @@ import {
   parseInteraction,
   registerInteractionNormalizer,
   zodParse,
+  usageMetadataSchema,
   type Interaction,
   type NormalizedMessage,
+  type UsageMetadata,
 } from '../llm.js';
 
 /** Default model label recorded on produced interactions. */
@@ -154,6 +157,8 @@ export interface GemmaEngine {
   ): Promise<StatusOr<string>>;
   /** Release the underlying model, if the runtime supports it. */
   close?(): void;
+  /** Actual inference counts, including output removed by stop filtering. */
+  usage?(): UsageMetadata | undefined;
 }
 
 /** Builds a {@link GemmaEngine} for a given configuration. */
@@ -285,8 +290,21 @@ async function defaultGemmaEngineFactory(
   }
 
   const engine: GemmaEngine = {
-    generate(prompt, onToken) {
+    generate(prompt, onToken, signal) {
       return new Promise<StatusOr<string>>((resolve) => {
+        let settled = false;
+        const finish = (result: StatusOr<string>): void => {
+          if (settled) return;
+          settled = true;
+          signal?.removeEventListener('abort', abort);
+          resolve(result);
+        };
+        const abort = (): void => {
+          try { llm.close?.(); } catch { /* Best-effort teardown. */ }
+          finish(cancelledError('Gemma generation cancelled.'));
+        };
+        if (signal?.aborted) { abort(); return; }
+        signal?.addEventListener('abort', abort, {once: true});
         try {
           let full = '';
           const generateResponse = llm.generateResponse as (
@@ -294,6 +312,7 @@ async function defaultGemmaEngineFactory(
             progress: (partial: string, done: boolean) => void,
           ) => void;
           generateResponse(prompt, (partial: string, done: boolean) => {
+            if (settled) return;
             if (partial) {
               full += partial;
               try {
@@ -302,10 +321,10 @@ async function defaultGemmaEngineFactory(
                 // A UI sink failure must not abort generation.
               }
             }
-            if (done) resolve(full);
+            if (done) finish(full);
           });
         } catch (error) {
-          resolve(statusFromUnknown(error, 'Gemma generation failed.'));
+          finish(statusFromUnknown(error, 'Gemma generation failed.'));
         }
       });
     },
@@ -637,14 +656,43 @@ export async function interactWithGemma(action: Action): Promise<Status> {
     };
     const emit = (delta: string): void => show(stopFilter.push(delta));
 
-    const generated = await engine.generate(prompt, emit, action.signal);
-    if (isOk(generated)) show(stopFilter.finish());
-    await writeChain;
-    try {
-      engine.close?.();
-    } catch {
-      // Best-effort teardown.
+    const usageId = globalThis.crypto.randomUUID();
+    const publishUsage = (usage: UsageMetadata, coverage: string) => eventNode.put({
+      type: 'a11.usage', version: 1, id: usageId,
+      revision: usage.usage_revision, provider: 'gemma', model, usage, coverage,
+    });
+    const initialUsage = await publishUsage({
+      usage_id: usageId, usage_revision: 1, complete: false,
+    }, 'awaiting_engine_result');
+    if (!isOk(initialUsage)) {
+      try { engine.close?.(); } catch { /* Best-effort teardown. */ }
+      return initialUsage;
     }
+    let generated: StatusOr<string>;
+    let measured: UsageMetadata | undefined;
+    try {
+      try {
+        generated = await engine.generate(prompt, emit, action.signal);
+      } catch (error) {
+        generated = statusFromUnknown(error, 'Gemma generation failed.');
+      }
+      if (isOk(generated)) show(stopFilter.finish());
+      await writeChain;
+      const reported = engine.usage?.();
+      if (reported !== undefined) {
+        const validated = usageMetadataSchema.safeParse(reported);
+        if (validated.success) measured = validated.data;
+        else generated = invalidArgumentError('Invalid Gemma engine usage.');
+      }
+    } finally {
+      try { engine.close?.(); } catch { /* Best-effort teardown. */ }
+    }
+    const usage: UsageMetadata = {
+      ...measured, complete: measured !== undefined && measured.complete !== false && isOk(generated),
+      usage_id: usageId, usage_revision: 2,
+    };
+    const usageResult = await publishUsage(usage, measured ? 'engine_reported' : 'unavailable');
+    if (!isOk(usageResult)) return usageResult;
     if (!isOk(generated)) return generated;
     if (writeError !== null) return writeError;
 
@@ -664,6 +712,7 @@ export async function interactWithGemma(action: Action): Promise<Status> {
       created_at_millis: Date.now(),
       previous_interaction_id: previousInteractionId,
       content: [replyChunk],
+      usage_metadata: usage,
       backend_specific_metadata: { [BACKEND_METADATA_KEY]: utf8Encode(Backend.GEMMA) },
     });
     if (!isOk(assistant)) return assistant;

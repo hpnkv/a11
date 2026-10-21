@@ -633,3 +633,67 @@ async def test_native_tool_call_executes_and_returns_structured_output(
         "success": True,
     }
     assert calls[0][6][0]["type"] == "function"
+
+
+@pytest.mark.asyncio
+async def test_live_child_trace_keeps_parent_running_and_counts_each_thread(
+    monkeypatch,
+):
+    from pydantic_core import from_json
+    from a11.sdk.usage import UsageLedger, parse_update
+
+    fixture = from_json(
+        (
+            Path(__file__).parents[4]
+            / "testdata/token_accounting/harness_usage.json"
+        ).read_bytes()
+    )
+    case = next(c for c in fixture["cases"] if c["name"] == "codex-subagents")
+    events = [e for e in case["events"] if "method" in e]
+    first = next(
+        e["params"]
+        for e in events
+        if e["method"] == "thread/tokenUsage/updated"
+    )
+    root = first["threadId"]
+    process = _Process(
+        [
+            {"id": 1, "result": {}},
+            {"id": 2, "result": {"thread": {"id": root}}},
+            {"id": 3, "result": {"turn": {"id": first["turnId"]}}},
+            *events,
+        ]
+    )
+
+    async def create(*args, **kwargs):
+        return process
+
+    async def unexpected_tool(*args):
+        pytest.fail("The recorded child run uses no A11 action")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create)
+    sinks = {
+        name: _Sink() for name in ("event_stream", "thoughts", "text_output")
+    }
+    text, thread, _ = await mod._run_codex(
+        sinks,
+        CreateCodexSessionConfig(),
+        case["model"],
+        "probe",
+        None,
+        None,
+        [],
+        unexpected_tool,
+        {},
+    )
+    assert thread == root
+    assert text == "DONE"
+    assert "OK" not in "".join(sinks["text_output"].values)
+    ledger = UsageLedger()
+    for event in sinks["event_stream"].values:
+        if update := parse_update(event):
+            ledger.observe(update)
+    assert ledger.totals().complete
+    assert ledger.totals().total_tokens == sum(
+        row["expected"]["total_tokens"] for row in case["comparison"]
+    )

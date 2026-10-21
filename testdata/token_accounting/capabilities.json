@@ -1,0 +1,226 @@
+{
+  "version": 1,
+  "recorded_on": "2026-10-21",
+  "providers": [
+    {
+      "provider": "gpt",
+      "path": "Responses and Chat Completions",
+      "counter_scope": "request",
+      "source": "Terminal API usage; cached input is a prompt subset.",
+      "context": "Request input plus output is an estimate.",
+      "limitations": [
+        "No reported terminal usage after a disconnect means unknown usage, not zero.",
+        "SDK-internal attempts with no exposed usage cannot be measured exactly."
+      ],
+      "references": [
+        "https://developers.openai.com/api/reference/resources/responses/"
+      ],
+      "sdk_versions": {
+        "openai": "3.6.0",
+        "anthropic": "0.120.0",
+        "claude-agent-sdk": "0.2.148",
+        "google-genai": "2.16.0",
+        "ollama": "0.6.2"
+      },
+      "evidence": [
+        "gpt-responses-tools",
+        "gpt-chat"
+      ],
+      "verification": "live"
+    },
+    {
+      "provider": "claude",
+      "path": "Messages and opt-in beta Messages",
+      "counter_scope": "request",
+      "source": "All reported sampling iterations, including compaction; the top-level usage overlaps message iterations.",
+      "context": "Last sampling iteration input plus output is an estimate.",
+      "limitations": [
+        "An internal sampling iteration without reported category fields leaves those categories unknown.",
+        "SDK-internal attempts with no exposed usage cannot be measured exactly."
+      ],
+      "references": [
+        "https://platform.claude.com/docs/en/build-with-claude/compaction-threshold",
+        "https://platform.claude.com/docs/en/build-with-claude/context-editing"
+      ],
+      "sdk_versions": {
+        "openai": "3.6.0",
+        "anthropic": "0.120.0",
+        "claude-agent-sdk": "0.2.148",
+        "google-genai": "2.16.0",
+        "ollama": "0.6.2"
+      },
+      "evidence": [
+        "claude-tools",
+        "claude-context-clearing",
+        "claude-api-compaction"
+      ],
+      "verification": "live"
+    },
+    {
+      "provider": "codex",
+      "path": "App Server 0.162.1",
+      "counter_scope": "thread delta",
+      "source": "Independent thread snapshots; primary and child threads each contribute once.",
+      "context": "Primary latest request estimate; compaction invalidates it until refreshed.",
+      "limitations": [
+        "A resumed thread without an established baseline or regressed counters is incomplete.",
+        "SDK-internal attempts with no exposed usage cannot be measured exactly."
+      ],
+      "references": [
+        "https://learn.chatgpt.com/docs/app-server"
+      ],
+      "sdk_versions": {
+        "openai": "3.6.0",
+        "anthropic": "0.120.0",
+        "claude-agent-sdk": "0.2.148",
+        "google-genai": "2.16.0",
+        "ollama": "0.6.2",
+        "codex-cli": "0.162.1"
+      },
+      "evidence": [
+        "codex-automatic-compaction",
+        "codex-tool-truncation",
+        "codex-subagents",
+        "codex-client-cancellation",
+        "codex-process-crash"
+      ],
+      "verification": "live"
+    },
+    {
+      "provider": "claude_code",
+      "path": "Agent SDK; CLI 2.1.266 and 2.1.306 observed",
+      "counter_scope": "query",
+      "source": "Per-model result map includes main-loop, children and auxiliary work; primary usage overlaps it.",
+      "context": "Explicit compact-boundary post_tokens when reported; otherwise a single primary request estimate.",
+      "limitations": [
+        "CLI >=2.1.277 restores session totals: subtract a verified prior snapshot. Missing baseline/version remains incomplete. Crashes retain exposed request inputs; placeholder output is unknown.",
+        "SDK-internal attempts with no exposed usage cannot be measured exactly."
+      ],
+      "references": [
+        "https://code.claude.com/docs/en/agent-sdk/cost-tracking"
+      ],
+      "sdk_versions": {
+        "openai": "3.6.0",
+        "anthropic": "0.120.0",
+        "claude-agent-sdk": "0.2.148",
+        "google-genai": "2.16.0",
+        "ollama": "0.6.2",
+        "claude-code-cli": "2.1.266, 2.1.306"
+      },
+      "evidence": [
+        "claude-code-manual-compaction",
+        "claude-code-subagent",
+        "claude-code-consumed-failure",
+        "claude-code-tool-truncation-1",
+        "claude-code-tool-truncation-2",
+        "claude-code-automatic-compaction-1",
+        "claude-code-automatic-compaction-2",
+        "claude-code-repeated-compaction-1",
+        "claude-code-repeated-compaction-2",
+        "claude-code-repeated-compaction-3",
+        "claude-code-repeated-compaction-4",
+        "claude-code-different-model-subagent",
+        "claude-code-process-crash",
+        "claude-code-client-cancellation",
+        "claude-code-session-resume-fork-1",
+        "claude-code-session-resume-fork-2",
+        "claude-code-session-resume-fork-3",
+        "claude-code-fallback-after-consumption",
+        "a11-tool-output-limit"
+      ],
+      "verification": "live"
+    },
+    {
+      "provider": "gemini",
+      "path": "Interactions",
+      "counter_scope": "request or incremental continuation",
+      "source": "Reported input, cached input, output and separate thoughts; authoritative total is preserved.",
+      "context": "Incremental continuation usage does not establish occupancy.",
+      "limitations": [
+        "Server-owned history and unreported internal work cannot be reconstructed from visible text.",
+        "SDK-internal attempts with no exposed usage cannot be measured exactly."
+      ],
+      "references": [
+        "https://ai.google.dev/api/interactions-api"
+      ],
+      "sdk_versions": {
+        "openai": "3.6.0",
+        "anthropic": "0.120.0",
+        "claude-agent-sdk": "0.2.148",
+        "google-genai": "2.16.0",
+        "ollama": "0.6.2"
+      },
+      "evidence": [
+        "gemini-tools"
+      ],
+      "verification": "live"
+    },
+    {
+      "provider": "ollama",
+      "path": "Chat; cloud endpoint observed",
+      "counter_scope": "request",
+      "source": "Terminal prompt/evaluation counters; cached prompt counts only when exposed.",
+      "context": "Configured context capacity is not occupancy.",
+      "limitations": [
+        "No exact cache saving or context-shift attribution without daemon counters/events.",
+        "SDK-internal attempts with no exposed usage cannot be measured exactly."
+      ],
+      "references": [
+        "https://docs.ollama.com/api/chat"
+      ],
+      "sdk_versions": {
+        "openai": "3.6.0",
+        "anthropic": "0.120.0",
+        "claude-agent-sdk": "0.2.148",
+        "google-genai": "2.16.0",
+        "ollama": "0.6.2"
+      },
+      "evidence": [
+        "ollama"
+      ],
+      "verification": "live"
+    },
+    {
+      "provider": "vllm",
+      "path": "OpenAI-compatible Chat Completions",
+      "counter_scope": "request",
+      "source": "Terminal usage with server-provided prefix-cache and reasoning details.",
+      "context": "Request input plus output is an estimate.",
+      "limitations": [
+        "Cache, speculative and multimodal breakdowns depend on server configuration; omitted values stay unknown.",
+        "SDK-internal attempts with no exposed usage cannot be measured exactly."
+      ],
+      "references": [
+        "https://docs.vllm.ai/en/latest/api/vllm/entrypoints/openai/chat_completion/serving/"
+      ],
+      "sdk_versions": {
+        "openai": "3.6.0",
+        "anthropic": "0.120.0",
+        "claude-agent-sdk": "0.2.148",
+        "google-genai": "2.16.0",
+        "ollama": "0.6.2"
+      },
+      "evidence": [
+        "vllm"
+      ],
+      "verification": "live"
+    },
+    {
+      "provider": "gemma",
+      "path": "Browser engine interface",
+      "counter_scope": "request",
+      "source": "Optional engine-native usage; generated output includes text removed by presentation stop filtering.",
+      "context": "Only engine-native context observations are reported.",
+      "limitations": [
+        "The default MediaPipe engine exposes no inference output-token counters: exact consumption is unsupported. Visible-text tokenization is not a substitute.",
+        "SDK-internal attempts with no exposed usage cannot be measured exactly."
+      ],
+      "references": [
+        "https://ai.google.dev/edge/mediapipe/solutions/genai/llm_inference/web_js"
+      ],
+      "sdk_versions": {},
+      "evidence": [],
+      "verification": "engine_contract_tests"
+    }
+  ]
+}

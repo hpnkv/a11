@@ -16,7 +16,7 @@ import enum
 from typing import Any, ClassVar, Literal
 
 import a11
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from a11.data import serial_tags
 from a11.sdk.llm import Interaction, InteractionAdapter, LlmHeaders, Role
@@ -35,6 +35,7 @@ CLAUDE_CODE_PRESET = "claude_code"
 
 
 BuiltinTool = Literal[
+    "Agent",
     "Bash",
     "Edit",
     "Glob",
@@ -55,6 +56,31 @@ PermissionMode = Literal[
     "dontAsk",
     "bypassPermissions",
 ]
+
+
+class ClaudeCodeSettings(BaseModel):
+    """Per-session settings understood by the installed Claude Code CLI."""
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+    auto_compact_enabled: bool | None = Field(
+        default=None, alias="autoCompactEnabled"
+    )
+    auto_compact_window: int | None = Field(
+        default=None, alias="autoCompactWindow", ge=100_000, le=1_000_000
+    )
+
+
+class ClaudeCodeSubagent(BaseModel):
+    """Describe a model-backed child agent available to the harness."""
+
+    model_config = ConfigDict(populate_by_name=True)
+    description: str
+    prompt: str
+    tools: list[str] | None = None
+    model: str | None = None
+    max_turns: int | None = Field(default=None, alias="maxTurns", gt=0)
+    background: bool | None = None
+    effort: str | int | None = None
 
 
 class CreateSessionConfig(BaseModel):
@@ -173,6 +199,21 @@ class CreateSessionConfig(BaseModel):
         description="Path to the `claude` executable.",
         exclude_if=lambda x: x is None,
     )
+    env: dict[str, str] = Field(
+        default_factory=dict, exclude_if=lambda x: not x
+    )
+    settings: ClaudeCodeSettings | None = Field(
+        default=None,
+        exclude_if=lambda x: x is None,
+        description="Per-session Claude Code settings passed to the SDK.",
+    )
+    agents: dict[str, ClaudeCodeSubagent] = Field(
+        default_factory=dict,
+        exclude_if=lambda x: not x,
+        description=(
+            "Claude Agent SDK subagent definitions keyed by agent name."
+        ),
+    )
 
 
 INTERACT_WITH_CLAUDE_CODE_SCHEMA = a11.ActionSchema(
@@ -281,10 +322,12 @@ class ClaudeCodeInteractionAdapter(InteractionAdapter):
         return Interaction(
             role=Role.USER,
             content=[
-                a11.to_chunk({
-                    "role": role_str,
-                    "content": [{"type": "text", "text": text}],
-                })
+                a11.to_chunk(
+                    {
+                        "role": role_str,
+                        "content": [{"type": "text", "text": text}],
+                    }
+                )
             ],
             system_instructions=system_instructions,
         )

@@ -214,6 +214,10 @@ export type VllmCreateChatCompletionConfig = z.infer<
 
 /** Parameters for creating a Claude message (`messages.create`). */
 export const claudeCreateMessageConfigSchema = z.object({
+  betas: z.array(z.string()).default([]),
+  context_management: z.object({edits: z.array(z.object({
+    type: z.enum(['clear_tool_uses_20250919', 'clear_thinking_20251015', 'compact_20260112']),
+  }).loose())}).nullish(),
   max_tokens: z
     .number()
     .int()
@@ -275,6 +279,12 @@ export type ClaudeCodeBuiltinTool = z.infer<typeof claudeCodeBuiltinToolSchema>;
 
 /** Parameters for one Claude Code session. */
 export const claudeCodeCreateSessionConfigSchema = z.object({
+  env: z.record(z.string(), z.string()).default({}),
+  settings: z.object({
+    autoCompactEnabled: z.boolean().nullish(),
+    autoCompactWindow: z.number().int().min(100_000).max(1_000_000).nullish(),
+  }).loose().nullish(),
+  agents: z.record(z.string(), z.record(z.string(), z.unknown())).default({}),
   builtin_tools: z
     .union([z.boolean(), z.array(claudeCodeBuiltinToolSchema)])
     .default(false)

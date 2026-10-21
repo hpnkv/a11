@@ -14,6 +14,7 @@
 
 import asyncio
 import contextlib
+from pydantic_core import to_json
 import os
 import pathlib
 import sqlite3
@@ -27,6 +28,7 @@ from a11.data.types import Chunk
 from a11.nodes.async_node import AsyncNode
 from a11.sdk import llm
 from a11.sdk import presentation
+from a11.sdk.usage import UsageUpdate, METADATA_KEY, merge_updates
 from a11.status import Status, StatusCode
 from a11.stores import chunk_store
 from a11.stores import chunk_store_reader
@@ -185,8 +187,18 @@ class ConversationStore:
 
         async with self._lock(conversation_id):
             stored = await self.read(conversation_id)
-            known = {interaction.id for interaction in stored}
-            fresh = [i for i in interactions if i.id not in known]
+            known = {interaction.id: interaction for interaction in stored}
+            fresh = []
+            for incoming in interactions:
+                previous = known.get(incoming.id)
+                if previous is None:
+                    fresh.append(incoming)
+                else:
+                    merged = merge_updates(previous, incoming)
+                    if merged.backend_specific_metadata.get(
+                        METADATA_KEY
+                    ) != previous.backend_specific_metadata.get(METADATA_KEY):
+                        fresh.append(merged)
             if fresh:
                 node = AsyncNode.create(
                     conversation_id, chunk_store_factory=self._factory
@@ -236,7 +248,27 @@ class ConversationStore:
                     seq,
                     exc_info=True,
                 )
-        return interactions
+        return list(
+            {
+                interaction.id: interaction for interaction in interactions
+            }.values()
+        )
+
+    async def record_usage(
+        self, base: Sequence[llm.Interaction], update: UsageUpdate
+    ) -> None:
+        """Persist a usage observation on the turn's initiating interaction."""
+        if not base:
+            return
+        anchor = base[-1].model_copy(
+            update={
+                "backend_specific_metadata": {
+                    **base[-1].backend_specific_metadata,
+                    METADATA_KEY: to_json([update.model_dump(mode="json")]),
+                }
+            }
+        )
+        await self.record([*base[:-1], anchor])
 
     async def list(self) -> list[dict[str, Any]]:
         """The conversation list, newest first: ``{id, title, started_at}``."""

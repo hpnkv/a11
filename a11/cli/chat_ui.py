@@ -534,12 +534,10 @@ class ChatUI:
         if self._pending_user_inputs:
             return HTML(
                 "<ansiyellow>• Waiting for input</ansiyellow>"
-                f" <ansigray>· {self._tokens.output_label} output</ansigray>"
             )
         if self._llm_running:
             return HTML(
                 "<ansicyan>• Working</ansicyan>"
-                f" <ansigray>· {self._tokens.output_label} output</ansigray>"
                 " <ansigray>· Ctrl+C to interrupt</ansigray>"
             )
         return None

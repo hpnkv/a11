@@ -16,7 +16,7 @@
 
 import asyncio
 import hashlib
-import json
+from pydantic_core import from_json, to_json
 import os
 import traceback
 import uuid
@@ -29,6 +29,7 @@ import a11
 import openai
 
 from a11.sdk import llm
+from a11.sdk.usage import UsageReporter, provider_event, closing_stream
 from a11.sdk.llm_tools import runner
 from a11.sdk.openai.interact_with_gpt_schema import (
     CreateChatCompletionConfig,
@@ -100,13 +101,15 @@ def _responses_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
     converted = []
     for tool in tools:
         function = tool.get("function", {})
-        converted.append({
-            "type": "function",
-            "name": function.get("name", ""),
-            "description": function.get("description", ""),
-            "parameters": function.get("parameters", {"type": "object"}),
-            "strict": function.get("strict", False),
-        })
+        converted.append(
+            {
+                "type": "function",
+                "name": function.get("name", ""),
+                "description": function.get("description", ""),
+                "parameters": function.get("parameters", {"type": "object"}),
+                "strict": function.get("strict", False),
+            }
+        )
     return converted
 
 
@@ -116,23 +119,27 @@ def _responses_input(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for message in messages:
         role = message.get("role")
         if role == "tool":
-            items.append({
-                "type": "function_call_output",
-                "call_id": message.get("tool_call_id", ""),
-                "output": llm.stringify_content(message.get("content")),
-            })
+            items.append(
+                {
+                    "type": "function_call_output",
+                    "call_id": message.get("tool_call_id", ""),
+                    "output": llm.stringify_content(message.get("content")),
+                }
+            )
             continue
         content = message.get("content")
         if content:
             items.append({"role": role, "content": content})
         for call in message.get("tool_calls") or []:
             function = call.get("function", {})
-            items.append({
-                "type": "function_call",
-                "call_id": call.get("id", ""),
-                "name": function.get("name", ""),
-                "arguments": function.get("arguments", "{}"),
-            })
+            items.append(
+                {
+                    "type": "function_call",
+                    "call_id": call.get("id", ""),
+                    "name": function.get("name", ""),
+                    "arguments": function.get("arguments", "{}"),
+                }
+            )
     return items
 
 
@@ -242,7 +249,7 @@ async def _raw_response_events(
                     payload = "\n".join(data_lines)
                     data_lines.clear()
                     if payload != "[DONE]":
-                        event = json.loads(payload)
+                        event = from_json(payload)
                         if isinstance(event, dict):
                             yield event
                 continue
@@ -251,7 +258,7 @@ async def _raw_response_events(
         if data_lines:
             payload = "\n".join(data_lines)
             if payload != "[DONE]":
-                event = json.loads(payload)
+                event = from_json(payload)
                 if isinstance(event, dict):
                     yield event
 
@@ -265,8 +272,9 @@ async def _response_events(
             yield event
         return
     stream = await client.responses.create(**request)
-    async for event in stream:
-        yield event
+    async with closing_stream(stream):
+        async for event in stream:
+            yield event
 
 
 def _event_value(source: Any, name: str, default: Any = None) -> Any:
@@ -304,9 +312,11 @@ async def _run_responses_turn(
         text_parts: list[str] = []
         tool_calls: list[llm.ToolCall] = []
         response = None
+        reporter = UsageReporter(action, "gpt", model)
+        await reporter.report(llm.UsageMetadata(), complete=False)
         try:
             async for event in _response_events(client, request):
-                await action["event_stream"].put(event)
+                await action["event_stream"].put(provider_event(event))
                 event_type = _event_value(event, "type", "")
                 if event_type == "response.output_text.delta":
                     delta = str(_event_value(event, "delta", ""))
@@ -324,7 +334,7 @@ async def _run_responses_turn(
                     if _event_value(item, "type", "") == "function_call":
                         arguments = _event_value(item, "arguments", "{}")
                         try:
-                            params = json.loads(arguments)
+                            params = from_json(arguments)
                         except (TypeError, ValueError):
                             params = {}
                         tool_calls.append(
@@ -336,8 +346,17 @@ async def _run_responses_turn(
                                 ),
                             )
                         )
-                elif event_type == "response.completed":
+                elif event_type in {
+                    "response.completed",
+                    "response.incomplete",
+                    "response.failed",
+                }:
                     response = _event_value(event, "response")
+                    await reporter.report(
+                        _responses_usage(_event_value(response, "usage")),
+                        _event_value(response, "usage"),
+                        source_id=_event_value(response, "id"),
+                    )
         except openai.APIError as exc:
             raise _api_status(exc).to_exception() from exc
 
@@ -362,7 +381,7 @@ async def _run_responses_turn(
                     "type": "function",
                     "function": {
                         "name": call.name,
-                        "arguments": json.dumps(call.params),
+                        "arguments": to_json(call.params).decode(),
                     },
                 }
                 for call in tool_calls
@@ -380,7 +399,7 @@ async def _run_responses_turn(
                     _event_value(response, "usage")
                 ),
             },
-            usage_metadata=_responses_usage(_event_value(response, "usage")),
+            usage_metadata=reporter.usage,
         )
         previous_interaction_id = interaction.id
         rejected = await llm.add_tool_calls_to_interaction(
@@ -414,18 +433,24 @@ async def _run_responses_turn(
             conversation.feed_next_interaction(result)
         )
         response_output = _event_value(response, "output", [])
-        response_input.extend([
-            item.model_dump(exclude_none=True)
-            if hasattr(item, "model_dump")
-            else item
-            for item in response_output
-        ])
         response_input.extend(
-            _responses_input([
-                message
-                for message in tool_messages
-                if isinstance(message, dict)
-            ])
+            [
+                (
+                    item.model_dump(exclude_none=True)
+                    if hasattr(item, "model_dump")
+                    else item
+                )
+                for item in response_output
+            ]
+        )
+        response_input.extend(
+            _responses_input(
+                [
+                    message
+                    for message in tool_messages
+                    if isinstance(message, dict)
+                ]
+            )
         )
         if not failed_rounds.record(executed):
             break
@@ -502,10 +527,12 @@ async def interact_with_gpt(action: a11.Action) -> None:
         while True:
             messages: list[dict[str, Any]] = []
             if conversation.system_prompt:
-                messages.append({
-                    "role": "system",
-                    "content": conversation.system_prompt,
-                })
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": conversation.system_prompt,
+                    }
+                )
             messages.extend(conversation.messages)
             request: dict[str, Any] = {
                 "model": model,
@@ -518,6 +545,8 @@ async def interact_with_gpt(action: a11.Action) -> None:
                 request.update(tools=tools, tool_choice="auto")
             if config.extra_body:
                 request["extra_body"] = dict(config.extra_body)
+            reporter = UsageReporter(action, "gpt", model)
+            await reporter.report(llm.UsageMetadata(), complete=False)
             try:
                 stream = await client.chat.completions.create(**request)
             except openai.APIError as exc:
@@ -526,10 +555,17 @@ async def interact_with_gpt(action: a11.Action) -> None:
             accumulator = chat._StreamAccumulator(
                 prefix, next_call_id, llm.Backend.GPT
             )
-            async for chunk in stream:
-                await action["event_stream"].put(chunk)
-                text, reasoning = accumulator.add(chunk)
-                await output.put(text=text, thought=reasoning)
+            async with closing_stream(stream):
+                async for chunk in stream:
+                    await action["event_stream"].put(provider_event(chunk))
+                    text, reasoning = accumulator.add(chunk)
+                    if chunk.usage is not None:
+                        await reporter.report(
+                            chat._build_usage_metadata(chunk.usage),
+                            chunk.usage,
+                            source_id=chunk.id,
+                        )
+                    await output.put(text=text, thought=reasoning)
             tool_calls = await accumulator.finalize()
             next_call_id += len(tool_calls)
             message = accumulator.message_dict()
@@ -540,7 +576,7 @@ async def interact_with_gpt(action: a11.Action) -> None:
                 model=accumulator.model or model,
                 content=[await asyncio.to_thread(a11.to_chunk, message)],
                 backend_specific_metadata=accumulator.backend_specific_metadata(),
-                usage_metadata=chat._build_usage_metadata(accumulator.usage),
+                usage_metadata=reporter.usage,
             )
             previous_interaction_id = interaction.id
             rejected = await llm.add_tool_calls_to_interaction(
@@ -574,13 +610,15 @@ async def interact_with_gpt(action: a11.Action) -> None:
                     **executed.log_metadata(),
                 },
                 content=[
-                    a11.to_chunk({
-                        "messages": (
-                            await chat._build_tool_results_from_outputs(
-                                executed
+                    a11.to_chunk(
+                        {
+                            "messages": (
+                                await chat._build_tool_results_from_outputs(
+                                    executed
+                                )
                             )
-                        )
-                    })
+                        }
+                    )
                 ],
             )
             previous_interaction_id = result.id

@@ -107,9 +107,9 @@ async def run_turn(
     Raises:
         StatusException: When the call fails, at any point in the turn.
     """
+    reducer.defer_usage()
     call = (
-        a11
-        .Action(INTERACT_WITH_LLM_SCHEMA)
+        a11.Action(INTERACT_WITH_LLM_SCHEMA)
         .bind_node_map(connection.session.node_map)
         .bind_session(connection.session)
         .bind_stream(connection.stream)
@@ -132,6 +132,7 @@ async def run_turn(
     await call.call()
 
     new_interactions: list[Interaction] = []
+
     async def read_thoughts() -> None:
         async for piece in call["thoughts"]:
             reducer.on_thought(piece)
@@ -139,6 +140,7 @@ async def run_turn(
     async def read_events() -> None:
         # Drained even when nobody is looking; see the module docstring.
         async for event in call["event_stream"]:
+            reducer.on_usage_event(event)
             if config.on_event is not None:
                 config.on_event(event)
 

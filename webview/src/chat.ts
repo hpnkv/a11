@@ -45,9 +45,13 @@ import {
   BlockKind,
   isOk,
   presentInteraction,
+  formatUsage,
+  summarizeUsage,
+  interactionUsageUpdates,
   Role,
   toolStatuses,
   type Interaction,
+  type UsageMetadata,
 } from '@curiositystack/a11';
 import type {ToolActivity} from './ideTools.js';
 import {
@@ -194,6 +198,28 @@ function renderPatch(patch: PatchPresentation): HTMLElement {
  * provider's events — that stays in the backend that speaks to that provider.
  */
 export class AssistantBubble {
+  private readonly usageValues = new Map<string, UsageMetadata>();
+  private usageElement: HTMLElement | null = null;
+
+  showUsage(usage: UsageMetadata): void {
+    const key = usage.usage_id ?? 'legacy';
+    const revision = usage.usage_revision ?? 0;
+    const previous = this.usageValues.get(key);
+    if (previous && (previous.usage_revision ?? 0) >= revision) return;
+    this.usageValues.set(key, usage);
+  }
+
+  private flushUsage(): void {
+    if (!this.usageValues.size) return;
+    const element = this.usageElement ?? document.createElement('div');
+    element.className = 'bubble-body muted';
+    element.setAttribute('aria-label', 'Token usage');
+    element.textContent = formatUsage(summarizeUsage([...this.usageValues.values()]));
+    this.wroteAnything = true;
+    this.element.append(element);
+    this.usageElement = element;
+    this.onGrow();
+  }
   private readonly indicator: HTMLDivElement;
   /**
    * Where streamed characters are currently landing, and how it renders. Null
@@ -753,6 +779,7 @@ export class AssistantBubble {
     this.indicator.remove();
     this.flushPaint();
     this.closeThinking();
+    this.flushUsage();
     if (!this.wroteAnything) {
       const empty = document.createElement('div');
       empty.className = 'bubble-body muted';
@@ -762,6 +789,7 @@ export class AssistantBubble {
   }
 
   fail(message: string): void {
+    this.flushUsage();
     this.indicator.remove();
     this.flushPaint();
     this.closeThinking();
@@ -1073,6 +1101,9 @@ export class ChatView {
    * collected across the whole conversation first and matched by call id.
    */
   private async rehydrate(interactions: Interaction[]): Promise<void> {
+    const usageEvents = interactions.flatMap(interactionUsageUpdates)
+      .filter(event => event.contribution !== 'reconciliation');
+    const durableIds = new Set(usageEvents.map(event => event.id));
     const logs: Record<string, string> = Object.assign({}, ...interactions.map(toolLogs));
     const statuses = Object.assign({}, ...interactions.map(toolStatuses));
     const outputs: Record<string, Record<string, unknown>> = Object.assign(
@@ -1084,6 +1115,7 @@ export class ChatView {
       const text = await interactionText(interaction);
       if (interaction.role === Role.ASSISTANT) {
         const bubble = new AssistantBubble(this.addBubble('assistant'), () => {});
+        if (interaction.usage_metadata && !durableIds.has(interaction.usage_metadata.usage_id ?? '')) bubble.showUsage(interaction.usage_metadata);
         if (text) bubble.appendToken(text);
         const presented = await presentInteraction(interaction, logs, statuses);
         if (!isOk(presented)) throw new Error(presented.message);
@@ -1104,6 +1136,11 @@ export class ChatView {
       }
       if (isToolResultCarrier(interaction) || !text) continue;
       this.addBubble('user').textContent = text;
+    }
+    if (usageEvents.length) {
+      const bubble = new AssistantBubble(this.addBubble('assistant'), () => {});
+      for (const event of usageEvents) bubble.showUsage(event.usage);
+      bubble.finish();
     }
   }
 
@@ -1151,6 +1188,7 @@ export class ChatView {
       const completed = await session.chat(prompt, {
         onToken: (text) => bubble.appendToken(text),
         onThought: (text) => bubble.appendThought(text),
+        onUsage: (usage) => bubble.showUsage(usage),
       });
       if (!completed) bubble.appendToken('\n\n_Response stopped._');
       bubble.finish();

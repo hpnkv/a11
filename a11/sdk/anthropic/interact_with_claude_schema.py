@@ -22,6 +22,36 @@ from a11.sdk.llm import Interaction, InteractionAdapter, LlmHeaders, Role
 from a11.status import Status, StatusCode
 
 
+class ContextEditThreshold(BaseModel):
+    """Choose when an API context edit applies."""
+
+    type: Literal["input_tokens", "tool_uses", "thinking_turns", "all"]
+    value: int = Field(ge=0)
+
+
+class ContextEdit(BaseModel):
+    """A caller-selected server-side history transformation."""
+
+    type: Literal[
+        "clear_tool_uses_20250919",
+        "clear_thinking_20251015",
+        "compact_20260112",
+    ]
+    trigger: ContextEditThreshold | None = None
+    keep: ContextEditThreshold | Literal["all"] | None = None
+    clear_at_least: ContextEditThreshold | None = None
+    exclude_tools: list[str] | None = None
+    clear_tool_inputs: bool | None = None
+    pause_after_compaction: bool | None = None
+    instructions: str | None = None
+
+
+class ContextManagement(BaseModel):
+    """Context edits explicitly enabled for a Claude request."""
+
+    edits: list[ContextEdit]
+
+
 class CreateMessageConfig(BaseModel):
     """Parameters for creating a Claude message.
 
@@ -32,6 +62,19 @@ class CreateMessageConfig(BaseModel):
     """
 
     A11_SERIAL_TAG: ClassVar[str] = serial_tags.INTERACT_WITH_CLAUDE_CONFIG
+
+    betas: list[str] = Field(
+        default_factory=list,
+        description="Opt-in Anthropic API beta headers.",
+        exclude_if=lambda x: not x,
+    )
+    context_management: ContextManagement | None = Field(
+        default=None,
+        description=(
+            "Caller-selected API context clearing or compaction policy."
+        ),
+        exclude_if=lambda x: x is None,
+    )
 
     max_tokens: int = Field(
         default=10240,
@@ -189,10 +232,12 @@ class ClaudeInteractionAdapter(InteractionAdapter):
         return Interaction(
             role=Role.USER,
             content=[
-                a11.to_chunk({
-                    "role": role_str,
-                    "content": [{"type": "text", "text": text}],
-                })
+                a11.to_chunk(
+                    {
+                        "role": role_str,
+                        "content": [{"type": "text", "text": text}],
+                    }
+                )
             ],
             system_instructions=system_instructions,
         )

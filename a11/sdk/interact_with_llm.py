@@ -45,6 +45,7 @@ from absl import logging
 import a11
 from a11 import _native
 from a11.sdk.llm import Interaction, LlmHeaders
+from a11.sdk.usage import usage_observer
 from a11.status import Status, StatusCode
 
 Handler = Callable[[a11.Action], Awaitable[None]]
@@ -303,12 +304,19 @@ async def _forward_logs(
 
 
 async def _run_backend(
-    action: a11.Action, provider: str, handler: Handler
+    action: a11.Action, provider: str, handler: Handler, event_observer=None
 ) -> None:
     """Run the selected backend and connect all of its ports to the router."""
     backend = action.make_nested(_backend_schema(provider))
     backend.bind_stream(None)
-    backend.bind_handler(handler)
+    async def run_handler(child):
+        token = usage_observer.set(event_observer)
+        try:
+            await handler(child)
+        finally:
+            usage_observer.reset(token)
+
+    backend.bind_handler(run_handler)
     logs = backend.get_log_node()
 
     pumps = [
@@ -316,7 +324,9 @@ async def _run_backend(
         for name in INTERACT_WITH_LLM_SCHEMA.inputs
     ]
     pumps.extend(
-        asyncio.create_task(_pump_fragments(backend[name], action[name]))
+        asyncio.create_task(
+            _pump_fragments(backend[name], action[name])
+        )
         for name in INTERACT_WITH_LLM_SCHEMA.outputs
     )
     pumps.append(asyncio.create_task(_forward_logs(logs, action, backend)))
@@ -325,7 +335,10 @@ async def _run_backend(
     waiter = asyncio.ensure_future(backend.wait())
     tasks = [waiter, *pumps]
     try:
-        await asyncio.gather(*tasks)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
     except BaseException:
         backend.cancel()
         for task in tasks:
@@ -361,12 +374,12 @@ def load_provider(provider: str) -> None:
     _load_handler(provider)
 
 
-async def interact_with_llm(action: a11.Action) -> None:
+async def interact_with_llm(action: a11.Action, *, event_observer=None) -> None:
     """Route the interaction through a nested provider action."""
     provider = _resolve_provider(action)
     handler = _load_handler(provider)
     await action.logf("Selected the %s provider.", provider, channel="routing")
-    await _run_backend(action, provider, handler)
+    await _run_backend(action, provider, handler, event_observer)
     await action.logf(
         "The %s interaction completed.", provider, channel="routing"
     )

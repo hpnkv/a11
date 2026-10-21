@@ -47,6 +47,7 @@ import { fromChunk } from "../serialization.js";
 import {
   isOk,
   isStatus,
+  invalidArgumentError,
   okStatus,
   statusFromUnknown,
   type Status,
@@ -58,6 +59,7 @@ import {
   type Interaction,
   type UsageMetadata,
 } from "./llm.js";
+import {interactionUsageUpdates, summarizeUsage, usageUpdate} from './usage.js';
 
 /**
  * Where a turn's user-facing tool logs ride: JSON bytes of
@@ -491,6 +493,24 @@ export async function presentConversation(
       if (!isOk(turn)) return turn;
       if (turn.blocks.length > 0) turns.push(turn);
     }
+    const replay = new PresentationReducer();
+    for (const interaction of interactions) {
+      const status = await replay.onInteraction(interaction);
+      if (!isOk(status)) return status;
+    }
+    const latest = new Map(replay.blocks
+      .filter(b => b.kind === BlockKind.USAGE && b.usage?.usage_id)
+      .map(b => [b.usage!.usage_id!, b]));
+    for (const turn of turns) {
+      turn.blocks = turn.blocks.map(block => {
+        const id = block.usage?.usage_id;
+        if (!id || !latest.has(id)) return block;
+        const replacement = latest.get(id)!;
+        latest.delete(id);
+        return replacement;
+      });
+    }
+    if (latest.size) turns.push({role: 'model', interactionIds: [], blocks: [...latest.values()]});
     return turns;
   } catch (error) {
     return statusFromUnknown(error, "Could not present the conversation.");
@@ -518,7 +538,8 @@ export class PresentationReducer {
   private readonly collected: PresentationBlock[] = [];
   private open: PresentationBlock | null = null;
   private readonly seenCalls = new Set<string>();
-  private readonly seenUsage = new Set<string>();
+  private readonly seenUsage = new Map<string, PresentationBlock>();
+  private usageSummary: PresentationBlock | null = null;
   private readonly logs: Record<string, string> = {};
   private readonly statuses: Record<string, Status> = {};
   private readonly inputs: Record<string, Record<string, unknown>> = {};
@@ -534,6 +555,7 @@ export class PresentationReducer {
   constructor(
     private readonly sink: PresentationSink = {},
     private readonly role: string = "model",
+    private readonly deferUsage = false,
   ) {}
 
   /** The turn's blocks so far, in order. */
@@ -570,6 +592,10 @@ export class PresentationReducer {
    * interaction that lands on `new_interactions`.
    */
   async onInteraction(interaction: Interaction): Promise<Status> {
+    for (const event of interactionUsageUpdates(interaction)) {
+      const status = this.onUsageEvent(event);
+      if (!isOk(status)) return status;
+    }
     try {
       const interactionLogs = toolLogs(interaction);
       if (!isOk(interactionLogs)) return interactionLogs;
@@ -625,9 +651,9 @@ export class PresentationReducer {
       );
       if (!isOk(turn)) return turn;
       for (const block of turn.blocks) {
-        if (block.kind === BlockKind.USAGE && block.interactionId) {
-          if (this.seenUsage.has(block.interactionId)) continue;
-          this.seenUsage.add(block.interactionId);
+        if (block.kind === BlockKind.USAGE) {
+          this.onUsage(block);
+          continue;
         }
         if (block.kind === BlockKind.TEXT && this.streamedText) continue;
         if (block.kind === BlockKind.TOOL_RUN) {
@@ -644,6 +670,52 @@ export class PresentationReducer {
     } catch (error) {
       return statusFromUnknown(error, "Could not present the interaction.");
     }
+  }
+
+  /** Fold a normalized usage update from the provider event stream. */
+  onUsageEvent(event: unknown): Status {
+    try {
+      if (!event || typeof event !== 'object') return okStatus();
+      const update = event as Record<string, unknown>;
+      if (update.type !== 'a11.usage' || update.version !== 1) return okStatus();
+      if (update.contribution === 'reconciliation') return okStatus();
+      const parsed = usageUpdate(event);
+      if (!parsed) return invalidArgumentError('Invalid usage update.');
+      this.onUsage({
+        ...emptyBlock(BlockKind.USAGE, this.role),
+        interactionId: String(update.id),
+        usage: parsed.usage,
+      });
+      return okStatus();
+    } catch (error) {
+      return statusFromUnknown(error, 'Could not present usage.');
+    }
+  }
+
+  private onUsage(block: PresentationBlock): void {
+    if (!block.usage) return;
+    const key = block.usage.usage_id ?? block.interactionId;
+    const previous = key ? this.seenUsage.get(key) : undefined;
+    if (this.deferUsage) {
+      if (!previous || (block.usage.usage_revision ?? 0) > (previous.usage?.usage_revision ?? 0)) {
+        this.seenUsage.delete(key);
+        this.seenUsage.set(key, block);
+      }
+      return;
+    }
+    if (previous) {
+      if ((block.usage.usage_revision ?? 0) <= (previous.usage?.usage_revision ?? 0)) return;
+      previous.usage = block.usage;
+      this.collected.splice(this.collected.indexOf(previous), 1);
+      this.collected.push(previous);
+      this.sink.onBlockClosed?.(previous);
+      return;
+    }
+    if (key) this.seenUsage.set(key, block);
+    this.closeOpen();
+    this.collected.push(block);
+    this.sink.onBlockOpened?.(block);
+    this.sink.onBlockClosed?.(block);
   }
 
   /** Record a failure as the turn's last block. */
@@ -667,6 +739,15 @@ export class PresentationReducer {
   endTurn(): Status {
     try {
       this.closeOpen();
+      if (this.deferUsage && this.seenUsage.size) {
+        const usage = summarizeUsage([...this.seenUsage.values()].map(b => b.usage!));
+        if (!this.usageSummary) {
+          this.usageSummary = {...emptyBlock(BlockKind.USAGE, this.role), usage};
+          this.collected.push(this.usageSummary);
+          this.sink.onBlockOpened?.(this.usageSummary);
+        } else this.usageSummary.usage = usage;
+        this.sink.onBlockClosed?.(this.usageSummary);
+      }
       for (const block of this.collected) {
         if (block.kind !== BlockKind.TOOL_RUN || !block.partial) continue;
         block.partial = false;

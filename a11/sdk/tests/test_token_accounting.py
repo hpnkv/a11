@@ -298,7 +298,7 @@ def test_context_uses_request_scope_and_output_resets_each_turn():
     assert counter.context is None
 
 
-def test_terminal_reports_all_known_counters_including_zero():
+def test_terminal_uses_compact_inclusive_input_and_output():
     line = _usage_line(
         PresentationBlock(
             kind=BlockKind.USAGE,
@@ -312,10 +312,7 @@ def test_terminal_reports_all_known_counters_including_zero():
             ),
         )
     )
-    assert line == (
-        "tokens: in 0, cache read 100, cache write 20, out 7, "
-        "reasoning (in out) 5, total 127"
-    )
+    assert line == "120 input (100 cached), 7 output"
 
 
 @pytest.mark.parametrize("run", _DOWNSTREAM, ids=lambda run: run["provider"])

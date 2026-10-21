@@ -460,18 +460,23 @@ def _indented_detail(value: str, style: str) -> Text:
 def _usage_line(block: PresentationBlock) -> str:
     usage = block.usage
     assert usage is not None  # guarded by the caller
-    parts = []
-    for label, value in (
-        ("in", getattr(usage, "input_tokens", None)),
-        ("cache read", getattr(usage, "cached_input_tokens", None)),
-        ("cache write", getattr(usage, "cache_write_tokens", None)),
-        ("out", getattr(usage, "output_tokens", None)),
-        ("reasoning (in out)", getattr(usage, "reasoning_tokens", None)),
-        ("total", getattr(usage, "total_tokens", None)),
-    ):
-        if value is not None:
-            parts.append(f"{label} {value}")
-    return f"tokens: {', '.join(parts)}" if parts else "tokens: n/a"
+    if usage.context_invalidated or usage.context_only:
+        return ""
+    input_tokens = usage.input_tokens
+    if input_tokens is not None:
+        input_tokens += (usage.cached_input_tokens or 0) + (
+            usage.cache_write_tokens or 0
+        )
+    input_label = "—" if input_tokens is None else f"{input_tokens:,}"
+    output_label = (
+        "—" if usage.output_tokens is None else f"{usage.output_tokens:,}"
+    )
+    cached = (
+        ""
+        if usage.cached_input_tokens is None
+        else f" ({usage.cached_input_tokens:,} cached)"
+    )
+    return f"{input_label} input{cached}, {output_label} output"
 
 
 __all__ = ["render_block", "render_blocks"]

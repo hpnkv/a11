@@ -107,11 +107,17 @@ export function zodParse<S extends z.ZodType>(
   );
 }
 
-// --- Usage accounting --------------------------------------------------------
+// --- Token usage -------------------------------------------------------------
 
 /** Disjoint input/cache counts; output includes the reasoning subset. */
 export const usageMetadataSchema = z
   .object({
+    usage_id: z.string().nullish(),
+    usage_revision: z.number().int().optional(),
+    complete: z.boolean().optional(),
+    context_invalidated: z.boolean().optional(),
+    context_only: z.boolean().optional(),
+    context_source: z.enum(['request_estimate', 'reported', 'unknown']).nullish(),
     input_tokens: z.number().int().nullish(),
     output_tokens: z.number().int().nullish(),
     total_tokens: z.number().int().nullish(),
@@ -123,7 +129,7 @@ export const usageMetadataSchema = z
     input_tokens_scope: z.enum(['context', 'incremental']).optional(),
   })
   .loose();
-/** Validated provider-independent token accounting. */
+/** Validated provider-independent token usage. */
 export type UsageMetadata = z.infer<typeof usageMetadataSchema>;
 
 // --- Peers -------------------------------------------------------------------

@@ -23,6 +23,7 @@ from a11.nodes.async_node import AsyncNode
 from a11.sdk.interact_with_llm import interact_with_llm
 from a11.sdk.interact_with_llm_schema import INTERACT_WITH_LLM_SCHEMA
 from a11.sdk.llm import Interaction
+from a11.sdk.usage import parse_update
 
 #: Ports are terminated by the time they are read, so this only bounds a
 #: pathology: 30s of a stuck port instead of a turn that never records.
@@ -131,8 +132,21 @@ async def interact_with_llm_and_persist(
     # and `ChunkStoreReaderOptions.pop_chunks` all default to False).
     base_interactions_port = action.get_port("interactions")
     new_interactions_port = action.get_port("new_interactions")
+    store = store or conversations.get_conversation_store()
+    base_interactions = None
 
-    await interact_with_llm(action)
+    async def record_event(event) -> None:
+        nonlocal base_interactions
+        update = parse_update(event)
+        if update is None:
+            return
+        if base_interactions is None:
+            base_interactions = await conversations.read_interactions(
+                base_interactions_port.get_chunk_store(), _HARVEST_TIMEOUT
+            )
+        await store.record_usage(base_interactions, update)
+
+    await interact_with_llm(action, event_observer=record_event)
 
     # Only a turn that got this far is recorded, which matches the client:
     # it appends to its own history on success only, so a failed turn is

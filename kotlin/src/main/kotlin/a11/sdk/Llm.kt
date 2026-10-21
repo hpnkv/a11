@@ -134,7 +134,7 @@ fun makePeer(fields: Map<String, Any?> = emptyMap()): TaggedModel =
 fun makeActionConfig(fields: Map<String, Any?> = emptyMap()): TaggedModel =
     TaggedModel(SerialTags.ACTION_CONFIG, fields)
 
-/** An `a11.sdk.UsageMetadata`: an interaction's token accounting. */
+/** An `a11.sdk.UsageMetadata`: an interaction's token usage. */
 fun makeUsageMetadata(fields: Map<String, Any?> = emptyMap()): TaggedModel =
     TaggedModel(SerialTags.USAGE_METADATA, fields)
 

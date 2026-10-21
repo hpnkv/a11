@@ -39,8 +39,8 @@ from a11.sdk.vllm.interact_with_vllm_schema import (
     DEFAULT_MODEL,
 )
 from a11.sdk import llm
+from a11.sdk.usage import UsageReporter, provider_event, closing_stream
 from a11.sdk.llm_tools import runner
-
 
 DEFAULT_IMAGE_MIME_TYPE = "image/png"
 
@@ -284,20 +284,24 @@ def _vllm_from_normalized(
             if part.data:
                 content.append(_image_part(part.data, part.mime_type))
         elif part.type == llm.NormalizedContentType.TOOL_CALL:
-            tool_calls.append({
-                "id": part.id or part.name or "",
-                "type": "function",
-                "function": {
-                    "name": part.name or "",
-                    "arguments": _encode_arguments(part.arguments or {}),
-                },
-            })
+            tool_calls.append(
+                {
+                    "id": part.id or part.name or "",
+                    "type": "function",
+                    "function": {
+                        "name": part.name or "",
+                        "arguments": _encode_arguments(part.arguments or {}),
+                    },
+                }
+            )
         elif part.type == llm.NormalizedContentType.TOOL_RESULT:
-            tool_results.append({
-                "role": "tool",
-                "tool_call_id": part.call_id or part.id or "",
-                "content": part.content or "",
-            })
+            tool_results.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": part.call_id or part.id or "",
+                    "content": part.content or "",
+                }
+            )
 
     messages: list[dict[str, Any]] = []
     if content or tool_calls:
@@ -647,16 +651,18 @@ async def _build_tool_results_from_outputs(
             }
         ]
         if images:
-            messages.append({
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": _IMAGE_RESULT_NOTE},
-                    *(
-                        _image_part(image.data or "", image.mime_type)
-                        for image in images
-                    ),
-                ],
-            })
+            messages.append(
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": _IMAGE_RESULT_NOTE},
+                        *(
+                            _image_part(image.data or "", image.mime_type)
+                            for image in images
+                        ),
+                    ],
+                }
+            )
         return messages
 
     return await llm.build_tool_results(executed, as_tool_message)
@@ -849,10 +855,12 @@ async def interact_with_vllm(action: a11.Action):
         while True:
             messages: list[dict[str, Any]] = []
             if conversation.system_prompt:
-                messages.append({
-                    "role": "system",
-                    "content": conversation.system_prompt,
-                })
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": conversation.system_prompt,
+                    }
+                )
             messages.extend(conversation.messages)
 
             request: dict[str, Any] = {
@@ -868,6 +876,8 @@ async def interact_with_vllm(action: a11.Action):
             if extra_body:
                 request["extra_body"] = extra_body
 
+            reporter = UsageReporter(action, "vllm", model)
+            await reporter.report(llm.UsageMetadata(), complete=False)
             try:
                 stream = await client.chat.completions.create(**request)
             except openai.APIConnectionError as exc:
@@ -885,10 +895,17 @@ async def interact_with_vllm(action: a11.Action):
 
             accumulator = _StreamAccumulator(call_id_prefix, next_tool_call_id)
 
-            async for chunk in stream:
-                await action["event_stream"].put(chunk)
-                text, reasoning = accumulator.add(chunk)
-                await output.put(text=text, thought=reasoning)
+            async with closing_stream(stream):
+                async for chunk in stream:
+                    await action["event_stream"].put(provider_event(chunk))
+                    text, reasoning = accumulator.add(chunk)
+                    if chunk.usage is not None:
+                        await reporter.report(
+                            _build_usage_metadata(chunk.usage),
+                            chunk.usage,
+                            source_id=chunk.id,
+                        )
+                    await output.put(text=text, thought=reasoning)
 
             tool_calls = await accumulator.finalize()
             next_tool_call_id += len(tool_calls)
@@ -903,7 +920,7 @@ async def interact_with_vllm(action: a11.Action):
                 backend_specific_metadata=(
                     accumulator.backend_specific_metadata()
                 ),
-                usage_metadata=_build_usage_metadata(accumulator.usage),
+                usage_metadata=reporter.usage,
             )
             previous_interaction_id = interaction.id
             rejected = await llm.add_tool_calls_to_interaction(
@@ -939,11 +956,13 @@ async def interact_with_vllm(action: a11.Action):
                     **executed.log_metadata(),
                 },
                 content=[
-                    a11.to_chunk({
-                        "messages": await _build_tool_results_from_outputs(
-                            executed
-                        )
-                    })
+                    a11.to_chunk(
+                        {
+                            "messages": await _build_tool_results_from_outputs(
+                                executed
+                            )
+                        }
+                    )
                 ],
             )
             previous_interaction_id = tool_output_interaction.id

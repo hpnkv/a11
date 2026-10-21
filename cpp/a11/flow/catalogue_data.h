@@ -1135,6 +1135,20 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
           "description": "Path to the `claude` executable.",
           "name": "cli_path",
           "type": "string"
+        },
+        {
+          "name": "env",
+          "type": "object"
+        },
+        {
+          "description": "Per-session Claude Code settings passed to the SDK.",
+          "name": "settings",
+          "type": "json"
+        },
+        {
+          "description": "Claude Agent SDK subagent definitions keyed by agent name.",
+          "name": "agents",
+          "type": "object"
         }
       ],
       "tag": "a11.sdk.InteractWithClaudeCodeConfig"
@@ -1142,6 +1156,17 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
     {
       "description": "Parameters for creating a Claude message.",
       "fields": [
+        {
+          "description": "Opt-in Anthropic API beta headers.",
+          "element": "string",
+          "name": "betas",
+          "type": "list"
+        },
+        {
+          "description": "Caller-selected API context clearing or compaction policy.",
+          "name": "context_management",
+          "type": "json"
+        },
         {
           "description": "Maximum number of tokens to generate.",
           "name": "max_tokens",
@@ -1711,8 +1736,38 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
       "tag": "a11.sdk.TranscriptionEvent"
     },
     {
-      "description": "Provider-independent token accounting for a single interaction.",
+      "description": "Provider-independent token usage for a single interaction.",
       "fields": [
+        {
+          "description": "Stable identity shared by event and interaction usage.",
+          "name": "usage_id",
+          "type": "string"
+        },
+        {
+          "description": "Replacement revision for this usage identity.",
+          "name": "usage_revision",
+          "type": "integer"
+        },
+        {
+          "description": "Whether the source report is final with known coverage.",
+          "name": "complete",
+          "type": "bool"
+        },
+        {
+          "description": "History changed without a replacement context count.",
+          "name": "context_invalidated",
+          "type": "bool"
+        },
+        {
+          "description": "A context observation with no consumption contribution.",
+          "name": "context_only",
+          "type": "bool"
+        },
+        {
+          "description": "Reported context occupancy or a latest-request estimate.",
+          "name": "context_source",
+          "type": "json"
+        },
         {
           "description": "Uncached input tokens, excluding separately reported cache writes. Inclusive provider prompt counts have cache reads/writes removed.",
           "name": "input_tokens",

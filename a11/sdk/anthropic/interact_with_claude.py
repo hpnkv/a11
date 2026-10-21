@@ -22,9 +22,13 @@ from absl import logging
 import a11
 import anthropic
 import pydantic_core
+import httpx
 
 from a11.status import Status, StatusCode, StatusException
 from anthropic.lib.streaming._messages import accumulate_event
+from anthropic.lib.streaming._beta_messages import (
+    accumulate_event as accumulate_beta_event,
+)
 
 from a11.sdk.anthropic.client import get_anthropic_client
 from a11.sdk.anthropic.interact_with_claude_schema import (
@@ -32,9 +36,9 @@ from a11.sdk.anthropic.interact_with_claude_schema import (
     DEFAULT_MODEL,
 )
 from a11.sdk import llm
+from a11.sdk.usage import UsageReporter, provider_event, closing_stream
 from a11.sdk.anthropic.messages import Conversation, to_normalized
 from a11.sdk.llm_tools import runner
-
 
 llm.register_interaction_normalizer(llm.Backend.CLAUDE, to_normalized)
 
@@ -125,7 +129,7 @@ def _cached_prefix(
 
 
 def _build_usage_metadata(
-    usage: anthropic.types.Usage | None,
+    usage: anthropic.types.Usage | anthropic.types.beta.BetaUsage | None,
 ) -> llm.UsageMetadata | None:
     """Map Anthropic's `Usage` onto the provider-independent `UsageMetadata`."""
     if usage is None:
@@ -144,7 +148,7 @@ def _build_usage_metadata(
         usage.input_tokens + usage.output_tokens + cache_read + cache_write
     )
 
-    return llm.UsageMetadata(
+    result = llm.UsageMetadata(
         input_tokens=usage.input_tokens,
         output_tokens=usage.output_tokens,
         total_tokens=total_tokens,
@@ -152,6 +156,36 @@ def _build_usage_metadata(
         cache_write_tokens=usage.cache_creation_input_tokens,
         reasoning_tokens=reasoning_tokens,
     )
+    iterations = getattr(usage, "iterations", None)
+    if iterations:
+        fields = {
+            "input_tokens": "input_tokens",
+            "output_tokens": "output_tokens",
+            "cached_input_tokens": "cache_read_input_tokens",
+            "cache_write_tokens": "cache_creation_input_tokens",
+        }
+        for target, source in fields.items():
+            values = [getattr(item, source, None) for item in iterations]
+            setattr(
+                result,
+                target,
+                sum(values) if all(v is not None for v in values) else None,
+            )
+        result.total_tokens = (
+            sum(getattr(result, name) or 0 for name in fields)
+            if result.input_tokens is not None
+            and result.output_tokens is not None
+            else None
+        )
+        last = iterations[-1]
+        result.context_tokens = (
+            last.input_tokens
+            + last.output_tokens
+            + (last.cache_read_input_tokens or 0)
+            + (last.cache_creation_input_tokens or 0)
+        )
+        result.context_source = "request_estimate"
+    return result
 
 
 def _build_backend_specific_metadata(
@@ -162,7 +196,12 @@ def _build_backend_specific_metadata(
         llm.BACKEND_METADATA_KEY: str(llm.Backend.CLAUDE).encode()
     }
 
-    for field in ("container", "stop_reason", "stop_details"):
+    for field in (
+        "container",
+        "stop_reason",
+        "stop_details",
+        "context_management",
+    ):
         value = getattr(snapshot, field, None)
         if value is not None:
             metadata[field] = llm.encode_backend_value(value)
@@ -212,10 +251,12 @@ def _build_server_tools(config: CreateMessageConfig) -> list[dict[str, Any]]:
     if config.web_fetch:
         tools.append({"type": "web_fetch_20260209", "name": "web_fetch"})
     if config.code_execution:
-        tools.append({
-            "type": "code_execution_20260521",
-            "name": "code_execution",
-        })
+        tools.append(
+            {
+                "type": "code_execution_20260521",
+                "name": "code_execution",
+            }
+        )
     return tools
 
 
@@ -258,10 +299,12 @@ async def interact_with_claude(action: a11.Action):
             action.set_span_name("Claude interaction")
             action.set_span_attribute("gen_ai.system", "anthropic")
             action.set_span_attribute("gen_ai.request.model", model)
-            action.set_span_input([
-                {"role": message["role"], "content": message["content"]}
-                for message in conversation.messages
-            ])
+            action.set_span_input(
+                [
+                    {"role": message["role"], "content": message["content"]}
+                    for message in conversation.messages
+                ]
+            )
         except Exception:
             logging.debug("failed to record LLM span input", exc_info=True)
 
@@ -280,13 +323,28 @@ async def interact_with_claude(action: a11.Action):
     try:
         failed_rounds = llm.FailedToolRounds()
         while True:
+            reporter = UsageReporter(action, "claude", model)
+            await reporter.report(llm.UsageMetadata(), complete=False)
             snapshot = None
             try:
                 messages = [
                     {"role": message["role"], "content": message["content"]}
                     for message in conversation.messages
                 ]
-                stream = await client.messages.create(
+                beta_path = bool(config.betas or config.context_management)
+                request_options = {}
+                if beta_path:
+                    request_options["betas"] = config.betas
+                    if config.context_management is not None:
+                        request_options["context_management"] = (
+                            config.context_management.model_dump(
+                                exclude_none=True
+                            )
+                        )
+                messages_api = (
+                    client.beta.messages if beta_path else client.messages
+                )
+                stream = await messages_api.create(
                     max_tokens=config.max_tokens,
                     messages=messages,
                     model=model,
@@ -302,6 +360,7 @@ async def interact_with_claude(action: a11.Action):
                     tools=tools or anthropic.Omit(),
                     thinking=thinking,
                     output_config=output_config,
+                    **request_options,
                 )
             except anthropic.APIError as exc:
                 raise Status(
@@ -311,40 +370,71 @@ async def interact_with_claude(action: a11.Action):
             tool_calls: list[_ToolCall] = []
             pending_tool_calls: dict[int, _ToolCall] = {}
 
-            async for event in stream:
-                await action["event_stream"].put(event)
-                snapshot = accumulate_event(
-                    event=event, current_snapshot=snapshot
-                )
-
-                if event.type == "content_block_start":
-                    if event.content_block.type == "tool_use":
-                        pending_tool_calls[event.index] = _ToolCall(
-                            name=event.content_block.name,
-                            id=event.content_block.id,
+            async with closing_stream(stream):
+                async for event in stream:
+                    await action["event_stream"].put(provider_event(event))
+                    if beta_path:
+                        snapshot = accumulate_beta_event(
+                            event=event,
+                            current_snapshot=snapshot,
+                            request_headers=httpx.Headers(),
+                        )
+                    else:
+                        snapshot = accumulate_event(
+                            event=event, current_snapshot=snapshot
+                        )
+                    if event.type == "content_block_start" and (
+                        event.content_block.type == "compaction"
+                    ):
+                        await reporter.invalidate_context(
+                            event.model_dump(mode="json"),
+                            operation="compaction",
+                        )
+                    management = getattr(event, "context_management", None)
+                    if management and management.applied_edits:
+                        await reporter.invalidate_context(
+                            management, operation="context_editing"
+                        )
+                    if snapshot is not None and event.type in {
+                        "message_start",
+                        "message_delta",
+                        "message_stop",
+                    }:
+                        await reporter.report(
+                            _build_usage_metadata(snapshot.usage),
+                            snapshot.usage,
+                            complete=event.type == "message_stop",
+                            source_id=snapshot.id,
                         )
 
-                if event.type == "content_block_delta":
-                    delta = event.delta
+                    if event.type == "content_block_start":
+                        if event.content_block.type == "tool_use":
+                            pending_tool_calls[event.index] = _ToolCall(
+                                name=event.content_block.name,
+                                id=event.content_block.id,
+                            )
 
-                    if delta.type == "input_json_delta":
-                        pending_tool_calls[event.index].apply_input_delta(
-                            delta.partial_json
-                        )
-                    elif delta.type == "text_delta":
-                        if delta.text:
-                            await output.put(text=delta.text)
-                    elif delta.type == "thinking_delta":
-                        if delta.thinking:
-                            await output.put(thought=delta.thinking)
+                    if event.type == "content_block_delta":
+                        delta = event.delta
 
-                if (
-                    event.type == "content_block_stop"
-                    and event.index in pending_tool_calls
-                ):
-                    tool_call = pending_tool_calls.pop(event.index)
-                    await tool_call.finalize_params()
-                    tool_calls.append(tool_call)
+                        if delta.type == "input_json_delta":
+                            pending_tool_calls[event.index].apply_input_delta(
+                                delta.partial_json
+                            )
+                        elif delta.type == "text_delta":
+                            if delta.text:
+                                await output.put(text=delta.text)
+                        elif delta.type == "thinking_delta":
+                            if delta.thinking:
+                                await output.put(thought=delta.thinking)
+
+                    if (
+                        event.type == "content_block_stop"
+                        and event.index in pending_tool_calls
+                    ):
+                        tool_call = pending_tool_calls.pop(event.index)
+                        await tool_call.finalize_params()
+                        tool_calls.append(tool_call)
 
             if snapshot is None:
                 raise Status(
@@ -365,7 +455,7 @@ async def interact_with_claude(action: a11.Action):
                 backend_specific_metadata=_build_backend_specific_metadata(
                     snapshot
                 ),
-                usage_metadata=_build_usage_metadata(snapshot.usage),
+                usage_metadata=reporter.usage,
             )
             previous_interaction_id = interaction.id
             rejected = await llm.add_tool_calls_to_interaction(
@@ -404,12 +494,14 @@ async def interact_with_claude(action: a11.Action):
                     **executed.log_metadata(),
                 },
                 content=[
-                    a11.to_chunk({
-                        "role": "user",
-                        "content": await _build_tool_results_from_outputs(
-                            executed
-                        ),
-                    })
+                    a11.to_chunk(
+                        {
+                            "role": "user",
+                            "content": await _build_tool_results_from_outputs(
+                                executed
+                            ),
+                        }
+                    )
                 ],
             )
             previous_interaction_id = tool_output_interaction.id

@@ -122,17 +122,51 @@ class Role(enum.Enum):
 
 
 class UsageMetadata(BaseModel):
-    """Provider-independent token accounting for a single interaction.
+    """Provider-independent token usage for a single interaction.
 
     Input, cached input and cache writes are disjoint. Output includes
     reasoning; reasoning is a subset and must not be added to output again.
     Provider totals are authoritative. Provider-specific breakdowns live in
     ``backend_specific_metadata["provider_usage"]`` with their original names.
-    Missing counters remain unknown. Request usage covers one model call;
-    turn usage covers all model calls in one user turn.
+    Missing counters remain unknown. Request usage covers one API request;
+    turn usage covers the reported agent aggregate. Usage updates identify
+    its agent and coverage when a turn includes nested work.
     """
 
     A11_SERIAL_TAG: ClassVar[str] = serial_tags.USAGE_METADATA
+
+    usage_id: str | None = Field(
+        default=None,
+        exclude_if=lambda x: x is None,
+        description="Stable identity shared by event and interaction usage.",
+    )
+    usage_revision: int = Field(
+        default=0,
+        exclude_if=lambda x: x == 0,
+        description="Replacement revision for this usage identity.",
+    )
+    complete: bool = Field(
+        default=True,
+        exclude_if=lambda x: x,
+        description="Whether the source report is final with known coverage.",
+    )
+    context_invalidated: bool = Field(
+        default=False,
+        exclude_if=lambda x: not x,
+        description="History changed without a replacement context count.",
+    )
+    context_only: bool = Field(
+        default=False,
+        exclude_if=lambda x: not x,
+        description="A context observation with no consumption contribution.",
+    )
+    context_source: (
+        Literal["request_estimate", "reported", "unknown"] | None
+    ) = Field(
+        default=None,
+        exclude_if=lambda x: x is None,
+        description="Reported context occupancy or a latest-request estimate.",
+    )
 
     input_tokens: int | None = Field(
         default=None,
@@ -172,9 +206,7 @@ class UsageMetadata(BaseModel):
     )
     cache_write_tokens: int | None = Field(
         default=None,
-        description=(
-            "Cache-write input tokens, excluded from input_tokens."
-        ),
+        description="Cache-write input tokens, excluded from input_tokens.",
         exclude_if=lambda x: x is None,
     )
     reasoning_tokens: int | None = Field(

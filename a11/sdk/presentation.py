@@ -331,6 +331,22 @@ def present_conversation(
         turn = present_interaction(interaction, logs, statuses)
         if turn.blocks:
             turns.append(turn)
+    usage_replay = PresentationReducer()
+    for interaction in interactions:
+        usage_replay.on_interaction(interaction)
+    latest = {
+        block.usage.usage_id: block
+        for block in usage_replay.blocks
+        if block.kind == BlockKind.USAGE and block.usage.usage_id
+    }
+    for turn in turns:
+        for index, block in enumerate(turn.blocks):
+            if block.kind == BlockKind.USAGE and block.usage.usage_id in latest:
+                turn.blocks[index] = latest.pop(block.usage.usage_id)
+    if latest:
+        turns.append(
+            PresentationTurn(role=Role.ASSISTANT, blocks=list(latest.values()))
+        )
     return turns
 
 
@@ -357,7 +373,9 @@ class PresentationReducer:
         #: coalesce into one block instead of one block per token.
         self._open: PresentationBlock | None = None
         self._seen_calls: set[str] = set()
-        self._seen_usage: set[str] = set()
+        self._seen_usage: dict[str, PresentationBlock] = {}
+        self._defer_usage = False
+        self._usage_summary: PresentationBlock | None = None
         self._logs: dict[str, str] = {}
         self._statuses: dict[str, Status] = {}
         #: Whether prose has arrived as deltas. Only then is the text inside a
@@ -387,6 +405,10 @@ class PresentationReducer:
         same prose arrives twice, once on ``text_output`` and once inside the
         interaction that lands on ``new_interactions``.
         """
+        from a11.sdk.usage import interaction_updates
+
+        for event in interaction_updates(interaction):
+            self.on_usage_event(event)
         self._logs.update(tool_logs(interaction))
         self._statuses.update(tool_statuses(interaction))
         # A late-arriving log belongs to the run block already drawn for it.
@@ -407,10 +429,9 @@ class PresentationReducer:
 
         turn = present_interaction(interaction, self._logs, self._statuses)
         for block in turn.blocks:
-            if block.kind == BlockKind.USAGE and block.interaction_id:
-                if block.interaction_id in self._seen_usage:
-                    continue
-                self._seen_usage.add(block.interaction_id)
+            if block.kind == BlockKind.USAGE:
+                self._on_usage(block)
+                continue
             # Only deltas make an interaction's text a duplicate: on the live
             # path the same prose arrives twice, once on `text_output` and once
             # inside the interaction that lands on `new_interactions`.
@@ -437,6 +458,53 @@ class PresentationReducer:
             self._emit_opened(block)
             if block.kind != BlockKind.TOOL_RUN:
                 self._emit_closed(block)
+
+    def on_usage_event(self, event: dict) -> None:
+        """Fold durable usage revisions and context transitions into a turn."""
+        from a11.sdk.usage import parse_update
+
+        update = parse_update(event)
+        if update is not None and update.contribution == "consumption":
+            self._on_usage(
+                PresentationBlock(
+                    kind=BlockKind.USAGE,
+                    usage=update.usage,
+                    interaction_id=update.id,
+                )
+            )
+
+    def defer_usage(self) -> None:
+        """Withhold usage blocks until the turn's text streams have closed."""
+        self._defer_usage = True
+
+    def _on_usage(self, block: PresentationBlock) -> None:
+        usage = block.usage
+        if usage is None:
+            return
+        key = usage.usage_id or block.interaction_id
+        existing = self._seen_usage.get(key) if key else None
+        if self._defer_usage:
+            if (
+                existing is None
+                or usage.usage_revision > existing.usage.usage_revision
+            ):
+                self._seen_usage.pop(key, None)
+                self._seen_usage[key] = block
+            return
+        if existing is not None:
+            if usage.usage_revision <= existing.usage.usage_revision:
+                return
+            existing.usage = usage
+            self._blocks.remove(existing)
+            self._blocks.append(existing)
+            self._emit_closed(existing)
+            return
+        if key:
+            self._seen_usage[key] = block
+        self._close_open()
+        self._blocks.append(block)
+        self._emit_opened(block)
+        self._emit_closed(block)
 
     def on_error(self, status: Status) -> None:
         """Record a failure as the turn's last block."""
@@ -526,6 +594,21 @@ class PresentationReducer:
     def end_turn(self) -> None:
         """Mark the turn complete, closing anything still streaming."""
         self._close_open()
+        if self._defer_usage and self._seen_usage:
+            from a11.sdk.usage import summarize_usage
+
+            usage = summarize_usage(
+                [b.usage for b in self._seen_usage.values()]
+            )
+            if self._usage_summary is None:
+                self._usage_summary = PresentationBlock(
+                    kind=BlockKind.USAGE, usage=usage
+                )
+                self._blocks.append(self._usage_summary)
+                self._emit_opened(self._usage_summary)
+            else:
+                self._usage_summary.usage = usage
+            self._emit_closed(self._usage_summary)
         for block in self._blocks:
             if block.kind == BlockKind.TOOL_RUN and block.partial:
                 block.partial = False

@@ -61,6 +61,8 @@ import {
     logText,
     makeTextMessageInteraction,
     presentInteraction,
+    rememberUsage,
+    usageUpdate,
     schemaDocument,
     schemaFromJson,
     schemasInDocument,
@@ -70,6 +72,7 @@ import {
     type SchemaDocument,
     type SchemaEntry,
     type Status,
+    type UsageMetadata,
     type WireStream,
 } from '@curiositystack/a11';
 
@@ -262,6 +265,7 @@ export interface ChatCallbacks {
     onToken(text: string): void;
 
     onThought?(text: string): void;
+    onUsage?(usage: UsageMetadata): void;
 }
 
 /** Connection state shown by IDE surfaces that issue Gateway calls. */
@@ -746,6 +750,10 @@ export class A11ChatSession {
                 produced = true;
                 callbacks.onThought?.(text);
             }),
+            onUsage: (usage) => {
+                if ((usage.total_tokens ?? usage.output_tokens ?? 0) > 0) produced = true;
+                callbacks.onUsage?.(usage);
+            },
         };
         this.ranTool = false;
         this.interrupted = false;
@@ -871,7 +879,9 @@ export class A11ChatSession {
         // log arrives on this stream, mid-turn, and waiting for the text to
         // finish would hold every shell command's box back until the model had
         // stopped talking.
-        const interactionsTask = this.pumpInteractions(call, produced);
+        const interactionsTask = this.pumpInteractions(call, produced, callbacks.onUsage);
+        const eventsTask = this.pumpUsage(call, userInteraction, callbacks.onUsage);
+        eventsTask.catch(() => undefined);
         // Cancellation may abort text first and leave this concurrent reader to
         // observe the same status later. The chat action remains authoritative.
         interactionsTask.catch(() => undefined);
@@ -885,6 +895,7 @@ export class A11ChatSession {
 
         await thoughtsTask;
         await interactionsTask;
+        await eventsTask;
 
         // The turn's terminal status is the *only* place a backend failure
         // after the first token shows up: the text stream has already ended
@@ -925,13 +936,26 @@ export class A11ChatSession {
      * [buildIdeToolRegistry] has already shown its log live. Reporting it again
      * from the record would draw the box twice.
      */
-    private async pumpInteractions(call: Action, into: Interaction[]): Promise<void> {
+    private async pumpUsage(call: Action, question: Interaction, sink?: (usage: UsageMetadata) => void): Promise<void> {
+        const node = need(await call.getOutput('event_stream', false));
+        for (;;) {
+            const event = need(await node.next({timeoutMs: 120_000}));
+            if (event === null) return;
+            const update = usageUpdate(event);
+            if (!update) continue;
+            rememberUsage(question, event);
+            if (update.contribution !== 'reconciliation') sink?.(update.usage);
+        }
+    }
+
+    private async pumpInteractions(call: Action, into: Interaction[], sink?: (usage: UsageMetadata) => void): Promise<void> {
         const names = new Map<string, string>();
         const node = need(await call.getOutput('new_interactions', false));
         for (; ;) {
             const next = need(await node.next({timeoutMs: 120_000}));
             if (next === null) break;
             const interaction = next as Interaction;
+            if (interaction.usage_metadata) sink?.(interaction.usage_metadata);
             into.push(interaction);
             const presented = need(await presentInteraction(interaction));
             for (const block of presented.blocks) {

@@ -405,3 +405,17 @@ test('a closed Gateway session is replaced before the next action', async () => 
   assert.deepEqual(notices, ['connecting', 'connected']);
   client.halfClose();
 });
+
+test('usage replaces provisional rows and labels caches and unknown counts', () => {
+  const element = document.createElement('div');
+  const bubble = new AssistantBubble(element, () => {});
+  bubble.showUsage({usage_id: 'turn', usage_revision: 1, output_tokens: 1, complete: false});
+  bubble.showUsage({usage_id: 'turn', usage_revision: 2, input_tokens: 0, cached_input_tokens: 900, output_tokens: 5, reasoning_tokens: 2});
+  bubble.showUsage({usage_id: 'turn', usage_revision: 1, output_tokens: 1});
+  assert.equal(element.querySelectorAll('[aria-label="Token usage"]').length, 0);
+  bubble.finish();
+  const rows = element.querySelectorAll('[aria-label="Token usage"]');
+  assert.equal(rows.length, 1);
+  assert.match(rows[0].textContent!, /900 input \(900 cached\), 5 output/);
+  assert.doesNotMatch(rows[0].textContent!, /partial/);
+});

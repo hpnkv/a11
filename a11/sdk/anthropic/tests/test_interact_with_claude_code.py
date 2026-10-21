@@ -229,11 +229,15 @@ async def _run(
     await tools.finalize()
 
     new_interactions = []
-    async for interaction in action["new_interactions"]:
-        new_interactions.append(interaction)
-
-    await reader
-    await action.wait()
+    try:
+        async for interaction in action["new_interactions"]:
+            new_interactions.append(interaction)
+        await reader
+        await action.wait()
+    finally:
+        if not reader.done():
+            reader.cancel()
+        await asyncio.gather(reader, return_exceptions=True)
     return collected, new_interactions
 
 

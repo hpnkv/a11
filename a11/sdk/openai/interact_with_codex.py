@@ -19,7 +19,7 @@ import base64
 import binascii
 import contextlib
 import hashlib
-import json
+from pydantic_core import from_json, to_json
 import mimetypes
 import os
 import re
@@ -33,6 +33,7 @@ from absl import logging
 
 import a11
 from a11.sdk import llm
+from a11.sdk.usage import UsageReporter, UsageScope
 from a11.sdk.llm_tools import runner
 from a11.sdk.openai.interact_with_codex_schema import (
     CreateCodexSessionConfig,
@@ -41,7 +42,6 @@ from a11.sdk.openai.interact_with_codex_schema import (
 )
 from a11.sdk.vllm import interact_with_vllm as chat
 from a11.status import Status, StatusCode, StatusException
-
 
 CODEX_TRANSPORT_METADATA_KEY = "codex_transport"
 CODEX_TRANSPORT = b"app-server-dynamic-tools/v1"
@@ -56,6 +56,9 @@ class _TurnUsage:
         self.baseline: dict[str, int] | None = None
         self.snapshot: dict[str, Any] | None = None
         self.delta: dict[str, int] = {}
+        self.inferred_baseline = False
+        self.fresh_thread = False
+        self.context_valid = True
 
     def update(self, params: dict[str, Any]) -> None:
         snapshot = params.get("tokenUsage") or {}
@@ -68,20 +71,38 @@ class _TurnUsage:
             return
         last = snapshot.get("last") or {}
         if total is not None:
+            previous_total = (self.snapshot or {}).get("total") or self.baseline
+            if previous_total is not None and any(
+                total[key] < value
+                for key, value in previous_total.items()
+                if key in total
+            ):
+                self.inferred_baseline = True
+                self.context_valid = False
+                return
             if self.baseline is None:
-                self.baseline = {
-                    key: value - last[key]
-                    for key, value in total.items()
-                    if key in last
-                }
+                self.inferred_baseline = not self.fresh_thread
+                self.baseline = (
+                    {key: 0 for key in total}
+                    if self.fresh_thread
+                    else {
+                        key: value - last[key]
+                        for key, value in total.items()
+                        if key in last
+                    }
+                )
             self.delta = {
                 key: value - self.baseline[key]
                 for key, value in total.items()
                 if key in self.baseline
             }
+            if any(value < 0 for value in self.delta.values()):
+                self.delta = {}
+                self.inferred_baseline = True
         else:
             self.delta = dict(last)
         self.snapshot = snapshot
+        self.context_valid = True
 
     def metadata(self) -> llm.UsageMetadata | None:
         if self.snapshot is None:
@@ -102,7 +123,15 @@ class _TurnUsage:
             reasoning_tokens=values.get("reasoningOutputTokens"),
             total_tokens=values.get("totalTokens"),
             usage_scope="turn",
-            context_tokens=(self.snapshot.get("last") or {}).get("totalTokens"),
+            complete=not self.inferred_baseline,
+            context_tokens=(
+                (self.snapshot.get("last") or {}).get("totalTokens")
+                if self.context_valid
+                else None
+            ),
+            context_source=(
+                "request_estimate" if self.context_valid else "unknown"
+            ),
         )
 
 
@@ -118,6 +147,8 @@ def _latest_thread(
 ) -> tuple[str | None, int]:
     for index in range(len(interactions) - 1, -1, -1):
         metadata = interactions[index].backend_specific_metadata
+        if metadata.get("parent_thread_id"):
+            continue
         if metadata.get(llm.BACKEND_METADATA_KEY) != b"codex":
             continue
         if metadata.get(CODEX_TRANSPORT_METADATA_KEY) != CODEX_TRANSPORT:
@@ -182,7 +213,7 @@ def _toml_value(value: Any) -> str:
         return "true" if value else "false"
     if isinstance(value, (int, float)):
         return str(value)
-    return json.dumps(value, separators=(",", ":"))
+    return to_json(value).decode()
 
 
 def _app_server_command(config: CreateCodexSessionConfig) -> list[str]:
@@ -225,14 +256,18 @@ def _dynamic_tools(
             else _tool_name(original, used)
         )
         names[exposed] = original
-        result.append({
-            "type": "function",
-            "name": exposed,
-            "description": definition.get("description") or "",
-            "inputSchema": definition.get("input_schema")
-            or {"type": "object", "properties": {}},
-        })
-    encoded = json.dumps(result, sort_keys=True, separators=(",", ":")).encode()
+        result.append(
+            {
+                "type": "function",
+                "name": exposed,
+                "description": definition.get("description") or "",
+                "inputSchema": (
+                    definition.get("input_schema")
+                    or {"type": "object", "properties": {}}
+                ),
+            }
+        )
+    encoded = to_json(_sorted_json(result))
     return result, names, hashlib.sha256(encoded).hexdigest().encode()
 
 
@@ -303,6 +338,7 @@ async def _run_codex(
     env: dict[str, str],
     image_paths: list[str] | None = None,
     usage_details: dict[str, bytes] | None = None,
+    usage_baseline: dict[str, int] | None = None,
 ) -> tuple[str, str, llm.UsageMetadata | None]:
     """Run one turn over Codex's JSONL stdio app-server protocol."""
     try:
@@ -331,9 +367,7 @@ async def _run_codex(
 
     async def send(message: dict[str, Any]) -> None:
         async with write_lock:
-            process.stdin.write(
-                json.dumps(message, separators=(",", ":")).encode() + b"\n"
-            )
+            process.stdin.write(to_json(message) + b"\n")
             await process.stdin.drain()
 
     async def request(
@@ -353,6 +387,13 @@ async def _run_codex(
     final_text = ""
     streamed_text = False
     turn_usage = _TurnUsage()
+    turn_usage.baseline = usage_baseline
+    turn_usage.fresh_thread = resume is None
+    reporter = UsageReporter(action, "codex", model)
+    root_thread_id = resume
+    child_usage: dict[str, _TurnUsage] = {}
+    child_reporters: dict[str, UsageReporter] = {}
+    active_children: set[str] = set()
     turn_done = False
     seen_questions: set[str] = set()
     read_task: asyncio.Task[None] | None = None
@@ -380,7 +421,7 @@ async def _run_codex(
         )
         if not result.get("success"):
             raise ValueError(content)
-        return json.loads(content)["answer"]
+        return from_json(content)["answer"]
 
     async def answer_async_questions(params: dict[str, Any]) -> None:
         """Return asynchronous question answers as input to the Codex turn."""
@@ -402,7 +443,10 @@ async def _run_codex(
             )
             answers.append({"question": question["title"], "answer": answer})
         inputs = [
-            {"type": "text", "text": "User answers:\n" + json.dumps(answers)}
+            {
+                "type": "text",
+                "text": "User answers:\n" + to_json(answers).decode(),
+            }
         ]
         if turn_done:
             turn_done = False
@@ -434,13 +478,17 @@ async def _run_codex(
             await send({"id": message["id"], "result": result})
         except Exception as exc:
             logging.debug("Codex dynamic tool call failed", exc_info=True)
-            await send({
-                "id": message["id"],
-                "result": {
-                    "contentItems": [{"type": "inputText", "text": str(exc)}],
-                    "success": False,
-                },
-            })
+            await send(
+                {
+                    "id": message["id"],
+                    "result": {
+                        "contentItems": [
+                            {"type": "inputText", "text": str(exc)}
+                        ],
+                        "success": False,
+                    },
+                }
+            )
 
     async def answer_user_input(
         message: dict[str, Any], thread_id: str
@@ -466,10 +514,12 @@ async def _run_codex(
                 answers[question["id"]] = {"answers": [answer]}
             await send({"id": message["id"], "result": {"answers": answers}})
         except Exception as exc:
-            await send({
-                "id": message["id"],
-                "error": {"code": -32603, "message": str(exc)},
-            })
+            await send(
+                {
+                    "id": message["id"],
+                    "error": {"code": -32603, "message": str(exc)},
+                }
+            )
 
     async def read_one(thread_id: str = "") -> None:
         nonlocal final_text, streamed_text, turn_done
@@ -480,8 +530,8 @@ async def _run_codex(
                 message="Codex app-server ended before the turn completed.",
             ).to_exception()
         try:
-            message = json.loads(line)
-        except json.JSONDecodeError as exc:
+            message = from_json(line)
+        except ValueError as exc:
             raise Status(
                 code=StatusCode.INTERNAL,
                 message=f"Codex emitted invalid JSONL: {exc}",
@@ -496,6 +546,84 @@ async def _run_codex(
                 responses[message["id"]] = message
         method = message.get("method")
         params = message.get("params") or {}
+        event_thread = params.get("threadId") or thread_id
+        item = params.get("item") or {}
+        if (
+            item.get("type") == "collabAgentToolCall"
+            and item.get("tool") == "spawnAgent"
+            and method == "item/completed"
+        ):
+            for child in item.get("receiverThreadIds") or []:
+                if child in child_reporters:
+                    continue
+                active_children.add(child)
+                child_reporter = UsageReporter(
+                    action, "codex", item.get("model") or model
+                )
+                child_reporter.scope = UsageScope(
+                    session_id=child,
+                    agent_id=child,
+                    parent_agent_id=event_thread,
+                    reporting="cumulative",
+                )
+                child_reporters[child] = child_reporter
+                await child_reporter.report(
+                    llm.UsageMetadata(usage_scope="turn"),
+                    complete=False,
+                    coverage="awaiting_child_result",
+                )
+        if event_thread and root_thread_id and event_thread != root_thread_id:
+            state = child_usage.setdefault(event_thread, _TurnUsage())
+            state.fresh_thread = True
+            child_reporter = child_reporters.setdefault(
+                event_thread, UsageReporter(action, "codex", model)
+            )
+            child_reporter.scope = UsageScope(
+                session_id=event_thread,
+                agent_id=event_thread,
+                parent_agent_id=root_thread_id,
+                turn_id=params.get("turnId"),
+                reporting="cumulative",
+            )
+            if method == "thread/tokenUsage/updated":
+                state.turn_id = params.get("turnId")
+                state.update(params)
+                await child_reporter.report(
+                    state.metadata(),
+                    {"thread_snapshot": state.snapshot, "turn": state.delta},
+                    complete=False,
+                    source_id=state.turn_id,
+                    coverage="child_thread",
+                )
+            elif method == "turn/completed":
+                active_children.discard(event_thread)
+                await child_reporter.report(
+                    state.metadata(),
+                    {"thread_snapshot": state.snapshot, "turn": state.delta},
+                    complete=(params.get("turn") or {}).get("status")
+                    == "completed",
+                    source_id=state.turn_id,
+                    coverage="child_thread",
+                )
+            elif (
+                method == "item/completed"
+                and item.get("type") == "contextCompaction"
+            ):
+                state.context_valid = False
+                await child_reporter.invalidate_context(
+                    params, operation="compaction"
+                )
+            elif method == "item/tool/call":
+                pending_calls.add(
+                    asyncio.create_task(answer_tool(message, event_thread))
+                )
+            elif method == "item/tool/requestUserInput":
+                pending_calls.add(
+                    asyncio.create_task(
+                        answer_user_input(message, event_thread)
+                    )
+                )
+            return
         if method == "item/tool/call":
             task = asyncio.create_task(answer_tool(message, thread_id))
             pending_calls.add(task)
@@ -514,6 +642,14 @@ async def _run_codex(
                 await action["thoughts"].put(delta)
         elif method in ("item/started", "item/completed"):
             item = params.get("item") or {}
+            if (
+                item.get("type") == "contextCompaction"
+                and method == "item/completed"
+            ):
+                turn_usage.context_valid = False
+                await reporter.invalidate_context(
+                    params, operation="compaction"
+                )
             if item.get("type") == "agentMessage":
                 if item.get("questions"):
                     if item["id"] not in seen_questions:
@@ -525,9 +661,29 @@ async def _run_codex(
                     final_text = item.get("text") or final_text
         elif method == "turn/started":
             turn_usage.turn_id = (params.get("turn") or {}).get("id")
+            reporter.scope.turn_id = turn_usage.turn_id
         elif method == "thread/tokenUsage/updated":
             turn_usage.update(params)
+            if turn_usage.snapshot is not None:
+                await reporter.report(
+                    turn_usage.metadata(),
+                    {
+                        "thread_snapshot": turn_usage.snapshot,
+                        "turn": turn_usage.delta,
+                    },
+                    complete=False,
+                    source_id=turn_usage.turn_id,
+                )
         elif method == "turn/completed":
+            if turn_usage.snapshot is not None:
+                await reporter.report(
+                    turn_usage.metadata(),
+                    {
+                        "thread_snapshot": turn_usage.snapshot,
+                        "turn": turn_usage.delta,
+                    },
+                    source_id=turn_usage.turn_id,
+                )
             turn = params.get("turn") or {}
             if turn.get("status") != "completed":
                 error = turn.get("error") or {}
@@ -593,6 +749,12 @@ async def _run_codex(
                 code=StatusCode.INTERNAL,
                 message="Codex did not return a thread id.",
             ).to_exception()
+        root_thread_id = thread_id
+        if usage_details is not None:
+            usage_details["root_thread_id"] = thread_id.encode()
+        reporter.scope = UsageScope(
+            session_id=thread_id, agent_id=thread_id, reporting="cumulative"
+        )
         turn_input = [{"type": "text", "text": prompt}]
         turn_input.extend(
             {"type": "localImage", "path": path} for path in image_paths or []
@@ -607,12 +769,22 @@ async def _run_codex(
                 "outputSchema": config.output_schema,
             },
         )
+        await reporter.report(
+            llm.UsageMetadata(usage_scope="turn"),
+            complete=False,
+            coverage="awaiting_harness_result",
+        )
         turn_result = await wait_response(turn_request, thread_id)
         turn_usage.turn_id = (turn_result.get("turn") or {}).get(
             "id"
         ) or turn_usage.turn_id
-        while not turn_done or pending_calls or resume_requests:
-            if read_task is None and (not turn_done or resume_requests):
+        reporter.scope.turn_id = turn_usage.turn_id
+        while (
+            not turn_done or active_children or pending_calls or resume_requests
+        ):
+            if read_task is None and (
+                not turn_done or active_children or resume_requests
+            ):
                 read_task = asyncio.create_task(read_one(thread_id))
             waiting = set(pending_calls)
             if read_task is not None:
@@ -629,11 +801,13 @@ async def _run_codex(
         if final_text and not streamed_text:
             await action["text_output"].put(final_text)
         if usage_details is not None and turn_usage.snapshot is not None:
-            usage_details["provider_usage"] = llm.encode_backend_value({
-                "thread_snapshot": turn_usage.snapshot,
-                "turn": turn_usage.delta,
-            })
-        return final_text, thread_id, turn_usage.metadata()
+            usage_details["provider_usage"] = llm.encode_backend_value(
+                {
+                    "thread_snapshot": turn_usage.snapshot,
+                    "turn": turn_usage.delta,
+                }
+            )
+        return final_text, thread_id, reporter.usage
     finally:
         if read_task is not None:
             read_task.cancel()
@@ -644,11 +818,23 @@ async def _run_codex(
             await asyncio.gather(*pending_calls, return_exceptions=True)
         if process.returncode is None:
             process.terminate()
-            await process.wait()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
         if not stderr_task.done():
             stderr_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await stderr_task
+
+
+def _sorted_json(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _sorted_json(value[key]) for key in sorted(value)}
+    if isinstance(value, list):
+        return [_sorted_json(item) for item in value]
+    return value
 
 
 def _metadata(thread_id: str, tools_digest: bytes) -> dict[str, bytes]:
@@ -719,6 +905,13 @@ async def interact_with_codex(action: a11.Action) -> None:
     tool_lock = asyncio.Lock()
     current_thread = resume or ""
 
+    def thread_metadata(thread_id: str) -> dict[str, bytes]:
+        metadata = _metadata(thread_id, tools_digest)
+        root = usage_details.get("root_thread_id")
+        if root and root.decode() != thread_id:
+            metadata["parent_thread_id"] = root
+        return metadata
+
     async def handle_tool(
         params: dict[str, Any], thread_id: str
     ) -> dict[str, Any]:
@@ -737,22 +930,26 @@ async def interact_with_codex(action: a11.Action) -> None:
                 created_at_millis=a11.now().nanoseconds_since_epoch // 1000000,
                 model=model,
                 content=[
-                    a11.to_chunk({
-                        "role": "assistant",
-                        "content": "",
-                        "tool_calls": [
-                            {
-                                "id": call.id,
-                                "type": "function",
-                                "function": {
-                                    "name": call.name,
-                                    "arguments": json.dumps(call.params),
-                                },
-                            }
-                        ],
-                    })
+                    a11.to_chunk(
+                        {
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": call.id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": call.name,
+                                        "arguments": (
+                                            to_json(call.params).decode()
+                                        ),
+                                    },
+                                }
+                            ],
+                        }
+                    )
                 ],
-                backend_specific_metadata=_metadata(thread_id, tools_digest),
+                backend_specific_metadata=thread_metadata(thread_id),
             )
             rejected = await llm.add_tool_calls_to_interaction(
                 [call], interaction, action.get_registry()
@@ -790,7 +987,7 @@ async def interact_with_codex(action: a11.Action) -> None:
                 action_outputs=executed.outputs,
                 content=[a11.to_chunk({"role": "user", "content": text})],
                 backend_specific_metadata={
-                    **_metadata(thread_id, tools_digest),
+                    **thread_metadata(thread_id),
                     **executed.log_metadata(),
                 },
             )
@@ -814,6 +1011,15 @@ async def interact_with_codex(action: a11.Action) -> None:
         with tempfile.TemporaryDirectory(prefix="a11-codex-") as directory:
             image_paths = _write_prompt_images(prompt_interactions, directory)
             usage_details: dict[str, bytes] = {}
+            usage_baseline = None
+            if recorded_thread == resume and recorded_at >= 0:
+                raw = interactions[recorded_at].backend_specific_metadata.get(
+                    "provider_usage"
+                )
+                if raw:
+                    usage_baseline = (
+                        from_json(raw).get("thread_snapshot") or {}
+                    ).get("total")
             answer, current_thread, usage = await _run_codex(
                 action,
                 config,
@@ -826,6 +1032,7 @@ async def interact_with_codex(action: a11.Action) -> None:
                 env,
                 image_paths,
                 usage_details,
+                usage_baseline,
             )
         interaction = llm.Interaction(
             previous_interaction_id=previous_id,

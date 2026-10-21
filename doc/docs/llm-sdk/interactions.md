@@ -119,24 +119,79 @@ The remaining fields retain accounting and provider details:
 | `backend_specific_metadata` | `{}`    | Stores opaque byte values needed by one backend, such as its producer name, stop reason, container ID, or resumable session ID. JSON serialisation represents the bytes as base64. |
 | `usage_metadata`            | `None`  | Stores provider-independent input, output, total, cached-input, cache-write, and reasoning token counts. Unreported counters remain `None`.                                        |
 
-Input, cache reads, and cache writes are separate counts. Output includes
-reasoning; `reasoning_tokens` is a subset of output. Sum `total_tokens` once
-per interaction for reported consumption, and sum `output_tokens` for generated
-tokens. Do not add cache or reasoning counts to `total_tokens` again.
+The schema permits content, action calls, and status information in the same interaction. `role` records provenance;
+every role admits the same payload fields. The ordered interaction list remains the conversation record, while
+`previous_interaction_id` makes the link explicit for backends that address stored state by ID.
+
+## Interpret token usage
+
+Read `interaction.usage_metadata` for the provider's reported consumption.
+A11 normalises the counters so the same field has the same meaning across
+backends. These counts describe model input and generation, including provider
+prompt overhead, rather than the size of the stored interaction.
+
+| Counter | Includes | Excludes |
+|---------|----------|----------|
+| `input_tokens` | Ordinary, uncached prompt tokens. | Reported cache reads, separately reported cache writes, and generated output. |
+| `cached_input_tokens` | Prompt tokens reused from a provider's cache. | Ordinary input, cache writes, and output. |
+| `cache_write_tokens` | Prompt tokens written to a cache, when reported separately. | Ordinary input, cache reads, and output. |
+| `output_tokens` | All generated tokens, including tool arguments and reasoning/thinking. | Prompt tokens, including cache reads and writes. |
+| `reasoning_tokens` | The reasoning/thinking portion of `output_tokens`, when reported. | Other generated output. This is a subset of output, not an additional count. |
+| `total_tokens` | The provider's total for the interaction, preserved when supplied. Otherwise, a total derived from input, cache, and output counts where available. | No separately supplied breakdown should be added to this total again. |
+
+Cache reads reuse prompt material already stored by the provider; cache writes
+store prompt material for later reuse. Both are input to the model and remain
+part of the prompt even though A11 records them outside `input_tokens`. A cache
+hit therefore reduces ordinary input without removing those tokens from the
+prompt or the reported total. Providers may charge cache reads, cache writes,
+ordinary input, and output at different rates; a token total alone is not a
+monetary cost.
+
+When the provider's total consists of these four categories, the relationship
+is:
+
+```text
+prompt tokens = input_tokens + cached_input_tokens + cache_write_tokens
+total_tokens = prompt tokens + output_tokens
+reasoning_tokens <= output_tokens
+```
+
+Keep the provider's `total_tokens` when supplied, even if its additional usage
+categories or incomplete breakdown prevent this calculation. An unreported
+counter is `None` (unknown); a reported `0` means none were counted.
+
+For example, these fully reported counts illustrate cache use and reasoning:
+
+| Example | Input | Cache read | Cache write | Output | Reasoning (within output) | Total |
+|---------|------:|-----------:|------------:|-------:|--------------------------:|------:|
+| Cache hit | 100 | 900 | 0 | 50 | 0 | 1,050 |
+| Cache creation | 100 | 0 | 900 | 50 | 0 | 1,050 |
+| Reasoning response | 40 | 0 | 0 | 124 | 119 | 164 |
+
+The first two requests each have a 1,000-token prompt and 50 output tokens.
+The reasoning response generates 5 response tokens and 119 thought tokens:
+output is 124, and total is 164. Adding reasoning to output again would count
+the thoughts twice. Gemini reports response and thought tokens separately;
+A11 combines them into `output_tokens`.
+
+Sum `total_tokens` once per interaction for reported consumption, and sum
+`output_tokens` for generated tokens. Count each interaction ID once when
+processing repeated delivery or replay.
 
 `usage_scope` is `request` for one model call or `turn` for all model calls in a
 user turn. Codex and Claude Code report turn usage; Claude Code includes each
 model in its result's per-model usage map when available. A turn total includes
 repeated prompts across tool rounds. `context_tokens`, when supplied, describes
-the last model request's input plus output. Gemini resumed requests report
+the last model request's full input, including cache reads and writes, plus
+output. For example, two tool-round requests with totals of 1,020 and 1,060
+consume 2,080 tokens in aggregate; the latest request's context approximation
+is 1,060. Gemini resumed requests report
 `input_tokens_scope="incremental"`; their usage does not establish context size.
+An aggregate or incremental usage record without `context_tokens` leaves
+context size unknown.
 
 `backend_specific_metadata["provider_usage"]` retains the provider's original
 usage fields, including modality and other token breakdowns. Claude Code also
 retains `model_usage`; its primary result usage overlaps that per-model map.
 Codex preserves thread snapshots and the turn delta separately. These raw
 records retain provider scopes and are not additional counters to sum.
-
-The schema permits content, action calls, and status information in the same interaction. `role` records provenance;
-every role admits the same payload fields. The ordered interaction list remains the conversation record, while
-`previous_interaction_id` makes the link explicit for backends that address stored state by ID.

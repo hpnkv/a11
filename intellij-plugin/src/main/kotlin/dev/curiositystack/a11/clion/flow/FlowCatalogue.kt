@@ -99,7 +99,12 @@ class FlowCatalogueService(private val project: Project) : Disposable {
         val path = event.path
         val readable = SCANNED_EXTENSIONS.any { path.endsWith(it) }
         if (!readable) return false
-        if (SKIPPED.any { path.contains(it) }) return false
+        if (path.split('/').any { name ->
+                SKIPPED.any { pattern ->
+                    if (pattern.endsWith('*')) name.startsWith(pattern.dropLast(1))
+                    else name == pattern
+                }
+            }) return false
         return event is VFileContentChangeEvent ||
             event is VFileCreateEvent ||
             event is VFileDeleteEvent
@@ -113,32 +118,38 @@ class FlowCatalogueService(private val project: Project) : Disposable {
      * request throw its answer away rather than overwrite a fresher one.
      */
     fun rescan() {
-        val mine = generation.incrementAndGet()
+        generation.incrementAndGet()
+        schedule()
+    }
+
+    private fun schedule() {
+        if (project.isDisposed) return
         if (!scheduled.compareAndSet(false, true)) return
         ApplicationManager.getApplication().executeOnPooledThread {
+            var mine = generation.get()
             try {
                 Thread.sleep(SETTLE_MILLIS)
+                mine = generation.get()
+                if (!project.isDisposed) read(mine)
             } catch (_: InterruptedException) {
                 Thread.currentThread().interrupt()
-                return@executeOnPooledThread
+            } finally {
+                scheduled.set(false)
+                if (generation.get() != mine && !Thread.currentThread().isInterrupted) {
+                    schedule()
+                }
             }
-            scheduled.set(false)
-            if (generation.get() != mine) {
-                // Something asked again while this was waiting, and that
-                // request scheduled its own run.
-                return@executeOnPooledThread
-            }
-            read()
         }
     }
 
-    private fun read() {
+    private fun read(mine: Long) {
         val roots = project.basePath?.let { listOf(it) } ?: return
         val answer = FlowEngine.instance().scan(roots)
         if (answer == null) {
             LOG.debug("no scan: a11-flow answered nothing for $roots")
             return
         }
+        if (project.isDisposed || generation.get() != mine) return
         val actions = (answer["actions"] as? List<*>)?.size ?: 0
         @Suppress("UNCHECKED_CAST")
         val scanned = answer["scanned"] as? Map<String, Any?>
@@ -147,6 +158,12 @@ class FlowCatalogueService(private val project: Project) : Disposable {
             // looks exactly like a project with two actions in it.
             LOG.warn(
                 "a11-flow stopped after ${scanned["files_read"]} files;" +
+                    " some of $roots was not read"
+            )
+        }
+        if (scanned?.get("reached_entry_limit") == true) {
+            LOG.warn(
+                "a11-flow stopped after ${scanned["entries_visited"]} entries;" +
                     " some of $roots was not read"
             )
         }
@@ -181,7 +198,13 @@ class FlowCatalogueService(private val project: Project) : Disposable {
          * into, so an event in one is not news.
          */
         private val SKIPPED =
-            listOf("/node_modules/", "/.venv/", "/build/", "/dist/", "/__pycache__/", "/.git/")
+            listOf(
+                "node_modules", ".venv*", "venv", "build*", "cmake-build*",
+                "dist", "__pycache__", ".git", ".idea", ".gradle", "_deps",
+                ".next", ".nuxt", ".svelte-kit", ".ruff_cache",
+                ".vscode-test", ".mypy_cache", ".pytest_cache", ".tox",
+                "site-packages", "target",
+            )
 
         fun of(project: Project): FlowCatalogueService = project.service()
     }

@@ -91,8 +91,8 @@ std::optional<Language> LanguageOf(std::string_view path);
 /// What to read and what to leave alone.
 struct Options {
   /// Directory names never descended into. Defaults to the ones that hold
-  /// somebody else's code or a build of this one: `node_modules`, `.venv`,
-  /// `build`, `cmake-build-*`, `dist`, `.git`, `__pycache__`.
+  /// generated code and caches: `node_modules`, `.venv*`, `build*`,
+  /// `cmake-build*`, `dist`, `.git`, `__pycache__`, `.next`, `.vscode-test`.
   std::vector<std::string> skip_directories;
 
   /// The largest file read. A generated or vendored file of several megabytes
@@ -102,6 +102,9 @@ struct Options {
 
   /// The most files read in one scan.
   size_t max_files = 20000;
+
+  /// The most directory entries visited, including non-source files.
+  size_t max_entries = 50000;
 
   /// Options with the defaults filled in.
   static Options Default();
@@ -120,6 +123,10 @@ struct Result {
   std::vector<std::string> too_large;
   /// Whether `max_files` stopped the walk before it ran out of files.
   bool reached_file_limit = false;
+  /// Directory entries visited, including directories and non-source files.
+  size_t entries_visited = 0;
+  /// Whether `max_entries` stopped traversal.
+  bool reached_entry_limit = false;
 };
 
 /// Every `ActionSchema` declared under `roots`, as a catalogue with origins.

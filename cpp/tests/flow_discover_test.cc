@@ -13,22 +13,55 @@
 // limitations under the License.
 
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include <absl/strings/str_cat.h>
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
 #include "a11/flow/catalogue.h"
 #include "a11/flow/discover.h"
 #include "a11/flow/navigate.h"
+#include "a11/flow/service.h"
 
 namespace a11::flow {
 namespace {
 
 using discover::Language;
+
+class TemporaryTree {
+ public:
+  TemporaryTree()
+      : root_(
+            std::filesystem::path(::testing::TempDir()) /
+            absl::StrCat(
+                "a11-discover-",
+                std::chrono::steady_clock::now().time_since_epoch().count())) {
+    std::filesystem::create_directories(root_);
+  }
+
+  ~TemporaryTree() {
+    std::error_code error;
+    std::filesystem::remove_all(root_, error);
+  }
+
+  const std::filesystem::path& root() const { return root_; }
+
+  void Write(std::string_view relative, std::string_view text) {
+    const auto file = root_ / relative;
+    std::filesystem::create_directories(file.parent_path());
+    std::ofstream output(file);
+    output << text;
+  }
+
+ private:
+  std::filesystem::path root_;
+};
 
 /// The fixtures: one file per language, plus a header for the C++ one.
 ///
@@ -253,6 +286,68 @@ TEST(FlowDiscover, SaysWhatItDidNotRead) {
       discover::Discover({Fixtures().string()}, options);
   EXPECT_FALSE(skipped.too_large.empty());
   EXPECT_TRUE(skipped.found.Empty());
+}
+
+TEST(FlowDiscover, BoundsTraversalWithoutSourceFilesAcrossRoots) {
+  TemporaryTree tree;
+  for (int index = 0; index < 10; ++index) {
+    tree.Write(absl::StrCat("records/", index, ".json"), "{}");
+  }
+  tree.Write("later.py", "ActionSchema(name='later')");
+  auto options = discover::Options::Default();
+  options.max_entries = 3;
+  const auto found = discover::Discover(
+      {(tree.root() / "records").string(), (tree.root() / "later.py").string()},
+      options);
+  EXPECT_TRUE(found.reached_entry_limit);
+  EXPECT_EQ(found.entries_visited, 3);
+  EXPECT_EQ(found.files_read, 0);
+  EXPECT_TRUE(found.found.Empty());
+}
+
+TEST(FlowDiscover, SkipsGeneratedWebCachesAndVirtualEnvironments) {
+  TemporaryTree tree;
+  for (const auto directory :
+       {".next", ".nuxt", ".svelte-kit", ".venv-test", ".vscode-test"}) {
+    tree.Write(absl::StrCat(directory, "/nested/action.py"),
+               "ActionSchema(name='generated')");
+  }
+  tree.Write("action.py", "ActionSchema(name='project_action')");
+  const auto found = discover::Discover({tree.root().string()});
+  EXPECT_EQ(found.files_read, 1);
+  EXPECT_EQ(found.entries_visited, 6);
+  EXPECT_FALSE(found.reached_entry_limit);
+  EXPECT_NE(Find(found.found, "project_action"), nullptr);
+  EXPECT_EQ(Find(found.found, "generated"), nullptr);
+}
+
+TEST(FlowDiscover, LimitsExplicitFileRootsTogether) {
+  TemporaryTree tree;
+  tree.Write("one.py", "ActionSchema(name='one')");
+  tree.Write("two.py", "ActionSchema(name='two')");
+  auto options = discover::Options::Default();
+  options.max_files = 1;
+  const auto found = discover::Discover(
+      {(tree.root() / "one.py").string(), (tree.root() / "two.py").string()},
+      options);
+  EXPECT_EQ(found.files_read, 1);
+  EXPECT_TRUE(found.reached_file_limit);
+  EXPECT_NE(Find(found.found, "one"), nullptr);
+  EXPECT_EQ(Find(found.found, "two"), nullptr);
+}
+
+TEST(FlowDiscover, ServiceReportsTheRequestedTraversalLimit) {
+  TemporaryTree tree;
+  tree.Write("one.json", "{}");
+  tree.Write("two.json", "{}");
+  const auto response = Handle(nlohmann::json{{"method", "scan"},
+                                              {"paths", {tree.root().string()}},
+                                              {"max_entries", size_t{1}}});
+  ASSERT_TRUE(response["ok"].get<bool>());
+  const auto& scanned = response["result"]["scanned"];
+  EXPECT_EQ(scanned["entries_visited"], 1);
+  EXPECT_EQ(scanned["files_read"], 0);
+  EXPECT_EQ(scanned["reached_entry_limit"], true);
 }
 
 TEST(FlowDiscover, AScannedActionHoversAsItsDescriptionAndSaysWhereItIs) {

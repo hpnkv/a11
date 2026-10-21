@@ -473,8 +473,28 @@ structural declarations:
 small one:
 
 ```json
-{"scanned": {"files_read": 245, "reached_file_limit": false, "too_large": []}}
+{
+  "scanned": {
+    "files_read": 245,
+    "reached_file_limit": false,
+    "entries_visited": 312,
+    "reached_entry_limit": false,
+    "too_large": []
+  }
+}
 ```
+
+Scans read at most 20,000 source files and visit at most 50,000 directory
+entries, including non-source files. JSON service requests can set `max_files`
+and `max_entries`. Each limit applies across all roots in the request.
+Generated directories such as `.next`, `.vscode-test`, build trees and virtual
+environments are excluded. A limit produces a partial catalogue with the
+corresponding `reached_*_limit` flag set.
+
+The IntelliJ plugin uses separate native connections for project scans and
+editor requests. Waiting for a response or a busy connection checks IDE
+cancellation. A missing response ends the connection after five seconds;
+cancelled requests terminate their process before the connection is reused.
 
 Both editors run this on open and again after a save, and fold the result into
 the context they send. `flow.hover/v1` and `flow.definition/v1` then carry the

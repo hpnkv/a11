@@ -26,13 +26,11 @@ import com.intellij.openapi.application.PathManager
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
-import java.io.BufferedReader
-import java.io.BufferedWriter
+import com.intellij.openapi.progress.ProcessCanceledException
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
@@ -51,9 +49,8 @@ import kotlin.concurrent.withLock
 class FlowEngine : Disposable {
 
     private val lock = ReentrantLock()
-    private var process: Process? = null
-    private var writer: BufferedWriter? = null
-    private var reader: BufferedReader? = null
+    private val editor = FlowProcess(::executable)
+    private val scanner = FlowProcess(::executable)
     private var complained = false
 
     /** The last answer for each method, keyed by the text it was about. */
@@ -138,7 +135,7 @@ class FlowEngine : Disposable {
     /**
      * What one project's own source declares, under a key naming that project.
      *
-     * One `a11-flow` process serves all open projects. Catalogues remain keyed
+     * One engine serves all open projects. Catalogues remain keyed
      * by project and are merged for requests so opening another project does
      * not replace existing action declarations.
      */
@@ -159,7 +156,7 @@ class FlowEngine : Disposable {
      * a "go to declaration" that lands on it.
      */
     fun scan(paths: List<String>): Map<String, Any?>? =
-        request(mapOf("method" to "scan", "paths" to paths))
+        request(mapOf("method" to "scan", "paths" to paths), scanner)
 
     /**
      * The `context` argument: whatever was set, with every project's own
@@ -202,14 +199,19 @@ class FlowEngine : Disposable {
     }
 
     @Suppress("UNCHECKED_CAST")
-    private fun request(payload: Map<String, Any?>): Map<String, Any?>? {
+    private fun request(
+        payload: Map<String, Any?>,
+        transport: FlowProcess = editor,
+    ): Map<String, Any?>? {
         val answer = try {
             // IntelliJ offsets use UTF-16 code units. The service converts
             // its native byte offsets at this shared request boundary.
             val line = A11Json.encodeToString(payload + ("offsets" to "utf16"))
                 .valueOrThrow()
-            val response = exchange(line) ?: return null
+            val response = transport.exchange(line) ?: return null
             A11Json.parse(response).valueOrThrow() as? Map<String, Any?>
+        } catch (cancelled: ProcessCanceledException) {
+            throw cancelled
         } catch (error: Throwable) {
             LOG.warn("a11-flow answered something unreadable", error)
             null
@@ -224,73 +226,6 @@ class FlowEngine : Disposable {
     }
 
     /**
-     * Write one line, read one line, restarting the process if it has gone.
-     *
-     * Serialised: the protocol is one answer per request in order, and a
-     * document being retyped produces bursts of them from several threads.
-     */
-    private fun exchange(line: String): String? = lock.withLock {
-        for (attempt in 0..1) {
-            val pipes = pipes() ?: return null
-            try {
-                pipes.first.write(line)
-                pipes.first.write("\n")
-                pipes.first.flush()
-                val answer = pipes.second.readLine()
-                if (answer != null) return answer
-            } catch (error: Throwable) {
-                LOG.info("a11-flow stopped answering; restarting it", error)
-            }
-            // The tool died, or the pipe broke. One restart, then give up for
-            // this request: an editor that retried for ever would hang.
-            stop()
-        }
-        return null
-    }
-
-    private fun pipes(): Pair<BufferedWriter, BufferedReader>? {
-        val running = process
-        if (running != null && running.isAlive) {
-            val out = writer
-            val input = reader
-            if (out != null && input != null) return out to input
-        }
-        stop()
-        val tool = executable() ?: return null
-        return try {
-            val started = ProcessBuilder(tool.absolutePath, "serve", "--protocol", "json")
-                .redirectErrorStream(false)
-                .start()
-            process = started
-            writer = started.outputWriter()
-            reader = started.inputReader()
-            writer!! to reader!!
-        } catch (error: Throwable) {
-            LOG.warn("Could not start ${tool.absolutePath}", error)
-            complain("A11 Flow: could not start ${tool.name} (${error.message}).")
-            null
-        }
-    }
-
-    private fun stop() {
-        try {
-            writer?.close()
-        } catch (_: Throwable) {
-        }
-        try {
-            reader?.close()
-        } catch (_: Throwable) {
-        }
-        process?.let { running ->
-            running.destroy()
-            running.waitFor(200, TimeUnit.MILLISECONDS)
-        }
-        process = null
-        writer = null
-        reader = null
-    }
-
-    /**
      * Where the tool is.
      *
      * In order: what a developer pointed at, what the plugin bundles for this
@@ -298,6 +233,7 @@ class FlowEngine : Disposable {
      * into the IDE's own system directory, because a file inside a jar is not
      * executable.
      */
+    @Synchronized
     private fun executable(): File? {
         held?.let { return it.takeIf { file -> file.canExecute() } }
         val found = fromProperty() ?: bundled() ?: onPath()
@@ -378,7 +314,8 @@ class FlowEngine : Disposable {
     }
 
     override fun dispose() {
-        lock.withLock { stop() }
+        editor.dispose()
+        scanner.dispose()
     }
 
     companion object {

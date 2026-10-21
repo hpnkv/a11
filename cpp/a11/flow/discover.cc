@@ -1389,10 +1389,12 @@ std::optional<Language> LanguageOf(std::string_view path) {
 Options Options::Default() {
   Options options;
   options.skip_directories = {
-      "node_modules", ".venv",         "venv",   "build*",
-      "cmake-build*", "dist",          ".git",   "__pycache__",
-      ".mypy_cache",  ".pytest_cache", ".tox",   "site-packages",
-      ".idea",        ".gradle",       "target", "_deps",
+      "node_modules", ".venv*",        "venv",        "build*",
+      "cmake-build*", "dist",          ".git",        "__pycache__",
+      ".mypy_cache",  ".pytest_cache", ".tox",        "site-packages",
+      ".idea",        ".gradle",       "target",      "_deps",
+      ".next",        ".nuxt",         ".svelte-kit", ".ruff_cache",
+      ".vscode-test",
   };
   return options;
 }
@@ -1407,9 +1409,21 @@ Result Discover(absl::Span<const std::string> roots, const Options& options) {
   Result result;
   std::vector<ActionInfo> found;
   for (const std::string& root : roots) {
+    if (result.reached_file_limit || result.reached_entry_limit) {
+      break;
+    }
     std::error_code error;
     const std::filesystem::path path(root);
     if (std::filesystem::is_regular_file(path, error)) {
+      if (result.entries_visited >= options.max_entries) {
+        result.reached_entry_limit = true;
+        break;
+      }
+      if (result.files_read >= options.max_files) {
+        result.reached_file_limit = true;
+        break;
+      }
+      ++result.entries_visited;
       ScanOneFile(path, root, options, result, found);
       continue;
     }
@@ -1426,6 +1440,11 @@ Result Discover(absl::Span<const std::string> roots, const Options& options) {
       if (error) {
         break;
       }
+      if (result.entries_visited >= options.max_entries) {
+        result.reached_entry_limit = true;
+        break;
+      }
+      ++result.entries_visited;
       if (result.files_read >= options.max_files) {
         result.reached_file_limit = true;
         break;

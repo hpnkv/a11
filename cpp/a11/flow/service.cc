@@ -336,6 +336,10 @@ nlohmann::json Handle(const nlohmann::json& request) {
         limit != request.end() && limit->is_number_unsigned()) {
       options.max_files = limit->get<size_t>();
     }
+    if (const auto limit = request.find("max_entries");
+        limit != request.end() && limit->is_number_unsigned()) {
+      options.max_entries = limit->get<size_t>();
+    }
     const discover::Result found = discover::Discover(roots, options);
     nlohmann::json scanned = found.found.ToJson();
     // What was read and what was not. A cap that applied itself silently would
@@ -343,6 +347,8 @@ nlohmann::json Handle(const nlohmann::json& request) {
     scanned["scanned"] =
         nlohmann::json{{"files_read", found.files_read},
                        {"reached_file_limit", found.reached_file_limit},
+                       {"entries_visited", found.entries_visited},
+                       {"reached_entry_limit", found.reached_entry_limit},
                        {"too_large", found.too_large}};
     return Success(request, std::move(scanned));
   }

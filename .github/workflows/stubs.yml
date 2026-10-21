@@ -57,7 +57,10 @@ jobs:
 
       - name: Build the editable extension
         env:
-          CMAKE_ARGS: "-DA11_REQUIRE_STATIC_DEPS=ON -DA11_FETCH_MISSING_DEPS=ON"
+          CMAKE_ARGS: >-
+            -DA11_REQUIRE_STATIC_DEPS=ON -DA11_FETCH_MISSING_DEPS=ON
+            -DCMAKE_PREFIX_PATH=/tmp/a11-deps
+            -DOPENSSL_ROOT_DIR=/tmp/a11-deps
         run: uv sync --locked --group dev
 
       - name: Verify the stub is fresh

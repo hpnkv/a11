@@ -626,3 +626,31 @@ async def test_a_json_array_is_one_value_on_a_unary_port():
         {"label": "one"},
         {"label": "two"},
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unary", [False, True])
+async def test_empty_array_preserves_port_identity_and_serializes(unary):
+    schema = ActionSchema(
+        name="empty_array",
+        inputs={
+            "items": ActionPortSchema("items", "application/json", unary=unary)
+        },
+    )
+    adapter = ActionCallAdapter.create(
+        ToolCall(name=schema.name, id="call", params={"items": []}), schema
+    )
+    fragments = await adapter.get_action_inputs()
+    assert len(fragments) == 1
+    assert fragments[0].id == "items" and not fragments[0].continued
+    assert fragments[0].get_chunk().is_null() is not unary
+    if unary:
+        assert a11.from_chunk(fragments[0].get_chunk()) == []
+    interaction = Interaction(
+        role=Role.ASSISTANT, action_inputs={"call": fragments}
+    )
+    for mimetype in ("application/json", "application/x-msgpack"):
+        restored = a11.from_chunk(
+            a11.to_chunk(interaction, mimetype), obj_type=Interaction
+        )
+        assert restored.model_dump() == interaction.model_dump()

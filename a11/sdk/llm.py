@@ -1069,7 +1069,9 @@ class ActionCallAdapter:
                 fragments.append(fragment)
 
             if not final_encountered:
-                fragments.append(None)
+                fragments.append(
+                    a11.NodeFragment(id=key, data=a11.to_chunk(b""))
+                )
 
             inputs.extend(fragments)
 

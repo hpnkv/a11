@@ -445,9 +445,9 @@ async def feed_action_inputs(
 
     Takes what
     [ActionCallAdapter.get_action_inputs][a11.sdk.llm.ActionCallAdapter.get_action_inputs]
-    produced. A ``None`` in that list stands for an argument whose fragments
-    carried no finality -- an empty list argument writes nothing -- and the
-    close below is what ends the port.
+    produced. Empty streaming arguments carry a named native null terminator.
+    Legacy ``None`` entries carry no value and are skipped; closing the inputs
+    below ends any stream that has no fragment-level finality.
 
     Autofilled inputs are written, drained and closed by the native run flow,
     so only the inputs fed here are closed. Closed, not finalized: the

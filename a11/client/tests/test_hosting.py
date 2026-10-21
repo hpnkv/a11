@@ -214,7 +214,8 @@ async def test_a_lapsing_credential_rebinds_in_the_right_order():
     endpoint = _endpoint()
     endpoint.identity = "agent"
     endpoint._connected = asyncio.Event()
-    endpoint._transport = None
+    endpoint._stopped = asyncio.Event()
+    endpoint._transport = _FakeTransport()
     steps: list[str] = []
 
     async def drop_listener() -> None:
@@ -223,19 +224,26 @@ async def test_a_lapsing_credential_rebinds_in_the_right_order():
     async def connect() -> None:
         steps.append("connected")
 
+    async def settle(seconds: float) -> None:
+        from a11.client import hosting
+
+        assert seconds == hosting.DISCONNECT_SETTLE_SECONDS
+        steps.append("settled")
+
     endpoint.on_drop_listener = drop_listener
     endpoint._connect = connect
+    endpoint._wait = settle
     now = time_module.time()
 
     # Bound credentials nearly out, and a renewal has produced newer ones.
     endpoint._bound_expiry = now + 30
     endpoint.claim = _FakeClaim(now + 3600)
     await endpoint._rebind_if_lapsing()
-    assert steps == ["dropped", "connected"]
+    assert steps == ["dropped", "settled", "connected"]
 
     # Now that the listener holds the fresh expiry, it must settle.
     await endpoint._rebind_if_lapsing()
-    assert steps == ["dropped", "connected"]
+    assert steps == ["dropped", "settled", "connected"]
 
 
 @pytest.mark.asyncio
@@ -250,6 +258,7 @@ async def test_a_failing_drop_hook_does_not_stop_the_rebind():
     endpoint = _endpoint()
     endpoint.identity = "agent"
     endpoint._connected = asyncio.Event()
+    endpoint._stopped = asyncio.Event()
     endpoint._transport = None
     endpoint.claim = _FakeClaim(time_module.time() + 3600)
     endpoint._bound_expiry = time_module.time() + 30

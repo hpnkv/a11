@@ -49,6 +49,8 @@ CONNECT_TIMEOUT = timing.Duration.seconds(20)
 #: How soon after a lost connection to try again, and how far to back off.
 MIN_RECONNECT_BACKOFF = 1.0
 MAX_RECONNECT_BACKOFF = 30.0
+#: Time for a closed signalling socket's departure to reach the exchange.
+DISCONNECT_SETTLE_SECONDS = 1.0
 #: Renewal is scheduled from the claim's own `renew_after`; this bounds how
 #: long the loop sleeps between checks so a clock change cannot strand it.
 RENEW_POLL_SECONDS = 30.0
@@ -412,9 +414,9 @@ class HostedEndpoint:
             logging.info(
                 "signalling for %s dropped; reconnecting", self.identity
             )
-            await self._relinquish()
             try:
-                await self._connect()
+                if not await self._replace_transport():
+                    return
                 backoff = MIN_RECONNECT_BACKOFF
             except Exception as exc:  # noqa: BLE001 - a transport may raise anything
                 logging.warning(
@@ -514,11 +516,25 @@ class HostedEndpoint:
             self.identity,
             self._bound_expiry - time.time(),
         )
-        await self._relinquish()
-        await self._connect()
-        self._bound_expiry = fresh
+        if await self._replace_transport():
+            self._bound_expiry = fresh
 
-    async def _relinquish(self) -> None:
+    async def _replace_transport(self) -> bool:
+        """Close one signalling socket before registering its replacement.
+
+        Departure reaches the exchange asynchronously. Waiting after a live
+        transport closes prevents its departure from removing or refusing the
+        replacement registration.
+        """
+        had_transport = await self._relinquish()
+        if had_transport:
+            await self._wait(DISCONNECT_SETTLE_SECONDS)
+        if self._stopped.is_set():
+            return False
+        await self._connect()
+        return True
+
+    async def _relinquish(self) -> bool:
         """Let go of the listener and the transport it is bound to.
 
         Always both, and in that order: a WebRTC server closes its transport
@@ -538,6 +554,7 @@ class HostedEndpoint:
             with contextlib.suppress(Exception):
                 transport.close()
         self._connected.clear()
+        return transport is not None
 
     async def _renew_if_due(self) -> None:
         """Renew when the claim says it is time, and not before."""
@@ -609,6 +626,7 @@ class HostedEndpoint:
 
 __all__ = [
     "CONNECT_TIMEOUT",
+    "DISCONNECT_SETTLE_SECONDS",
     "HEALTH_CHECK_SECONDS",
     "REBIND_MARGIN_SECONDS",
     "MAX_RECONNECT_BACKOFF",

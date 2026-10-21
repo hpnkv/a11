@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import weakref
 
 import pytest
 
@@ -40,6 +41,32 @@ from a11.sdk.audio.client import (
 from a11.status import StatusCode, StatusException
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["resolve_asr_model", "resolve_vad_model"])
+async def test_model_resolution_releases_progress_callback_safely(
+    tmp_path, name
+):
+    from a11 import _native
+
+    model = tmp_path / "local-model.bin"
+    model.write_bytes(b"local model")
+
+    class Progress:
+        def __call__(self, done, total):
+            pytest.fail("a local model does not report download progress")
+
+    callback = Progress()
+    reference = weakref.ref(callback)
+    assert await getattr(_native, name)(str(model), callback) == str(model)
+    del callback
+    for _ in range(100):
+        _native.release_deferred_python_refs()
+        if reference() is None:
+            break
+        await asyncio.sleep(0.001)
+    assert reference() is None
+
+
 def _has_input_device() -> bool:
     return any(d.max_input_channels > 0 for d in list_devices())
 
@@ -53,12 +80,10 @@ def test_list_devices_returns_metadata():
 
 
 def test_options_validate_from_mapping():
-    options = AudioInputOptions.model_validate(
-        {
-            "sample_rate": 44100.0,
-            "channels": 1,
-        }
-    )
+    options = AudioInputOptions.model_validate({
+        "sample_rate": 44100.0,
+        "channels": 1,
+    })
     assert options.sample_rate == 44100.0
     assert options.channels == 1
     assert options.block_frames == 256  # default preserved
@@ -71,12 +96,10 @@ def test_options_reject_tiny_block():
 
 
 def test_speech_recognizer_options_validate_from_mapping():
-    options = SpeechRecognizerOptions.model_validate(
-        {
-            "language": "en",
-            "min_silence_millis": 400,
-        }
-    )
+    options = SpeechRecognizerOptions.model_validate({
+        "language": "en",
+        "min_silence_millis": 400,
+    })
     assert options.language == "en"
     assert options.min_silence_millis == 400
     assert options.use_gpu is True

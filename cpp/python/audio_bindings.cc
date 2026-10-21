@@ -67,11 +67,14 @@ audio::OnModelProgress AudioProgressFromPython(const py::object& on_progress) {
   if (on_progress.is_none()) {
     return {};
   }
-  auto shared = std::make_shared<py::object>(on_progress);
+  auto shared = std::shared_ptr<PyObject>(on_progress.inc_ref().ptr(),
+                                          [](PyObject* absl_nonnull object) {
+                                            DeferredPythonRefs::Retire(object);
+                                          });
   return [shared](std::uint64_t done, std::uint64_t total) {
     py::gil_scoped_acquire acquire;
     try {
-      (*shared)(done, total);
+      py::reinterpret_borrow<py::object>(shared.get())(done, total);
     } catch (const py::error_already_set& error) {
       PyErr_WarnFormat(PyExc_RuntimeWarning, 1,
                        "a11 model progress callback raised: %s", error.what());

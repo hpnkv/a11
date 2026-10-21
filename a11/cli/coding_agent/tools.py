@@ -63,8 +63,10 @@ def _port(
 WORKSPACE_INFO_SCHEMA = a11.ActionSchema(
     name="workspace_info",
     description=(
-        "Inspect the coding session before making assumptions about its root"
-        " or state. This action takes no inputs. Its unary `result` object has"
+        "Read coding-session metadata when repository state, applicable"
+        " instructions, roots, or policy affect the next decision. Reuse a"
+        " previous result unless the state may have changed or the task moves"
+        " to another root. This action takes no inputs. Its unary `result` has"
         " exactly these fields: `cwd`, `root`, `repository_root`, `read_roots`,"
         " `write_roots`, `initial_git_status`, `current_git_status`,"
         " `agent_changed_files`, `checks`, `instructions`, `approval_mode`,"
@@ -198,7 +200,9 @@ APPLY_PATCH_SCHEMA = a11.ActionSchema(
         " exactly `-`, and an empty context line is one space. Never use"
         " `*** Begin Patch`, `*** Add File`, or similar wrapper syntax. Hunk"
         " counts are inferred from their lines. The implementation repeats"
-        " the whitespace and final-newline normalization defensively. The"
+        " the whitespace and final-newline normalization defensively. Read"
+        " the current target span before constructing a patch. After a"
+        " context or preimage mismatch, reread that span before retrying. The"
         " entire multi-file patch is preflighted before any"
         " file changes; a context/preimage mismatch changes nothing. The only"
         " output is unary `result`, exactly"
@@ -283,7 +287,10 @@ RUN_COMMAND_SCHEMA = a11.ActionSchema(
         " not the text. A nonzero process exit is reported in `result` rather"
         " than treated as a malformed tool call. In Flow, filter"
         " `step.output_lines`; omit that output when only completion data is"
-        " needed. Use web-fetch for HTTP retrieval, not curl or wget."
+        " needed. One call may contain a coherent bounded sequence such as"
+        " environment setup followed by its check, when later commands do not"
+        " require model interpretation of earlier output. Use web-fetch for"
+        " HTTP retrieval, not curl or wget."
     ),
     inputs={
         "command": _port(
@@ -605,9 +612,10 @@ RUN_FLOW_SCHEMA = a11.ActionSchema(
     name="run_flow",
     description=(
         "Compile and run an A11 Flow for parallel or streaming multi-action"
-        " work. Prefer it when operations compose or when a deterministic"
-        " filter, slice, projection, or bound can keep unneeded action output"
-        " out of model context—even for one action. Use Flow to expose only"
+        " work. Use it when independent operations benefit from concurrency"
+        " or when a deterministic projection materially reduces the action"
+        " output entering model context. Use direct actions for small or"
+        " adaptive operations. Use Flow to expose only"
         " the smallest output needed instead of requiring a full tool result"
         " in context. Every value the model should receive must be declared"
         " as an `out` port and routed there with `->`; undeclared values stay"
@@ -630,9 +638,6 @@ RUN_FLOW_SCHEMA = a11.ActionSchema(
             "source",
             "text/plain",
             "Raw, unfenced Flow source; the first named flow is invoked."
-            " When workspace sources may be relevant, start with bounded"
-            " `read_file`, `list_files`, or `search_text` calls; add"
-            " web-fetch for current external evidence or missing context."
             " Start with `flow NAME {`, not `flow NAME() {`. Declare"
             " `in` and `out` ports before statements. Types include"
             " `string`, `any`, and `list[string]`; append `stream` for a"
@@ -648,30 +653,18 @@ RUN_FLOW_SCHEMA = a11.ActionSchema(
             " `flatten`, `drop N`, `first N`, `truncate N`, and `collect`."
             " Declare each returned value as a typed `out` port and route"
             " it there with `->`; only declared outputs reach the model."
-            " The program may declare sibling flows and compose them with"
-            " `run`. Copyable bounded-read example:\n"
+            " Copyable bounded-read example:\n"
             "flow inspect {\n"
             "  in path: string required\n"
             "  out lines: string stream\n"
             "  file = run read_file(path: path)\n"
             "  file.lines | drop 3 | first 9 | truncate 400 -> lines\n"
             "}\n"
-            " For matching file lines use `file.lines | where"
-            ' contains(lower(it), "needle") | first 30 | truncate 500`.'
             " Never return whole text or an unbounded line stream when a"
             " bounded selection answers the question. `first N` bounds"
-            " value count; `truncate N` bounds each value. Put every"
-            " independent action call in the first flow so they run"
-            " concurrently. Later sibling declarations are definitions"
-            " and do nothing unless that entry flow runs them. Use `after"
-            " step`, `wait"
-            " step timeout 30s`, or `cancel step` for control. Pipe only"
+            " value count; `truncate N` bounds each value. Pipe only"
             " needed outputs so intermediate values stay out of model"
-            " context. Do not include Markdown backticks. Use absolute"
-            " workspace paths for filesystem actions. A bounded whole-text"
-            " pattern is `page = run web-fetch(url: url)` then"
-            ' `page.text | map split(it, "\\n") | flatten | drop 29 |'
-            " first 21 -> lines` for lines 30–50.",
+            " context. Do not include Markdown backticks.",
             required=True,
         ),
         "inputs": _port(

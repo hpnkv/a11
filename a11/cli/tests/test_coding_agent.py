@@ -168,7 +168,12 @@ def test_structured_action_inputs_have_json_schemas(tmp_path):
     assert process_arguments["oneOf"][1]["items"] == {"type": "string"}
     assert flow_inputs == {"type": "object", "additionalProperties": True}
     flow_schema = registry.get_schema("run_flow")
-    assert "even for one action" in flow_schema.description
+    assert "independent operations benefit from concurrency" in (
+        flow_schema.description
+    )
+    assert "Use direct actions for small or adaptive operations" in (
+        flow_schema.description
+    )
     assert "step = run action(port: value)" in flow_schema.description
     assert "not `flow NAME() {`" in flow_schema.inputs["source"].description
     assert (
@@ -178,13 +183,6 @@ def test_structured_action_inputs_have_json_schemas(tmp_path):
         "Never spell that `[string]`"
         in flow_schema.inputs["source"].description
     )
-    assert "map split" in flow_schema.inputs["source"].description
-    assert (
-        "where contains(lower(it)" in flow_schema.inputs["source"].description
-    )
-    assert "sibling declarations are definitions" in (
-        flow_schema.inputs["source"].description
-    )
     assert (
         "only declared outputs reach the model"
         in flow_schema.inputs["source"].description
@@ -192,17 +190,20 @@ def test_structured_action_inputs_have_json_schemas(tmp_path):
     assert "Flow call syntax is not shell syntax" in agent.prompt
     assert "use the available tools to achieve the goal" in agent.prompt
     assert "declare and route only what the next decision needs" in agent.prompt
-    assert "Do not load flow_guide for an ordinary Flow" in agent.prompt
-    assert "call` requires an attached peer stream" in agent.prompt
-    assert "Only the first declared flow is invoked" in agent.prompt
+    assert "Use flow_guide for advanced syntax" in agent.prompt
+    assert "The first declared flow is the entry flow" in agent.prompt
     assert "<repo-root>/.a11/flows/" in agent.prompt
     assert "flow-name.flow" in agent.prompt
     assert "flow-name.md" in agent.prompt
     assert "each input and output" in agent.prompt
     assert "which reusable Flows are available" in agent.prompt
     assert "Filesystem actions accept relative paths" in agent.prompt
-    assert "Never return an entire text value" in agent.prompt
-    assert "`read action(...)` is invalid" in agent.prompt
+    assert "Treat each tool invocation as a meaningful decision point" in (
+        agent.prompt
+    )
+    assert "Avoid repeating successful reads" in agent.prompt
+    assert "A successful\nfocused check may suffice" in agent.prompt
+    assert "Stop when the requested behavior is implemented" in agent.prompt
     assert "Do not run curl, wget" in agent.prompt
     assert "Put known independent URLs" in agent.prompt
     assert "run_flow so the web-fetch calls run concurrently" in agent.prompt
@@ -216,8 +217,8 @@ def test_structured_action_inputs_have_json_schemas(tmp_path):
     assert "Common coding outputs" in flow_schema.description
     assert "`list_files.result.files`" in flow_schema.description
     assert "For workspace research" in flow_schema.description
-    assert "start with bounded `read_file`, `list_files`, or `search_text`" in (
-        flow_schema.inputs["source"].description
+    assert "coherent bounded sequence" in (
+        registry.get_schema("run_command").description
     )
     for name in ("read_file", "list_files", "search_text"):
         assert "Do not use this as the first source" not in (
@@ -243,6 +244,8 @@ def test_structured_action_inputs_have_json_schemas(tmp_path):
         in registry.get_schema("file_diff").description
     )
     patch_schema = registry.get_schema("apply_patch")
+    assert "Read the current target span" in patch_schema.description
+    assert "reread that span before retrying" in patch_schema.description
     assert "git-format unified diff" in patch_schema.description
     assert "description of what is being changed" in patch_schema.description
     assert "diff --git" in patch_schema.description

@@ -28,6 +28,8 @@ from pydantic import BaseModel, Field
 import a11
 from a11.actions import describe
 from a11.sdk.llm_tools.runner import definition_from_schema
+from a11.sdk.llm_tools.runner import output_definition_from_schema
+from a11.sdk.llm_tools.adapter import ToolAdapter
 
 
 class Address(BaseModel):
@@ -39,6 +41,80 @@ class Customer(BaseModel):
     name: str
     home: Address
     work: Address | None = None
+
+
+@pytest.mark.parametrize("value_schema", [True, False, {}, {"type": "integer"}])
+def test_port_metadata_survives_local_and_remote_adapters(
+    value_schema,
+):
+    schema = a11.ActionSchema(
+        name="structured",
+        inputs={
+            "one": a11.ActionPortSchema(
+                "one",
+                "application/json",
+                required=True,
+                unary=True,
+                description="Exactly one input.",
+                json_schema=json.dumps(value_schema),
+            ),
+            "many": a11.ActionPortSchema(
+                "many",
+                "application/json",
+                required=True,
+                description="A nonempty input stream.",
+                json_schema=json.dumps(value_schema),
+            ),
+        },
+        outputs={
+            "result": a11.ActionPortSchema(
+                "result",
+                "application/json",
+                unary=True,
+                description="The result.",
+                json_schema=json.dumps(value_schema),
+            ),
+        },
+        output_to_json_field={"result": "$"},
+    )
+    entry = describe.schema_to_json(schema)
+    before = json.dumps(entry, sort_keys=True)
+    inputs = definition_from_schema(entry)["input_schema"]
+    outputs = output_definition_from_schema(entry)
+    assert inputs == ToolAdapter(schema).input_schema
+    assert outputs == ToolAdapter(schema).output_schema
+    assert set(inputs["required"]) == {"one", "many"}
+    many = inputs["properties"]["many"]
+    assert many == {
+        "type": "array",
+        "items": value_schema,
+        "minItems": 1,
+        "description": "A nonempty input stream.",
+    }
+    described = (
+        {"allOf": [value_schema]}
+        if isinstance(value_schema, bool)
+        else value_schema
+    )
+    assert inputs["properties"]["one"] == {
+        **described,
+        "description": "Exactly one input.",
+    }
+    assert outputs == {**described, "description": "The result."}
+    assert json.dumps(entry, sort_keys=True) == before
+
+
+def test_whole_boolean_output_schema_keeps_its_meaning():
+    schema = a11.ActionSchema(
+        name="no_values",
+        outputs={
+            "result": a11.ActionPortSchema(
+                "result", "application/json", unary=True, json_schema="false"
+            )
+        },
+        output_to_json_field={"result": "$"},
+    )
+    assert ToolAdapter(schema).output_schema is False
 
 
 def _definition(schema: a11.ActionSchema) -> dict:

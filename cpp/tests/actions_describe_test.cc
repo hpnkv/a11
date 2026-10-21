@@ -189,6 +189,30 @@ TEST(SchemaFromDescriptionTest, DropsAnOlderClientsUserFacingFlag) {
   EXPECT_TRUE(rebuilt->outputs.contains("progress"));
 }
 
+TEST(DescribeSchemaTest, PreservesBooleanAndUnionJsonSchemas) {
+  for (const std::string encoded :
+       {"true", "false", "{}", R"({"type":["object","null"]})",
+        R"({"enum":[1,"two",null]})"}) {
+    ActionSchema schema;
+    schema.name = "structured";
+    ActionPortSchema port;
+    port.name = "value";
+    port.type = "application/json";
+    port.description = "Structured value.";
+    port.required = true;
+    port.unary = true;
+    port.json_schema = encoded;
+    schema.inputs.emplace(port.name, port);
+    const nlohmann::json described = SchemaToJson(schema, true);
+    const auto parsed = a11::ParseJson(encoded, "test JSON Schema");
+    ASSERT_TRUE(parsed.ok()) << parsed.status();
+    EXPECT_EQ(described["inputs"][0]["json_schema"], *parsed);
+    const auto restored = SchemaFromJson(described);
+    ASSERT_TRUE(restored.ok()) << restored.status();
+    EXPECT_EQ(SchemaToJson(*restored, true), described);
+  }
+}
+
 TEST(DescribeSchemaTest, NeverWritesAUserFacingFlag) {
   ActionSchema schema;
   schema.name = "sample";

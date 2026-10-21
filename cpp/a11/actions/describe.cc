@@ -119,8 +119,11 @@ std::vector<const ActionHeaderSchema*> SortedHeaders(
 /// document carrying that spelled out says exactly what an absent field does,
 /// on every port whose type is a bare mapping.
 bool SaysNothing(const nlohmann::json& schema) {
-  return schema.is_object() && schema.size() == 1 &&
-         schema.value("type", "") == "object";
+  if (!schema.is_object() || schema.size() != 1) {
+    return false;
+  }
+  const auto type = schema.find("type");
+  return type != schema.end() && *type == "object";
 }
 
 /// A port's `json_schema`, parsed if it parses.

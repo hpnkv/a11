@@ -14,6 +14,7 @@
 
 import asyncio
 import dataclasses
+from copy import deepcopy
 import json
 from collections import defaultdict
 from collections.abc import AsyncIterator, Mapping
@@ -37,9 +38,19 @@ from a11.sdk.llm import (
     TOOL_STATUSES_METADATA_KEY,
     WHOLE_JSON_FRAGMENT_ID,
 )
-from a11.sdk.llm_tools.adapter import WHOLE_JSON_OUTPUT, ToolAdapter
+from a11.sdk.llm_tools.adapter import WHOLE_JSON_OUTPUT
 
 MAX_MODEL_TOOL_OUTPUT_BYTES = 128 * 1024
+
+
+def _port_description(schema: dict | bool, port: dict) -> dict | bool:
+    """Attach port documentation without changing a boolean schema's meaning."""
+    description = port.get("description")
+    if not description:
+        return schema
+    if isinstance(schema, bool):
+        schema = {"allOf": [schema]}
+    return {**schema, "description": description}
 
 
 def definition_from_schema(entry: dict[str, Any]) -> dict[str, Any]:
@@ -59,12 +70,12 @@ def definition_from_schema(entry: dict[str, Any]) -> dict[str, Any]:
             continue
         # `{"type": "object"}` where the port stated no type, which is what the
         # adapter has always shown for an untyped port.
-        schema = port.get("json_schema") or {"type": "object"}
+        schema = deepcopy(port.get("json_schema", {"type": "object"}))
         if not port.get("unary", False):
             schema = {"type": "array", "items": schema}
             if port.get("required"):
                 schema["minItems"] = 1
-        properties[name] = schema
+        properties[name] = _port_description(schema, port)
         if port.get("required"):
             required.append(name)
 
@@ -80,7 +91,9 @@ def definition_from_schema(entry: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def output_definition_from_schema(entry: dict[str, Any]) -> dict[str, Any]:
+def output_definition_from_schema(
+    entry: dict[str, Any],
+) -> dict[str, Any] | bool:
     """The JSON Schema of what one action returns, from its entry.
 
     The output half of
@@ -110,10 +123,10 @@ def output_definition_from_schema(entry: dict[str, Any]) -> dict[str, Any]:
         name = port.get("name")
         if not name:
             continue
-        schema = port.get("json_schema") or {}
+        schema = deepcopy(port.get("json_schema", {}))
         if not port.get("unary", False):
             schema = {"type": "array", "items": schema}
-        properties[name] = schema
+        properties[name] = _port_description(schema, port)
 
     mapping = entry.get("output_to_json_field") or {}
     whole = whole_json_port(mapping)
@@ -128,10 +141,12 @@ def output_definition_from_schema(entry: dict[str, Any]) -> dict[str, Any]:
     if not properties:
         return {}
 
-    return organise_and_deduplicate_jsonschema({
-        "type": "object",
-        "properties": properties,
-    })
+    return organise_and_deduplicate_jsonschema(
+        {
+            "type": "object",
+            "properties": properties,
+        }
+    )
 
 
 def whole_json_port(mapping: Mapping[str, str]) -> str | None:
@@ -215,8 +230,7 @@ async def collect_tools(
     local = sorted(
         name
         for name in registry.list_registered_actions()
-        if name not in requested
-        and name != action.get_schema().name
+        if name not in requested and name != action.get_schema().name
         # A11's reserved actions are protocol operations, not model tools.
         and not describe.is_reserved_action(name)
         and action_name_matches_allowed(name, allowed_patterns)
@@ -281,12 +295,16 @@ class ExecutedActions:
         if self.logs:
             metadata[TOOL_LOGS_METADATA_KEY] = json.dumps(self.logs).encode()
         if self.outputs:
-            metadata[TOOL_STATUSES_METADATA_KEY] = json.dumps({
-                call_id: (
-                    self.errors.get(call_id, Status()).model_dump(mode="json")
-                )
-                for call_id in self.outputs
-            }).encode()
+            metadata[TOOL_STATUSES_METADATA_KEY] = json.dumps(
+                {
+                    call_id: (
+                        self.errors.get(call_id, Status()).model_dump(
+                            mode="json"
+                        )
+                    )
+                    for call_id in self.outputs
+                }
+            ).encode()
         return metadata
 
     def error_message(self, call_id: str) -> str | None:
@@ -349,9 +367,9 @@ async def user_facing_log_entries(
 
 async def user_facing_log(node: a11.AsyncNode, timeout: a11.Duration) -> str:
     """What a call logged for the person watching, as one block of text."""
-    return "".join([
-        text async for text in user_facing_log_entries(node, timeout)
-    ])
+    return "".join(
+        [text async for text in user_facing_log_entries(node, timeout)]
+    )
 
 
 async def relay_user_facing_logs(
@@ -572,8 +590,7 @@ async def execute_actions_from_interaction(
                 ).to_exception()
 
             nested_action = (
-                action
-                .make_nested(registry.get_schema(call.name))
+                action.make_nested(registry.get_schema(call.name))
                 .set_id(call.id)
                 .bind_stream(None)
                 .bind_handler(registry.get_handler(call.name))

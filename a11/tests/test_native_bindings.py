@@ -117,6 +117,43 @@ def test_native_action_schema_json_round_trip_preserves_binary_fields():
     assert isinstance(restored, native.ActionSchema)
 
 
+def test_native_schema_helpers_preserve_json_schema_and_local_type_handles():
+    port = ActionPortSchema(
+        name="request",
+        type="application/json",
+        description="Structured input.",
+        required=True,
+        unary=True,
+        typeinfo=list,
+        json_schema='{"type":"array","items":{"type":"string"}}',
+    )
+    schema = ActionSchema(name="structured", inputs={"request": port})
+    for original in (port, schema):
+        for deep in (False, True):
+            copied = original.model_copy(deep=deep)
+            copied_port = (
+                copied
+                if isinstance(copied, ActionPortSchema)
+                else copied.inputs["request"]
+            )
+            assert copied_port.json_schema == port.json_schema
+            assert copied_port.typeinfo is list
+            assert copied_port.description == port.description
+            assert copied_port.required and copied_port.unary
+            copied_port.description = "Changed copy."
+            assert port.description == "Structured input."
+        restored = type(original).model_validate_json(
+            original.model_dump_json()
+        )
+        restored_port = (
+            restored
+            if isinstance(restored, ActionPortSchema)
+            else restored.inputs["request"]
+        )
+        assert restored_port.json_schema == port.json_schema
+        assert restored_port.typeinfo is None
+
+
 def test_sync_native_failures_raise_public_status_exception():
     framing = native.ChannelFramingOptions()
     framing.split_size = 0

@@ -126,7 +126,7 @@ def _validate_action_port(
                 else types.NodeFragment.model_validate(item)
             )
 
-    port_python_type = None
+    port_python_type = data.get("typeinfo")
     port_type_name = data["type"]
 
     if isinstance(data["type"], type):
@@ -141,6 +141,7 @@ def _validate_action_port(
         unary=data.get("unary", False),
         autofills=autofills,
         typeinfo=port_python_type,
+        json_schema=data.get("json_schema", ""),
     )
     return schema
 
@@ -223,6 +224,8 @@ def _dump_action_model(value: Any, mode: str = "python") -> dict[str, Any]:
             out["required"] = value.required
         if value.unary:
             out["unary"] = value.unary
+        if value.json_schema:
+            out["json_schema"] = value.json_schema
         if value.autofills:
             out["autofills"] = [
                 chunk.model_dump(mode=mode) for chunk in value.autofills
@@ -319,6 +322,12 @@ def _action_model_copy(
 ):
     del deep
     values = self.model_dump()
+    if isinstance(self, ActionPortSchema):
+        values["typeinfo"] = self.typeinfo
+    elif isinstance(self, ActionSchema):
+        for direction in ("inputs", "outputs"):
+            for name, port in getattr(self, direction).items():
+                values[direction][name]["typeinfo"] = port.typeinfo
     if update:
         values.update(update)
     return type(self).model_validate(values)
@@ -357,6 +366,7 @@ _ACTION_ANNOTATIONS = {
         "required": bool,
         "unary": bool,
         "autofills": list[types.Chunk] | None,
+        "json_schema": str,
     },
     ActionHeaderSchema: {
         "name": types.NameString,

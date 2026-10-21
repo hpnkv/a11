@@ -12,118 +12,37 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any
-
 import a11
+from a11.actions.describe import fill_json_schemas, schema_to_json
 
-from a11.sdk.llm_tools import jsonschema_utils
-
-#: In ``ActionSchema.output_to_json_field``, mapping a port to this instead of a
-#: field name means "this port *is* the whole result". Mirrors
-#: ``ActionSchema::kWholeJson`` in C++ and ``WHOLE_JSON_OUTPUT`` in Kotlin; it
-#: had no Python spelling before, which is how two readings of it drifted apart.
+#: A port mapped to "$" supplies the whole JSON result.
 WHOLE_JSON_OUTPUT = "$"
 
 
 class ToolAdapter:
+    """Expose a native action through the shared discovery-schema projection."""
+
     def __init__(self, schema: a11.ActionSchema):
         self._schema = schema
+
+    def _entry(self):
+        schema = fill_json_schemas(self._schema.model_copy(deep=True))
+        return schema_to_json(schema)
 
     @property
     def input_schema(self):
         return self._get_input_json_schema()
 
     def _get_input_json_schema(self):
-        properties = dict()
-        required_nodes = []
+        from a11.sdk.llm_tools.runner import definition_from_schema
 
-        for input_node in self._schema.inputs.values():
-            # Autofilled inputs are supplied automatically before the handler
-            # runs, so the LLM must never see them in the tool definition.
-            if input_node.autofills:
-                continue
-
-            name = input_node.name
-            unary = input_node.unary
-            required = input_node.required
-
-            node_schema = {"type": "object"}
-            if input_node.typeinfo is not None:
-                node_schema = jsonschema_utils.get_json_schema_type(
-                    input_node.typeinfo
-                )
-
-            if required:
-                required_nodes.append(name)
-
-            if not unary:
-                node_schema: dict[str, Any] = {
-                    "type": "array",
-                    "items": node_schema,
-                }
-                if required:
-                    node_schema["minItems"] = 1
-
-            properties[name] = node_schema
-
-        return jsonschema_utils.organise_and_deduplicate_jsonschema(
-            {
-                "type": "object",
-                "properties": properties,
-                "required": required_nodes,
-            }
-        )
+        return definition_from_schema(self._entry())["input_schema"]
 
     @property
     def output_schema(self):
         return self._get_output_json_schema()
 
     def _get_output_json_schema(self):
-        properties = dict()
-        required_nodes = []
+        from a11.sdk.llm_tools.runner import output_definition_from_schema
 
-        for output_node in self._schema.outputs.values():
-            name = output_node.name
-            unary = output_node.unary
-            required = output_node.required
-
-            node_schema = {"type": "object"}
-            if output_node.typeinfo is not None:
-                node_schema = jsonschema_utils.get_json_schema_type(
-                    output_node.typeinfo
-                )
-
-            if required:
-                required_nodes.append(name)
-
-            if not unary:
-                node_schema: dict[str, Any] = {
-                    "type": "array",
-                    "items": node_schema,
-                }
-                node_schema["minItems"] = 1
-
-            properties[name] = node_schema
-
-        substitutions = self._schema.output_to_json_field
-        if not substitutions:
-            schema = {
-                "type": "object",
-                "properties": properties,
-                "required": required_nodes,
-            }
-        elif (
-            len(substitutions) == 1
-            and next(iter(substitutions.values())) == WHOLE_JSON_OUTPUT
-        ):
-            schema = properties[list(substitutions.keys())[0]]
-        else:
-            for name, substitution in substitutions.items():
-                properties[substitution] = properties.pop(name)
-            schema = {
-                "type": "object",
-                "properties": properties,
-                "required": required_nodes,
-            }
-
-        return jsonschema_utils.organise_and_deduplicate_jsonschema(schema)
+        return output_definition_from_schema(self._entry())

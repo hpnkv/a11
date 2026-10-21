@@ -32,8 +32,6 @@ import bisect
 import dataclasses
 import enum
 import functools
-import json
-import pathlib
 from typing import Any, Iterable, Sequence
 
 #: The envelope versions. Bumped only when a field changes meaning or goes away.
@@ -42,14 +40,6 @@ CODES_FORMAT = "flow.codes/v1"
 TOKENS_FORMAT = "flow.tokens/v1"
 PLAN_FORMAT = "flow.plan/v1"
 SYNTAX_FORMAT = "flow.syntax/v1"
-
-#: The generated table of every code the language publishes.
-_CODES_PATH = (
-    pathlib.Path(__file__).resolve().parents[2]
-    / "testdata"
-    / "flow"
-    / "codes.json"
-)
 
 
 class FlowSyntaxError(Exception):
@@ -261,10 +251,11 @@ class CodeInfo:
 def known_codes() -> tuple[CodeInfo, ...]:
     """Every diagnostic code the language publishes, sorted by code.
 
-    Read from `testdata/flow/codes.json`, which the C++ table generates: this is
-    a reader of that contract, never a second copy of it.
+    Read from the native language's table, which also generates
+    `testdata/flow/codes.json`.
     """
-    table = json.loads(_CODES_PATH.read_text(encoding="utf-8"))
+    from a11._native import flow as native
+
     return tuple(
         CodeInfo(
             code=entry["code"],
@@ -272,7 +263,7 @@ def known_codes() -> tuple[CodeInfo, ...]:
             severity=Severity(entry["severity"]),
             summary=entry["summary"],
         )
-        for entry in table["codes"]
+        for entry in native.codes()
     )
 
 

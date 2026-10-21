@@ -117,6 +117,8 @@ def _audit_vendored_symbols(binary: Path) -> None:
 
 
 def _audit_typing_files(root: Path) -> None:
+    if (root / "testdata").exists():
+        raise RuntimeError("wheel contains repository testdata")
     marker = root / "a11" / "py.typed"
     package = root / "a11" / "_native"
     if not marker.is_file():
@@ -139,12 +141,9 @@ def _audit_typing_files(root: Path) -> None:
         if declaration not in source:
             raise RuntimeError(f"native stub is missing {declaration}")
 
-    for relative in (
-        "editors/pygments/a11flow_lexer.py",
-        "testdata/flow/codes.json",
-    ):
-        if not (root / relative).is_file():
-            raise RuntimeError(f"wheel does not contain {relative}")
+    relative = "editors/pygments/a11flow_lexer.py"
+    if not (root / relative).is_file():
+        raise RuntimeError(f"wheel does not contain {relative}")
 
 
 def _audit_installed_behavior() -> None:

@@ -96,7 +96,7 @@ llm = [
 cmake.source-dir = "cpp"
 cmake.version = ">=3.28"
 build-dir = "build/{state}/{wheel_tag}"
-wheel.packages = ["a11", "pybind11_abseil", "editors", "testdata"]
+wheel.packages = ["a11", "pybind11_abseil", "editors"]
 wheel.exclude = [
     "**/__pycache__/**",
     "**/*.pyc",

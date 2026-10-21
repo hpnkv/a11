@@ -22,12 +22,12 @@ checked by `cpp/tests/flow_emit_json_test.cc`, against the same golden table.
 
 from __future__ import annotations
 
-import json
 import pathlib
 
 import dataclasses
 
 import pytest
+from pydantic_core import from_json
 
 from a11.flow import diagnostics as diag
 
@@ -143,10 +143,10 @@ def test_every_code_is_published_with_a_meaning():
 
 def test_the_code_table_is_the_generated_one():
     """Python reads the C++'s table; it never keeps a second copy of it."""
-    table = json.loads(CODES_JSON.read_text(encoding="utf-8"))
+    table = from_json(CODES_JSON.read_bytes())
     assert table["format"] == diag.CODES_FORMAT
-    assert [entry["code"] for entry in table["codes"]] == [
-        entry.code for entry in diag.known_codes()
+    assert table["codes"] == [
+        dataclasses.asdict(entry) for entry in diag.known_codes()
     ]
 
 

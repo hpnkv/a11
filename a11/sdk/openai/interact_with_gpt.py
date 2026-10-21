@@ -190,6 +190,7 @@ def _api_status(exc: openai.APIError) -> Status:
 def _responses_usage(usage: Any | None) -> llm.UsageMetadata | None:
     if usage is None:
         return None
+
     def value(source: Any, name: str) -> Any:
         if isinstance(source, dict):
             return source.get(name)
@@ -197,11 +198,19 @@ def _responses_usage(usage: Any | None) -> llm.UsageMetadata | None:
 
     input_details = value(usage, "input_tokens_details")
     output_details = value(usage, "output_tokens_details")
+    cached = value(input_details, "cached_tokens")
+    written = value(input_details, "cache_write_tokens")
+    prompt = value(usage, "input_tokens")
     return llm.UsageMetadata(
-        input_tokens=value(usage, "input_tokens"),
+        input_tokens=(
+            prompt - (cached or 0) - (written or 0)
+            if prompt is not None
+            else None
+        ),
         output_tokens=value(usage, "output_tokens"),
         total_tokens=value(usage, "total_tokens"),
-        cached_input_tokens=value(input_details, "cached_tokens"),
+        cached_input_tokens=cached,
+        cache_write_tokens=written,
         reasoning_tokens=value(output_details, "reasoning_tokens"),
     )
 
@@ -366,7 +375,10 @@ async def _run_responses_turn(
             model=str(_event_value(response, "model", model)),
             content=[await asyncio.to_thread(a11.to_chunk, message)],
             backend_specific_metadata={
-                llm.BACKEND_METADATA_KEY: str(llm.Backend.GPT).encode()
+                llm.BACKEND_METADATA_KEY: str(llm.Backend.GPT).encode(),
+                "provider_usage": llm.encode_backend_value(
+                    _event_value(response, "usage")
+                ),
             },
             usage_metadata=_responses_usage(_event_value(response, "usage")),
         )

@@ -1093,7 +1093,7 @@
           "type": "string"
         },
         {
-          "description": "Claude Code session id to continue. Also read from the newest assistant interaction's metadata when unset.",
+          "description": "Claude Code session id to continue with the newest supplied interaction. Also read from the newest assistant interaction's metadata when unset.",
           "name": "resume",
           "type": "string"
         },
@@ -1117,6 +1117,16 @@
           "description": "Maximum number of tokens to generate.",
           "name": "max_tokens",
           "type": "integer"
+        },
+        {
+          "description": "How long Anthropic retains the stable tools and system prefix. One-hour writes cost more and suit prefixes reused after idle periods.",
+          "name": "stable_cache_ttl",
+          "type": "json"
+        },
+        {
+          "description": "How long Anthropic retains the growing conversation prefix. Five minutes keeps each moving suffix write inexpensive.",
+          "name": "conversation_cache_ttl",
+          "type": "json"
         },
         {
           "description": "Enable adaptive thinking so the model decides when and how much internal reasoning to spend. Unsupported alongside tools and on Haiku models.",
@@ -1152,7 +1162,7 @@
       "tag": "a11.sdk.InteractWithClaudeConfig"
     },
     {
-      "description": "Options for a `codex exec --json` session.",
+      "description": "Options for a Codex app-server session over stdio.",
       "fields": [
         {
           "description": "Working directory exposed as Codex's primary workspace.",
@@ -1365,7 +1375,7 @@
           "type": "integer"
         },
         {
-          "description": "How long to keep the model loaded in memory after the request (e.g. `5m`, or seconds as a number).",
+          "description": "How long to keep the model loaded in memory after the request so its prompt cache remains available (e.g. `5m`, or seconds as a number). Set null to use the server default.",
           "name": "keep_alive",
           "type": "json"
         },
@@ -1445,6 +1455,11 @@
           "description": "Values passed to the model's chat template, such as `{\"enable_thinking\": true}` on models whose template gates reasoning (vLLM `extra_body.chat_template_kwargs`).",
           "name": "chat_template_kwargs",
           "type": "object"
+        },
+        {
+          "description": "Stable vLLM prefix-cache namespace. Reuse a value for prompts allowed to share cached prefixes; use distinct values to isolate tenants.",
+          "name": "cache_salt",
+          "type": "string"
         },
         {
           "description": "Additional request fields, merged into the request body last. Covers deployment-specific sampling parameters this config does not name.",
@@ -1670,12 +1685,12 @@
       "description": "Provider-independent token accounting for a single interaction.",
       "fields": [
         {
-          "description": "Prompt/input tokens consumed. Anthropic `input_tokens`, OpenAI `prompt_tokens`, Gemini `promptTokenCount`, Ollama `prompt_eval_count`.",
+          "description": "Uncached input tokens, excluding separately reported cache writes. Inclusive provider prompt counts have cache reads/writes removed.",
           "name": "input_tokens",
           "type": "integer"
         },
         {
-          "description": "Completion/output tokens generated. Anthropic `output_tokens`, OpenAI `completion_tokens`, Gemini `candidatesTokenCount`, Ollama `eval_count`.",
+          "description": "Generated output tokens, including reasoning and tool arguments. Gemini output and thought counts are combined.",
           "name": "output_tokens",
           "type": "integer"
         },
@@ -1690,14 +1705,29 @@
           "type": "integer"
         },
         {
-          "description": "Input tokens written to a prompt cache. Currently only reported by Anthropic (`cache_creation_input_tokens`).",
+          "description": "Cache-write input tokens, excluded from input_tokens.",
           "name": "cache_write_tokens",
           "type": "integer"
         },
         {
-          "description": "Output tokens spent on internal reasoning/thinking. Anthropic `output_tokens_details.thinking_tokens`, OpenAI `completion_tokens_details.reasoning_tokens`, Gemini `thoughtsTokenCount`.",
+          "description": "Subset of output_tokens spent on reasoning/thinking. Anthropic `output_tokens_details.thinking_tokens`, OpenAI `completion_tokens_details.reasoning_tokens`, Gemini `thoughtsTokenCount`.",
           "name": "reasoning_tokens",
           "type": "integer"
+        },
+        {
+          "description": "Whether counters cover one request or one user turn.",
+          "name": "usage_scope",
+          "type": "json"
+        },
+        {
+          "description": "Latest model request's input plus output, including cached input. This is a context estimate, distinct from aggregate turn usage.",
+          "name": "context_tokens",
+          "type": "integer"
+        },
+        {
+          "description": "Whether provider input usage covers the context or only new input. Incremental usage does not establish context occupancy.",
+          "name": "input_tokens_scope",
+          "type": "json"
         }
       ],
       "tag": "a11.sdk.UsageMetadata"

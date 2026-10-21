@@ -463,9 +463,13 @@ def _usage_line(block: PresentationBlock) -> str:
     parts = []
     for label, value in (
         ("in", getattr(usage, "input_tokens", None)),
+        ("cache read", getattr(usage, "cached_input_tokens", None)),
+        ("cache write", getattr(usage, "cache_write_tokens", None)),
         ("out", getattr(usage, "output_tokens", None)),
+        ("reasoning (in out)", getattr(usage, "reasoning_tokens", None)),
+        ("total", getattr(usage, "total_tokens", None)),
     ):
-        if value:
+        if value is not None:
             parts.append(f"{label} {value}")
     return f"tokens: {', '.join(parts)}" if parts else "tokens: n/a"
 

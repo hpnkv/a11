@@ -615,6 +615,7 @@ class _StreamAccumulator:
         for field, value in (
             ("response_id", self._response_id),
             ("finish_reason", self._finish_reason),
+            ("provider_usage", self._usage),
         ):
             if value:
                 metadata[field] = llm.encode_backend_value(value)
@@ -668,11 +669,19 @@ def _build_usage_metadata(usage: Any | None) -> llm.UsageMetadata | None:
 
     prompt_details = getattr(usage, "prompt_tokens_details", None)
     completion_details = getattr(usage, "completion_tokens_details", None)
+    cached = getattr(prompt_details, "cached_tokens", None)
+    written = getattr(prompt_details, "cache_write_tokens", None)
+    prompt = getattr(usage, "prompt_tokens", None)
     return llm.UsageMetadata(
-        input_tokens=getattr(usage, "prompt_tokens", None),
+        input_tokens=(
+            prompt - (cached or 0) - (written or 0)
+            if prompt is not None
+            else None
+        ),
         output_tokens=getattr(usage, "completion_tokens", None),
         total_tokens=getattr(usage, "total_tokens", None),
-        cached_input_tokens=getattr(prompt_details, "cached_tokens", None),
+        cached_input_tokens=cached,
+        cache_write_tokens=written,
         reasoning_tokens=getattr(completion_details, "reasoning_tokens", None),
     )
 

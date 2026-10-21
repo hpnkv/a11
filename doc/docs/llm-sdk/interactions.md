@@ -119,6 +119,24 @@ The remaining fields retain accounting and provider details:
 | `backend_specific_metadata` | `{}`    | Stores opaque byte values needed by one backend, such as its producer name, stop reason, container ID, or resumable session ID. JSON serialisation represents the bytes as base64. |
 | `usage_metadata`            | `None`  | Stores provider-independent input, output, total, cached-input, cache-write, and reasoning token counts. Unreported counters remain `None`.                                        |
 
+Input, cache reads, and cache writes are separate counts. Output includes
+reasoning; `reasoning_tokens` is a subset of output. Sum `total_tokens` once
+per interaction for reported consumption, and sum `output_tokens` for generated
+tokens. Do not add cache or reasoning counts to `total_tokens` again.
+
+`usage_scope` is `request` for one model call or `turn` for all model calls in a
+user turn. Codex and Claude Code report turn usage; Claude Code includes each
+model in its result's per-model usage map when available. A turn total includes
+repeated prompts across tool rounds. `context_tokens`, when supplied, describes
+the last model request's input plus output. Gemini resumed requests report
+`input_tokens_scope="incremental"`; their usage does not establish context size.
+
+`backend_specific_metadata["provider_usage"]` retains the provider's original
+usage fields, including modality and other token breakdowns. Claude Code also
+retains `model_usage`; its primary result usage overlaps that per-model map.
+Codex preserves thread snapshots and the turn delta separately. These raw
+records retain provider scopes and are not additional counters to sum.
+
 The schema permits content, action calls, and status information in the same interaction. `role` records provenance;
 every role admits the same payload fields. The ordered interaction list remains the conversation record, while
 `previous_interaction_id` makes the link explicit for backends that address stored state by ID.

@@ -518,6 +518,7 @@ export class PresentationReducer {
   private readonly collected: PresentationBlock[] = [];
   private open: PresentationBlock | null = null;
   private readonly seenCalls = new Set<string>();
+  private readonly seenUsage = new Set<string>();
   private readonly logs: Record<string, string> = {};
   private readonly statuses: Record<string, Status> = {};
   private readonly inputs: Record<string, Record<string, unknown>> = {};
@@ -624,6 +625,10 @@ export class PresentationReducer {
       );
       if (!isOk(turn)) return turn;
       for (const block of turn.blocks) {
+        if (block.kind === BlockKind.USAGE && block.interactionId) {
+          if (this.seenUsage.has(block.interactionId)) continue;
+          this.seenUsage.add(block.interactionId);
+        }
         if (block.kind === BlockKind.TEXT && this.streamedText) continue;
         if (block.kind === BlockKind.TOOL_RUN) {
           if (this.seenCalls.has(block.id)) continue;

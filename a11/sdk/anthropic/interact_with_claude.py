@@ -171,6 +171,7 @@ def _build_backend_specific_metadata(
     # provider-independent `UsageMetadata`.
     usage = snapshot.usage
     if usage is not None:
+        metadata["provider_usage"] = llm.encode_backend_value(usage)
         for field in (
             "service_tier",
             "inference_geo",

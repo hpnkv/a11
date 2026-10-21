@@ -263,6 +263,27 @@ test('presentation sink exceptions become statuses', async () => {
   assert.equal(isOk(interaction), true);
 });
 
+test('usage scope survives presentation and duplicate delivery', async () => {
+  const usage = {
+    input_tokens: 31, cached_input_tokens: 130, cache_write_tokens: 9,
+    output_tokens: 45, reasoning_tokens: 13, total_tokens: 215,
+    usage_scope: 'turn', context_tokens: 105,
+    input_tokens_scope: 'context',
+  };
+  const interaction = makeInteraction({
+    id: 'recorded-tool-turn', role: 'model', content: [],
+    usage_metadata: usage,
+  });
+  const parsed = valueOrThrow(parseInteraction(interaction));
+  assert.deepEqual(parsed.usage_metadata, usage);
+  const reducer = new PresentationReducer();
+  assert.ok(isOk(await reducer.onInteraction(parsed)));
+  assert.ok(isOk(await reducer.onInteraction(parsed)));
+  const blocks = reducer.blocks.filter(block => block.kind === BlockKind.USAGE);
+  assert.equal(blocks.length, 1);
+  assert.deepEqual(blocks[0].usage, usage);
+});
+
 test('malformed conversation metadata becomes a status', async () => {
   const presented = await presentConversation([
     {

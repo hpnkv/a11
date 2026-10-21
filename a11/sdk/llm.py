@@ -124,12 +124,12 @@ class Role(enum.Enum):
 class UsageMetadata(BaseModel):
     """Provider-independent token accounting for a single interaction.
 
-    The fields are the common denominator across the major LLM provider APIs
-    (Anthropic, Gemini, Ollama, OpenAI). Each field documents the per-provider
-    source it maps from. Counters that are specific to one backend and do not
-    generalize (e.g. Anthropic's `server_tool_use`, `service_tier`, or Ollama's
-    timing durations) do not belong here — they go into an interaction's
-    `backend_specific_metadata`.
+    Input, cached input and cache writes are disjoint. Output includes
+    reasoning; reasoning is a subset and must not be added to output again.
+    Provider totals are authoritative. Provider-specific breakdowns live in
+    ``backend_specific_metadata["provider_usage"]`` with their original names.
+    Missing counters remain unknown. Request usage covers one model call;
+    turn usage covers all model calls in one user turn.
     """
 
     A11_SERIAL_TAG: ClassVar[str] = serial_tags.USAGE_METADATA
@@ -137,18 +137,16 @@ class UsageMetadata(BaseModel):
     input_tokens: int | None = Field(
         default=None,
         description=(
-            "Prompt/input tokens consumed. Anthropic `input_tokens`, OpenAI"
-            " `prompt_tokens`, Gemini `promptTokenCount`, Ollama"
-            " `prompt_eval_count`."
+            "Uncached input tokens, excluding separately reported cache writes."
+            " Inclusive provider prompt counts have cache reads/writes removed."
         ),
         exclude_if=lambda x: x is None,
     )
     output_tokens: int | None = Field(
         default=None,
         description=(
-            "Completion/output tokens generated. Anthropic `output_tokens`,"
-            " OpenAI `completion_tokens`, Gemini `candidatesTokenCount`, Ollama"
-            " `eval_count`."
+            "Generated output tokens, including reasoning and tool arguments."
+            " Gemini output and thought counts are combined."
         ),
         exclude_if=lambda x: x is None,
     )
@@ -175,20 +173,40 @@ class UsageMetadata(BaseModel):
     cache_write_tokens: int | None = Field(
         default=None,
         description=(
-            "Input tokens written to a prompt cache. Currently only reported by"
-            " Anthropic (`cache_creation_input_tokens`)."
+            "Cache-write input tokens, excluded from input_tokens."
         ),
         exclude_if=lambda x: x is None,
     )
     reasoning_tokens: int | None = Field(
         default=None,
         description=(
-            "Output tokens spent on internal reasoning/thinking. Anthropic"
+            "Subset of output_tokens spent on reasoning/thinking. Anthropic"
             " `output_tokens_details.thinking_tokens`, OpenAI"
             " `completion_tokens_details.reasoning_tokens`, Gemini"
             " `thoughtsTokenCount`."
         ),
         exclude_if=lambda x: x is None,
+    )
+    usage_scope: Literal["request", "turn"] = Field(
+        default="request",
+        description="Whether counters cover one request or one user turn.",
+        exclude_if=lambda x: x == "request",
+    )
+    context_tokens: int | None = Field(
+        default=None,
+        description=(
+            "Latest model request's input plus output, including cached input."
+            " This is a context estimate, distinct from aggregate turn usage."
+        ),
+        exclude_if=lambda x: x is None,
+    )
+    input_tokens_scope: Literal["context", "incremental"] = Field(
+        default="context",
+        description=(
+            "Whether provider input usage covers the context or only new input."
+            " Incremental usage does not establish context occupancy."
+        ),
+        exclude_if=lambda x: x == "context",
     )
 
 

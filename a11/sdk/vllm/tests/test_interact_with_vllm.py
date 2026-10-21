@@ -402,7 +402,7 @@ async def test_usage_and_tools_reach_the_request(monkeypatch):
     )
 
     usage = interactions[0].usage_metadata
-    assert usage.input_tokens == 13
+    assert usage.input_tokens == 5
     assert usage.output_tokens == 5
     assert usage.total_tokens == 18
     assert usage.cached_input_tokens == 8

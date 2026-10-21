@@ -109,7 +109,7 @@ export function zodParse<S extends z.ZodType>(
 
 // --- Usage accounting --------------------------------------------------------
 
-/** Provider-independent token accounting for a single interaction. */
+/** Disjoint input/cache counts; output includes the reasoning subset. */
 export const usageMetadataSchema = z
   .object({
     input_tokens: z.number().int().nullish(),
@@ -118,6 +118,9 @@ export const usageMetadataSchema = z
     cached_input_tokens: z.number().int().nullish(),
     cache_write_tokens: z.number().int().nullish(),
     reasoning_tokens: z.number().int().nullish(),
+    usage_scope: z.enum(['request', 'turn']).optional(),
+    context_tokens: z.number().int().nullish(),
+    input_tokens_scope: z.enum(['context', 'incremental']).optional(),
   })
   .loose();
 /** Validated provider-independent token accounting. */

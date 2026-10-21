@@ -48,6 +48,64 @@ CODEX_TRANSPORT = b"app-server-dynamic-tools/v1"
 CODEX_TOOLS_METADATA_KEY = "codex_tools_sha256"
 
 
+class _TurnUsage:
+    """Reconcile thread snapshots with the active turn's request counts."""
+
+    def __init__(self) -> None:
+        self.turn_id: str | None = None
+        self.baseline: dict[str, int] | None = None
+        self.snapshot: dict[str, Any] | None = None
+        self.delta: dict[str, int] = {}
+
+    def update(self, params: dict[str, Any]) -> None:
+        snapshot = params.get("tokenUsage") or {}
+        total = snapshot.get("total")
+        if self.turn_id is None:
+            if total is not None:
+                self.baseline = dict(total)
+            return
+        if params.get("turnId", self.turn_id) != self.turn_id:
+            return
+        last = snapshot.get("last") or {}
+        if total is not None:
+            if self.baseline is None:
+                self.baseline = {
+                    key: value - last[key]
+                    for key, value in total.items()
+                    if key in last
+                }
+            self.delta = {
+                key: value - self.baseline[key]
+                for key, value in total.items()
+                if key in self.baseline
+            }
+        else:
+            self.delta = dict(last)
+        self.snapshot = snapshot
+
+    def metadata(self) -> llm.UsageMetadata | None:
+        if self.snapshot is None:
+            return None
+        values = self.delta
+        cached = values.get("cachedInputTokens")
+        written = values.get("cacheWriteInputTokens")
+        prompt = values.get("inputTokens")
+        return llm.UsageMetadata(
+            input_tokens=(
+                prompt - (cached or 0) - (written or 0)
+                if prompt is not None
+                else None
+            ),
+            output_tokens=values.get("outputTokens"),
+            cached_input_tokens=cached,
+            cache_write_tokens=written,
+            reasoning_tokens=values.get("reasoningOutputTokens"),
+            total_tokens=values.get("totalTokens"),
+            usage_scope="turn",
+            context_tokens=(self.snapshot.get("last") or {}).get("totalTokens"),
+        )
+
+
 def _codex_to_normalized(interaction: llm.Interaction) -> llm.NormalizedMessage:
     return chat._vllm_to_normalized(interaction)
 
@@ -244,6 +302,7 @@ async def _run_codex(
     tool_handler: ToolHandler,
     env: dict[str, str],
     image_paths: list[str] | None = None,
+    usage_details: dict[str, bytes] | None = None,
 ) -> tuple[str, str, llm.UsageMetadata | None]:
     """Run one turn over Codex's JSONL stdio app-server protocol."""
     try:
@@ -293,7 +352,7 @@ async def _run_codex(
     responses: dict[int, dict[str, Any]] = {}
     final_text = ""
     streamed_text = False
-    usage = None
+    turn_usage = _TurnUsage()
     turn_done = False
     seen_questions: set[str] = set()
     read_task: asyncio.Task[None] | None = None
@@ -413,7 +472,7 @@ async def _run_codex(
             })
 
     async def read_one(thread_id: str = "") -> None:
-        nonlocal final_text, streamed_text, usage, turn_done
+        nonlocal final_text, streamed_text, turn_done
         line = await _read_jsonl_line(process.stdout)
         if not line:
             raise Status(
@@ -464,14 +523,10 @@ async def _run_codex(
                         )
                 elif method == "item/completed":
                     final_text = item.get("text") or final_text
+        elif method == "turn/started":
+            turn_usage.turn_id = (params.get("turn") or {}).get("id")
         elif method == "thread/tokenUsage/updated":
-            values = (params.get("tokenUsage") or {}).get("last") or {}
-            usage = llm.UsageMetadata(
-                input_tokens=values.get("inputTokens"),
-                output_tokens=values.get("outputTokens"),
-                cached_input_tokens=values.get("cachedInputTokens"),
-                total_tokens=values.get("totalTokens"),
-            )
+            turn_usage.update(params)
         elif method == "turn/completed":
             turn = params.get("turn") or {}
             if turn.get("status") != "completed":
@@ -552,7 +607,10 @@ async def _run_codex(
                 "outputSchema": config.output_schema,
             },
         )
-        await wait_response(turn_request, thread_id)
+        turn_result = await wait_response(turn_request, thread_id)
+        turn_usage.turn_id = (turn_result.get("turn") or {}).get(
+            "id"
+        ) or turn_usage.turn_id
         while not turn_done or pending_calls or resume_requests:
             if read_task is None and (not turn_done or resume_requests):
                 read_task = asyncio.create_task(read_one(thread_id))
@@ -570,7 +628,12 @@ async def _run_codex(
                 finished.result()
         if final_text and not streamed_text:
             await action["text_output"].put(final_text)
-        return final_text, thread_id, usage
+        if usage_details is not None and turn_usage.snapshot is not None:
+            usage_details["provider_usage"] = llm.encode_backend_value({
+                "thread_snapshot": turn_usage.snapshot,
+                "turn": turn_usage.delta,
+            })
+        return final_text, thread_id, turn_usage.metadata()
     finally:
         if read_task is not None:
             read_task.cancel()
@@ -750,6 +813,7 @@ async def interact_with_codex(action: a11.Action) -> None:
     try:
         with tempfile.TemporaryDirectory(prefix="a11-codex-") as directory:
             image_paths = _write_prompt_images(prompt_interactions, directory)
+            usage_details: dict[str, bytes] = {}
             answer, current_thread, usage = await _run_codex(
                 action,
                 config,
@@ -761,6 +825,7 @@ async def interact_with_codex(action: a11.Action) -> None:
                 handle_tool,
                 env,
                 image_paths,
+                usage_details,
             )
         interaction = llm.Interaction(
             previous_interaction_id=previous_id,
@@ -768,7 +833,9 @@ async def interact_with_codex(action: a11.Action) -> None:
             created_at_millis=a11.now().nanoseconds_since_epoch // 1000000,
             model=model,
             content=[a11.to_chunk({"role": "assistant", "content": answer})],
-            backend_specific_metadata=_metadata(current_thread, tools_digest),
+            backend_specific_metadata=(
+                _metadata(current_thread, tools_digest) | usage_details
+            ),
             usage_metadata=usage,
         )
         await action["new_interactions"].put(interaction)

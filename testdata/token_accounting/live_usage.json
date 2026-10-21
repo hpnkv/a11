@@ -1,0 +1,3417 @@
+{
+  "recorded_on": "2026-10-21",
+  "source": "Live provider calls through A11; baseline usage before normalization fixes. Gemini records follow account funding.",
+  "cases": [
+    {
+      "id": "claude-tools-unary",
+      "provider": "claude",
+      "model_requested": "claude-sonnet-4-6",
+      "provider_events": [
+        {
+          "kind": "message_start",
+          "usage": {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "inference_geo": "global",
+            "input_tokens": 557,
+            "output_tokens": 4,
+            "output_tokens_details": null,
+            "server_tool_use": null,
+            "service_tier": "standard",
+            "speed": "standard"
+          }
+        },
+        {
+          "kind": "message_delta",
+          "usage": {
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "input_tokens": 557,
+            "output_tokens": 76,
+            "output_tokens_details": null,
+            "server_tool_use": null
+          }
+        },
+        {
+          "kind": "message_start",
+          "usage": {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "inference_geo": "global",
+            "input_tokens": 662,
+            "output_tokens": 1,
+            "output_tokens_details": null,
+            "server_tool_use": null,
+            "service_tier": "standard",
+            "speed": "standard"
+          }
+        },
+        {
+          "kind": "message_delta",
+          "usage": {
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "input_tokens": 662,
+            "output_tokens": 110,
+            "output_tokens_details": null,
+            "server_tool_use": null
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 557,
+          "output_tokens": 76,
+          "total_tokens": 633,
+          "cached_input_tokens": 0,
+          "cache_write_tokens": 0
+        },
+        {
+          "input_tokens": 662,
+          "output_tokens": 110,
+          "total_tokens": 772,
+          "cached_input_tokens": 0,
+          "cache_write_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "claude_code-tools-unary",
+      "provider": "claude_code",
+      "model_requested": "claude-sonnet-4-6",
+      "provider_events": [
+        {
+          "kind": "assistant_snapshot",
+          "usage": {
+            "input_tokens": 779,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 0
+            },
+            "output_tokens": 1,
+            "service_tier": "standard",
+            "inference_geo": "global",
+            "speed": "standard"
+          }
+        },
+        {
+          "kind": "assistant_snapshot",
+          "usage": {
+            "input_tokens": 779,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 0
+            },
+            "output_tokens": 1,
+            "service_tier": "standard",
+            "inference_geo": "global",
+            "speed": "standard"
+          }
+        },
+        {
+          "kind": "assistant_snapshot",
+          "usage": {
+            "input_tokens": 779,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 0
+            },
+            "output_tokens": 1,
+            "service_tier": "standard",
+            "inference_geo": "global",
+            "speed": "standard"
+          }
+        },
+        {
+          "kind": "assistant_snapshot",
+          "usage": {
+            "input_tokens": 959,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 0
+            },
+            "output_tokens": 10,
+            "service_tier": "standard",
+            "inference_geo": "global",
+            "speed": "standard"
+          }
+        },
+        {
+          "kind": "assistant_snapshot",
+          "usage": {
+            "input_tokens": 959,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 0
+            },
+            "output_tokens": 10,
+            "service_tier": "standard",
+            "inference_geo": "global",
+            "speed": "standard"
+          }
+        },
+        {
+          "kind": "assistant_snapshot",
+          "usage": {
+            "input_tokens": 959,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 0
+            },
+            "output_tokens": 10,
+            "service_tier": "standard",
+            "inference_geo": "global",
+            "speed": "standard"
+          }
+        },
+        {
+          "kind": "assistant_snapshot",
+          "usage": {
+            "input_tokens": 1,
+            "cache_creation_input_tokens": 1126,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 1126,
+              "ephemeral_1h_input_tokens": 0
+            },
+            "output_tokens": 8,
+            "service_tier": "standard",
+            "inference_geo": "global",
+            "speed": "standard"
+          }
+        },
+        {
+          "kind": "assistant_snapshot",
+          "usage": {
+            "input_tokens": 1,
+            "cache_creation_input_tokens": 1126,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 1126,
+              "ephemeral_1h_input_tokens": 0
+            },
+            "output_tokens": 8,
+            "service_tier": "standard",
+            "inference_geo": "global",
+            "speed": "standard"
+          }
+        },
+        {
+          "kind": "result",
+          "usage": {
+            "input_tokens": 1739,
+            "cache_creation_input_tokens": 1126,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 1173,
+            "output_tokens_details": {
+              "thinking_tokens": 800
+            },
+            "server_tool_use": {
+              "web_search_requests": 0,
+              "web_fetch_requests": 0
+            },
+            "service_tier": "standard",
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 1126
+            },
+            "inference_geo": "global",
+            "iterations": [
+              {
+                "input_tokens": 1,
+                "output_tokens": 945,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 1126,
+                "cache_creation": {
+                  "ephemeral_5m_input_tokens": 1126,
+                  "ephemeral_1h_input_tokens": 0
+                },
+                "type": "message"
+              }
+            ],
+            "speed": "standard"
+          },
+          "model_usage": {
+            "claude-haiku-4-5-20251001": {
+              "inputTokens": 908,
+              "outputTokens": 13,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0,
+              "webSearchRequests": 0,
+              "costUSD": 0.0009729999999999999,
+              "contextWindow": 200000,
+              "maxOutputTokens": 32000,
+              "thinkingTokens": 0,
+              "canonicalModel": "claude-haiku-4-5",
+              "provider": "firstParty",
+              "costBasis": "list"
+            },
+            "claude-sonnet-4-6": {
+              "inputTokens": 1739,
+              "outputTokens": 1173,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 1126,
+              "webSearchRequests": 0,
+              "costUSD": 0.0270345,
+              "contextWindow": 200000,
+              "maxOutputTokens": 32000,
+              "thinkingTokens": 800,
+              "canonicalModel": "claude-sonnet-4-6",
+              "provider": "firstParty",
+              "costBasis": "list"
+            }
+          },
+          "num_turns": 3
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 1739,
+          "output_tokens": 1173,
+          "total_tokens": 4038,
+          "cached_input_tokens": 0,
+          "cache_write_tokens": 1126,
+          "reasoning_tokens": 800
+        }
+      ]
+    },
+    {
+      "id": "codex-tools-unary",
+      "provider": "codex",
+      "model_requested": "gpt-5.4-mini",
+      "provider_events": [
+        {
+          "kind": "turn/started",
+          "turn_id": "01a15fbc-9c3e-7381-87aa-3cc12cab22e2"
+        },
+        {
+          "kind": "thread_usage",
+          "turn_id": "01a15fbc-9c3e-7381-87aa-3cc12cab22e2",
+          "usage": {
+            "total": {
+              "totalTokens": 11627,
+              "inputTokens": 11591,
+              "cachedInputTokens": 0,
+              "cacheWriteInputTokens": 0,
+              "outputTokens": 36,
+              "reasoningOutputTokens": 16
+            },
+            "last": {
+              "totalTokens": 11627,
+              "inputTokens": 11591,
+              "cachedInputTokens": 0,
+              "cacheWriteInputTokens": 0,
+              "outputTokens": 36,
+              "reasoningOutputTokens": 16
+            },
+            "modelContextWindow": 258400
+          }
+        },
+        {
+          "kind": "thread_usage",
+          "turn_id": "01a15fbc-9c3e-7381-87aa-3cc12cab22e2",
+          "usage": {
+            "total": {
+              "totalTokens": 23279,
+              "inputTokens": 23238,
+              "cachedInputTokens": 11520,
+              "cacheWriteInputTokens": 0,
+              "outputTokens": 41,
+              "reasoningOutputTokens": 16
+            },
+            "last": {
+              "totalTokens": 11652,
+              "inputTokens": 11647,
+              "cachedInputTokens": 11520,
+              "cacheWriteInputTokens": 0,
+              "outputTokens": 5,
+              "reasoningOutputTokens": 0
+            },
+            "modelContextWindow": 258400
+          }
+        },
+        {
+          "kind": "turn/completed",
+          "turn_id": "01a15fbc-9c3e-7381-87aa-3cc12cab22e2"
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 11647,
+          "output_tokens": 5,
+          "total_tokens": 11652,
+          "cached_input_tokens": 11520
+        }
+      ]
+    },
+    {
+      "id": "gemini-cache1",
+      "provider": "gemini",
+      "model_requested": "gemini-3.5-flash",
+      "provider_events": [
+        {
+          "kind": "interaction",
+          "usage": {
+            "input_tokens_by_modality": [
+              {
+                "modality": "text",
+                "tokens": 6509
+              }
+            ],
+            "total_cached_tokens": 0,
+            "total_input_tokens": 6509,
+            "total_output_tokens": 1,
+            "total_thought_tokens": 0,
+            "total_tokens": 6510,
+            "total_tool_use_tokens": 0
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 6509,
+          "output_tokens": 1,
+          "total_tokens": 6510,
+          "cached_input_tokens": 0,
+          "reasoning_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "gemini-cache2",
+      "provider": "gemini",
+      "model_requested": "gemini-3.5-flash",
+      "provider_events": [
+        {
+          "kind": "interaction",
+          "usage": {
+            "input_tokens_by_modality": [
+              {
+                "modality": "text",
+                "tokens": 6509
+              }
+            ],
+            "total_cached_tokens": 0,
+            "total_input_tokens": 6509,
+            "total_output_tokens": 1,
+            "total_thought_tokens": 0,
+            "total_tokens": 6510,
+            "total_tool_use_tokens": 0
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 6509,
+          "output_tokens": 1,
+          "total_tokens": 6510,
+          "cached_input_tokens": 0,
+          "reasoning_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "gemini-image",
+      "provider": "gemini",
+      "model_requested": "gemini-3.5-flash",
+      "provider_events": [
+        {
+          "kind": "interaction",
+          "usage": {
+            "input_tokens_by_modality": [
+              {
+                "modality": "text",
+                "tokens": 11
+              },
+              {
+                "modality": "image",
+                "tokens": 1089
+              }
+            ],
+            "total_cached_tokens": 0,
+            "total_input_tokens": 1100,
+            "total_output_tokens": 1,
+            "total_thought_tokens": 0,
+            "total_tokens": 1101,
+            "total_tool_use_tokens": 0
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 1100,
+          "output_tokens": 1,
+          "total_tokens": 1101,
+          "cached_input_tokens": 0,
+          "reasoning_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "gemini-raw-first",
+      "provider": "gemini",
+      "model_requested": "gemini-3.5-flash",
+      "provider_events": [
+        {
+          "kind": "interaction",
+          "usage": {
+            "input_tokens_by_modality": [
+              {
+                "modality": "text",
+                "tokens": 10
+              }
+            ],
+            "total_cached_tokens": 0,
+            "total_input_tokens": 10,
+            "total_output_tokens": 1,
+            "total_thought_tokens": 0,
+            "total_tokens": 11,
+            "total_tool_use_tokens": 0
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 10,
+          "output_tokens": 1,
+          "total_tokens": 11,
+          "cached_input_tokens": 0,
+          "reasoning_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "gemini-raw-resume",
+      "provider": "gemini",
+      "model_requested": "gemini-3.5-flash",
+      "provider_events": [
+        {
+          "kind": "interaction",
+          "usage": {
+            "input_tokens_by_modality": [
+              {
+                "modality": "text",
+                "tokens": 10
+              }
+            ],
+            "total_cached_tokens": 0,
+            "total_input_tokens": 10,
+            "total_output_tokens": 2,
+            "total_thought_tokens": 0,
+            "total_tokens": 12,
+            "total_tool_use_tokens": 0
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 10,
+          "output_tokens": 2,
+          "total_tokens": 12,
+          "cached_input_tokens": 0,
+          "reasoning_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "gemini-tools",
+      "provider": "gemini",
+      "model_requested": "gemini-3.5-flash",
+      "provider_events": [
+        {
+          "kind": "interaction",
+          "usage": {
+            "input_tokens_by_modality": [
+              {
+                "modality": "text",
+                "tokens": 41
+              }
+            ],
+            "total_cached_tokens": 0,
+            "total_input_tokens": 41,
+            "total_output_tokens": 10,
+            "total_thought_tokens": 0,
+            "total_tokens": 51,
+            "total_tool_use_tokens": 0
+          }
+        },
+        {
+          "kind": "interaction",
+          "usage": {
+            "input_tokens_by_modality": [
+              {
+                "modality": "text",
+                "tokens": 25
+              }
+            ],
+            "total_cached_tokens": 0,
+            "total_input_tokens": 25,
+            "total_output_tokens": 12,
+            "total_thought_tokens": 0,
+            "total_tokens": 37,
+            "total_tool_use_tokens": 0
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 41,
+          "output_tokens": 10,
+          "total_tokens": 51,
+          "cached_input_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        {
+          "input_tokens": 25,
+          "output_tokens": 12,
+          "total_tokens": 37,
+          "cached_input_tokens": 0,
+          "reasoning_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "gemini-turn1",
+      "provider": "gemini",
+      "model_requested": "gemini-3.5-flash",
+      "provider_events": [
+        {
+          "kind": "interaction",
+          "usage": {
+            "input_tokens_by_modality": [
+              {
+                "modality": "text",
+                "tokens": 6
+              }
+            ],
+            "total_cached_tokens": 0,
+            "total_input_tokens": 6,
+            "total_output_tokens": 1,
+            "total_thought_tokens": 0,
+            "total_tokens": 7,
+            "total_tool_use_tokens": 0
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 6,
+          "output_tokens": 1,
+          "total_tokens": 7,
+          "cached_input_tokens": 0,
+          "reasoning_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "gemini-turn2",
+      "provider": "gemini",
+      "model_requested": "gemini-3.5-flash",
+      "provider_events": [
+        {
+          "kind": "interaction",
+          "usage": {
+            "input_tokens_by_modality": [
+              {
+                "modality": "text",
+                "tokens": 6
+              }
+            ],
+            "total_cached_tokens": 0,
+            "total_input_tokens": 6,
+            "total_output_tokens": 2,
+            "total_thought_tokens": 0,
+            "total_tokens": 8,
+            "total_tool_use_tokens": 0
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 6,
+          "output_tokens": 2,
+          "total_tokens": 8,
+          "cached_input_tokens": 0,
+          "reasoning_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "gemini-turn3",
+      "provider": "gemini",
+      "model_requested": "gemini-3.5-flash",
+      "provider_events": [
+        {
+          "kind": "interaction",
+          "usage": {
+            "input_tokens_by_modality": [
+              {
+                "modality": "text",
+                "tokens": 6
+              }
+            ],
+            "total_cached_tokens": 0,
+            "total_input_tokens": 6,
+            "total_output_tokens": 1,
+            "total_thought_tokens": 0,
+            "total_tokens": 7,
+            "total_tool_use_tokens": 0
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 6,
+          "output_tokens": 1,
+          "total_tokens": 7,
+          "cached_input_tokens": 0,
+          "reasoning_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "gemini-wire-first",
+      "provider": "gemini",
+      "model_requested": "gemini-3.5-flash",
+      "provider_events": [
+        {
+          "kind": "interaction",
+          "usage": {
+            "input_tokens_by_modality": [
+              {
+                "modality": "text",
+                "tokens": 10
+              }
+            ],
+            "total_cached_tokens": 0,
+            "total_input_tokens": 10,
+            "total_output_tokens": 1,
+            "total_thought_tokens": 0,
+            "total_tokens": 11,
+            "total_tool_use_tokens": 0
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 10,
+          "output_tokens": 1,
+          "total_tokens": 11,
+          "cached_input_tokens": 0,
+          "reasoning_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "gemini-wire-full-history",
+      "provider": "gemini",
+      "model_requested": "gemini-3.5-flash",
+      "provider_events": [
+        {
+          "kind": "interaction",
+          "usage": {
+            "input_tokens_by_modality": [
+              {
+                "modality": "text",
+                "tokens": 22
+              }
+            ],
+            "total_cached_tokens": 0,
+            "total_input_tokens": 22,
+            "total_output_tokens": 2,
+            "total_thought_tokens": 0,
+            "total_tokens": 24,
+            "total_tool_use_tokens": 0
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 22,
+          "output_tokens": 2,
+          "total_tokens": 24,
+          "cached_input_tokens": 0,
+          "reasoning_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "gemini-wire-resume",
+      "provider": "gemini",
+      "model_requested": "gemini-3.5-flash",
+      "provider_events": [
+        {
+          "kind": "interaction",
+          "usage": {
+            "input_tokens_by_modality": [
+              {
+                "modality": "text",
+                "tokens": 10
+              }
+            ],
+            "total_cached_tokens": 0,
+            "total_input_tokens": 10,
+            "total_output_tokens": 2,
+            "total_thought_tokens": 0,
+            "total_tokens": 12,
+            "total_tool_use_tokens": 0
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 10,
+          "output_tokens": 2,
+          "total_tokens": 12,
+          "cached_input_tokens": 0,
+          "reasoning_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "gpt-tools-unary",
+      "provider": "gpt",
+      "model_requested": "gpt-4.1-mini",
+      "provider_events": [
+        {
+          "kind": "response",
+          "usage": {
+            "input_tokens": 46,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 15,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 61
+          }
+        },
+        {
+          "kind": "response",
+          "usage": {
+            "input_tokens": 78,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 18,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 96
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 46,
+          "output_tokens": 15,
+          "total_tokens": 61,
+          "cached_input_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        {
+          "input_tokens": 78,
+          "output_tokens": 18,
+          "total_tokens": 96,
+          "cached_input_tokens": 0,
+          "reasoning_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "ollama-tools-unary",
+      "provider": "ollama",
+      "model_requested": "gemma4:31b",
+      "provider_events": [
+        {
+          "kind": "ollama",
+          "usage": {
+            "prompt_eval_count": 68,
+            "eval_count": 12,
+            "prompt_eval_cached_count": 0
+          }
+        },
+        {
+          "kind": "ollama",
+          "usage": {
+            "prompt_eval_count": 99,
+            "eval_count": 19,
+            "prompt_eval_cached_count": 64
+          }
+        },
+        {
+          "kind": "ollama",
+          "usage": {
+            "prompt_eval_count": 136,
+            "eval_count": 13,
+            "prompt_eval_cached_count": 96
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 68,
+          "output_tokens": 12,
+          "total_tokens": 80,
+          "cached_input_tokens": 0
+        },
+        {
+          "input_tokens": 99,
+          "output_tokens": 19,
+          "total_tokens": 118,
+          "cached_input_tokens": 64
+        },
+        {
+          "input_tokens": 136,
+          "output_tokens": 13,
+          "total_tokens": 149,
+          "cached_input_tokens": 96
+        }
+      ]
+    },
+    {
+      "id": "vllm-tools-unary",
+      "provider": "vllm",
+      "model_requested": "Qwen/Qwen3-0.6B",
+      "provider_events": [
+        {
+          "kind": "completion",
+          "usage": {
+            "completion_tokens": 20,
+            "prompt_tokens": 152,
+            "total_tokens": 172,
+            "completion_tokens_details": {
+              "accepted_prediction_tokens": null,
+              "audio_tokens": null,
+              "reasoning_tokens": 0,
+              "rejected_prediction_tokens": null,
+              "text_tokens": null
+            },
+            "compute_units": null,
+            "prompt_tokens_details": {
+              "audio_tokens": null,
+              "cache_write_tokens": null,
+              "cached_tokens": 64,
+              "image_tokens": null,
+              "text_tokens": null,
+              "created_cache_tokens": 80
+            }
+          }
+        },
+        {
+          "kind": "completion",
+          "usage": {
+            "completion_tokens": 9,
+            "prompt_tokens": 194,
+            "total_tokens": 203,
+            "completion_tokens_details": {
+              "accepted_prediction_tokens": null,
+              "audio_tokens": null,
+              "reasoning_tokens": 0,
+              "rejected_prediction_tokens": null,
+              "text_tokens": null
+            },
+            "compute_units": null,
+            "prompt_tokens_details": {
+              "audio_tokens": null,
+              "cache_write_tokens": null,
+              "cached_tokens": 144,
+              "image_tokens": null,
+              "text_tokens": null,
+              "created_cache_tokens": 48
+            }
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 152,
+          "output_tokens": 20,
+          "total_tokens": 172,
+          "cached_input_tokens": 64,
+          "reasoning_tokens": 0
+        },
+        {
+          "input_tokens": 194,
+          "output_tokens": 9,
+          "total_tokens": 203,
+          "cached_input_tokens": 144,
+          "reasoning_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "claude-cache1",
+      "provider": "claude",
+      "model_requested": "claude-sonnet-4-6",
+      "provider_events": [
+        {
+          "kind": "message_start",
+          "usage": {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 6014,
+              "ephemeral_5m_input_tokens": 9
+            },
+            "cache_creation_input_tokens": 6023,
+            "cache_read_input_tokens": 0,
+            "inference_geo": "global",
+            "input_tokens": 3,
+            "output_tokens": 6,
+            "output_tokens_details": null,
+            "server_tool_use": null,
+            "service_tier": "standard",
+            "speed": "standard"
+          }
+        },
+        {
+          "kind": "message_delta",
+          "usage": {
+            "cache_creation_input_tokens": 6023,
+            "cache_read_input_tokens": 0,
+            "input_tokens": 3,
+            "output_tokens": 6,
+            "output_tokens_details": null,
+            "server_tool_use": null
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 3,
+          "output_tokens": 6,
+          "total_tokens": 6032,
+          "cached_input_tokens": 0,
+          "cache_write_tokens": 6023
+        }
+      ]
+    },
+    {
+      "id": "claude-cache2",
+      "provider": "claude",
+      "model_requested": "claude-sonnet-4-6",
+      "provider_events": [
+        {
+          "kind": "message_start",
+          "usage": {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 6023,
+            "inference_geo": "global",
+            "input_tokens": 3,
+            "output_tokens": 6,
+            "output_tokens_details": null,
+            "server_tool_use": null,
+            "service_tier": "standard",
+            "speed": "standard"
+          }
+        },
+        {
+          "kind": "message_delta",
+          "usage": {
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 6023,
+            "input_tokens": 3,
+            "output_tokens": 6,
+            "output_tokens_details": null,
+            "server_tool_use": null
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 3,
+          "output_tokens": 6,
+          "total_tokens": 6032,
+          "cached_input_tokens": 6023,
+          "cache_write_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "claude-image",
+      "provider": "claude",
+      "model_requested": "claude-sonnet-4-6",
+      "provider_events": [
+        {
+          "kind": "message_start",
+          "usage": {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "inference_geo": "global",
+            "input_tokens": 29,
+            "output_tokens": 1,
+            "output_tokens_details": null,
+            "server_tool_use": null,
+            "service_tier": "standard",
+            "speed": "standard"
+          }
+        },
+        {
+          "kind": "message_delta",
+          "usage": {
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "input_tokens": 29,
+            "output_tokens": 6,
+            "output_tokens_details": null,
+            "server_tool_use": null
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 29,
+          "output_tokens": 6,
+          "total_tokens": 35,
+          "cached_input_tokens": 0,
+          "cache_write_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "claude-reasoning",
+      "provider": "claude",
+      "model_requested": "claude-sonnet-4-6",
+      "provider_events": [
+        {
+          "kind": "message_start",
+          "usage": {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "inference_geo": "global",
+            "input_tokens": 20,
+            "output_tokens": 2,
+            "output_tokens_details": null,
+            "server_tool_use": null,
+            "service_tier": "standard",
+            "speed": "standard"
+          }
+        },
+        {
+          "kind": "message_delta",
+          "usage": {
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "input_tokens": 20,
+            "output_tokens": 6,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "server_tool_use": null
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 20,
+          "output_tokens": 6,
+          "total_tokens": 26,
+          "cached_input_tokens": 0,
+          "cache_write_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "claude-tools",
+      "provider": "claude",
+      "model_requested": "claude-sonnet-4-6",
+      "provider_events": [
+        {
+          "kind": "message_start",
+          "usage": {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "inference_geo": "global",
+            "input_tokens": 577,
+            "output_tokens": 4,
+            "output_tokens_details": null,
+            "server_tool_use": null,
+            "service_tier": "standard",
+            "speed": "standard"
+          }
+        },
+        {
+          "kind": "message_delta",
+          "usage": {
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "input_tokens": 577,
+            "output_tokens": 78,
+            "output_tokens_details": null,
+            "server_tool_use": null
+          }
+        },
+        {
+          "kind": "message_start",
+          "usage": {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "inference_geo": "global",
+            "input_tokens": 684,
+            "output_tokens": 1,
+            "output_tokens_details": null,
+            "server_tool_use": null,
+            "service_tier": "standard",
+            "speed": "standard"
+          }
+        },
+        {
+          "kind": "message_delta",
+          "usage": {
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "input_tokens": 684,
+            "output_tokens": 118,
+            "output_tokens_details": null,
+            "server_tool_use": null
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 577,
+          "output_tokens": 78,
+          "total_tokens": 655,
+          "cached_input_tokens": 0,
+          "cache_write_tokens": 0
+        },
+        {
+          "input_tokens": 684,
+          "output_tokens": 118,
+          "total_tokens": 802,
+          "cached_input_tokens": 0,
+          "cache_write_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "claude-turn1",
+      "provider": "claude",
+      "model_requested": "claude-sonnet-4-6",
+      "provider_events": [
+        {
+          "kind": "message_start",
+          "usage": {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "inference_geo": "global",
+            "input_tokens": 13,
+            "output_tokens": 3,
+            "output_tokens_details": null,
+            "server_tool_use": null,
+            "service_tier": "standard",
+            "speed": "standard"
+          }
+        },
+        {
+          "kind": "message_delta",
+          "usage": {
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "input_tokens": 13,
+            "output_tokens": 6,
+            "output_tokens_details": null,
+            "server_tool_use": null
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 13,
+          "output_tokens": 6,
+          "total_tokens": 19,
+          "cached_input_tokens": 0,
+          "cache_write_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "claude-turn2",
+      "provider": "claude",
+      "model_requested": "claude-sonnet-4-6",
+      "provider_events": [
+        {
+          "kind": "message_start",
+          "usage": {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "inference_geo": "global",
+            "input_tokens": 28,
+            "output_tokens": 6,
+            "output_tokens_details": null,
+            "server_tool_use": null,
+            "service_tier": "standard",
+            "speed": "standard"
+          }
+        },
+        {
+          "kind": "message_delta",
+          "usage": {
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "input_tokens": 28,
+            "output_tokens": 6,
+            "output_tokens_details": null,
+            "server_tool_use": null
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 28,
+          "output_tokens": 6,
+          "total_tokens": 34,
+          "cached_input_tokens": 0,
+          "cache_write_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "claude-turn3",
+      "provider": "claude",
+      "model_requested": "claude-sonnet-4-6",
+      "provider_events": [
+        {
+          "kind": "message_start",
+          "usage": {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "inference_geo": "global",
+            "input_tokens": 43,
+            "output_tokens": 6,
+            "output_tokens_details": null,
+            "server_tool_use": null,
+            "service_tier": "standard",
+            "speed": "standard"
+          }
+        },
+        {
+          "kind": "message_delta",
+          "usage": {
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "input_tokens": 43,
+            "output_tokens": 6,
+            "output_tokens_details": null,
+            "server_tool_use": null
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 43,
+          "output_tokens": 6,
+          "total_tokens": 49,
+          "cached_input_tokens": 0,
+          "cache_write_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "claude_code-cache1",
+      "provider": "claude_code",
+      "model_requested": "claude-sonnet-4-6",
+      "provider_events": [
+        {
+          "kind": "assistant_snapshot",
+          "usage": {
+            "input_tokens": 3,
+            "cache_creation_input_tokens": 6224,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 6224,
+              "ephemeral_1h_input_tokens": 0
+            },
+            "output_tokens": 6,
+            "service_tier": "standard",
+            "inference_geo": "global",
+            "speed": "standard"
+          }
+        },
+        {
+          "kind": "result",
+          "usage": {
+            "input_tokens": 3,
+            "cache_creation_input_tokens": 6224,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 6,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "server_tool_use": {
+              "web_search_requests": 0,
+              "web_fetch_requests": 0
+            },
+            "service_tier": "standard",
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 6224
+            },
+            "inference_geo": "global",
+            "iterations": [
+              {
+                "input_tokens": 3,
+                "output_tokens": 6,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 6224,
+                "cache_creation": {
+                  "ephemeral_5m_input_tokens": 6224,
+                  "ephemeral_1h_input_tokens": 0
+                },
+                "type": "message"
+              }
+            ],
+            "speed": "standard"
+          },
+          "model_usage": {
+            "claude-sonnet-4-6": {
+              "inputTokens": 3,
+              "outputTokens": 6,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 6224,
+              "webSearchRequests": 0,
+              "costUSD": 0.023438999999999998,
+              "contextWindow": 200000,
+              "maxOutputTokens": 32000,
+              "thinkingTokens": 0,
+              "canonicalModel": "claude-sonnet-4-6",
+              "provider": "firstParty",
+              "costBasis": "list"
+            }
+          },
+          "num_turns": 1
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 3,
+          "output_tokens": 6,
+          "total_tokens": 6233,
+          "cached_input_tokens": 0,
+          "cache_write_tokens": 6224,
+          "reasoning_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "claude_code-cache2",
+      "provider": "claude_code",
+      "model_requested": "claude-sonnet-4-6",
+      "provider_events": [
+        {
+          "kind": "assistant_snapshot",
+          "usage": {
+            "input_tokens": 3,
+            "cache_creation_input_tokens": 43,
+            "cache_read_input_tokens": 6224,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 43,
+              "ephemeral_1h_input_tokens": 0
+            },
+            "output_tokens": 6,
+            "service_tier": "standard",
+            "inference_geo": "global",
+            "speed": "standard"
+          }
+        },
+        {
+          "kind": "result",
+          "usage": {
+            "input_tokens": 3,
+            "cache_creation_input_tokens": 43,
+            "cache_read_input_tokens": 6224,
+            "output_tokens": 6,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "server_tool_use": {
+              "web_search_requests": 0,
+              "web_fetch_requests": 0
+            },
+            "service_tier": "standard",
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 43
+            },
+            "inference_geo": "global",
+            "iterations": [
+              {
+                "input_tokens": 3,
+                "output_tokens": 6,
+                "cache_read_input_tokens": 6224,
+                "cache_creation_input_tokens": 43,
+                "cache_creation": {
+                  "ephemeral_5m_input_tokens": 43,
+                  "ephemeral_1h_input_tokens": 0
+                },
+                "type": "message"
+              }
+            ],
+            "speed": "standard"
+          },
+          "model_usage": {
+            "claude-sonnet-4-6": {
+              "inputTokens": 3,
+              "outputTokens": 6,
+              "cacheReadInputTokens": 6224,
+              "cacheCreationInputTokens": 43,
+              "webSearchRequests": 0,
+              "costUSD": 0.00212745,
+              "contextWindow": 200000,
+              "maxOutputTokens": 32000,
+              "thinkingTokens": 0,
+              "canonicalModel": "claude-sonnet-4-6",
+              "provider": "firstParty",
+              "costBasis": "list"
+            }
+          },
+          "num_turns": 1
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 3,
+          "output_tokens": 6,
+          "total_tokens": 6276,
+          "cached_input_tokens": 6224,
+          "cache_write_tokens": 43,
+          "reasoning_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "claude_code-image",
+      "provider": "claude_code",
+      "model_requested": "claude-sonnet-4-6",
+      "provider_events": [
+        {
+          "kind": "assistant_snapshot",
+          "usage": {
+            "input_tokens": 245,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 0
+            },
+            "output_tokens": 1,
+            "service_tier": "standard",
+            "inference_geo": "global",
+            "speed": "standard"
+          }
+        },
+        {
+          "kind": "result",
+          "usage": {
+            "input_tokens": 245,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 6,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "server_tool_use": {
+              "web_search_requests": 0,
+              "web_fetch_requests": 0
+            },
+            "service_tier": "standard",
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "inference_geo": "global",
+            "iterations": [
+              {
+                "input_tokens": 245,
+                "output_tokens": 6,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_creation": {
+                  "ephemeral_5m_input_tokens": 0,
+                  "ephemeral_1h_input_tokens": 0
+                },
+                "type": "message"
+              }
+            ],
+            "speed": "standard"
+          },
+          "model_usage": {
+            "claude-haiku-4-5-20251001": {
+              "inputTokens": 902,
+              "outputTokens": 10,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0,
+              "webSearchRequests": 0,
+              "costUSD": 0.000952,
+              "contextWindow": 200000,
+              "maxOutputTokens": 32000,
+              "thinkingTokens": 0,
+              "canonicalModel": "claude-haiku-4-5",
+              "provider": "firstParty",
+              "costBasis": "list"
+            },
+            "claude-sonnet-4-6": {
+              "inputTokens": 245,
+              "outputTokens": 6,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0,
+              "webSearchRequests": 0,
+              "costUSD": 0.000825,
+              "contextWindow": 200000,
+              "maxOutputTokens": 32000,
+              "thinkingTokens": 0,
+              "canonicalModel": "claude-sonnet-4-6",
+              "provider": "firstParty",
+              "costBasis": "list"
+            }
+          },
+          "num_turns": 1
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 245,
+          "output_tokens": 6,
+          "total_tokens": 251,
+          "cached_input_tokens": 0,
+          "cache_write_tokens": 0,
+          "reasoning_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "claude_code-tools",
+      "provider": "claude_code",
+      "model_requested": "claude-sonnet-4-6",
+      "provider_events": [
+        {
+          "kind": "assistant_snapshot",
+          "usage": {
+            "input_tokens": 799,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 0
+            },
+            "output_tokens": 5,
+            "service_tier": "standard",
+            "inference_geo": "global",
+            "speed": "standard"
+          }
+        },
+        {
+          "kind": "assistant_snapshot",
+          "usage": {
+            "input_tokens": 799,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 0
+            },
+            "output_tokens": 5,
+            "service_tier": "standard",
+            "inference_geo": "global",
+            "speed": "standard"
+          }
+        },
+        {
+          "kind": "assistant_snapshot",
+          "usage": {
+            "input_tokens": 799,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 0
+            },
+            "output_tokens": 5,
+            "service_tier": "standard",
+            "inference_geo": "global",
+            "speed": "standard"
+          }
+        },
+        {
+          "kind": "assistant_snapshot",
+          "usage": {
+            "input_tokens": 994,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 0
+            },
+            "output_tokens": 10,
+            "service_tier": "standard",
+            "inference_geo": "global",
+            "speed": "standard"
+          }
+        },
+        {
+          "kind": "assistant_snapshot",
+          "usage": {
+            "input_tokens": 994,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 0
+            },
+            "output_tokens": 10,
+            "service_tier": "standard",
+            "inference_geo": "global",
+            "speed": "standard"
+          }
+        },
+        {
+          "kind": "assistant_snapshot",
+          "usage": {
+            "input_tokens": 994,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 0
+            },
+            "output_tokens": 10,
+            "service_tier": "standard",
+            "inference_geo": "global",
+            "speed": "standard"
+          }
+        },
+        {
+          "kind": "assistant_snapshot",
+          "usage": {
+            "input_tokens": 1,
+            "cache_creation_input_tokens": 1962,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 1962,
+              "ephemeral_1h_input_tokens": 0
+            },
+            "output_tokens": 8,
+            "service_tier": "standard",
+            "inference_geo": "global",
+            "speed": "standard"
+          }
+        },
+        {
+          "kind": "assistant_snapshot",
+          "usage": {
+            "input_tokens": 1,
+            "cache_creation_input_tokens": 1962,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 1962,
+              "ephemeral_1h_input_tokens": 0
+            },
+            "output_tokens": 8,
+            "service_tier": "standard",
+            "inference_geo": "global",
+            "speed": "standard"
+          }
+        },
+        {
+          "kind": "result",
+          "usage": {
+            "input_tokens": 1794,
+            "cache_creation_input_tokens": 1962,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 1609,
+            "output_tokens_details": {
+              "thinking_tokens": 1266
+            },
+            "server_tool_use": {
+              "web_search_requests": 0,
+              "web_fetch_requests": 0
+            },
+            "service_tier": "standard",
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 1962
+            },
+            "inference_geo": "global",
+            "iterations": [
+              {
+                "input_tokens": 1,
+                "output_tokens": 561,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 1962,
+                "cache_creation": {
+                  "ephemeral_5m_input_tokens": 1962,
+                  "ephemeral_1h_input_tokens": 0
+                },
+                "type": "message"
+              }
+            ],
+            "speed": "standard"
+          },
+          "model_usage": {
+            "claude-haiku-4-5-20251001": {
+              "inputTokens": 918,
+              "outputTokens": 15,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0,
+              "webSearchRequests": 0,
+              "costUSD": 0.000993,
+              "contextWindow": 200000,
+              "maxOutputTokens": 32000,
+              "thinkingTokens": 0,
+              "canonicalModel": "claude-haiku-4-5",
+              "provider": "firstParty",
+              "costBasis": "list"
+            },
+            "claude-sonnet-4-6": {
+              "inputTokens": 1794,
+              "outputTokens": 1609,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 1962,
+              "webSearchRequests": 0,
+              "costUSD": 0.0368745,
+              "contextWindow": 200000,
+              "maxOutputTokens": 32000,
+              "thinkingTokens": 1266,
+              "canonicalModel": "claude-sonnet-4-6",
+              "provider": "firstParty",
+              "costBasis": "list"
+            }
+          },
+          "num_turns": 3
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 1794,
+          "output_tokens": 1609,
+          "total_tokens": 5365,
+          "cached_input_tokens": 0,
+          "cache_write_tokens": 1962,
+          "reasoning_tokens": 1266
+        }
+      ]
+    },
+    {
+      "id": "claude_code-turn1",
+      "provider": "claude_code",
+      "model_requested": "claude-sonnet-4-6",
+      "provider_events": [
+        {
+          "kind": "assistant_snapshot",
+          "usage": {
+            "input_tokens": 202,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 0
+            },
+            "output_tokens": 4,
+            "service_tier": "standard",
+            "inference_geo": "global",
+            "speed": "standard"
+          }
+        },
+        {
+          "kind": "result",
+          "usage": {
+            "input_tokens": 202,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 5,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "server_tool_use": {
+              "web_search_requests": 0,
+              "web_fetch_requests": 0
+            },
+            "service_tier": "standard",
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "inference_geo": "global",
+            "iterations": [
+              {
+                "input_tokens": 202,
+                "output_tokens": 5,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_creation": {
+                  "ephemeral_5m_input_tokens": 0,
+                  "ephemeral_1h_input_tokens": 0
+                },
+                "type": "message"
+              }
+            ],
+            "speed": "standard"
+          },
+          "model_usage": {
+            "claude-haiku-4-5-20251001": {
+              "inputTokens": 898,
+              "outputTokens": 9,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0,
+              "webSearchRequests": 0,
+              "costUSD": 0.000943,
+              "contextWindow": 200000,
+              "maxOutputTokens": 32000,
+              "thinkingTokens": 0,
+              "canonicalModel": "claude-haiku-4-5",
+              "provider": "firstParty",
+              "costBasis": "list"
+            },
+            "claude-sonnet-4-6": {
+              "inputTokens": 202,
+              "outputTokens": 5,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0,
+              "webSearchRequests": 0,
+              "costUSD": 0.000681,
+              "contextWindow": 200000,
+              "maxOutputTokens": 32000,
+              "thinkingTokens": 0,
+              "canonicalModel": "claude-sonnet-4-6",
+              "provider": "firstParty",
+              "costBasis": "list"
+            }
+          },
+          "num_turns": 1
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 202,
+          "output_tokens": 5,
+          "total_tokens": 207,
+          "cached_input_tokens": 0,
+          "cache_write_tokens": 0,
+          "reasoning_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "claude_code-turn2",
+      "provider": "claude_code",
+      "model_requested": "claude-sonnet-4-6",
+      "provider_events": [
+        {
+          "kind": "assistant_snapshot",
+          "usage": {
+            "input_tokens": 245,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 0
+            },
+            "output_tokens": 5,
+            "service_tier": "standard",
+            "inference_geo": "global",
+            "speed": "standard"
+          }
+        },
+        {
+          "kind": "result",
+          "usage": {
+            "input_tokens": 245,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 5,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "server_tool_use": {
+              "web_search_requests": 0,
+              "web_fetch_requests": 0
+            },
+            "service_tier": "standard",
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "inference_geo": "global",
+            "iterations": [
+              {
+                "input_tokens": 245,
+                "output_tokens": 5,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_creation": {
+                  "ephemeral_5m_input_tokens": 0,
+                  "ephemeral_1h_input_tokens": 0
+                },
+                "type": "message"
+              }
+            ],
+            "speed": "standard"
+          },
+          "model_usage": {
+            "claude-sonnet-4-6": {
+              "inputTokens": 245,
+              "outputTokens": 5,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0,
+              "webSearchRequests": 0,
+              "costUSD": 0.00081,
+              "contextWindow": 200000,
+              "maxOutputTokens": 32000,
+              "thinkingTokens": 0,
+              "canonicalModel": "claude-sonnet-4-6",
+              "provider": "firstParty",
+              "costBasis": "list"
+            }
+          },
+          "num_turns": 1
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 245,
+          "output_tokens": 5,
+          "total_tokens": 250,
+          "cached_input_tokens": 0,
+          "cache_write_tokens": 0,
+          "reasoning_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "claude_code-turn3",
+      "provider": "claude_code",
+      "model_requested": "claude-sonnet-4-6",
+      "provider_events": [
+        {
+          "kind": "assistant_snapshot",
+          "usage": {
+            "input_tokens": 288,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 0
+            },
+            "output_tokens": 5,
+            "service_tier": "standard",
+            "inference_geo": "global",
+            "speed": "standard"
+          }
+        },
+        {
+          "kind": "result",
+          "usage": {
+            "input_tokens": 288,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 5,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "server_tool_use": {
+              "web_search_requests": 0,
+              "web_fetch_requests": 0
+            },
+            "service_tier": "standard",
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "inference_geo": "global",
+            "iterations": [
+              {
+                "input_tokens": 288,
+                "output_tokens": 5,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_creation": {
+                  "ephemeral_5m_input_tokens": 0,
+                  "ephemeral_1h_input_tokens": 0
+                },
+                "type": "message"
+              }
+            ],
+            "speed": "standard"
+          },
+          "model_usage": {
+            "claude-sonnet-4-6": {
+              "inputTokens": 288,
+              "outputTokens": 5,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0,
+              "webSearchRequests": 0,
+              "costUSD": 0.000939,
+              "contextWindow": 200000,
+              "maxOutputTokens": 32000,
+              "thinkingTokens": 0,
+              "canonicalModel": "claude-sonnet-4-6",
+              "provider": "firstParty",
+              "costBasis": "list"
+            }
+          },
+          "num_turns": 1
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 288,
+          "output_tokens": 5,
+          "total_tokens": 293,
+          "cached_input_tokens": 0,
+          "cache_write_tokens": 0,
+          "reasoning_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "codex-image",
+      "provider": "codex",
+      "model_requested": "gpt-5.4-mini",
+      "provider_events": [
+        {
+          "kind": "turn/started",
+          "turn_id": "01a15fba-63a6-7cb1-85c3-caeca97be4e2"
+        },
+        {
+          "kind": "thread_usage",
+          "turn_id": "01a15fba-63a6-7cb1-85c3-caeca97be4e2",
+          "usage": {
+            "total": {
+              "totalTokens": 11658,
+              "inputTokens": 11641,
+              "cachedInputTokens": 0,
+              "cacheWriteInputTokens": 0,
+              "outputTokens": 17,
+              "reasoningOutputTokens": 10
+            },
+            "last": {
+              "totalTokens": 11658,
+              "inputTokens": 11641,
+              "cachedInputTokens": 0,
+              "cacheWriteInputTokens": 0,
+              "outputTokens": 17,
+              "reasoningOutputTokens": 10
+            },
+            "modelContextWindow": 258400
+          }
+        },
+        {
+          "kind": "turn/completed",
+          "turn_id": "01a15fba-63a6-7cb1-85c3-caeca97be4e2"
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 11641,
+          "output_tokens": 17,
+          "total_tokens": 11658,
+          "cached_input_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "codex-tools",
+      "provider": "codex",
+      "model_requested": "gpt-5.4-mini",
+      "provider_events": [
+        {
+          "kind": "turn/started",
+          "turn_id": "01a15fba-6920-7922-80db-e18722e1d3f3"
+        },
+        {
+          "kind": "thread_usage",
+          "turn_id": "01a15fba-6920-7922-80db-e18722e1d3f3",
+          "usage": {
+            "total": {
+              "totalTokens": 11637,
+              "inputTokens": 11602,
+              "cachedInputTokens": 0,
+              "cacheWriteInputTokens": 0,
+              "outputTokens": 35,
+              "reasoningOutputTokens": 13
+            },
+            "last": {
+              "totalTokens": 11637,
+              "inputTokens": 11602,
+              "cachedInputTokens": 0,
+              "cacheWriteInputTokens": 0,
+              "outputTokens": 35,
+              "reasoningOutputTokens": 13
+            },
+            "modelContextWindow": 258400
+          }
+        },
+        {
+          "kind": "thread_usage",
+          "turn_id": "01a15fba-6920-7922-80db-e18722e1d3f3",
+          "usage": {
+            "total": {
+              "totalTokens": 23398,
+              "inputTokens": 23257,
+              "cachedInputTokens": 11520,
+              "cacheWriteInputTokens": 0,
+              "outputTokens": 141,
+              "reasoningOutputTokens": 95
+            },
+            "last": {
+              "totalTokens": 11761,
+              "inputTokens": 11655,
+              "cachedInputTokens": 11520,
+              "cacheWriteInputTokens": 0,
+              "outputTokens": 106,
+              "reasoningOutputTokens": 82
+            },
+            "modelContextWindow": 258400
+          }
+        },
+        {
+          "kind": "turn/completed",
+          "turn_id": "01a15fba-6920-7922-80db-e18722e1d3f3"
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 11655,
+          "output_tokens": 106,
+          "total_tokens": 11761,
+          "cached_input_tokens": 11520
+        }
+      ]
+    },
+    {
+      "id": "codex-turn1",
+      "provider": "codex",
+      "model_requested": "gpt-5.4-mini",
+      "provider_events": [
+        {
+          "kind": "turn/started",
+          "turn_id": "01a15fba-5262-76c1-810c-6bbbdf55842d"
+        },
+        {
+          "kind": "thread_usage",
+          "turn_id": "01a15fba-5262-76c1-810c-6bbbdf55842d",
+          "usage": {
+            "total": {
+              "totalTokens": 11592,
+              "inputTokens": 11568,
+              "cachedInputTokens": 0,
+              "cacheWriteInputTokens": 0,
+              "outputTokens": 24,
+              "reasoningOutputTokens": 16
+            },
+            "last": {
+              "totalTokens": 11592,
+              "inputTokens": 11568,
+              "cachedInputTokens": 0,
+              "cacheWriteInputTokens": 0,
+              "outputTokens": 24,
+              "reasoningOutputTokens": 16
+            },
+            "modelContextWindow": 258400
+          }
+        },
+        {
+          "kind": "turn/completed",
+          "turn_id": "01a15fba-5262-76c1-810c-6bbbdf55842d"
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 11568,
+          "output_tokens": 24,
+          "total_tokens": 11592,
+          "cached_input_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "codex-turn2",
+      "provider": "codex",
+      "model_requested": "gpt-5.4-mini",
+      "provider_events": [
+        {
+          "kind": "thread_usage",
+          "turn_id": "01a15fba-5262-76c1-810c-6bbbdf55842d",
+          "usage": {
+            "total": {
+              "totalTokens": 11592,
+              "inputTokens": 11568,
+              "cachedInputTokens": 0,
+              "cacheWriteInputTokens": 0,
+              "outputTokens": 24,
+              "reasoningOutputTokens": 16
+            },
+            "last": {
+              "totalTokens": 11592,
+              "inputTokens": 11568,
+              "cachedInputTokens": 0,
+              "cacheWriteInputTokens": 0,
+              "outputTokens": 24,
+              "reasoningOutputTokens": 16
+            },
+            "modelContextWindow": 258400
+          }
+        },
+        {
+          "kind": "turn/started",
+          "turn_id": "01a15fba-59ff-7101-a9c7-99f4de1f259d"
+        },
+        {
+          "kind": "thread_usage",
+          "turn_id": "01a15fba-59ff-7101-a9c7-99f4de1f259d",
+          "usage": {
+            "total": {
+              "totalTokens": 23198,
+              "inputTokens": 23154,
+              "cachedInputTokens": 11520,
+              "cacheWriteInputTokens": 0,
+              "outputTokens": 44,
+              "reasoningOutputTokens": 28
+            },
+            "last": {
+              "totalTokens": 11606,
+              "inputTokens": 11586,
+              "cachedInputTokens": 11520,
+              "cacheWriteInputTokens": 0,
+              "outputTokens": 20,
+              "reasoningOutputTokens": 12
+            },
+            "modelContextWindow": 258400
+          }
+        },
+        {
+          "kind": "turn/completed",
+          "turn_id": "01a15fba-59ff-7101-a9c7-99f4de1f259d"
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 11586,
+          "output_tokens": 20,
+          "total_tokens": 11606,
+          "cached_input_tokens": 11520
+        }
+      ]
+    },
+    {
+      "id": "codex-turn3",
+      "provider": "codex",
+      "model_requested": "gpt-5.4-mini",
+      "provider_events": [
+        {
+          "kind": "thread_usage",
+          "turn_id": "01a15fba-59ff-7101-a9c7-99f4de1f259d",
+          "usage": {
+            "total": {
+              "totalTokens": 23198,
+              "inputTokens": 23154,
+              "cachedInputTokens": 11520,
+              "cacheWriteInputTokens": 0,
+              "outputTokens": 44,
+              "reasoningOutputTokens": 28
+            },
+            "last": {
+              "totalTokens": 11606,
+              "inputTokens": 11586,
+              "cachedInputTokens": 11520,
+              "cacheWriteInputTokens": 0,
+              "outputTokens": 20,
+              "reasoningOutputTokens": 12
+            },
+            "modelContextWindow": 258400
+          }
+        },
+        {
+          "kind": "turn/started",
+          "turn_id": "01a15fba-5f63-7853-ae20-51303306e7e6"
+        },
+        {
+          "kind": "thread_usage",
+          "turn_id": "01a15fba-5f63-7853-ae20-51303306e7e6",
+          "usage": {
+            "total": {
+              "totalTokens": 34809,
+              "inputTokens": 34758,
+              "cachedInputTokens": 23040,
+              "cacheWriteInputTokens": 0,
+              "outputTokens": 51,
+              "reasoningOutputTokens": 28
+            },
+            "last": {
+              "totalTokens": 11611,
+              "inputTokens": 11604,
+              "cachedInputTokens": 11520,
+              "cacheWriteInputTokens": 0,
+              "outputTokens": 7,
+              "reasoningOutputTokens": 0
+            },
+            "modelContextWindow": 258400
+          }
+        },
+        {
+          "kind": "turn/completed",
+          "turn_id": "01a15fba-5f63-7853-ae20-51303306e7e6"
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 11604,
+          "output_tokens": 7,
+          "total_tokens": 11611,
+          "cached_input_tokens": 11520
+        }
+      ]
+    },
+    {
+      "id": "gpt-cache1",
+      "provider": "gpt",
+      "model_requested": "gpt-4.1-mini",
+      "provider_events": [
+        {
+          "kind": "completion",
+          "usage": {
+            "completion_tokens": 1,
+            "prompt_tokens": 5427,
+            "total_tokens": 5428,
+            "completion_tokens_details": {
+              "accepted_prediction_tokens": 0,
+              "audio_tokens": 0,
+              "reasoning_tokens": 0,
+              "rejected_prediction_tokens": 0,
+              "text_tokens": null
+            },
+            "compute_units": null,
+            "prompt_tokens_details": {
+              "audio_tokens": 0,
+              "cache_write_tokens": null,
+              "cached_tokens": 0,
+              "image_tokens": null,
+              "text_tokens": null
+            }
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 5427,
+          "output_tokens": 1,
+          "total_tokens": 5428,
+          "cached_input_tokens": 0,
+          "reasoning_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "gpt-cache2",
+      "provider": "gpt",
+      "model_requested": "gpt-4.1-mini",
+      "provider_events": [
+        {
+          "kind": "completion",
+          "usage": {
+            "completion_tokens": 1,
+            "prompt_tokens": 5427,
+            "total_tokens": 5428,
+            "completion_tokens_details": {
+              "accepted_prediction_tokens": 0,
+              "audio_tokens": 0,
+              "reasoning_tokens": 0,
+              "rejected_prediction_tokens": 0,
+              "text_tokens": null
+            },
+            "compute_units": null,
+            "prompt_tokens_details": {
+              "audio_tokens": 0,
+              "cache_write_tokens": null,
+              "cached_tokens": 5248,
+              "image_tokens": null,
+              "text_tokens": null
+            }
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 5427,
+          "output_tokens": 1,
+          "total_tokens": 5428,
+          "cached_input_tokens": 5248,
+          "reasoning_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "gpt-image",
+      "provider": "gpt",
+      "model_requested": "gpt-4.1-mini",
+      "provider_events": [
+        {
+          "kind": "completion",
+          "usage": {
+            "completion_tokens": 1,
+            "prompt_tokens": 23,
+            "total_tokens": 24,
+            "completion_tokens_details": {
+              "accepted_prediction_tokens": 0,
+              "audio_tokens": 0,
+              "reasoning_tokens": 0,
+              "rejected_prediction_tokens": 0,
+              "text_tokens": null
+            },
+            "compute_units": null,
+            "prompt_tokens_details": {
+              "audio_tokens": 0,
+              "cache_write_tokens": null,
+              "cached_tokens": 0,
+              "image_tokens": null,
+              "text_tokens": null
+            }
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 23,
+          "output_tokens": 1,
+          "total_tokens": 24,
+          "cached_input_tokens": 0,
+          "reasoning_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "gpt-reasoning-tools",
+      "provider": "gpt",
+      "model_requested": "gpt-5.4-mini",
+      "provider_events": [
+        {
+          "kind": "response",
+          "usage": {
+            "input_tokens": 47,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 31,
+            "output_tokens_details": {
+              "reasoning_tokens": 10
+            },
+            "total_tokens": 78
+          }
+        },
+        {
+          "kind": "response",
+          "usage": {
+            "input_tokens": 98,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 11,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 109
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 47,
+          "output_tokens": 31,
+          "total_tokens": 78,
+          "cached_input_tokens": 0,
+          "reasoning_tokens": 10
+        },
+        {
+          "input_tokens": 98,
+          "output_tokens": 11,
+          "total_tokens": 109,
+          "cached_input_tokens": 0,
+          "reasoning_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "gpt-reasoning",
+      "provider": "gpt",
+      "model_requested": "gpt-5.4-mini",
+      "provider_events": [
+        {
+          "kind": "completion",
+          "usage": {
+            "completion_tokens": 22,
+            "prompt_tokens": 18,
+            "total_tokens": 40,
+            "completion_tokens_details": {
+              "accepted_prediction_tokens": 0,
+              "audio_tokens": 0,
+              "reasoning_tokens": 11,
+              "rejected_prediction_tokens": 0,
+              "text_tokens": null
+            },
+            "compute_units": null,
+            "prompt_tokens_details": {
+              "audio_tokens": 0,
+              "cache_write_tokens": null,
+              "cached_tokens": 0,
+              "image_tokens": null,
+              "text_tokens": null
+            }
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 18,
+          "output_tokens": 22,
+          "total_tokens": 40,
+          "cached_input_tokens": 0,
+          "reasoning_tokens": 11
+        }
+      ]
+    },
+    {
+      "id": "gpt-tools",
+      "provider": "gpt",
+      "model_requested": "gpt-4.1-mini",
+      "provider_events": [
+        {
+          "kind": "response",
+          "usage": {
+            "input_tokens": 57,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 19,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 76
+          }
+        },
+        {
+          "kind": "response",
+          "usage": {
+            "input_tokens": 93,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 16,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 109
+          }
+        },
+        {
+          "kind": "response",
+          "usage": {
+            "input_tokens": 126,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 18,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 144
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 57,
+          "output_tokens": 19,
+          "total_tokens": 76,
+          "cached_input_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        {
+          "input_tokens": 93,
+          "output_tokens": 16,
+          "total_tokens": 109,
+          "cached_input_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        {
+          "input_tokens": 126,
+          "output_tokens": 18,
+          "total_tokens": 144,
+          "cached_input_tokens": 0,
+          "reasoning_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "gpt-turn1",
+      "provider": "gpt",
+      "model_requested": "gpt-4.1-mini",
+      "provider_events": [
+        {
+          "kind": "completion",
+          "usage": {
+            "completion_tokens": 2,
+            "prompt_tokens": 13,
+            "total_tokens": 15,
+            "completion_tokens_details": {
+              "accepted_prediction_tokens": 0,
+              "audio_tokens": 0,
+              "reasoning_tokens": 0,
+              "rejected_prediction_tokens": 0,
+              "text_tokens": null
+            },
+            "compute_units": null,
+            "prompt_tokens_details": {
+              "audio_tokens": 0,
+              "cache_write_tokens": null,
+              "cached_tokens": 0,
+              "image_tokens": null,
+              "text_tokens": null
+            }
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 13,
+          "output_tokens": 2,
+          "total_tokens": 15,
+          "cached_input_tokens": 0,
+          "reasoning_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "gpt-turn2",
+      "provider": "gpt",
+      "model_requested": "gpt-4.1-mini",
+      "provider_events": [
+        {
+          "kind": "completion",
+          "usage": {
+            "completion_tokens": 2,
+            "prompt_tokens": 29,
+            "total_tokens": 31,
+            "completion_tokens_details": {
+              "accepted_prediction_tokens": 0,
+              "audio_tokens": 0,
+              "reasoning_tokens": 0,
+              "rejected_prediction_tokens": 0,
+              "text_tokens": null
+            },
+            "compute_units": null,
+            "prompt_tokens_details": {
+              "audio_tokens": 0,
+              "cache_write_tokens": null,
+              "cached_tokens": 0,
+              "image_tokens": null,
+              "text_tokens": null
+            }
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 29,
+          "output_tokens": 2,
+          "total_tokens": 31,
+          "cached_input_tokens": 0,
+          "reasoning_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "gpt-turn3",
+      "provider": "gpt",
+      "model_requested": "gpt-4.1-mini",
+      "provider_events": [
+        {
+          "kind": "completion",
+          "usage": {
+            "completion_tokens": 3,
+            "prompt_tokens": 45,
+            "total_tokens": 48,
+            "completion_tokens_details": {
+              "accepted_prediction_tokens": 0,
+              "audio_tokens": 0,
+              "reasoning_tokens": 0,
+              "rejected_prediction_tokens": 0,
+              "text_tokens": null
+            },
+            "compute_units": null,
+            "prompt_tokens_details": {
+              "audio_tokens": 0,
+              "cache_write_tokens": null,
+              "cached_tokens": 0,
+              "image_tokens": null,
+              "text_tokens": null
+            }
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 45,
+          "output_tokens": 3,
+          "total_tokens": 48,
+          "cached_input_tokens": 0,
+          "reasoning_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "ollama-cache1",
+      "provider": "ollama",
+      "model_requested": "gemma4:31b",
+      "provider_events": [
+        {
+          "kind": "ollama",
+          "usage": {
+            "prompt_eval_count": 6525,
+            "eval_count": 2,
+            "prompt_eval_cached_count": 0
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 6525,
+          "output_tokens": 2,
+          "total_tokens": 6527,
+          "cached_input_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "ollama-cache2",
+      "provider": "ollama",
+      "model_requested": "gemma4:31b",
+      "provider_events": [
+        {
+          "kind": "ollama",
+          "usage": {
+            "prompt_eval_count": 6525,
+            "eval_count": 2,
+            "prompt_eval_cached_count": 6496
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 6525,
+          "output_tokens": 2,
+          "total_tokens": 6527,
+          "cached_input_tokens": 6496
+        }
+      ]
+    },
+    {
+      "id": "ollama-image",
+      "provider": "ollama",
+      "model_requested": "gemma4:31b",
+      "provider_events": [
+        {
+          "kind": "ollama",
+          "usage": {
+            "prompt_eval_count": 281,
+            "eval_count": 2,
+            "prompt_eval_cached_count": 0
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 281,
+          "output_tokens": 2,
+          "total_tokens": 283,
+          "cached_input_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "ollama-tools",
+      "provider": "ollama",
+      "model_requested": "gemma4:31b",
+      "provider_events": [
+        {
+          "kind": "ollama",
+          "usage": {
+            "prompt_eval_count": 83,
+            "eval_count": 13,
+            "prompt_eval_cached_count": 0
+          }
+        },
+        {
+          "kind": "ollama",
+          "usage": {
+            "prompt_eval_count": 115,
+            "eval_count": 22,
+            "prompt_eval_cached_count": 64
+          }
+        },
+        {
+          "kind": "ollama",
+          "usage": {
+            "prompt_eval_count": 156,
+            "eval_count": 19,
+            "prompt_eval_cached_count": 96
+          }
+        },
+        {
+          "kind": "ollama",
+          "usage": {
+            "prompt_eval_count": 193,
+            "eval_count": 13,
+            "prompt_eval_cached_count": 128
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 83,
+          "output_tokens": 13,
+          "total_tokens": 96,
+          "cached_input_tokens": 0
+        },
+        {
+          "input_tokens": 115,
+          "output_tokens": 22,
+          "total_tokens": 137,
+          "cached_input_tokens": 64
+        },
+        {
+          "input_tokens": 156,
+          "output_tokens": 19,
+          "total_tokens": 175,
+          "cached_input_tokens": 96
+        },
+        {
+          "input_tokens": 193,
+          "output_tokens": 13,
+          "total_tokens": 206,
+          "cached_input_tokens": 128
+        }
+      ]
+    },
+    {
+      "id": "ollama-turn1",
+      "provider": "ollama",
+      "model_requested": "gemma4:31b",
+      "provider_events": [
+        {
+          "kind": "ollama",
+          "usage": {
+            "prompt_eval_count": 18,
+            "eval_count": 2,
+            "prompt_eval_cached_count": 0
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 18,
+          "output_tokens": 2,
+          "total_tokens": 20,
+          "cached_input_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "ollama-turn2",
+      "provider": "ollama",
+      "model_requested": "gemma4:31b",
+      "provider_events": [
+        {
+          "kind": "ollama",
+          "usage": {
+            "prompt_eval_count": 34,
+            "eval_count": 3,
+            "prompt_eval_cached_count": 0
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 34,
+          "output_tokens": 3,
+          "total_tokens": 37,
+          "cached_input_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "ollama-turn3",
+      "provider": "ollama",
+      "model_requested": "gemma4:31b",
+      "provider_events": [
+        {
+          "kind": "ollama",
+          "usage": {
+            "prompt_eval_count": 51,
+            "eval_count": 2,
+            "prompt_eval_cached_count": 0
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 51,
+          "output_tokens": 2,
+          "total_tokens": 53,
+          "cached_input_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "vllm-cache1-small",
+      "provider": "vllm",
+      "model_requested": "Qwen/Qwen3-0.6B",
+      "provider_events": [
+        {
+          "kind": "completion",
+          "usage": {
+            "completion_tokens": 3,
+            "prompt_tokens": 651,
+            "total_tokens": 654,
+            "completion_tokens_details": {
+              "accepted_prediction_tokens": null,
+              "audio_tokens": null,
+              "reasoning_tokens": 0,
+              "rejected_prediction_tokens": null,
+              "text_tokens": null
+            },
+            "compute_units": null,
+            "prompt_tokens_details": {
+              "audio_tokens": null,
+              "cache_write_tokens": null,
+              "cached_tokens": 0,
+              "image_tokens": null,
+              "text_tokens": null,
+              "created_cache_tokens": 640
+            }
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 651,
+          "output_tokens": 3,
+          "total_tokens": 654,
+          "cached_input_tokens": 0,
+          "reasoning_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "vllm-cache2-small",
+      "provider": "vllm",
+      "model_requested": "Qwen/Qwen3-0.6B",
+      "provider_events": [
+        {
+          "kind": "completion",
+          "usage": {
+            "completion_tokens": 3,
+            "prompt_tokens": 651,
+            "total_tokens": 654,
+            "completion_tokens_details": {
+              "accepted_prediction_tokens": null,
+              "audio_tokens": null,
+              "reasoning_tokens": 0,
+              "rejected_prediction_tokens": null,
+              "text_tokens": null
+            },
+            "compute_units": null,
+            "prompt_tokens_details": {
+              "audio_tokens": null,
+              "cache_write_tokens": null,
+              "cached_tokens": 640,
+              "image_tokens": null,
+              "text_tokens": null,
+              "created_cache_tokens": 0
+            }
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 651,
+          "output_tokens": 3,
+          "total_tokens": 654,
+          "cached_input_tokens": 640,
+          "reasoning_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "vllm-reasoning",
+      "provider": "vllm",
+      "model_requested": "Qwen/Qwen3-0.6B",
+      "provider_events": [
+        {
+          "kind": "completion",
+          "usage": {
+            "completion_tokens": 512,
+            "prompt_tokens": 22,
+            "total_tokens": 534,
+            "completion_tokens_details": {
+              "accepted_prediction_tokens": null,
+              "audio_tokens": null,
+              "reasoning_tokens": 511,
+              "rejected_prediction_tokens": null,
+              "text_tokens": null
+            },
+            "compute_units": null,
+            "prompt_tokens_details": {
+              "audio_tokens": null,
+              "cache_write_tokens": null,
+              "cached_tokens": 0,
+              "image_tokens": null,
+              "text_tokens": null,
+              "created_cache_tokens": 16
+            }
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 22,
+          "output_tokens": 512,
+          "total_tokens": 534,
+          "cached_input_tokens": 0,
+          "reasoning_tokens": 511
+        }
+      ]
+    },
+    {
+      "id": "vllm-tools",
+      "provider": "vllm",
+      "model_requested": "Qwen/Qwen3-0.6B",
+      "provider_events": [
+        {
+          "kind": "completion",
+          "usage": {
+            "completion_tokens": 21,
+            "prompt_tokens": 171,
+            "total_tokens": 192,
+            "completion_tokens_details": {
+              "accepted_prediction_tokens": null,
+              "audio_tokens": null,
+              "reasoning_tokens": 0,
+              "rejected_prediction_tokens": null,
+              "text_tokens": null
+            },
+            "compute_units": null,
+            "prompt_tokens_details": {
+              "audio_tokens": null,
+              "cache_write_tokens": null,
+              "cached_tokens": 0,
+              "image_tokens": null,
+              "text_tokens": null,
+              "created_cache_tokens": 160
+            }
+          }
+        },
+        {
+          "kind": "completion",
+          "usage": {
+            "completion_tokens": 9,
+            "prompt_tokens": 214,
+            "total_tokens": 223,
+            "completion_tokens_details": {
+              "accepted_prediction_tokens": null,
+              "audio_tokens": null,
+              "reasoning_tokens": 0,
+              "rejected_prediction_tokens": null,
+              "text_tokens": null
+            },
+            "compute_units": null,
+            "prompt_tokens_details": {
+              "audio_tokens": null,
+              "cache_write_tokens": null,
+              "cached_tokens": 160,
+              "image_tokens": null,
+              "text_tokens": null,
+              "created_cache_tokens": 48
+            }
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 171,
+          "output_tokens": 21,
+          "total_tokens": 192,
+          "cached_input_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        {
+          "input_tokens": 214,
+          "output_tokens": 9,
+          "total_tokens": 223,
+          "cached_input_tokens": 160,
+          "reasoning_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "vllm-turn1",
+      "provider": "vllm",
+      "model_requested": "Qwen/Qwen3-0.6B",
+      "provider_events": [
+        {
+          "kind": "completion",
+          "usage": {
+            "completion_tokens": 3,
+            "prompt_tokens": 17,
+            "total_tokens": 20,
+            "completion_tokens_details": {
+              "accepted_prediction_tokens": null,
+              "audio_tokens": null,
+              "reasoning_tokens": 0,
+              "rejected_prediction_tokens": null,
+              "text_tokens": null
+            },
+            "compute_units": null,
+            "prompt_tokens_details": {
+              "audio_tokens": null,
+              "cache_write_tokens": null,
+              "cached_tokens": 0,
+              "image_tokens": null,
+              "text_tokens": null,
+              "created_cache_tokens": 16
+            }
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 17,
+          "output_tokens": 3,
+          "total_tokens": 20,
+          "cached_input_tokens": 0,
+          "reasoning_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "vllm-turn2",
+      "provider": "vllm",
+      "model_requested": "Qwen/Qwen3-0.6B",
+      "provider_events": [
+        {
+          "kind": "completion",
+          "usage": {
+            "completion_tokens": 3,
+            "prompt_tokens": 35,
+            "total_tokens": 38,
+            "completion_tokens_details": {
+              "accepted_prediction_tokens": null,
+              "audio_tokens": null,
+              "reasoning_tokens": 0,
+              "rejected_prediction_tokens": null,
+              "text_tokens": null
+            },
+            "compute_units": null,
+            "prompt_tokens_details": {
+              "audio_tokens": null,
+              "cache_write_tokens": null,
+              "cached_tokens": 0,
+              "image_tokens": null,
+              "text_tokens": null,
+              "created_cache_tokens": 32
+            }
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 35,
+          "output_tokens": 3,
+          "total_tokens": 38,
+          "cached_input_tokens": 0,
+          "reasoning_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "vllm-turn3",
+      "provider": "vllm",
+      "model_requested": "Qwen/Qwen3-0.6B",
+      "provider_events": [
+        {
+          "kind": "completion",
+          "usage": {
+            "completion_tokens": 4,
+            "prompt_tokens": 53,
+            "total_tokens": 57,
+            "completion_tokens_details": {
+              "accepted_prediction_tokens": null,
+              "audio_tokens": null,
+              "reasoning_tokens": 0,
+              "rejected_prediction_tokens": null,
+              "text_tokens": null
+            },
+            "compute_units": null,
+            "prompt_tokens_details": {
+              "audio_tokens": null,
+              "cache_write_tokens": null,
+              "cached_tokens": 16,
+              "image_tokens": null,
+              "text_tokens": null,
+              "created_cache_tokens": 32
+            }
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 53,
+          "output_tokens": 4,
+          "total_tokens": 57,
+          "cached_input_tokens": 16,
+          "reasoning_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "gemini-reasoning-bounded",
+      "provider": "gemini",
+      "phase": "follow-up",
+      "model_requested": "gemini-3.5-flash",
+      "provider_events": [
+        {
+          "kind": "interaction",
+          "usage": {
+            "input_tokens_by_modality": [
+              {
+                "modality": "text",
+                "tokens": 40
+              }
+            ],
+            "total_cached_tokens": 0,
+            "total_input_tokens": 40,
+            "total_output_tokens": 5,
+            "total_thought_tokens": 119,
+            "total_tokens": 164,
+            "total_tool_use_tokens": 0
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 40,
+          "output_tokens": 124,
+          "total_tokens": 164,
+          "cached_input_tokens": 0,
+          "reasoning_tokens": 119
+        }
+      ]
+    },
+    {
+      "id": "claude-reasoning-puzzle",
+      "provider": "claude",
+      "phase": "follow-up",
+      "model_requested": "claude-sonnet-4-6",
+      "provider_events": [
+        {
+          "kind": "message_start",
+          "usage": {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "inference_geo": "global",
+            "input_tokens": 47,
+            "output_tokens": 1,
+            "output_tokens_details": null,
+            "server_tool_use": null,
+            "service_tier": "standard",
+            "speed": "standard"
+          }
+        },
+        {
+          "kind": "message_delta",
+          "usage": {
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "input_tokens": 47,
+            "output_tokens": 757,
+            "output_tokens_details": {
+              "thinking_tokens": 378
+            },
+            "server_tool_use": null
+          }
+        }
+      ],
+      "a11_usage": [
+        {
+          "input_tokens": 47,
+          "output_tokens": 757,
+          "total_tokens": 804,
+          "cached_input_tokens": 0,
+          "cache_write_tokens": 0
+        }
+      ]
+    }
+  ]
+}

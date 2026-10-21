@@ -28,7 +28,7 @@ class ChatTokens:
 
     def begin_turn(self) -> None:
         self._lengths: dict[int, int] = {}
-        self._usage_ids: set[int] = set()
+        self._usage_ids: set[int | str] = set()
         self._characters = 0
         self._reported_characters = 0
         self._output = 0
@@ -36,10 +36,24 @@ class ChatTokens:
         self._finished = False
 
     def restore_context(self, usage: UsageMetadata) -> None:
-        if usage.total_tokens is not None:
+        if usage.context_tokens is not None:
+            self.context = usage.context_tokens
+        elif (
+            usage.usage_scope == "turn"
+            or usage.input_tokens_scope == "incremental"
+        ):
+            self.context = None
+        elif usage.total_tokens is not None:
             self.context = usage.total_tokens
-        elif usage.input_tokens is not None:
-            self.context = usage.input_tokens + (usage.output_tokens or 0)
+        elif usage.input_tokens is not None and usage.output_tokens is not None:
+            self.context = (
+                usage.input_tokens
+                + (usage.cached_input_tokens or 0)
+                + (usage.cache_write_tokens or 0)
+                + usage.output_tokens
+            )
+        else:
+            self.context = None
 
     def observe(self, block: PresentationBlock) -> None:
         key = id(block)
@@ -48,6 +62,7 @@ class ChatTokens:
             self._characters += max(0, length - self._lengths.get(key, 0))
             self._lengths[key] = length
         elif block.kind == BlockKind.USAGE and block.usage is not None:
+            key = block.interaction_id or key
             if key in self._usage_ids:
                 return
             self._usage_ids.add(key)

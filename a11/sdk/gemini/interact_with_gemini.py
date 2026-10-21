@@ -42,27 +42,25 @@ _GEMINI_INTERACTION_ID = "gemini_interaction_id"
 # Discriminators of Interactions API *steps* (as opposed to content parts).
 # A content list whose items are all steps is passed through untouched; any
 # other list is wrapped in a `user_input` step.
-_STEP_TYPES = frozenset(
-    {
-        "user_input",
-        "model_output",
-        "thought",
-        "function_call",
-        "function_result",
-        "code_execution_call",
-        "code_execution_result",
-        "url_context_call",
-        "url_context_result",
-        "google_search_call",
-        "google_search_result",
-        "mcp_server_tool_call",
-        "mcp_server_tool_result",
-        "file_search_call",
-        "file_search_result",
-        "google_maps_call",
-        "google_maps_result",
-    }
-)
+_STEP_TYPES = frozenset({
+    "user_input",
+    "model_output",
+    "thought",
+    "function_call",
+    "function_result",
+    "code_execution_call",
+    "code_execution_result",
+    "url_context_call",
+    "url_context_result",
+    "google_search_call",
+    "google_search_result",
+    "mcp_server_tool_call",
+    "mcp_server_tool_result",
+    "file_search_call",
+    "file_search_result",
+    "google_maps_call",
+    "google_maps_result",
+})
 
 # Steps the model itself produces; these are replayed as history in
 # "full-history" mode. Server-tool call/result steps are managed by the server
@@ -70,8 +68,8 @@ _STEP_TYPES = frozenset(
 _MODEL_STEP_TYPES = frozenset({"model_output", "function_call", "thought"})
 
 
-#: Image bytes by the prefix their base64 begins with, for a portable image block that named
-#: no media type. Gemini rejects an image part without one, so a sniffed type beats no type.
+#: Recognize image bytes by their base64 prefix when a portable image block
+#: omits the media type required by Gemini.
 _IMAGE_MAGIC = (
     ("iVBORw0KGgo", "image/png"),
     ("/9j/", "image/jpeg"),
@@ -93,11 +91,9 @@ def _sniffed_mimetype(data: str | None) -> str | None:
 def _native_content_blocks(blocks: list[Any]) -> list[Any]:
     """User content blocks as Gemini's own parts.
 
-    A block Gemini already reads passes through untouched. An image block minted for another
-    provider is translated through `llm.normalized_parts_by_shape`, because Gemini rejects an
-    image part carrying no ``mime_type``: a client sending Anthropic's portable
-    ``source``/``media_type`` envelope got HTTP 400 ``Missing/unsupported mime_type in image
-    content``, since this handler read the block as native and found neither field.
+    Native Gemini blocks pass through. Portable image blocks are translated
+    through `llm.normalized_parts_by_shape` and require a media type, supplied
+    explicitly or recognized from their bytes.
     """
     out: list[Any] = []
     for block in blocks:
@@ -112,19 +108,20 @@ def _native_content_blocks(blocks: list[Any]) -> list[Any]:
         )
         if native or not foreign:
             if native and not block.get("mime_type"):
-                block = {**block, "mime_type": _sniffed_mimetype(block.get("data"))}
+                block = {
+                    **block,
+                    "mime_type": _sniffed_mimetype(block.get("data")),
+                }
             out.append(block)
             continue
         for part in llm.normalized_parts_by_shape([block]):
             if part.type != llm.NormalizedContentType.IMAGE:
                 continue
-            out.append(
-                {
-                    "type": "image",
-                    "data": part.data,
-                    "mime_type": part.mime_type or _sniffed_mimetype(part.data),
-                }
-            )
+            out.append({
+                "type": "image",
+                "data": part.data,
+                "mime_type": part.mime_type or _sniffed_mimetype(part.data),
+            })
     return out
 
 
@@ -256,30 +253,24 @@ def _gemini_from_normalized(
         if part.type == llm.NormalizedContentType.TEXT:
             content_parts.append({"type": "text", "text": part.text or ""})
         elif part.type == llm.NormalizedContentType.IMAGE:
-            content_parts.append(
-                {
-                    "type": "image",
-                    "data": part.data,
-                    "mime_type": part.mime_type,
-                }
-            )
+            content_parts.append({
+                "type": "image",
+                "data": part.data,
+                "mime_type": part.mime_type,
+            })
         elif part.type == llm.NormalizedContentType.TOOL_CALL:
-            steps.append(
-                {
-                    "type": "function_call",
-                    "id": part.id or "",
-                    "name": part.name or "",
-                    "arguments": part.arguments or {},
-                }
-            )
+            steps.append({
+                "type": "function_call",
+                "id": part.id or "",
+                "name": part.name or "",
+                "arguments": part.arguments or {},
+            })
         elif part.type == llm.NormalizedContentType.TOOL_RESULT:
-            steps.append(
-                {
-                    "type": "function_result",
-                    "call_id": part.call_id or "",
-                    "result": [{"type": "text", "text": part.content or ""}],
-                }
-            )
+            steps.append({
+                "type": "function_result",
+                "call_id": part.call_id or "",
+                "result": [{"type": "text", "text": part.content or ""}],
+            })
 
     if content_parts:
         step_type = (
@@ -502,13 +493,11 @@ class _StepAccumulator:
             self._append_text(entry, delta.text)
         elif delta_type == "image":
             entry.setdefault("type", "model_output")
-            entry.setdefault("content", []).append(
-                {
-                    "type": "image",
-                    "data": delta.data,
-                    "mime_type": delta.mime_type,
-                }
-            )
+            entry.setdefault("content", []).append({
+                "type": "image",
+                "data": delta.data,
+                "mime_type": delta.mime_type,
+            })
         elif delta_type == "arguments_delta":
             if delta.arguments:
                 entry["_partial"] = entry.get("_partial", "") + delta.arguments
@@ -610,17 +599,28 @@ async def _build_tool_results_from_outputs(
     return await llm.build_tool_results(executed, as_function_result)
 
 
-def _build_usage_metadata(usage: Any | None) -> llm.UsageMetadata | None:
+def _build_usage_metadata(
+    usage: Any | None, *, incremental: bool = False
+) -> llm.UsageMetadata | None:
     """Map Gemini's `Usage` onto the provider-independent `UsageMetadata`."""
     if usage is None:
         return None
 
     return llm.UsageMetadata(
-        input_tokens=usage.total_input_tokens,
-        output_tokens=usage.total_output_tokens,
+        input_tokens=(
+            usage.total_input_tokens - (usage.total_cached_tokens or 0)
+            if usage.total_input_tokens is not None
+            else None
+        ),
+        output_tokens=(
+            usage.total_output_tokens + (usage.total_thought_tokens or 0)
+            if usage.total_output_tokens is not None
+            else None
+        ),
         total_tokens=usage.total_tokens,
         cached_input_tokens=usage.total_cached_tokens,
         reasoning_tokens=usage.total_thought_tokens,
+        input_tokens_scope="incremental" if incremental else "context",
     )
 
 
@@ -644,6 +644,9 @@ def _build_backend_specific_metadata(
         if value is not None:
             metadata[field] = llm.encode_backend_value(str(value))
 
+    if getattr(snapshot, "usage", None) is not None:
+        metadata["provider_usage"] = llm.encode_backend_value(snapshot.usage)
+
     return metadata
 
 
@@ -665,14 +668,12 @@ def _build_tools(
     """Convert A11 tool definitions and config toggles into Gemini tools."""
     tools: list[dict[str, Any]] = []
     for tool in requested_tools:
-        tools.append(
-            {
-                "type": "function",
-                "name": tool["name"],
-                "description": tool.get("description", ""),
-                "parameters": tool.get("input_schema", {}),
-            }
-        )
+        tools.append({
+            "type": "function",
+            "name": tool["name"],
+            "description": tool.get("description", ""),
+            "parameters": tool.get("input_schema", {}),
+        })
 
     if config.google_search:
         tools.append({"type": "google_search"})
@@ -869,7 +870,10 @@ async def interact_with_gemini(action: a11.Action):
                 backend_specific_metadata=_build_backend_specific_metadata(
                     snapshot, gemini_interaction_id
                 ),
-                usage_metadata=_build_usage_metadata(snapshot.usage),
+                usage_metadata=_build_usage_metadata(
+                    snapshot.usage,
+                    incremental=have_prev and not replay_full_history,
+                ),
             )
             previous_interaction_id = interaction.id
             rejected = await llm.add_tool_calls_to_interaction(
@@ -907,14 +911,12 @@ async def interact_with_gemini(action: a11.Action):
                     **executed.log_metadata(),
                 },
                 content=[
-                    a11.to_chunk(
-                        {
-                            "role": "user",
-                            "content": await _build_tool_results_from_outputs(
-                                executed, call_names
-                            ),
-                        }
-                    )
+                    a11.to_chunk({
+                        "role": "user",
+                        "content": await _build_tool_results_from_outputs(
+                            executed, call_names
+                        ),
+                    })
                 ],
             )
             previous_interaction_id = tool_output_interaction.id

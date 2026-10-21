@@ -357,6 +357,7 @@ class PresentationReducer:
         #: coalesce into one block instead of one block per token.
         self._open: PresentationBlock | None = None
         self._seen_calls: set[str] = set()
+        self._seen_usage: set[str] = set()
         self._logs: dict[str, str] = {}
         self._statuses: dict[str, Status] = {}
         #: Whether prose has arrived as deltas. Only then is the text inside a
@@ -406,6 +407,10 @@ class PresentationReducer:
 
         turn = present_interaction(interaction, self._logs, self._statuses)
         for block in turn.blocks:
+            if block.kind == BlockKind.USAGE and block.interaction_id:
+                if block.interaction_id in self._seen_usage:
+                    continue
+                self._seen_usage.add(block.interaction_id)
             # Only deltas make an interaction's text a duplicate: on the live
             # path the same prose arrives twice, once on `text_output` and once
             # inside the interaction that lands on `new_interactions`.

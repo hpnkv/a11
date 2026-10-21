@@ -417,6 +417,7 @@ def _as_event(message: Any) -> dict[str, Any]:
 
 def _build_usage_metadata(
     usage: dict[str, Any] | None,
+    model_usage: dict[str, Any] | None = None,
 ) -> llm.UsageMetadata | None:
     """Map the CLI's usage dict onto the provider-independent model.
 
@@ -425,6 +426,32 @@ def _build_usage_metadata(
     reports the same few output tokens for every message in a turn and omits
     thinking tokens, so it is kept as raw metadata instead.
     """
+    if model_usage:
+        fields = {
+            "input_tokens": "inputTokens",
+            "output_tokens": "outputTokens",
+            "cache_read_input_tokens": "cacheReadInputTokens",
+            "cache_creation_input_tokens": "cacheCreationInputTokens",
+        }
+        totals = {}
+        for target, source in fields.items():
+            values = [model.get(source) for model in model_usage.values()]
+            totals[target] = (
+                sum(values)
+                if all(value is not None for value in values)
+                else None
+            )
+        thinking = [
+            model.get("thinkingTokens") for model in model_usage.values()
+        ]
+        totals["output_tokens_details"] = {
+            "thinking_tokens": (
+                sum(thinking)
+                if all(value is not None for value in thinking)
+                else None
+            )
+        }
+        usage = totals
     if not usage:
         return None
 
@@ -432,17 +459,21 @@ def _build_usage_metadata(
     output_tokens = usage.get("output_tokens")
     cache_read = usage.get("cache_read_input_tokens")
     cache_write = usage.get("cache_creation_input_tokens")
-    total = (input_tokens or 0) + (output_tokens or 0)
-    total += (cache_read or 0) + (cache_write or 0)
+    total = (
+        input_tokens + output_tokens + (cache_read or 0) + (cache_write or 0)
+        if input_tokens is not None and output_tokens is not None
+        else None
+    )
     details = usage.get("output_tokens_details") or {}
 
     return llm.UsageMetadata(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
-        total_tokens=total or None,
+        total_tokens=total,
         cached_input_tokens=cache_read,
         cache_write_tokens=cache_write,
         reasoning_tokens=details.get("thinking_tokens"),
+        usage_scope="turn",
     )
 
 
@@ -465,6 +496,8 @@ def _result_metadata(message: cc.ResultMessage) -> dict[str, Any]:
         "total_cost_usd": message.total_cost_usd,
         "duration_ms": message.duration_ms,
         "num_turns": message.num_turns,
+        "provider_usage": message.usage,
+        "model_usage": message.model_usage,
     }
     for field in _RESULT_USAGE_METADATA:
         extra[field] = (message.usage or {}).get(field)
@@ -712,8 +745,17 @@ async def interact_with_claude_code(action: a11.Action):
                 last_message = message
                 if pending_assistant is not None:
                     pending_assistant.usage_metadata = _build_usage_metadata(
-                        message.usage
+                        message.usage, message.model_usage
                     )
+                    if (
+                        message.num_turns == 1
+                        and pending_assistant.usage_metadata is not None
+                    ):
+                        primary = _build_usage_metadata(message.usage)
+                        if primary is not None:
+                            pending_assistant.usage_metadata.context_tokens = (
+                                primary.total_tokens
+                            )
                     pending_assistant.backend_specific_metadata.update(
                         _backend_metadata(session_id, _result_metadata(message))
                     )

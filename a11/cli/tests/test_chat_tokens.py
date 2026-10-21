@@ -82,3 +82,26 @@ def test_anthropic_context_includes_cache_without_double_counting():
         )
     )
     assert tokens.context_label == "6.2K tok"
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        UsageMetadata(),
+        UsageMetadata(input_tokens=100),
+        UsageMetadata(output_tokens=10),
+        UsageMetadata(cached_input_tokens=100),
+    ],
+)
+def test_incomplete_request_usage_clears_previous_context(usage):
+    tokens = ChatTokens()
+    tokens.restore_context(UsageMetadata(total_tokens=1000))
+    tokens.observe(PresentationBlock(kind=BlockKind.USAGE, usage=usage))
+    assert tokens.context is None
+    assert tokens.context_label == "— tok"
+
+
+def test_context_fallback_accepts_known_zero_output():
+    tokens = ChatTokens()
+    tokens.restore_context(UsageMetadata(input_tokens=100, output_tokens=0))
+    assert tokens.context == 100

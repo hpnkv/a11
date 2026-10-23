@@ -30,6 +30,9 @@ claude = [
 claude-code = [
     { name = "claude-agent-sdk" },
 ]
+codex = [
+    { name = "mcp" },
+]
 diffusion = [
     { name = "accelerate" },
     { name = "diffusers" },
@@ -43,6 +46,7 @@ llm = [
     { name = "anthropic" },
     { name = "claude-agent-sdk" },
     { name = "google-genai" },
+    { name = "mcp" },
     { name = "ollama" },
     { name = "openai" },
 ]
@@ -71,6 +75,9 @@ claude = [
 ]
 claude-code = [
     { name = "claude-agent-sdk" },
+]
+codex = [
+    { name = "mcp" },
 ]
 dev = [
     { name = "anthropic" },
@@ -125,6 +132,8 @@ requires-dist = [
     { name = "google-genai", marker = "extra == 'gemini'", specifier = ">=1.55.0" },
     { name = "google-genai", marker = "extra == 'llm'", specifier = ">=1.55.0" },
     { name = "httpx", specifier = ">=0.28.1" },
+    { name = "mcp", marker = "extra == 'codex'", specifier = ">=2.1.1" },
+    { name = "mcp", marker = "extra == 'llm'", specifier = ">=2.1.1" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=2.1.1" },
     { name = "msgpack", specifier = ">=1.2.1" },
     { name = "ollama", marker = "extra == 'llm'", specifier = ">=0.6.0" },
@@ -147,7 +156,7 @@ provides-extras = ["claude", "claude-code", "gemini", "openai", "s2", "codex", "
 anthropic = [{ name = "anthropic", specifier = ">=0.120.0" }]
 claude = [{ name = "anthropic", specifier = ">=0.120.0" }]
 claude-code = [{ name = "claude-agent-sdk", specifier = ">=0.2.140" }]
-codex = []
+codex = [{ name = "mcp", specifier = ">=2.1.1" }]
 dev = [
     { name = "anthropic", specifier = ">=0.120.0" },
     { name = "black", specifier = ">=26.5.1" },

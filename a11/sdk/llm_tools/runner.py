@@ -424,6 +424,9 @@ async def wait_and_report_status(
     try:
         await child.wait(max(deadline - a11.now(), a11.zero_duration()))
         status = Status()
+    except asyncio.CancelledError:
+        child.cancel()
+        raise
     except Exception as error:
         status = _status_of(error)
     if parent.has_been_run() and not parent.is_done():

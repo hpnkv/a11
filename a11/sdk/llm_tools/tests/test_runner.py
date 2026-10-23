@@ -21,6 +21,7 @@ schema that nominates one output as the whole result, and it reports a call it
 could not even record as that call's own failure.
 """
 
+import asyncio
 import json
 
 import pytest
@@ -83,6 +84,40 @@ def _call(call_id: str, word: str) -> Interaction:
             ]
         },
     )
+
+
+@pytest.mark.asyncio
+async def test_cancelling_tool_wait_cancels_the_running_action():
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+    finish = asyncio.Event()
+    schema = ActionSchema(name="waiting_tool")
+
+    async def handler(action):
+        started.set()
+        try:
+            await finish.wait()
+        finally:
+            cancelled.set()
+
+    child = a11.Action(schema).bind_handler(handler).run()
+    parent = a11.Action(schema)
+    waiting = asyncio.create_task(
+        runner.wait_and_report_status(
+            child, parent, schema.name, a11.infinite_future()
+        )
+    )
+    try:
+        await asyncio.wait_for(started.wait(), 2)
+        waiting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiting
+        await asyncio.wait_for(cancelled.wait(), 2)
+        with pytest.raises(StatusException) as failure:
+            await child.wait()
+        assert failure.value.status.code == StatusCode.CANCELLED
+    finally:
+        child.cancel()
 
 
 @pytest.mark.asyncio
@@ -309,11 +344,13 @@ async def test_collect_tools_adds_the_registered_actions_the_caller_allows(
     host.set_header(LlmHeaders.ALLOWED_LLM_ACTIONS.value, patterns)
     host.run()
 
-    await host["tools"].finalize({
-        "name": "caller_tool",
-        "description": "A tool the caller serves itself.",
-        "input_schema": {"type": "object", "properties": {}},
-    })
+    await host["tools"].finalize(
+        {
+            "name": "caller_tool",
+            "description": "A tool the caller serves itself.",
+            "input_schema": {"type": "object", "properties": {}},
+        }
+    )
     await host["interactions"].finalize()
     await host["config"].finalize()
     await host.wait()
@@ -336,11 +373,13 @@ async def test_collect_tools_has_a_stable_name_order():
     host.set_header(LlmHeaders.ALLOWED_LLM_ACTIONS.value, b"alpha,middle,zebra")
     host.run()
     for name in ("zebra", "alpha", "middle"):
-        await host["tools"].put({
-            "name": name,
-            "description": name,
-            "input_schema": {"type": "object"},
-        })
+        await host["tools"].put(
+            {
+                "name": name,
+                "description": name,
+                "input_schema": {"type": "object"},
+            }
+        )
     await host["tools"].finalize()
     await host["interactions"].finalize()
     await host["config"].finalize()

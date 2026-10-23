@@ -25,7 +25,6 @@ import os
 import re
 import tempfile
 import traceback
-from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +34,7 @@ import a11
 from a11.sdk import llm
 from a11.sdk.usage import UsageReporter, UsageScope
 from a11.sdk.llm_tools import runner
+from a11.sdk.openai._codex_mcp import ToolHandler, serve_tools
 from a11.sdk.openai.interact_with_codex_schema import (
     CreateCodexSessionConfig,
     DEFAULT_MODEL,
@@ -44,7 +44,7 @@ from a11.sdk.vllm import interact_with_vllm as chat
 from a11.status import Status, StatusCode, StatusException
 
 CODEX_TRANSPORT_METADATA_KEY = "codex_transport"
-CODEX_TRANSPORT = b"app-server-dynamic-tools/v1"
+CODEX_TRANSPORT = b"app-server-mcp/v1"
 CODEX_TOOLS_METADATA_KEY = "codex_tools_sha256"
 
 
@@ -242,7 +242,7 @@ def _tool_name(name: str, used: set[str]) -> str:
     return candidate
 
 
-def _dynamic_tools(
+def _mcp_tools(
     definitions: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], dict[str, str], bytes]:
     used: set[str] = {"a11_request_user_input"}
@@ -258,7 +258,6 @@ def _dynamic_tools(
         names[exposed] = original
         result.append(
             {
-                "type": "function",
                 "name": exposed,
                 "description": definition.get("description") or "",
                 "inputSchema": (
@@ -323,9 +322,6 @@ def _rpc_error(message: dict[str, Any]) -> StatusException:
     ).to_exception()
 
 
-ToolHandler = Callable[[dict[str, Any], str], Awaitable[dict[str, Any]]]
-
-
 async def _run_codex(
     action: a11.Action,
     config: CreateCodexSessionConfig,
@@ -333,14 +329,66 @@ async def _run_codex(
     prompt: str,
     resume: str | None,
     developer_instructions: str | None,
-    dynamic_tools: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
     tool_handler: ToolHandler,
     env: dict[str, str],
     image_paths: list[str] | None = None,
     usage_details: dict[str, bytes] | None = None,
     usage_baseline: dict[str, int] | None = None,
+    deadline: a11.Time | None = None,
 ) -> tuple[str, str, llm.UsageMetadata | None]:
-    """Run one turn over Codex's JSONL stdio app-server protocol."""
+    """Run a Codex turn with an MCP endpoint scoped to this action."""
+    usage_details = usage_details if usage_details is not None else {}
+    remaining = (
+        (deadline - a11.now()).float_seconds() if deadline is not None else None
+    )
+    async with serve_tools(
+        tools,
+        tool_handler,
+        lambda: usage_details.get("root_thread_id", b"").decode()
+        or resume
+        or "",
+        tool_timeout=min(
+            max(remaining if remaining is not None else 2**31 - 1, 0.001),
+            2**31 - 1,
+        ),
+    ) as (overrides, tool_env):
+        config = config.model_copy(
+            update={
+                "config_overrides": {**config.config_overrides, **overrides}
+            }
+        )
+        return await _run_codex_session(
+            action,
+            config,
+            model,
+            prompt,
+            resume,
+            developer_instructions,
+            tools,
+            tool_handler,
+            {**env, **tool_env},
+            image_paths,
+            usage_details,
+            usage_baseline,
+        )
+
+
+async def _run_codex_session(
+    action: a11.Action,
+    config: CreateCodexSessionConfig,
+    model: str,
+    prompt: str,
+    resume: str | None,
+    developer_instructions: str | None,
+    tools: list[dict[str, Any]],
+    tool_handler: ToolHandler,
+    env: dict[str, str],
+    image_paths: list[str] | None,
+    usage_details: dict[str, bytes],
+    usage_baseline: dict[str, int] | None,
+) -> tuple[str, str, llm.UsageMetadata | None]:
+    """Run the app-server session while its MCP endpoint is available."""
     try:
         process = await asyncio.create_subprocess_exec(
             *_app_server_command(config),
@@ -402,9 +450,7 @@ async def _run_codex(
         arguments: dict[str, Any], call_id: str, thread_id: str
     ) -> str:
         """Ask through A11 so every client receives the same input action."""
-        if not any(
-            tool["name"] == "a11_request_user_input" for tool in dynamic_tools
-        ):
+        if not any(tool["name"] == "a11_request_user_input" for tool in tools):
             raise ValueError("User input is not enabled by this A11 client.")
         result = await tool_handler(
             {
@@ -416,10 +462,10 @@ async def _run_codex(
         )
         content = "".join(
             item.get("text", "")
-            for item in result["contentItems"]
-            if item.get("type") == "inputText"
+            for item in result["content"]
+            if item.get("type") == "text"
         )
-        if not result.get("success"):
+        if result.get("isError"):
             raise ValueError(content)
         return from_json(content)["answer"]
 
@@ -470,24 +516,6 @@ async def _run_codex(
                     "input": inputs,
                 },
                 resume_turn=True,
-            )
-
-    async def answer_tool(message: dict[str, Any], thread_id: str) -> None:
-        try:
-            result = await tool_handler(message.get("params") or {}, thread_id)
-            await send({"id": message["id"], "result": result})
-        except Exception as exc:
-            logging.debug("Codex dynamic tool call failed", exc_info=True)
-            await send(
-                {
-                    "id": message["id"],
-                    "result": {
-                        "contentItems": [
-                            {"type": "inputText", "text": str(exc)}
-                        ],
-                        "success": False,
-                    },
-                }
             )
 
     async def answer_user_input(
@@ -545,6 +573,14 @@ async def _run_codex(
             else:
                 responses[message["id"]] = message
         method = message.get("method")
+        if method == "item/tool/call":
+            raise Status(
+                code=StatusCode.FAILED_PRECONDITION,
+                message=(
+                    "This Codex thread uses legacy dynamic tools. Start a"
+                    " new thread to use MCP actions."
+                ),
+            ).to_exception()
         params = message.get("params") or {}
         event_thread = params.get("threadId") or thread_id
         item = params.get("item") or {}
@@ -613,10 +649,6 @@ async def _run_codex(
                 await child_reporter.invalidate_context(
                     params, operation="compaction"
                 )
-            elif method == "item/tool/call":
-                pending_calls.add(
-                    asyncio.create_task(answer_tool(message, event_thread))
-                )
             elif method == "item/tool/requestUserInput":
                 pending_calls.add(
                     asyncio.create_task(
@@ -624,10 +656,7 @@ async def _run_codex(
                     )
                 )
             return
-        if method == "item/tool/call":
-            task = asyncio.create_task(answer_tool(message, thread_id))
-            pending_calls.add(task)
-        elif method == "item/tool/requestUserInput":
+        if method == "item/tool/requestUserInput":
             task = asyncio.create_task(answer_user_input(message, thread_id))
             pending_calls.add(task)
         elif method == "item/agentMessage/delta":
@@ -739,7 +768,6 @@ async def _run_codex(
                     **common,
                     "developerInstructions": developer_instructions,
                     "ephemeral": config.ephemeral,
-                    "dynamicTools": dynamic_tools,
                 },
             )
         thread_result = await wait_response(thread_request)
@@ -847,7 +875,7 @@ def _metadata(thread_id: str, tools_digest: bytes) -> dict[str, bytes]:
 
 
 async def interact_with_codex(action: a11.Action) -> None:
-    """Run a Codex turn with A11 actions exposed as native dynamic tools."""
+    """Run a Codex turn with A11 actions exposed as parallel MCP tools."""
     deadline = a11.get_deadline(action)
     config = await action["config"].consume(
         CreateCodexSessionConfig,
@@ -869,7 +897,7 @@ async def interact_with_codex(action: a11.Action) -> None:
     )
     interactions = [interaction async for interaction in action["interactions"]]
     definitions = await runner.collect_tools(action, deadline)
-    dynamic_tools, tool_names, tools_digest = _dynamic_tools(definitions)
+    tools, tool_names, tools_digest = _mcp_tools(definitions)
     recorded_thread, recorded_at = _latest_thread(interactions, tools_digest)
     resume = config.resume or recorded_thread
     if config.resume:
@@ -915,8 +943,7 @@ async def interact_with_codex(action: a11.Action) -> None:
     async def handle_tool(
         params: dict[str, Any], thread_id: str
     ) -> dict[str, Any]:
-        nonlocal previous_id, current_thread
-        current_thread = thread_id
+        nonlocal previous_id
         exposed_name = params.get("tool") or ""
         call = llm.ToolCall(
             name=tool_names.get(exposed_name, exposed_name),
@@ -970,11 +997,12 @@ async def interact_with_codex(action: a11.Action) -> None:
             text, images = await llm.decoded_output_content(
                 executed.outputs.get(call.id, [])
             )
-        result_content = [{"type": "inputText", "text": text}]
+        result_content = [{"type": "text", "text": text}]
         result_content.extend(
             {
-                "type": "inputImage",
-                "imageUrl": f"data:{image.mime_type};base64,{image.data}",
+                "type": "image",
+                "mimeType": image.mime_type,
+                "data": image.data,
             }
             for image in images
             if image.data and image.mime_type
@@ -995,17 +1023,17 @@ async def interact_with_codex(action: a11.Action) -> None:
             await action["new_interactions"].put(result)
             if not failed_rounds.record(executed):
                 return {
-                    "contentItems": [
+                    "content": [
                         {
-                            "type": "inputText",
+                            "type": "text",
                             "text": (
                                 "A11 stopped after repeated failed tool calls."
                             ),
                         }
                     ],
-                    "success": False,
+                    "isError": True,
                 }
-        return {"contentItems": result_content, "success": failure is None}
+        return {"content": result_content, "isError": failure is not None}
 
     try:
         with tempfile.TemporaryDirectory(prefix="a11-codex-") as directory:
@@ -1027,12 +1055,13 @@ async def interact_with_codex(action: a11.Action) -> None:
                 prompt,
                 resume,
                 developer_instructions,
-                dynamic_tools,
+                tools,
                 handle_tool,
                 env,
                 image_paths,
                 usage_details,
                 usage_baseline,
+                deadline,
             )
         interaction = llm.Interaction(
             previous_interaction_id=previous_id,

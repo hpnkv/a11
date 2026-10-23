@@ -28,6 +28,7 @@ from a11.sdk.openai.interact_with_codex_schema import (
     INTERACT_WITH_CODEX_SCHEMA,
     THREAD_ID_METADATA_KEY,
 )
+from a11.status import StatusException
 
 
 async def _collect(node):
@@ -158,14 +159,18 @@ async def test_async_agent_questions_wait_for_a11_and_resume_codex(
             if message["id"] <= 3:
                 return
             emit({"id": message["id"], "result": {}})
-            emit({
-                "method": "item/agentMessage/delta",
-                "params": {"delta": "Correct!"},
-            })
-            emit({
-                "method": "turn/completed",
-                "params": {"turn": {"status": "completed"}},
-            })
+            emit(
+                {
+                    "method": "item/agentMessage/delta",
+                    "params": {"delta": "Correct!"},
+                }
+            )
+            emit(
+                {
+                    "method": "turn/completed",
+                    "params": {"turn": {"status": "completed"}},
+                }
+            )
 
     class Events(_Sink):
         async def put(self, event):
@@ -193,10 +198,12 @@ async def test_async_agent_questions_wait_for_a11_and_resume_codex(
     emit({"method": "item/started", "params": params})
     emit({"method": "item/completed", "params": params})
     if turn_completed:
-        emit({
-            "method": "turn/completed",
-            "params": {"turn": {"status": "completed"}},
-        })
+        emit(
+            {
+                "method": "turn/completed",
+                "params": {"turn": {"status": "completed"}},
+            }
+        )
 
     async def create(*args, **kwargs):
         return process
@@ -208,10 +215,10 @@ async def test_async_agent_questions_wait_for_a11_and_resume_codex(
         if answer_fails:
             raise ValueError("Input action unavailable")
         return {
-            "success": True,
-            "contentItems": [
+            "isError": False,
+            "content": [
                 {
-                    "type": "inputText",
+                    "type": "text",
                     "text": json.dumps({"answer": "C++"}),
                 }
             ],
@@ -231,7 +238,12 @@ async def test_async_agent_questions_wait_for_a11_and_resume_codex(
             "quiz",
             None,
             None,
-            [{"name": "a11_request_user_input"}],
+            [
+                {
+                    "name": "a11_request_user_input",
+                    "inputSchema": {"type": "object"},
+                }
+            ],
             answer,
             {},
         )
@@ -286,26 +298,28 @@ async def test_native_user_input_is_bridged_to_a11_with_question_ids(
         {"id": "q2", "question": "Second question?", "isOther": True},
         {"id": "q3", "question": "Third question?"},
     ]
-    process = _Process([
-        {"id": 1, "result": {}},
-        {"id": 2, "result": {"thread": {"id": "thread-9"}}},
-        {"id": 3, "result": {"turn": {"id": "turn-1"}}},
-        {
-            "id": 77,
-            "method": "item/tool/requestUserInput",
-            "params": {
-                "questions": questions,
-                "itemId": "item-1",
-                "threadId": "thread-9",
-                "turnId": "turn-1",
-                "isBlocking": True,
+    process = _Process(
+        [
+            {"id": 1, "result": {}},
+            {"id": 2, "result": {"thread": {"id": "thread-9"}}},
+            {"id": 3, "result": {"turn": {"id": "turn-1"}}},
+            {
+                "id": 77,
+                "method": "item/tool/requestUserInput",
+                "params": {
+                    "questions": questions,
+                    "itemId": "item-1",
+                    "threadId": "thread-9",
+                    "turnId": "turn-1",
+                    "isBlocking": True,
+                },
             },
-        },
-        {
-            "method": "turn/completed",
-            "params": {"turn": {"status": "completed"}},
-        },
-    ])
+            {
+                "method": "turn/completed",
+                "params": {"turn": {"status": "completed"}},
+            },
+        ]
+    )
 
     async def create(*args, **kwargs):
         return process
@@ -315,19 +329,21 @@ async def test_native_user_input_is_bridged_to_a11_with_question_ids(
     async def handler(params, thread_id):
         calls.append((params, thread_id))
         return {
-            "success": True,
-            "contentItems": [
+            "isError": False,
+            "content": [
                 {
-                    "type": "inputText",
+                    "type": "text",
                     "text": json.dumps({"answer": "Yes"}),
                 }
             ],
         }
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create)
-    tools, names, _ = mod._dynamic_tools([
-        {"name": "request_user_input", "input_schema": {"type": "object"}},
-    ])
+    tools, names, _ = mod._mcp_tools(
+        [
+            {"name": "request_user_input", "input_schema": {"type": "object"}},
+        ]
+    )
     assert names == {"a11_request_user_input": "request_user_input"}
     await mod._run_codex(
         {key: _Sink() for key in ("event_stream", "thoughts", "text_output")},
@@ -373,65 +389,50 @@ async def test_jsonl_reader_accepts_a_multimodal_message_over_64_kib():
 
 @pytest.mark.asyncio
 async def test_app_server_uses_structured_thread_turn_and_usage(monkeypatch):
-    process = _Process([
-        {"id": 1, "result": {}},
-        {"id": 2, "result": {"thread": {"id": "thread-9"}}},
-        {"id": 3, "result": {"turn": {"id": "turn-1"}}},
-        {
-            "method": "item/tool/call",
-            "id": 77,
-            "params": {
-                "threadId": "thread-9",
-                "turnId": "turn-1",
-                "callId": "call-7",
-                "tool": "lookup",
-                "arguments": {"key": "x"},
+    process = _Process(
+        [
+            {"id": 1, "result": {}},
+            {"id": 2, "result": {"thread": {"id": "thread-9"}}},
+            {"id": 3, "result": {"turn": {"id": "turn-1"}}},
+            {
+                "method": "item/reasoning/summaryTextDelta",
+                "params": {"delta": "considering"},
             },
-        },
-        {
-            "method": "item/reasoning/summaryTextDelta",
-            "params": {"delta": "considering"},
-        },
-        {
-            "method": "item/agentMessage/delta",
-            "params": {"delta": "Answer."},
-        },
-        {
-            "method": "item/completed",
-            "params": {"item": {"type": "agentMessage", "text": "Answer."}},
-        },
-        {
-            "method": "thread/tokenUsage/updated",
-            "params": {
-                "tokenUsage": {
-                    "last": {
-                        "inputTokens": 5,
-                        "cachedInputTokens": 2,
-                        "outputTokens": 3,
-                        "totalTokens": 8,
+            {
+                "method": "item/agentMessage/delta",
+                "params": {"delta": "Answer."},
+            },
+            {
+                "method": "item/completed",
+                "params": {"item": {"type": "agentMessage", "text": "Answer."}},
+            },
+            {
+                "method": "thread/tokenUsage/updated",
+                "params": {
+                    "tokenUsage": {
+                        "last": {
+                            "inputTokens": 5,
+                            "cachedInputTokens": 2,
+                            "outputTokens": 3,
+                            "totalTokens": 8,
+                        }
                     }
-                }
+                },
             },
-        },
-        {
-            "method": "turn/completed",
-            "params": {"turn": {"status": "completed"}},
-        },
-    ])
+            {
+                "method": "turn/completed",
+                "params": {"turn": {"status": "completed"}},
+            },
+        ]
+    )
     command = []
 
     async def create(*args, **kwargs):
         command.extend(args)
         return process
 
-    tool_calls = []
-
     async def tool_handler(params, thread_id):
-        tool_calls.append((params, thread_id))
-        return {
-            "contentItems": [{"type": "inputText", "text": "value"}],
-            "success": True,
-        }
+        pytest.fail("App-server requests do not execute MCP actions")
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create)
     action = {
@@ -448,7 +449,6 @@ async def test_app_server_uses_structured_thread_turn_and_usage(monkeypatch):
         "be concise",
         [
             {
-                "type": "function",
                 "name": "lookup",
                 "description": "Look up",
                 "inputSchema": {"type": "object"},
@@ -464,35 +464,31 @@ async def test_app_server_uses_structured_thread_turn_and_usage(monkeypatch):
     assert usage.cached_input_tokens == 2
     assert action["thoughts"].values == ["considering"]
     assert action["text_output"].values == ["Answer."]
-    assert command == ["codex", "app-server"]
+    assert command[:2] == ["codex", "app-server"]
+    assert (
+        "mcp_servers.a11_actions.supports_parallel_tool_calls=true" in command
+    )
     assert messages[0]["method"] == "initialize"
     assert messages[0]["params"]["capabilities"]["experimentalApi"]
     assert messages[2]["method"] == "thread/start"
-    assert messages[2]["params"]["dynamicTools"][0]["name"] == "lookup"
+    assert "dynamicTools" not in messages[2]["params"]
     assert messages[3]["method"] == "turn/start"
     assert messages[3]["params"]["input"] == [{"type": "text", "text": "hello"}]
-    assert tool_calls[0][0]["callId"] == "call-7"
-    assert tool_calls[0][1] == "thread-9"
-    assert messages[-1] == {
-        "id": 77,
-        "result": {
-            "contentItems": [{"type": "inputText", "text": "value"}],
-            "success": True,
-        },
-    }
 
 
 @pytest.mark.asyncio
-async def test_app_server_resume_reuses_the_threads_dynamic_tools(monkeypatch):
-    process = _Process([
-        {"id": 1, "result": {}},
-        {"id": 2, "result": {"thread": {"id": "thread-9"}}},
-        {"id": 3, "result": {"turn": {"id": "turn-2"}}},
-        {
-            "method": "turn/completed",
-            "params": {"turn": {"status": "completed"}},
-        },
-    ])
+async def test_app_server_resumes_without_dynamic_tools(monkeypatch):
+    process = _Process(
+        [
+            {"id": 1, "result": {}},
+            {"id": 2, "result": {"thread": {"id": "thread-9"}}},
+            {"id": 3, "result": {"turn": {"id": "turn-2"}}},
+            {
+                "method": "turn/completed",
+                "params": {"turn": {"status": "completed"}},
+            },
+        ]
+    )
 
     async def create(*args, **kwargs):
         return process
@@ -515,7 +511,6 @@ async def test_app_server_resume_reuses_the_threads_dynamic_tools(monkeypatch):
         None,
         [
             {
-                "type": "function",
                 "name": "lookup",
                 "description": "Look up",
                 "inputSchema": {"type": "object"},
@@ -531,12 +526,56 @@ async def test_app_server_resume_reuses_the_threads_dynamic_tools(monkeypatch):
     assert messages[3]["method"] == "turn/start"
 
 
-def test_dynamic_tool_names_are_codex_compatible_and_stable():
-    tools, names, digest = mod._dynamic_tools([
-        {"name": "files/read", "input_schema": {"type": "object"}},
-        {"name": "files read", "input_schema": {"type": "object"}},
-        {"name": "mcp__hidden", "input_schema": {"type": "object"}},
-    ])
+@pytest.mark.asyncio
+async def test_explicit_resume_reports_legacy_dynamic_tools(monkeypatch):
+    process = _Process(
+        [
+            {"id": 1, "result": {}},
+            {"id": 2, "result": {"thread": {"id": "legacy-thread"}}},
+            {"id": 3, "result": {"turn": {"id": "turn-1"}}},
+            {
+                "method": "item/tool/call",
+                "id": 77,
+                "params": {"tool": "lookup"},
+            },
+        ]
+    )
+
+    async def create(*args, **kwargs):
+        return process
+
+    async def unexpected_tool(*args):
+        pytest.fail("Legacy dynamic tools are not dispatched")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create)
+    with pytest.raises(StatusException) as failure:
+        await mod._run_codex(
+            {
+                name: _Sink()
+                for name in ("event_stream", "thoughts", "text_output")
+            },
+            CreateCodexSessionConfig(),
+            "test-model",
+            "continue",
+            "legacy-thread",
+            None,
+            [],
+            unexpected_tool,
+            {},
+        )
+    assert failure.value.status.code == a11.StatusCode.FAILED_PRECONDITION
+    assert "legacy dynamic tools" in failure.value.status.message
+    assert process.returncode is not None
+
+
+def test_mcp_tool_names_are_codex_compatible_and_stable():
+    tools, names, digest = mod._mcp_tools(
+        [
+            {"name": "files/read", "input_schema": {"type": "object"}},
+            {"name": "files read", "input_schema": {"type": "object"}},
+            {"name": "mcp__hidden", "input_schema": {"type": "object"}},
+        ]
+    )
 
     assert [tool["name"] for tool in tools] == [
         "files_read",
@@ -562,23 +601,29 @@ def test_recorded_thread_requires_native_transport_and_same_tools():
 
     assert mod._latest_thread([answered], b"same") == ("thread-10", 0)
     assert mod._latest_thread([answered], b"changed") == (None, -1)
+    answered.backend_specific_metadata[mod.CODEX_TRANSPORT_METADATA_KEY] = (
+        b"app-server-dynamic-tools/v1"
+    )
+    assert mod._latest_thread([answered], b"same") == (None, -1)
 
 
 def test_inline_images_become_local_image_inputs(tmp_path):
     interaction = llm.Interaction(
         role=llm.Role.USER,
         content=[
-            a11.to_chunk({
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "inspect this"},
-                    {
-                        "type": "image",
-                        "data": "QUJD",
-                        "mime_type": "image/png",
-                    },
-                ],
-            })
+            a11.to_chunk(
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "inspect this"},
+                        {
+                            "type": "image",
+                            "data": "QUJD",
+                            "mime_type": "image/png",
+                        },
+                    ],
+                }
+            )
         ],
     )
 
@@ -595,8 +640,9 @@ async def test_final_message_records_native_thread(monkeypatch):
 
     assert text == ["Done."]
     assert produced[0].backend_specific_metadata["backend"] == b"codex"
-    assert produced[0].backend_specific_metadata[THREAD_ID_METADATA_KEY] == (
-        b"thread-8"
+    assert (
+        produced[0].backend_specific_metadata[THREAD_ID_METADATA_KEY]
+        == b"thread-8"
     )
     assert (
         produced[0].backend_specific_metadata[mod.CODEX_TRANSPORT_METADATA_KEY]
@@ -627,12 +673,10 @@ async def test_native_tool_call_executes_and_returns_structured_output(
     assert produced[0].action_calls[0].name == "lookup"
     assert produced[1].action_outputs
     assert response == {
-        "contentItems": [
-            {"type": "inputText", "text": '{"value":"value of x"}'}
-        ],
-        "success": True,
+        "content": [{"type": "text", "text": '{"value":"value of x"}'}],
+        "isError": False,
     }
-    assert calls[0][6][0]["type"] == "function"
+    assert calls[0][6][0]["inputSchema"] == definition["input_schema"]
 
 
 @pytest.mark.asyncio

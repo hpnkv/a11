@@ -101,12 +101,22 @@ A11 actions as function tools, and accepts structured-output options through
 `CreateChatCompletionConfig`.
 
 Set the provider to `codex` to use the locally installed Codex CLI and its
-existing login. The handler reads `codex exec --json` events, records the
-thread id on assistant interactions, and resumes that thread on the next
-turn. `CreateCodexSessionConfig` controls its workspace, sandbox, reasoning
-effort, and final output schema. Registry actions use a schema-guided tool loop
-and return through the same interaction and action-output fields as the API
-providers.
+existing login. The handler uses `codex app-server`, records the thread id on
+assistant interactions, and resumes that thread on the next turn.
+`CreateCodexSessionConfig` controls its workspace, sandbox, reasoning effort,
+and final output schema.
+
+Allowed actions are exposed as individual MCP tools with their argument
+schemas. A temporary, authenticated loopback server dispatches each tool through
+the shared A11 action runner. Codex's MCP parallel-call support lets independent
+actions overlap while preserving per-call outputs, errors, images, and logs.
+The server and credentials are refreshed for each turn, including resumed
+threads. The parent action's deadline and cancellation apply to tool execution.
+
+Install the provider with `pip install 'a11-kit[codex]'`. Automatic resumption
+uses threads created with this MCP transport. A history from the dynamic-tool
+transport starts a new thread; an explicit `config.resume` should name an
+MCP-backed thread.
 
 Install API support with `pip install 'a11-kit[openai]'`. Install the Codex CLI
 with `npm install -g @openai/codex`.

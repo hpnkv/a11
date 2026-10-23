@@ -71,7 +71,7 @@ claude-code = ["claude-agent-sdk>=0.2.140"]
 gemini = ["google-genai>=1.55.0"]
 openai = ["openai>=2.0.0"]
 s2 = ["s2-sdk>=0.10.0,<1"]
-codex = []
+codex = ["mcp>=2.1.1"]
 ollama = ["ollama>=0.6.0"]
 vllm = ["openai>=2.0.0"]
 # What `a11.demos.text_to_image` needs: a diffusion pipeline and the text
@@ -88,6 +88,7 @@ llm = [
     "anthropic>=0.120.0",
     "claude-agent-sdk>=0.2.140",
     "google-genai>=1.55.0",
+    "mcp>=2.1.1",
     "ollama>=0.6.0",
     "openai>=2.0.0",
 ]
@@ -233,7 +234,9 @@ openai = [
 s2 = [
     "s2-sdk>=0.10.0,<1",
 ]
-codex = []
+codex = [
+    "mcp>=2.1.1",
+]
 ollama = [
     "ollama>=0.6.0",
 ]

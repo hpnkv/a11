@@ -411,6 +411,60 @@ absl::StatusOr<ActionMessage> DecodeAction(const Json& value) {
 
 }  // namespace
 
+absl::StatusOr<Json> ChunkMetadataToJsonValue(const ChunkMetadata& value) {
+  ABSL_RETURN_IF_ERROR(value.Validate());
+  return EncodeMetadata(value);
+}
+
+absl::StatusOr<ChunkMetadata> ChunkMetadataFromJsonValue(const Json& value) {
+  return DecodeMetadata(value);
+}
+
+absl::StatusOr<Json> ChunkToJsonValue(const Chunk& value) {
+  ABSL_RETURN_IF_ERROR(value.Validate());
+  return EncodeChunk(value);
+}
+
+absl::StatusOr<Chunk> ChunkFromJsonValue(const Json& value) {
+  return DecodeChunk(value);
+}
+
+absl::StatusOr<Json> NodeRefToJsonValue(const NodeRef& value) {
+  ABSL_RETURN_IF_ERROR(value.Validate());
+  return EncodeNodeRef(value);
+}
+
+absl::StatusOr<NodeRef> NodeRefFromJsonValue(const Json& value) {
+  return DecodeNodeRef(value);
+}
+
+absl::StatusOr<Json> NodeFragmentToJsonValue(const NodeFragment& value) {
+  ABSL_RETURN_IF_ERROR(value.Validate());
+  return EncodeFragment(value);
+}
+
+absl::StatusOr<NodeFragment> NodeFragmentFromJsonValue(const Json& value) {
+  return DecodeFragment(value);
+}
+
+absl::StatusOr<Json> PortToJsonValue(const Port& value) {
+  ABSL_RETURN_IF_ERROR(value.Validate());
+  return EncodePort(value);
+}
+
+absl::StatusOr<Port> PortFromJsonValue(const Json& value) {
+  return DecodePort(value);
+}
+
+absl::StatusOr<Json> ActionMessageToJsonValue(const ActionMessage& value) {
+  ABSL_RETURN_IF_ERROR(value.Validate());
+  return EncodeAction(value);
+}
+
+absl::StatusOr<ActionMessage> ActionMessageFromJsonValue(const Json& value) {
+  return DecodeAction(value);
+}
+
 absl::StatusOr<Json> WireMessageToJsonValue(const WireMessage& message) {
   ABSL_RETURN_IF_ERROR(message.Validate());
   // Encoding cannot fail: every value put here is built from a typed field, and

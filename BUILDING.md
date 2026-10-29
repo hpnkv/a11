@@ -15,6 +15,41 @@ it is enabled by default with `A11_BUILD_AUDIO=ON`.
 
 Run all commands from the repository root.
 
+## Kotlin and IntelliJ IDEA
+
+Install JDK 21 and the native prerequisites below, then open the **repository
+root** in IDEA and load its Gradle build. The root composite imports the Kotlin
+library, IntelliJ plugin, and example 010 together. There is no need to attach
+nested Gradle projects separately. Existing projects can link the root
+`build.gradle.kts` in the Gradle tool window and reload it.
+
+Use the Gradle wrapper and delegate builds and tests to Gradle. The shared
+`.run/` configurations build the Kotlin projects, run the library checks,
+launch the WebSocket echo, and launch the plugin sandbox. `Main.kt` in example
+010 is also an application entry point. The plugin's `runIde` task launches its
+configured CLion sandbox; the repository can be edited in IDEA.
+
+```sh
+./gradlew projects
+./gradlew :a11-kotlin:check
+./gradlew :a11-clion-plugin:compileKotlin
+./gradlew :a11-websocket-echo-kotlin:installDist
+./gradlew :a11-websocket-echo-kotlin:run --console=plain
+```
+
+The wrapper and JDK 21 daemon criteria are shared at the repository root.
+Nested `gradlew` scripts forward to that wrapper for standalone workflows.
+IDEA reads Kotlin formatting from `.editorconfig`; `./gradlew kotlinFormat`
+applies it and `./gradlew kotlinFormatCheck` checks it.
+
+The Kotlin jar includes the native library for the build machine. Gradle builds
+it through CMake when processing resources. The dependency prefix defaults to
+`~/.cache/a11-deps/<architecture>` (macOS Apple Silicon uses `arm64`); set
+`A11_DEPS_PREFIX` when using another prefix. CMake is discovered on `PATH` and
+standard Homebrew locations. `-Pa11.cmake=/absolute/path/to/cmake` selects a
+custom installation. These settings also work when IDEA is launched from the
+Dock without a terminal's environment.
+
 ## Python and native architecture
 
 Runtime state lives in C++. Public classes such as `Status`, `Time`,

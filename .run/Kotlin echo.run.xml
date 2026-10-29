@@ -1,0 +1,15 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="WebSocket echo (Kotlin)" type="GradleRunConfiguration" factoryName="Gradle">
+    <ExternalSystemSettings>
+      <option name="externalProjectPath" value="$PROJECT_DIR$" />
+      <option name="externalSystemIdString" value="GRADLE" />
+      <option name="taskNames">
+        <list>
+          <option value=":a11-websocket-echo-kotlin:run" />
+        </list>
+      </option>
+    </ExternalSystemSettings>
+    <method v="2" />
+  </configuration>
+</component>

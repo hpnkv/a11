@@ -65,9 +65,9 @@ class MsgpackDecoder {
     ABSL_RETURN_IF_ERROR(Need(sizeof(Unsigned)));
     Unsigned value = 0;
     for (size_t index = 0; index < sizeof(Unsigned); ++index) {
-      value = static_cast<Unsigned>(static_cast<Unsigned>(value << 8U) |
-                                    static_cast<unsigned char>(
-                                        bytes_[position_ + index]));
+      value = static_cast<Unsigned>(
+          static_cast<Unsigned>(value << 8U) |
+          static_cast<unsigned char>(bytes_[position_ + index]));
     }
     position_ += sizeof(Unsigned);
     return value;
@@ -331,46 +331,67 @@ absl::StatusOr<Json> MsgpackDecoder::Decode(int depth) {
       return DecodeObject(count, depth);
     }
     default:
-      return absl::InvalidArgumentError(
-          absl::StrCat("unsupported marker 0x",
-                       absl::Hex(marker, absl::kZeroPad2)));
+      return absl::InvalidArgumentError(absl::StrCat(
+          "unsupported marker 0x", absl::Hex(marker, absl::kZeroPad2)));
   }
 }
 
+template <typename JsonValue>
+class StatusJsonParser final
+    : public nlohmann::detail::json_sax_dom_parser<
+          JsonValue, nlohmann::detail::iterator_input_adapter<const char*>> {
+ public:
+  explicit StatusJsonParser(JsonValue& value)
+      : nlohmann::detail::json_sax_dom_parser<
+            JsonValue, nlohmann::detail::iterator_input_adapter<const char*>>(
+            value, false) {}
+
+  template <typename Exception>
+  bool parse_error(size_t, const std::string&, const Exception& error) {
+    diagnostic = error.what();
+    return false;
+  }
+
+  std::string diagnostic;
+};
+
+template <typename JsonValue>
+absl::StatusOr<JsonValue> ParseJsonImpl(std::string_view encoded,
+                                        std::string_view what) {
+  JsonValue value;
+  StatusJsonParser<JsonValue> parser(value);
+  // The local SAX type keeps error handling independent of other translation
+  // units' JSON_NOEXCEPTION instantiations and retains nlohmann's diagnostics.
+  if (JsonValue::sax_parse(encoded.begin(), encoded.end(), &parser))
+    return value;
+  return absl::InvalidArgumentError(
+      absl::StrCat("Failed to parse ", what, ": ", parser.diagnostic));
+}
 }  // namespace
 
 absl::StatusOr<Json> ParseJson(std::string_view encoded,
                                std::string_view what) {
-  // nlohmann's own non-throwing overload: `allow_exceptions = false` hands back
-  // a discarded value instead of raising.
-  Json value = Json::parse(encoded.begin(), encoded.end(), nullptr,
-                           /*allow_exceptions=*/false,
-                           /*ignore_comments=*/false);
-  if (!value.is_discarded()) {
-    return value;
-  }
-  try {
-    return Json::parse(encoded.begin(), encoded.end(), nullptr, true, false);
-  } catch (const std::exception& error) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("Failed to parse ", what, ": ", error.what()));
-  } catch (...) {
-    return absl::InvalidArgumentError(absl::StrCat(
-        "Failed to parse ", what, " with a non-standard exception"));
-  }
+  return ParseJsonImpl<Json>(encoded, what);
+}
+
+absl::StatusOr<nlohmann::ordered_json> ParseOrderedJson(
+    std::string_view encoded, std::string_view what) {
+  return ParseJsonImpl<nlohmann::ordered_json>(encoded, what);
 }
 
 bool IsValidUtf8(std::string_view text) {
   return utf8::IsValid(text);
 }
 
-const Json* FindUnencodableString(const Json& value) {
-  std::vector<const Json*> pending{&value};
+namespace {
+template <typename JsonValue>
+const JsonValue* FindUnencodableStringImpl(const JsonValue& value) {
+  std::vector<const JsonValue*> pending{&value};
   while (!pending.empty()) {
-    const Json* one = pending.back();
+    const JsonValue* one = pending.back();
     pending.pop_back();
     if (one->is_string()) {
-      if (!IsValidUtf8(one->get_ref<const std::string&>())) {
+      if (!IsValidUtf8(one->template get_ref<const std::string&>())) {
         return one;
       }
       continue;
@@ -384,11 +405,13 @@ const Json* FindUnencodableString(const Json& value) {
   return nullptr;
 }
 
-absl::StatusOr<std::string> DumpJson(const Json& value, std::string_view what) {
+template <typename JsonValue>
+absl::StatusOr<std::string> DumpJsonImpl(const JsonValue& value,
+                                         std::string_view what) {
   // Checked before nlohmann is asked, because nlohmann's answer to this one is
   // `std::abort()` in every `-fno-exceptions` TU and the linker picks which
   // instantiation of `dump()` survives. See the header for the whole story.
-  if (FindUnencodableString(value) != nullptr) {
+  if (FindUnencodableStringImpl(value) != nullptr) {
     return absl::InvalidArgumentError(absl::StrCat(
         "Failed to serialize ", what,
         ": it holds bytes that are not valid UTF-8, which JSON has no spelling "
@@ -399,7 +422,7 @@ absl::StatusOr<std::string> DumpJson(const Json& value, std::string_view what) {
   // the request to be told, and being told means a throw. Kept for everything
   // that is not a bad string, where a throw is still a throw here.
   try {
-    return value.dump(-1, ' ', false, Json::error_handler_t::strict);
+    return value.dump(-1, ' ', false, JsonValue::error_handler_t::strict);
   } catch (const std::exception& error) {
     return absl::InvalidArgumentError(
         absl::StrCat("Failed to serialize ", what, ": ", error.what()));
@@ -409,20 +432,38 @@ absl::StatusOr<std::string> DumpJson(const Json& value, std::string_view what) {
   }
 }
 
+}  // namespace
+
+const Json* FindUnencodableString(const Json& value) {
+  return FindUnencodableStringImpl(value);
+}
+
+absl::StatusOr<std::string> DumpJson(const Json& value, std::string_view what) {
+  return DumpJsonImpl(value, what);
+}
+
+absl::StatusOr<std::string> DumpOrderedJson(const nlohmann::ordered_json& value,
+                                            std::string_view what) {
+  return DumpJsonImpl(value, what);
+}
+
 std::string DumpJsonLossy(const Json& value) {
   // Cannot fail: replace substitutes U+FFFD for anything that is not valid
   // UTF-8, which is why this one needs no Status and no try.
   return value.dump(-1, ' ', false, Json::error_handler_t::replace);
 }
 
-absl::StatusOr<std::string> PackMsgpack(const Json& value,
-                                        std::string_view what) {
+namespace {
+template <typename JsonValue>
+absl::StatusOr<std::string> PackMsgpackImpl(const JsonValue& value,
+                                            std::string_view what) {
   // to_msgpack has no allow_exceptions overload, and it does raise: a string
   // field holding invalid UTF-8 is type_error.316.
   try {
     // The string-backed adapter writes directly into the returned buffer.
     std::string encoded;
-    Json::to_msgpack(value, nlohmann::detail::output_adapter<char>(encoded));
+    JsonValue::to_msgpack(value,
+                          nlohmann::detail::output_adapter<char>(encoded));
     return encoded;
   } catch (const std::exception& error) {
     return absl::InvalidArgumentError(absl::StrCat(
@@ -434,21 +475,32 @@ absl::StatusOr<std::string> PackMsgpack(const Json& value,
   }
 }
 
+}  // namespace
+
+absl::StatusOr<std::string> PackMsgpack(const Json& value,
+                                        std::string_view what) {
+  return PackMsgpackImpl(value, what);
+}
+
+absl::StatusOr<std::string> PackOrderedMsgpack(
+    const nlohmann::ordered_json& value, std::string_view what) {
+  return PackMsgpackImpl(value, what);
+}
+
 absl::StatusOr<Json> UnpackMsgpack(std::string_view encoded,
                                    std::string_view what) {
   MsgpackDecoder decoder(encoded);
   absl::StatusOr<Json> value = decoder.Decode(0);
   if (!value.ok()) {
-    return absl::Status(
-        value.status().code(),
-        absl::StrCat("Invalid ", what, " MessagePack data: ",
-                     value.status().message()));
+    return absl::Status(value.status().code(),
+                        absl::StrCat("Invalid ", what, " MessagePack data: ",
+                                     value.status().message()));
   }
   // One record contains exactly one value.
   if (decoder.position() != encoded.size()) {
-    return absl::InvalidArgumentError(absl::StrCat(
-        "Invalid ", what, " MessagePack data: ",
-        encoded.size() - decoder.position(), " trailing bytes"));
+    return absl::InvalidArgumentError(
+        absl::StrCat("Invalid ", what, " MessagePack data: ",
+                     encoded.size() - decoder.position(), " trailing bytes"));
   }
   return value;
 }

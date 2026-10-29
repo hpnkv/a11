@@ -17,7 +17,7 @@
 package dev.curiositystack.a11.clion.flow
 
 import a11.A11Json
-import a11.valueOrThrow
+import a11.orElse
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.Disposable
@@ -207,9 +207,15 @@ class FlowEngine : Disposable {
             // IntelliJ offsets use UTF-16 code units. The service converts
             // its native byte offsets at this shared request boundary.
             val line = A11Json.encodeToString(payload + ("offsets" to "utf16"))
-                .valueOrThrow()
+                .orElse { status ->
+                    LOG.warn("a11-flow JSON request failed: $status")
+                    return null
+                }
             val response = transport.exchange(line) ?: return null
-            A11Json.parse(response).valueOrThrow() as? Map<String, Any?>
+            A11Json.parse(response).orElse { status ->
+                LOG.warn("a11-flow answered something unreadable: $status")
+                return null
+            } as? Map<String, Any?>
         } catch (cancelled: ProcessCanceledException) {
             throw cancelled
         } catch (error: Throwable) {

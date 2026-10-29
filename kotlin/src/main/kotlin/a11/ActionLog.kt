@@ -19,10 +19,10 @@ package a11
 /**
  * Log levels, log-chunk metadata and the process-wide action log sink.
  *
- * The Kotlin twin of `cpp/a11/actions/log.h`. An [Action] narrates what it is
- * doing through [Action.log], which turns the value it is handed into a [Chunk]
- * on the reserved [ACTION_LOG_OUTPUT] port; this file holds the vocabulary
- * everything that writes or reads such a chunk shares.
+ * The Kotlin twin of `cpp/a11/actions/log.h`. An [Action] narrates what it is doing through
+ * [Action.log], which turns the value it is handed into a [Chunk] on the reserved
+ * [ACTION_LOG_OUTPUT] port; this file holds the vocabulary everything that writes or reads such a
+ * chunk shares.
  */
 
 /** The five severities every language A11 binds to agrees on, quietest first. */
@@ -34,9 +34,8 @@ const val DEFAULT_LOG_LEVEL = "info"
 /**
  * Chunk metadata attribute naming the log's level.
  *
- * The log attributes are unprefixed, unlike [CLOSE_STATUS_ATTRIBUTE], because
- * they only ever appear on the reserved log port: there is no user metadata there
- * to collide with.
+ * The log attributes are unprefixed, unlike [CLOSE_STATUS_ATTRIBUTE], because they only ever appear
+ * on the reserved log port: there is no user metadata there to collide with.
  */
 const val LOG_LEVEL_ATTRIBUTE = "level"
 /** Attribute marking a log as A11's own bookkeeping: `"true"` or `"false"`. */
@@ -58,8 +57,8 @@ fun isLogLevel(name: String): Boolean = name.lowercase() in LOG_LEVELS
 /**
  * The canonical level [name] means, or `null` when it is not one.
  *
- * Accepts `warn` for `warning` and `fatal` for `critical` -- the two spellings
- * host languages differ on. An empty name is [DEFAULT_LOG_LEVEL].
+ * Accepts `warn` for `warning` and `fatal` for `critical` -- the two spellings host languages
+ * differ on. An empty name is [DEFAULT_LOG_LEVEL].
  */
 fun parseLogLevel(name: String): String? {
     if (name.isEmpty()) return DEFAULT_LOG_LEVEL
@@ -72,17 +71,17 @@ fun parseLogLevel(name: String): String? {
 /**
  * Everything about a log other than the value being logged.
  *
- * [metadata] is merged onto the chunk first and the named fields after it, so an
- * explicit [level] wins over a `"level"` the same caller also put in the map.
+ * [metadata] is merged onto the chunk first and the named fields after it, so an explicit [level]
+ * wins over a `"level"` the same caller also put in the map.
  */
 data class LogOptions(
     val level: String = "",
     /**
      * Media type hint for the serializer.
      *
-     * Unlike C++, Kotlin distinguishes text from bytes already: a `String` is
-     * `text/plain` and a `ByteArray` is `application/octet-stream` through the
-     * ordinary registry, so a log needs no special case here.
+     * Unlike C++, Kotlin distinguishes text from bytes already: a `String` is `text/plain` and a
+     * `ByteArray` is `application/octet-stream` through the ordinary registry, so a log needs no
+     * special case here.
      */
     val mimetype: String = "",
     val channel: String = "",
@@ -112,9 +111,9 @@ typealias ActionLogSink = (LogRecord) -> Unit
 /**
  * Whether a log payload of this media type reads as a line of characters.
  *
- * Text and JSON do, so both print as themselves. Anything else is bytes, and a
- * log line is not the place to render a blob -- [logText] describes it instead,
- * and the payload is still on the record for a sink that wants it.
+ * Text and JSON do, so both print as themselves. Anything else is bytes, and a log line is not the
+ * place to render a blob -- [logText] describes it instead, and the payload is still on the record
+ * for a sink that wants it.
  */
 fun isTextualLogMimetype(mimetype: String): Boolean {
     if (mimetype.startsWith("text/")) return true
@@ -140,9 +139,9 @@ private fun reportThroughStderr(record: LogRecord) {
 /**
  * Install [next] as the process's action log sink.
  *
- * One slot rather than one sink per interested party, so a caller that takes it
- * takes it from whoever had it -- which is what keeps a log from being reported
- * twice. `null` restores the default.
+ * One slot rather than one sink per interested party, so a caller that takes it takes it from
+ * whoever had it -- which is what keeps a log from being reported twice. `null` restores the
+ * default.
  */
 fun setActionLogSink(next: ActionLogSink?) {
     installedSink = next
@@ -155,8 +154,9 @@ fun getActionLogSink(): ActionLogSink = installedSink ?: ::reportThroughStderr
 fun reportLog(record: LogRecord) {
     try {
         getActionLogSink()(record)
-    } catch (_: Throwable) {
-        // A failure to log must never reach the code that was logging.
+    } catch (error: Exception) {
+        if (error is java.util.concurrent.CancellationException) throw error
+        // Sink failures do not change the action's operational outcome.
     }
 }
 
@@ -168,9 +168,9 @@ private fun attribute(chunk: Chunk, key: String): String {
 /**
  * Read a [LogRecord] back out of a log chunk.
  *
- * The inverse of what [Action.log] writes, so a consumer on the far end of a wire
- * reads the metadata the same way every other language does. A missing or unknown
- * level falls back to [DEFAULT_LOG_LEVEL].
+ * The inverse of what [Action.log] writes, so a consumer on the far end of a wire reads the
+ * metadata the same way every other language does. A missing or unknown level falls back to
+ * [DEFAULT_LOG_LEVEL].
  */
 fun logRecordFromChunk(chunk: Chunk, actionName: String = "", actionId: String = ""): LogRecord =
     LogRecord(

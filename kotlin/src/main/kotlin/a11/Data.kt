@@ -16,354 +16,588 @@
 
 package a11
 
+import a11.internal.NativeByteMap
+import a11.internal.NativeData
+import a11.internal.NativeList
+
+/** Validate a native identifier using the C++ contract. */
+fun validateName(name: String): Status = a11.internal.NativeControl.validateName(name)
+
+/** The two wire payload variants accepted by a node fragment. */
+sealed interface NodePayload {
+    fun validate(): Status
+}
+
+/** Native metadata; member views retain the record containing them. */
+class ChunkMetadata internal constructor(id: Long) : NativeObject(id) {
+    constructor(
+        mimetype: String = "",
+        timestampMillis: Long? = null,
+        attributes: Map<String, ByteArray> = emptyMap(),
+    ) : this(NativeData.chunkMetadataNew()) {
+        this.mimetype = mimetype
+        this.timestampMillis = timestampMillis
+        if (attributes.isNotEmpty()) attributesView.replaceContents(attributes)
+    }
+
+    var mimetype: String
+        get() = NativeData.chunkMetadataMimetype(this)
+        set(value) = NativeData.chunkMetadataMimetypeSet(this, value)
+
+    var timestamp: Time?
+        get() = NativeData.metadataTimestamp(this)
+        set(value) = NativeData.metadataTimestampSet(this, value)
+
+    var timestampMicros: Long?
+        get() = NativeData.metadataMicros(this)
+        set(value) = NativeData.metadataMicrosSet(this, value)
+
+    var timestampMillis: Long?
+        get() = NativeData.metadataMillis(this)
+        set(value) = NativeData.metadataMillisSet(this, value)
+
+    private val attributesView by
+        lazy(LazyThreadSafetyMode.NONE) { NativeByteMap(NativeData.chunkMetadataMap(this)) }
+    var attributes: ByteMap
+        get() = attributesView
+        set(value) {
+            attributesView.replaceContents(value)
+        }
+
+    fun setAttribute(key: String, value: ByteArray): Status =
+        NativeData.metadataSetAttribute(this, key, value)
+
+    fun getAttribute(key: String): StatusOr<ByteArray> = NativeData.metadataGetAttribute(this, key)
+
+    override fun equals(other: Any?): Boolean =
+        other is ChunkMetadata && NativeData.chunkMetadataEquals(this, other)
+
+    override fun hashCode(): Int = NativeData.chunkMetadataHash(this)
+
+    fun copy(): ChunkMetadata = ChunkMetadata(NativeData.chunkMetadataCopy(this))
+
+    fun validate(): Status = NativeData.chunkMetadataValidate(this)
+
+    fun toMsgpack(): StatusOr<ByteArray> = NativeData.chunkMetadataEncode(this)
+
+    /** Assign the native value, copying its owned contents. */
+    fun copyFrom(other: ChunkMetadata) {
+        NativeData.chunkMetadataCopyFrom(this, other)
+    }
+
+    /** Move native contents from [other]; it retains its C++ moved-from state. */
+    fun moveFrom(other: ChunkMetadata) {
+        NativeData.chunkMetadataMoveFrom(this, other)
+    }
+
+    /** Swap native contents without copying their buffers. */
+    fun swap(other: ChunkMetadata) {
+        NativeData.chunkMetadataSwap(this, other)
+    }
+
+    /** Native estimate used for bounded-buffer accounting. */
+    val approxBytes: ULong
+        get() = NativeData.chunkMetadataApproxBytes(this).toULong()
+
+    fun debugString(): String = NativeData.chunkMetadataDebugString(this)
+
+    override fun toString(): String = debugString()
+
+    companion object {
+        fun fromMsgpack(bytes: ByteArray): StatusOr<ChunkMetadata> =
+            NativeData.chunkMetadataDecode(bytes)
+    }
+}
+
 /**
- * Wire data model, byte-compatible with `js/src/data.ts` and `a11/data`.
- *
- * Each type serializes to the concatenated-MessagePack field layout via
- * [MsgpackCodec]. Fields are mutable to match the reference implementation,
- * where the action/session layers rewrite fragment ids and continuation flags
- * in place.
+ * A native chunk. Reading [data] returns owned JVM bytes; assign [data] to replace them. Mutating a
+ * returned byte array does not modify the native chunk, matching Python bytes.
  */
-
-private const val UINT32_MAX = 0xffff_ffffL
-private const val UINT32_RANGE = 0x1_0000_0000L
-private val NAME_PATTERN = Regex("^[A-Za-z0-9_](?:[A-Za-z0-9_#-]{0,253}[A-Za-z0-9_])?$")
-
-/** Validate an action, port, node, session, stream, or metadata identifier. */
-fun validateName(name: String): Status {
-    if (name.length !in 1..255) {
-        return invalidArgument("name must contain between 1 and 255 characters")
-    }
-    if (!NAME_PATTERN.matches(name)) {
-        return invalidArgument(
-            "name must start and end with an ASCII letter, digit, or underscore and " +
-                "contain only [a-zA-Z0-9-_#]",
-        )
-    }
-    return Status.ok()
-}
-
-private fun validateOptionalName(value: String): Status =
-    if (value.isEmpty()) Status.ok() else validateName(value)
-
-private fun asString(value: Any?, field: String): StatusOr<String> =
-    if (value is String) Ok(value) else invalidArgument("$field must be a string.")
-
-private fun asBinary(value: Any?, field: String): StatusOr<ByteArray> =
-    if (value is ByteArray) Ok(value.copyOf()) else invalidArgument("$field must be MessagePack binary data.")
-
-private fun asUnsigned(value: Any?, field: String, maximum: Long): StatusOr<Long> {
-    val n = when (value) {
-        is Long -> value
-        is Int -> value.toLong()
-        else -> return invalidArgument("$field must be a non-negative integer.")
-    }
-    return if (n in 0..maximum) Ok(n) else outOfRange("$field exceeds its supported range.")
-}
-
-private fun decodeByteMap(value: Any?, field: String): StatusOr<ByteMap> {
-    if (value !is Map<*, *>) return invalidArgument("$field must be an object.")
-    val result = ByteMap()
-    for ((rawKey, rawValue) in value) {
-        val key = rawKey as? String ?: return invalidArgument("Invalid key in $field.")
-        validateName(key).let { if (!it.isOk) return invalidArgument("Invalid key in $field: ${it.message}") }
-        val bytes = rawValue as? ByteArray ?: return invalidArgument("$field.$key must be binary.")
-        result[key] = bytes.copyOf()
-    }
-    return Ok(result)
-}
-
-/** MIME type, timestamp (epoch millis), and binary attributes describing a [Chunk]. */
-class ChunkMetadata(
-    var mimetype: String = "",
-    var timestampMillis: Long? = null,
-    var attributes: ByteMap = ByteMap(),
-) {
-    fun validate(): Status {
-        for ((key, _) in attributes) {
-            validateName(key).let { if (!it.isOk) return it }
-        }
-        return Status.ok()
+class Chunk internal constructor(id: Long) : NativeObject(id), NodePayload {
+    constructor(
+        metadata: ChunkMetadata? = null,
+        ref: String = "",
+        data: ByteArray = ByteArray(0),
+    ) : this(NativeData.chunkNew()) {
+        this.metadata = metadata
+        this.ref = ref
+        this.data = data
     }
 
-    fun toMsgpack(): StatusOr<ByteArray> {
-        validate().let { if (!it.isOk) return it }
-        val micros = timestampMillis?.let { it * 1000 }
-        return MsgpackCodec.encodeFields(listOf(mimetype, micros, LinkedHashMap(attributes)))
+    var metadata: ChunkMetadata?
+        get() = NativeData.chunkMetadata(this)
+        set(value) = NativeData.chunkMetadataSet(this, value)
+
+    var ref: String
+        get() = NativeData.chunkRef(this)
+        set(value) = NativeData.chunkRefSet(this, value)
+
+    var data: ByteArray
+        get() = NativeData.chunkData(this)
+        set(value) = NativeData.chunkDataSet(this, value)
+
+    val hasObject: Boolean
+        get() = NativeData.chunkHasObject(this)
+
+    fun materialize(): Status = NativeData.chunkMaterialize(this)
+
+    val mimetype: String
+        get() = metadata?.mimetype ?: ""
+
+    val isEmpty: Boolean
+        get() = NativeData.chunkIsEmpty(this)
+
+    val isNull: Boolean
+        get() = NativeData.chunkIsNull(this)
+
+    override fun equals(other: Any?): Boolean =
+        other is Chunk && NativeData.chunkEquals(this, other)
+
+    override fun hashCode(): Int = NativeData.chunkHash(this)
+
+    fun copy(): Chunk = Chunk(NativeData.chunkCopy(this))
+
+    override fun validate(): Status = NativeData.chunkValidate(this)
+
+    fun toMsgpack(): StatusOr<ByteArray> = NativeData.chunkEncode(this)
+
+    /** Assign the native value, copying its owned contents. */
+    fun copyFrom(other: Chunk) {
+        NativeData.chunkCopyFrom(this, other)
     }
+
+    /** Move native contents from [other]; it retains its C++ moved-from state. */
+    fun moveFrom(other: Chunk) {
+        NativeData.chunkMoveFrom(this, other)
+    }
+
+    /** Swap native contents without copying their buffers. */
+    fun swap(other: Chunk) {
+        NativeData.chunkSwap(this, other)
+    }
+
+    /** Native estimate used for bounded-buffer accounting. */
+    val approxBytes: ULong
+        get() = NativeData.chunkApproxBytes(this).toULong()
+
+    fun debugString(): String = NativeData.chunkDebugString(this)
+
+    override fun toString(): String = debugString()
 
     companion object {
-        fun fromMsgpack(bytes: ByteArray): StatusOr<ChunkMetadata> {
-            val fields = MsgpackCodec.decodeFields(bytes, 3, "ChunkMetadata").orElse { return it }
-            val mimetype = asString(fields[0], "ChunkMetadata.mimetype").orElse { return it }
-            val timestamp = when (val raw = fields[1]) {
-                null -> null
-                is Long -> raw / 1000
-                is Int -> raw.toLong() / 1000
-                else -> return invalidArgument("ChunkMetadata.timestamp must be integer microseconds.")
+        fun fromMsgpack(bytes: ByteArray): StatusOr<Chunk> = NativeData.chunkDecode(bytes)
+    }
+}
+
+/** Reference to a native node slice. Offsets and lengths follow the C++ unsigned ranges. */
+class NodeRef internal constructor(handle: Long) : NativeObject(handle), NodePayload {
+    constructor(
+        id: String,
+        offset: UInt = 0u,
+        length: ULong? = null,
+    ) : this(NativeData.nodeRefNew()) {
+        this.id = id
+        this.offset = offset
+        this.length = length
+    }
+
+    var id: String
+        get() = NativeData.nodeRefId(this)
+        set(value) = NativeData.nodeRefIdSet(this, value)
+
+    var offset: UInt
+        get() = NativeData.nodeRefOffset(this).toUInt()
+        set(value) = NativeData.nodeRefOffsetSet(this, value.toLong())
+
+    var length: ULong?
+        get() = NativeData.nodeRefLength(this)?.toULong()
+        set(value) = NativeData.nodeRefLengthSet(this, value?.toLong())
+
+    override fun equals(other: Any?): Boolean =
+        other is NodeRef && NativeData.nodeRefEquals(this, other)
+
+    override fun hashCode(): Int = NativeData.nodeRefHash(this)
+
+    fun copy(
+        id: String = this.id,
+        offset: UInt = this.offset,
+        length: ULong? = this.length,
+    ): NodeRef = NodeRef(id, offset, length)
+
+    override fun validate(): Status = NativeData.nodeRefValidate(this)
+
+    fun toMsgpack(): StatusOr<ByteArray> = NativeData.nodeRefEncode(this)
+
+    /** Assign the native value, copying its owned contents. */
+    fun copyFrom(other: NodeRef) {
+        NativeData.nodeRefCopyFrom(this, other)
+    }
+
+    /** Move native contents from [other]; it retains its C++ moved-from state. */
+    fun moveFrom(other: NodeRef) {
+        NativeData.nodeRefMoveFrom(this, other)
+    }
+
+    /** Swap native contents without copying their buffers. */
+    fun swap(other: NodeRef) {
+        NativeData.nodeRefSwap(this, other)
+    }
+
+    /** Native estimate used for bounded-buffer accounting. */
+    val approxBytes: ULong
+        get() = NativeData.nodeRefApproxBytes(this).toULong()
+
+    fun debugString(): String = NativeData.nodeRefDebugString(this)
+
+    override fun toString(): String = debugString()
+
+    companion object {
+        fun fromMsgpack(bytes: ByteArray): StatusOr<NodeRef> = NativeData.nodeRefDecode(bytes)
+    }
+}
+
+/** A native fragment; payload access refers to the fragment's actual C++ member. */
+class NodeFragment internal constructor(handle: Long) : NativeObject(handle) {
+    constructor(
+        id: String = "",
+        data: NodePayload = Chunk(),
+        seq: UInt? = null,
+        continued: Boolean = false,
+    ) : this(NativeData.nodeFragmentNew()) {
+        this.id = id
+        this.data = data
+        this.seq = seq
+        this.continued = continued
+    }
+
+    var id: String
+        get() = NativeData.nodeFragmentId(this)
+        set(value) = NativeData.nodeFragmentIdSet(this, value)
+
+    var seq: UInt?
+        get() = NativeData.nodeFragmentSeq(this)?.toUInt()
+        set(value) = NativeData.nodeFragmentSeqSet(this, value?.toLong())
+
+    var continued: Boolean
+        get() = NativeData.nodeFragmentContinued(this)
+        set(value) = NativeData.nodeFragmentContinuedSet(this, value)
+
+    var data: NodePayload
+        get() = if (NativeData.fragmentIsChunk(this)) getChunk().value() else getNodeRef().value()
+        set(value) {
+            when (value) {
+                is Chunk -> NativeData.fragmentChunkSet(this, value)
+                is NodeRef -> NativeData.fragmentNodeRefSet(this, value)
             }
-            val attributes = decodeByteMap(fields[2], "ChunkMetadata.attributes").orElse { return it }
-            return Ok(ChunkMetadata(mimetype, timestamp, attributes))
         }
+
+    fun getChunk(): StatusOr<Chunk> = NativeData.fragmentChunk(this)
+
+    fun getNodeRef(): StatusOr<NodeRef> = NativeData.fragmentNodeRef(this)
+
+    override fun equals(other: Any?): Boolean =
+        other is NodeFragment && NativeData.nodeFragmentEquals(this, other)
+
+    override fun hashCode(): Int = NativeData.nodeFragmentHash(this)
+
+    fun copy(): NodeFragment = NodeFragment(NativeData.nodeFragmentCopy(this))
+
+    fun validate(): Status = NativeData.nodeFragmentValidate(this)
+
+    fun toMsgpack(): StatusOr<ByteArray> = NativeData.nodeFragmentEncode(this)
+
+    /** Assign the native value, copying its owned contents. */
+    fun copyFrom(other: NodeFragment) {
+        NativeData.nodeFragmentCopyFrom(this, other)
+    }
+
+    /** Move native contents from [other]; it retains its C++ moved-from state. */
+    fun moveFrom(other: NodeFragment) {
+        NativeData.nodeFragmentMoveFrom(this, other)
+    }
+
+    /** Swap native contents without copying their buffers. */
+    fun swap(other: NodeFragment) {
+        NativeData.nodeFragmentSwap(this, other)
+    }
+
+    /** Native estimate used for bounded-buffer accounting. */
+    val approxBytes: ULong
+        get() = NativeData.nodeFragmentApproxBytes(this).toULong()
+
+    fun debugString(): String = NativeData.nodeFragmentDebugString(this)
+
+    override fun toString(): String = debugString()
+
+    companion object {
+        fun fromMsgpack(bytes: ByteArray): StatusOr<NodeFragment> =
+            NativeData.nodeFragmentDecode(bytes)
     }
 }
 
-/** Smallest typed payload carried through an A11 node. */
-class Chunk(
-    var metadata: ChunkMetadata? = null,
-    var ref: String = "",
-    var data: ByteArray = ByteArray(0),
-) {
-    val mimetype: String get() = metadata?.mimetype ?: ""
-    val isEmpty: Boolean get() = ref.isEmpty() && data.isEmpty()
-
-    /** Whether this is the explicit null chunk used as a final terminator. */
-    val isNull: Boolean get() = isEmpty && mimetype == "application/octet-stream"
-
-    fun validate(): Status {
-        if (ref.isNotEmpty() && data.isNotEmpty()) {
-            return invalidArgument("Only one of ref or data may be set")
-        }
-        return metadata?.validate() ?: Status.ok()
+/** Native binding from a schema port name to a node id. */
+class Port internal constructor(handle: Long) : NativeObject(handle) {
+    constructor(name: String = "", id: String = "") : this(NativeData.portNew()) {
+        this.name = name
+        this.id = id
     }
 
-    fun toMsgpack(): StatusOr<ByteArray> {
-        validate().let { if (!it.isOk) return it }
-        val metadataBytes = metadata?.toMsgpack()?.orElse { return it }
-        return MsgpackCodec.encodeFields(listOf(metadataBytes, ref, data))
+    var name: String
+        get() = NativeData.portName(this)
+        set(value) = NativeData.portNameSet(this, value)
+
+    var id: String
+        get() = NativeData.portId(this)
+        set(value) = NativeData.portIdSet(this, value)
+
+    fun copy(name: String = this.name, id: String = this.id): Port = Port(name, id)
+
+    override fun equals(other: Any?): Boolean = other is Port && NativeData.portEquals(this, other)
+
+    override fun hashCode(): Int = NativeData.portHash(this)
+
+    fun validate(): Status = NativeData.portValidate(this)
+
+    fun toMsgpack(): StatusOr<ByteArray> = NativeData.portEncode(this)
+
+    /** Assign the native value, copying its owned contents. */
+    fun copyFrom(other: Port) {
+        NativeData.portCopyFrom(this, other)
     }
+
+    /** Move native contents from [other]; it retains its C++ moved-from state. */
+    fun moveFrom(other: Port) {
+        NativeData.portMoveFrom(this, other)
+    }
+
+    /** Swap native contents without copying their buffers. */
+    fun swap(other: Port) {
+        NativeData.portSwap(this, other)
+    }
+
+    /** Native estimate used for bounded-buffer accounting. */
+    val approxBytes: ULong
+        get() = NativeData.portApproxBytes(this).toULong()
+
+    fun debugString(): String = NativeData.portDebugString(this)
+
+    override fun toString(): String = debugString()
 
     companion object {
-        fun fromMsgpack(bytes: ByteArray): StatusOr<Chunk> {
-            val fields = MsgpackCodec.decodeFields(bytes, 3, "Chunk").orElse { return it }
-            val metadata = if (fields[0] == null) null else {
-                val encoded = asBinary(fields[0], "Chunk.metadata").orElse { return it }
-                ChunkMetadata.fromMsgpack(encoded).orElse { return it }
-            }
-            val ref = asString(fields[1], "Chunk.ref").orElse { return it }
-            val data = asBinary(fields[2], "Chunk.data").orElse { return it }
-            return Ok(Chunk(metadata, ref, data))
-        }
+        fun fromMsgpack(bytes: ByteArray): StatusOr<Port> = NativeData.portDecode(bytes)
     }
 }
 
-/** Reference to all or part of another logical node instead of inline bytes. */
-class NodeRef(var id: String, var offset: Long = 0, var length: Long? = null) {
-    fun validate(): Status {
-        validateName(id).let { if (!it.isOk) return it }
-        if (offset < 0 || offset > UINT32_MAX) return invalidArgument("NodeRef.offset must be a uint32 integer.")
-        val len = length
-        if (len != null && (len < 0 || len > UINT32_RANGE || len + offset > UINT32_RANGE)) {
-            return invalidArgument("Offset + length must not exceed 2^32")
-        }
-        return Status.ok()
+/** Native ActionMessage with mutable views over its C++ collections. */
+class ActionMessage internal constructor(handle: Long) : NativeObject(handle) {
+    constructor(
+        id: String = "",
+        name: String = "",
+        inputs: List<Port> = emptyList(),
+        outputs: List<Port> = emptyList(),
+        headers: Map<String, ByteArray> = emptyMap(),
+    ) : this(NativeData.actionMessageNew()) {
+        this.id = id
+        this.name = name
+        if (inputs.isNotEmpty()) NativeData.actionMessageInputsReplace(this, inputs.toTypedArray())
+        if (outputs.isNotEmpty())
+            NativeData.actionMessageOutputsReplace(this, outputs.toTypedArray())
+        if (headers.isNotEmpty()) headersView.replaceContents(headers)
     }
 
-    fun toMsgpack(): StatusOr<ByteArray> {
-        validate().let { if (!it.isOk) return it }
-        return MsgpackCodec.encodeFields(listOf(id, offset, length))
+    var id: String
+        get() = NativeData.actionMessageId(this)
+        set(value) = NativeData.actionMessageIdSet(this, value)
+
+    var name: String
+        get() = NativeData.actionMessageName(this)
+        set(value) = NativeData.actionMessageNameSet(this, value)
+
+    private val inputsView by
+        lazy(LazyThreadSafetyMode.NONE) {
+            NativeList(
+                { NativeData.actionMessageInputsSize(this) },
+                { index -> NativeData.actionMessageInputsGet(this, index) },
+                { index, value -> NativeData.actionMessageInputsSet(this, index, value) },
+                { index, value -> NativeData.actionMessageInputsAdd(this, index, value) },
+                { index -> NativeData.actionMessageInputsRemove(this, index) },
+                { NativeData.actionMessageInputsClear(this) },
+            )
+        }
+    var inputs: MutableList<Port>
+        get() = inputsView
+        set(value) {
+            NativeData.actionMessageInputsReplace(this, value.toTypedArray())
+        }
+
+    private val outputsView by
+        lazy(LazyThreadSafetyMode.NONE) {
+            NativeList(
+                { NativeData.actionMessageOutputsSize(this) },
+                { index -> NativeData.actionMessageOutputsGet(this, index) },
+                { index, value -> NativeData.actionMessageOutputsSet(this, index, value) },
+                { index, value -> NativeData.actionMessageOutputsAdd(this, index, value) },
+                { index -> NativeData.actionMessageOutputsRemove(this, index) },
+                { NativeData.actionMessageOutputsClear(this) },
+            )
+        }
+    var outputs: MutableList<Port>
+        get() = outputsView
+        set(value) {
+            NativeData.actionMessageOutputsReplace(this, value.toTypedArray())
+        }
+
+    private val headersView by
+        lazy(LazyThreadSafetyMode.NONE) { NativeByteMap(NativeData.actionMessageMap(this)) }
+    var headers: ByteMap
+        get() = headersView
+        set(value) {
+            headersView.replaceContents(value)
+        }
+
+    fun copy(): ActionMessage = ActionMessage(NativeData.actionMessageCopy(this))
+
+    fun validate(): Status = NativeData.actionMessageValidate(this)
+
+    fun toMsgpack(): StatusOr<ByteArray> = NativeData.actionMessageEncode(this)
+
+    override fun equals(other: Any?): Boolean =
+        other is ActionMessage && NativeData.actionMessageEquals(this, other)
+
+    override fun hashCode(): Int = NativeData.actionMessageHash(this)
+
+    /** Assign the native value, copying its owned contents. */
+    fun copyFrom(other: ActionMessage) {
+        NativeData.actionMessageCopyFrom(this, other)
     }
+
+    /** Move native contents from [other]; it retains its C++ moved-from state. */
+    fun moveFrom(other: ActionMessage) {
+        NativeData.actionMessageMoveFrom(this, other)
+    }
+
+    /** Swap native contents without copying their buffers. */
+    fun swap(other: ActionMessage) {
+        NativeData.actionMessageSwap(this, other)
+    }
+
+    /** Native estimate used for bounded-buffer accounting. */
+    val approxBytes: ULong
+        get() = NativeData.actionMessageApproxBytes(this).toULong()
+
+    fun debugString(): String = NativeData.actionMessageDebugString(this)
+
+    override fun toString(): String = debugString()
 
     companion object {
-        fun fromMsgpack(bytes: ByteArray): StatusOr<NodeRef> {
-            val fields = MsgpackCodec.decodeFields(bytes, 3, "NodeRef").orElse { return it }
-            val id = asString(fields[0], "NodeRef.id").orElse { return it }
-            val offset = asUnsigned(fields[1], "NodeRef.offset", UINT32_MAX).orElse { return it }
-            val length = if (fields[2] == null) null else
-                asUnsigned(fields[2], "NodeRef.length", UINT32_RANGE).orElse { return it }
-            return Ok(NodeRef(id, offset, length))
-        }
+        fun fromMsgpack(bytes: ByteArray): StatusOr<ActionMessage> =
+            NativeData.actionMessageDecode(bytes)
     }
 }
 
-/** One sequenced piece of an [AsyncNode]'s ordered stream. */
-class NodeFragment(
-    var id: String = "",
-    var data: Any = Chunk(),
-    var seq: Long? = null,
-    var continued: Boolean = false,
-) {
-    init {
-        require(data is Chunk || data is NodeRef) { "NodeFragment.data must be a Chunk or NodeRef." }
+/** Native WireMessage with mutable views over its C++ collections. */
+class WireMessage internal constructor(handle: Long) : NativeObject(handle) {
+    constructor(
+        nodeFragments: List<NodeFragment> = emptyList(),
+        actions: List<ActionMessage> = emptyList(),
+        headers: Map<String, ByteArray> = emptyMap(),
+    ) : this(NativeData.wireMessageNew()) {
+        if (nodeFragments.isNotEmpty())
+            NativeData.wireMessageNodeFragmentsReplace(this, nodeFragments.toTypedArray())
+        if (actions.isNotEmpty()) NativeData.wireMessageActionsReplace(this, actions.toTypedArray())
+        if (headers.isNotEmpty()) headersView.replaceContents(headers)
     }
 
-    fun getChunk(): StatusOr<Chunk> =
-        (data as? Chunk)?.let { Ok(it) } ?: failedPrecondition("Data is not a Chunk")
-
-    fun getNodeRef(): StatusOr<NodeRef> =
-        (data as? NodeRef)?.let { Ok(it) } ?: failedPrecondition("Data is not a NodeRef")
-
-    fun validate(): Status {
-        validateOptionalName(id).let { if (!it.isOk) return it }
-        val s = seq
-        if (s != null && (s < 0 || s > UINT32_MAX)) {
-            return invalidArgument("NodeFragment.seq must be a uint32 integer or null.")
+    private val nodeFragmentsView by
+        lazy(LazyThreadSafetyMode.NONE) {
+            NativeList(
+                { NativeData.wireMessageNodeFragmentsSize(this) },
+                { index -> NativeData.wireMessageNodeFragmentsGet(this, index) },
+                { index, value -> NativeData.wireMessageNodeFragmentsSet(this, index, value) },
+                { index, value -> NativeData.wireMessageNodeFragmentsAdd(this, index, value) },
+                { index -> NativeData.wireMessageNodeFragmentsRemove(this, index) },
+                { NativeData.wireMessageNodeFragmentsClear(this) },
+            )
         }
-        return when (val d = data) {
-            is Chunk -> d.validate()
-            is NodeRef -> d.validate()
-            else -> invalidArgument("NodeFragment.data must be a Chunk or NodeRef.")
+    var nodeFragments: MutableList<NodeFragment>
+        get() = nodeFragmentsView
+        set(value) {
+            NativeData.wireMessageNodeFragmentsReplace(this, value.toTypedArray())
         }
+
+    private val actionsView by
+        lazy(LazyThreadSafetyMode.NONE) {
+            NativeList(
+                { NativeData.wireMessageActionsSize(this) },
+                { index -> NativeData.wireMessageActionsGet(this, index) },
+                { index, value -> NativeData.wireMessageActionsSet(this, index, value) },
+                { index, value -> NativeData.wireMessageActionsAdd(this, index, value) },
+                { index -> NativeData.wireMessageActionsRemove(this, index) },
+                { NativeData.wireMessageActionsClear(this) },
+            )
+        }
+    var actions: MutableList<ActionMessage>
+        get() = actionsView
+        set(value) {
+            NativeData.wireMessageActionsReplace(this, value.toTypedArray())
+        }
+
+    private val headersView by
+        lazy(LazyThreadSafetyMode.NONE) { NativeByteMap(NativeData.wireMessageMap(this)) }
+    var headers: ByteMap
+        get() = headersView
+        set(value) {
+            headersView.replaceContents(value)
+        }
+
+    fun copy(): WireMessage = WireMessage(NativeData.wireMessageCopy(this))
+
+    fun validate(): Status = NativeData.wireMessageValidate(this)
+
+    fun toMsgpack(): StatusOr<ByteArray> = NativeData.wireMessageEncode(this)
+
+    val isHalfClose: Boolean
+        get() = actions.isEmpty() && nodeFragments.isEmpty()
+
+    override fun equals(other: Any?): Boolean =
+        other is WireMessage && NativeData.wireMessageEquals(this, other)
+
+    override fun hashCode(): Int = NativeData.wireMessageHash(this)
+
+    /** Assign the native value, copying its owned contents. */
+    fun copyFrom(other: WireMessage) {
+        NativeData.wireMessageCopyFrom(this, other)
     }
 
-    fun toMsgpack(): StatusOr<ByteArray> {
-        validate().let { if (!it.isOk) return it }
-        val d = data
-        val encoded = when (d) {
-            is Chunk -> d.toMsgpack()
-            is NodeRef -> d.toMsgpack()
-            else -> return invalidArgument("NodeFragment.data must be a Chunk or NodeRef.")
-        }.orElse { return it }
-        val variant = if (d is Chunk) 0 else 1
-        return MsgpackCodec.encodeFields(listOf(id, variant, encoded, seq, continued))
+    /** Move native contents from [other]; it retains its C++ moved-from state. */
+    fun moveFrom(other: WireMessage) {
+        NativeData.wireMessageMoveFrom(this, other)
     }
 
-    fun copy(): NodeFragment {
-        val clonedData: Any = when (val d = data) {
-            is Chunk -> Chunk(d.metadata?.let { ChunkMetadata(it.mimetype, it.timestampMillis, copyByteMap(it.attributes)) }, d.ref, d.data.copyOf())
-            is NodeRef -> NodeRef(d.id, d.offset, d.length)
-            else -> d
-        }
-        return NodeFragment(id, clonedData, seq, continued)
+    /** Swap native contents without copying their buffers. */
+    fun swap(other: WireMessage) {
+        NativeData.wireMessageSwap(this, other)
     }
+
+    /** Native estimate used for bounded-buffer accounting. */
+    val approxBytes: ULong
+        get() = NativeData.wireMessageApproxBytes(this).toULong()
+
+    fun debugString(): String = NativeData.wireMessageDebugString(this)
+
+    override fun toString(): String = debugString()
 
     companion object {
-        fun fromMsgpack(bytes: ByteArray): StatusOr<NodeFragment> {
-            val fields = MsgpackCodec.decodeFields(bytes, 5, "NodeFragment").orElse { return it }
-            val id = asString(fields[0], "NodeFragment.id").orElse { return it }
-            val variant = asUnsigned(fields[1], "NodeFragment.data index", 1).orElse { return it }
-            val encoded = asBinary(fields[2], "NodeFragment.data").orElse { return it }
-            val data: Any = if (variant == 0L) Chunk.fromMsgpack(encoded).orElse { return it }
-            else NodeRef.fromMsgpack(encoded).orElse { return it }
-            val seq = if (fields[3] == null) null else
-                asUnsigned(fields[3], "NodeFragment.seq", UINT32_MAX).orElse { return it }
-            val continued = fields[4] as? Boolean
-                ?: return invalidArgument("NodeFragment.continued must be bool.")
-            return Ok(NodeFragment(id, data, seq, continued))
-        }
-    }
-}
-
-/** Maps one schema port name onto the concrete node id for an action instance. */
-class Port(var name: String = "", var id: String = "") {
-    fun validate(): Status {
-        validateOptionalName(name).let { if (!it.isOk) return it }
-        return validateOptionalName(id)
-    }
-
-    fun toMsgpack(): StatusOr<ByteArray> {
-        validate().let { if (!it.isOk) return it }
-        return MsgpackCodec.encodeFields(listOf(name, id))
-    }
-
-    companion object {
-        fun fromMsgpack(bytes: ByteArray): StatusOr<Port> {
-            val fields = MsgpackCodec.decodeFields(bytes, 2, "Port").orElse { return it }
-            val name = asString(fields[0], "Port.name").orElse { return it }
-            val id = asString(fields[1], "Port.id").orElse { return it }
-            return Ok(Port(name, id))
-        }
-    }
-}
-
-/** Wire description of one action invocation. */
-class ActionMessage(
-    var id: String = "",
-    var name: String = "",
-    var inputs: MutableList<Port> = mutableListOf(),
-    var outputs: MutableList<Port> = mutableListOf(),
-    var headers: ByteMap = ByteMap(),
-) {
-    fun validate(): Status {
-        validateOptionalName(id).let { if (!it.isOk) return it }
-        validateOptionalName(name).let { if (!it.isOk) return it }
-        for (port in inputs + outputs) port.validate().let { if (!it.isOk) return it }
-        for ((key, _) in headers) validateName(key).let { if (!it.isOk) return it }
-        return Status.ok()
-    }
-
-    fun toMsgpack(): StatusOr<ByteArray> {
-        validate().let { if (!it.isOk) return it }
-        val inputBytes = inputs.map { it.toMsgpack().orElse { e -> return e } }
-        val outputBytes = outputs.map { it.toMsgpack().orElse { e -> return e } }
-        return MsgpackCodec.encodeFields(listOf(id, name, inputBytes, outputBytes, LinkedHashMap(headers)))
-    }
-
-    companion object {
-        fun fromMsgpack(bytes: ByteArray): StatusOr<ActionMessage> {
-            val fields = MsgpackCodec.decodeFields(bytes, 5, "ActionMessage").orElse { return it }
-            val id = asString(fields[0], "ActionMessage.id").orElse { return it }
-            val name = asString(fields[1], "ActionMessage.name").orElse { return it }
-            val inputs = decodePortList(fields[2], "inputs").orElse { return it }
-            val outputs = decodePortList(fields[3], "outputs").orElse { return it }
-            val headers = decodeByteMap(fields[4], "ActionMessage.headers").orElse { return it }
-            return Ok(ActionMessage(id, name, inputs, outputs, headers))
-        }
-
-        private fun decodePortList(value: Any?, field: String): StatusOr<MutableList<Port>> {
-            if (value !is List<*>) return invalidArgument("ActionMessage.$field must be a list.")
-            val ports = mutableListOf<Port>()
-            for (item in value) {
-                val encoded = asBinary(item, "ActionMessage.$field").orElse { return it }
-                ports.add(Port.fromMsgpack(encoded).orElse { return it })
-            }
-            return Ok(ports)
-        }
-    }
-}
-
-/** Atomic application message exchanged by every A11 transport. */
-class WireMessage(
-    var nodeFragments: MutableList<NodeFragment> = mutableListOf(),
-    var actions: MutableList<ActionMessage> = mutableListOf(),
-    var headers: ByteMap = ByteMap(),
-) {
-    /** Whether this carries only headers and can serve as a lifecycle marker. */
-    val isHalfClose: Boolean get() = actions.isEmpty() && nodeFragments.isEmpty()
-
-    fun validate(): Status {
-        for (fragment in nodeFragments) fragment.validate().let { if (!it.isOk) return it }
-        for (action in actions) action.validate().let { if (!it.isOk) return it }
-        for ((key, _) in headers) validateName(key).let { if (!it.isOk) return it }
-        return Status.ok()
-    }
-
-    fun toMsgpack(): StatusOr<ByteArray> {
-        validate().let { if (!it.isOk) return it }
-        val fragmentBytes = nodeFragments.map { it.toMsgpack().orElse { e -> return e } }
-        val actionBytes = actions.map { it.toMsgpack().orElse { e -> return e } }
-        return MsgpackCodec.encodeFields(listOf(VERSION, fragmentBytes, actionBytes, LinkedHashMap(headers)))
-    }
-
-    companion object {
-        /** Current MessagePack/JSON wire schema version. */
         const val VERSION = 1
 
-        fun fromMsgpack(bytes: ByteArray): StatusOr<WireMessage> {
-            val fields = MsgpackCodec.decodeFields(bytes, 4, "WireMessage").orElse { return it }
-            val version = asUnsigned(fields[0], "WireMessage.version", UINT32_MAX).orElse { return it }
-            if (version.toInt() != VERSION) {
-                return invalidArgument("Invalid serialized WireMessage version: $version")
-            }
-            val fragments = mutableListOf<NodeFragment>()
-            (fields[1] as? List<*> ?: return invalidArgument("WireMessage.node_fragments must be a list.")).forEach {
-                val encoded = asBinary(it, "WireMessage.node_fragments").orElse { e -> return e }
-                fragments.add(NodeFragment.fromMsgpack(encoded).orElse { e -> return e })
-            }
-            val actions = mutableListOf<ActionMessage>()
-            (fields[2] as? List<*> ?: return invalidArgument("WireMessage.actions must be a list.")).forEach {
-                val encoded = asBinary(it, "WireMessage.actions").orElse { e -> return e }
-                actions.add(ActionMessage.fromMsgpack(encoded).orElse { e -> return e })
-            }
-            val headers = decodeByteMap(fields[3], "WireMessage.headers").orElse { return it }
-            return Ok(WireMessage(fragments, actions, headers))
-        }
+        fun fromMsgpack(bytes: ByteArray): StatusOr<WireMessage> =
+            NativeData.wireMessageDecode(bytes)
     }
 }
 
-/** Build an empty lifecycle message carrying optional terminal headers. */
-fun makeHalfCloseMessage(headers: ByteMap = ByteMap()): WireMessage =
-    WireMessage(headers = copyByteMap(headers))
+/** Build an empty lifecycle message carrying terminal headers. */
+fun makeHalfCloseMessage(headers: Map<String, ByteArray> = emptyMap()): WireMessage =
+    WireMessage(headers = headers)
 
-/** Build the explicit octet-stream null chunk used to terminate unary data. */
+/** Build the octet-stream null chunk used to terminate unary data. */
 fun makeNullChunk(): Chunk = Chunk(metadata = ChunkMetadata(mimetype = "application/octet-stream"))

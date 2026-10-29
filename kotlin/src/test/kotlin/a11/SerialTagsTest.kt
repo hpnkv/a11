@@ -32,18 +32,17 @@ import kotlin.test.assertTrue
  * The Kotlin half of the cross-language tag contract.
  *
  * `testdata/serial_tags.json` is the one table every language answers to, and
- * `testdata/interaction_golden.json` is
- * one interaction as the Python SDK writes
- * it. Between them these tests pin what a Kotlin client depends on when it
- * holds a conversation and hands it back to a Python backend turn after turn:
- * the tool calls and results inside each interaction must arrive as the objects
- * that were sent, and go back out as the payload that was received.
+ * `testdata/interaction_golden.json` is one interaction as the Python SDK writes it. Between them
+ * these tests pin what a Kotlin client depends on when it holds a conversation and hands it back to
+ * a Python backend turn after turn: the tool calls and results inside each interaction must arrive
+ * as the objects that were sent, and go back out as the payload that was received.
  */
 class SerialTagsTest {
-    private fun <T> ok(value: StatusOr<T>): T = when (value) {
-        is Ok<T> -> value.value
-        is Status -> throw AssertionError("expected ok, got $value")
-    }
+    private fun <T> ok(value: StatusOr<T>): T =
+        when (value) {
+            is Ok<T> -> value.value
+            is Err -> throw AssertionError("expected ok, got $value")
+        }
 
     private fun testdata(name: String): String {
         // The Gradle build runs in kotlin/; the shared fixtures sit beside it.
@@ -78,21 +77,38 @@ class SerialTagsTest {
         ) to data
     }
 
-    private fun kotlinTags(): List<String> = listOf(
-        SerialTags.CHUNK_METADATA, SerialTags.CHUNK, SerialTags.NODE_REF,
-        SerialTags.NODE_FRAGMENT, SerialTags.PORT, SerialTags.ACTION_MESSAGE,
-        SerialTags.WIRE_MESSAGE, SerialTags.STATUS, SerialTags.TIME, SerialTags.DURATION,
-        SerialTags.INTERACTION, SerialTags.PEER, SerialTags.ACTION_CONFIG,
-        SerialTags.USAGE_METADATA, SerialTags.INTERACT_WITH_CLAUDE_CONFIG,
-        SerialTags.INTERACT_WITH_CLAUDE_CODE_CONFIG,
-        SerialTags.INTERACT_WITH_GEMINI_CONFIG, SerialTags.INTERACT_WITH_OLLAMA_CONFIG,
-        SerialTags.INTERACT_WITH_GPT_CONFIG, SerialTags.INTERACT_WITH_CODEX_CONFIG,
-        SerialTags.INTERACT_WITH_VLLM_CONFIG,
-        SerialTags.INTERACT_WITH_GEMMA_CONFIG, SerialTags.AUDIO_BUFFER,
-        SerialTags.AUDIO_INPUT_OPTIONS, SerialTags.SPEECH_RECOGNIZER_OPTIONS,
-        SerialTags.AUDIO_DEVICE_INFO, SerialTags.AUDIO_CONTROL_EVENT,
-        SerialTags.AUDIO_CAPTURE_EVENT, SerialTags.TRANSCRIPTION_EVENT,
-    )
+    private fun kotlinTags(): List<String> =
+        listOf(
+            SerialTags.CHUNK_METADATA,
+            SerialTags.CHUNK,
+            SerialTags.NODE_REF,
+            SerialTags.NODE_FRAGMENT,
+            SerialTags.PORT,
+            SerialTags.ACTION_MESSAGE,
+            SerialTags.WIRE_MESSAGE,
+            SerialTags.STATUS,
+            SerialTags.TIME,
+            SerialTags.DURATION,
+            SerialTags.INTERACTION,
+            SerialTags.PEER,
+            SerialTags.ACTION_CONFIG,
+            SerialTags.USAGE_METADATA,
+            SerialTags.INTERACT_WITH_CLAUDE_CONFIG,
+            SerialTags.INTERACT_WITH_CLAUDE_CODE_CONFIG,
+            SerialTags.INTERACT_WITH_GEMINI_CONFIG,
+            SerialTags.INTERACT_WITH_OLLAMA_CONFIG,
+            SerialTags.INTERACT_WITH_GPT_CONFIG,
+            SerialTags.INTERACT_WITH_CODEX_CONFIG,
+            SerialTags.INTERACT_WITH_VLLM_CONFIG,
+            SerialTags.INTERACT_WITH_GEMMA_CONFIG,
+            SerialTags.AUDIO_BUFFER,
+            SerialTags.AUDIO_INPUT_OPTIONS,
+            SerialTags.SPEECH_RECOGNIZER_OPTIONS,
+            SerialTags.AUDIO_DEVICE_INFO,
+            SerialTags.AUDIO_CONTROL_EVENT,
+            SerialTags.AUDIO_CAPTURE_EVENT,
+            SerialTags.TRANSCRIPTION_EVENT,
+        )
 
     @Test
     fun kotlinConstantsMatchTheSharedTable() {
@@ -146,11 +162,17 @@ class SerialTagsTest {
     fun theRuntimeTypesAreRegisteredUnderTheirCanonicalTags() {
         ensureCoreWireValues()
         val registered = allWireValueCodecs().map { it.tag }.toSet()
-        for (tag in listOf(
-            SerialTags.CHUNK, SerialTags.CHUNK_METADATA, SerialTags.NODE_REF,
-            SerialTags.NODE_FRAGMENT, SerialTags.PORT, SerialTags.ACTION_MESSAGE,
-            SerialTags.WIRE_MESSAGE, SerialTags.STATUS,
-        )) {
+        for (tag in
+            listOf(
+                SerialTags.CHUNK,
+                SerialTags.CHUNK_METADATA,
+                SerialTags.NODE_REF,
+                SerialTags.NODE_FRAGMENT,
+                SerialTags.PORT,
+                SerialTags.ACTION_MESSAGE,
+                SerialTags.WIRE_MESSAGE,
+                SerialTags.STATUS,
+            )) {
             assertTrue(registered.contains(tag), "no wire value codec for $tag")
         }
     }
@@ -209,18 +231,20 @@ class SerialTagsTest {
         // values they hold.
         ensureInteractionCodec()
         val registry = SerializationRegistry(registerDefaults = true)
-        val golden = ok(A11Json.parse(testdata("text_message_interaction_golden.json"))) as Map<*, *>
-        val expected = ok(
-            A11Json.parse(String(Base64.getDecoder().decode(golden["base64"].toString()))),
-        ) as Map<*, *>
+        val golden =
+            ok(A11Json.parse(testdata("text_message_interaction_golden.json"))) as Map<*, *>
+        val expected =
+            ok(A11Json.parse(String(Base64.getDecoder().decode(golden["base64"].toString()))))
+                as Map<*, *>
 
-        val interaction = ok(
-            makeTextMessageInteraction(
-                golden["text"].toString(),
-                golden["system_prompt"].toString(),
-                registry = registry,
-            ),
-        )
+        val interaction =
+            ok(
+                makeTextMessageInteraction(
+                    golden["text"].toString(),
+                    golden["system_prompt"].toString(),
+                    registry = registry,
+                )
+            )
         val chunk = ok(registry.toChunk(interaction))
         val actual = ok(A11Json.parse(String(chunk.data))) as Map<*, *>
 
@@ -246,11 +270,12 @@ class SerialTagsTest {
         // value sits in a field whose declared type identifies it.
         ensureInteractionCodec()
         val registry = SerializationRegistry(registerDefaults = true)
-        fun keys(value: Any?): List<String> = when (value) {
-            is Map<*, *> -> value.entries.flatMap { listOf(it.key.toString()) + keys(it.value) }
-            is List<*> -> value.flatMap { keys(it) }
-            else -> emptyList()
-        }
+        fun keys(value: Any?): List<String> =
+            when (value) {
+                is Map<*, *> -> value.entries.flatMap { listOf(it.key.toString()) + keys(it.value) }
+                is List<*> -> value.flatMap { keys(it) }
+                else -> emptyList()
+            }
         val interaction = ok(makeTextMessageInteraction("hi", "be brief"))
 
         val chunk = ok(registry.toChunk(interaction))
@@ -273,11 +298,12 @@ class SerialTagsTest {
         // that shape had to be escaped on the way out. The type lives in the
         // chunk's metadata now, so these go out byte-for-byte as written.
         val registry = SerializationRegistry(registerDefaults = true)
-        for (value in listOf(
-            linkedMapOf<String, Any?>("!${SerialTags.CHUNK}" to "not one"),
-            linkedMapOf<String, Any?>("!whatever" to listOf(1L, 2L)),
-            linkedMapOf<String, Any?>("!a" to 1L, "b" to 2L),
-        )) {
+        for (value in
+            listOf(
+                linkedMapOf<String, Any?>("!${SerialTags.CHUNK}" to "not one"),
+                linkedMapOf<String, Any?>("!whatever" to listOf(1L, 2L)),
+                linkedMapOf<String, Any?>("!a" to 1L, "b" to 2L),
+            )) {
             assertEquals(value, ok(registry.fromChunk(ok(registry.toChunk(value)))))
         }
         val plain = linkedMapOf<String, Any?>("!a" to 1L, "b" to 2L)
@@ -289,15 +315,13 @@ class SerialTagsTest {
         // A peer that never loaded the naming module still holds valid JSON,
         // and is entitled to read it as such rather than be refused.
         val registry = SerializationRegistry(registerDefaults = true)
-        val chunk = Chunk(
-            metadata = ChunkMetadata(mimetype = "application/json;type=some.other.Model"),
-            data = utf8Encode("""{"anything":1}"""),
-        )
+        val chunk =
+            Chunk(
+                metadata = ChunkMetadata(mimetype = "application/json;type=some.other.Model"),
+                data = utf8Encode("""{"anything":1}"""),
+            )
 
-        assertEquals(
-            linkedMapOf<String, Any?>("anything" to 1L),
-            ok(registry.fromChunk(chunk)),
-        )
+        assertEquals(linkedMapOf<String, Any?>("anything" to 1L), ok(registry.fromChunk(chunk)))
     }
 
     @Test

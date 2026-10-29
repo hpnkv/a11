@@ -16,51 +16,49 @@
 
 package a11
 
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
+import a11.net.WireStream
 
-/** Transport sink a node may tee its writes to (subset of WireStream/Session). */
-interface WritableWireStream {
-    fun send(message: WireMessage): Status
+/** One decoded value or the clean end of a node, including nullable values. */
+sealed interface NodeRead<out T> {
+    data class Value<out T>(val value: T) : NodeRead<T>
+
+    data object End : NodeRead<Nothing>
 }
 
 /**
- * One ordered, typed value sequence flowing through an A11 application.
+ * Ordered in-memory chunks with one consuming cursor.
  *
- * This is the Kotlin counterpart of `js/src/async_node.ts`. The reference splits
- * the log across a pluggable ChunkStore + reader + writer; because that store is
- * a purely local abstraction, the Kotlin port keeps a single in-memory,
- * seq-ordered buffer guarded by a coroutine [Mutex]. The observable contract —
- * ordered delivery, an explicit final marker, backpressure-free local writes,
- * structured abort, and teeing writes to a wire stream — matches the reference,
- * which is what the wire protocol and the higher layers depend on.
+ * Writes and reads own their wire values. Finality ends the logical sequence; close ends writes,
+ * and abort carries a non-OK status to readers. Suspended reads release the monitor and resume on
+ * writes, closure, or cancellation.
  */
-class AsyncNode private constructor(
-    val id: String,
-    private var registry: SerializationRegistry,
-) {
-    private val mutex = Mutex()
+class AsyncNode private constructor(val id: String, private var registry: SerializationRegistry) {
+    private val lock = Any()
     private val bySeq = HashMap<Long, NodeFragment>()
     private var nextWriteSeq = 0L
     private var nextReadSeq = 0L
     private var finalSeq: Long? = null
     private var writerClosed = false
-    private var abortStatus: Status? = null
-    private val streams = mutableListOf<WritableWireStream>()
+    @Volatile private var abortStatus: Err? = null
+    private val streams = mutableListOf<WireStream>()
     private var readerCancelled = false
     private val changeWaiters = mutableListOf<Deferred<Unit>>()
 
     private var expectedPatterns: List<String> = emptyList()
     private var expectedTag: String? = null
 
-    val serializationRegistry: SerializationRegistry get() = registry
+    val serializationRegistry: SerializationRegistry
+        get() = registry
 
     fun setSerializationRegistry(registry: SerializationRegistry): Status {
         this.registry = registry
         return Status.ok()
     }
 
-    fun setExpectedTypes(mimetypePatterns: List<String> = emptyList(), expectedTag: String? = null): Status {
+    fun setExpectedTypes(
+        mimetypePatterns: List<String> = emptyList(),
+        expectedTag: String? = null,
+    ): Status {
         this.expectedPatterns = mimetypePatterns
         this.expectedTag = expectedTag
         return Status.ok()
@@ -69,38 +67,76 @@ class AsyncNode private constructor(
     // --- producing half ------------------------------------------------------
 
     suspend fun putChunk(chunk: Chunk, seq: Long? = null, final: Boolean = false): StatusOr<Long> {
+        chunk.validate().orElse { status ->
+            return status
+        }
         val fragment: NodeFragment
-        mutex.withLock {
-            abortStatus?.let { return it }
+        synchronized(lock) {
+            abortStatus?.let { value ->
+                return value
+            }
             if (writerClosed) return failedPrecondition("AsyncNode writer is closed.")
-            val actualSeq = seq ?: nextWriteSeq
-            if (actualSeq + 1 > nextWriteSeq) nextWriteSeq = actualSeq + 1
-            fragment = NodeFragment(id = id, data = chunk, seq = actualSeq, continued = !final)
+            var actualSeq = seq ?: nextWriteSeq
+            if (seq == null) while (bySeq.containsKey(actualSeq)) actualSeq++
+            if (actualSeq !in 0..0xffff_ffffL) {
+                return (if (seq == null) resourceExhausted("Maximum implicit sequence exceeded.")
+                else invalidArgument("Sequence must be a uint32 integer."))
+            }
+            if (bySeq.containsKey(actualSeq))
+                return alreadyExists("Fragment $actualSeq already exists.")
+            if (final && finalSeq != null && finalSeq != actualSeq) {
+                return failedPrecondition("The node already has a different final sequence.")
+            }
+            val pendingFinal = if (final) actualSeq else finalSeq
+            if (
+                pendingFinal != null &&
+                    (actualSeq > pendingFinal || bySeq.keys.any { item -> item > pendingFinal })
+            ) {
+                return invalidArgument("A fragment exceeds the final sequence.")
+            }
+            nextWriteSeq++
+            fragment =
+                NodeFragment(id = id, data = chunk, seq = actualSeq.toUInt(), continued = !final)
+                    .copy()
             bySeq[actualSeq] = fragment
             if (final) finalSeq = actualSeq
             notifyChange()
         }
         for (stream in streamsSnapshot()) {
             val sent = stream.send(WireMessage(nodeFragments = mutableListOf(fragment.copy())))
-            if (!sent.isOk) return sent
+            sent.orElse { status ->
+                return status
+            }
         }
-        return Ok(fragment.seq!!)
+        return Ok(fragment.seq!!.toLong())
     }
 
     suspend fun putFragment(fragment: NodeFragment): StatusOr<Long> {
-        val chunk = fragment.getChunk().orElse {
-            return unimplemented("AsyncNode writers do not resolve NodeRef payloads.")
+        fragment.validate().orElse { status ->
+            return status
         }
-        return putChunk(chunk, fragment.seq, !fragment.continued)
+        val chunk =
+            fragment.getChunk().orElse {
+                return unimplemented("AsyncNode writers do not resolve NodeRef payloads.")
+            }
+        return putChunk(chunk, fragment.seq?.toLong(), !fragment.continued)
     }
 
     /** Serialize and persist one application value. */
-    suspend fun put(value: Any?, seq: Long? = null, final: Boolean = false, mimetype: String = ""): StatusOr<Long> {
+    suspend fun put(
+        value: Any?,
+        seq: Long? = null,
+        final: Boolean = false,
+        mimetype: String = "",
+    ): StatusOr<Long> {
         when (value) {
             is NodeFragment -> return putFragment(value)
             is Chunk -> return putChunk(value, seq, final)
             else -> {
-                val chunk = registry.toChunk(value, mimetype).orElse { return it }
+                val chunk =
+                    registry.toChunk(value, mimetype).orElse { status ->
+                        return status
+                    }
                 return putChunk(chunk, seq, final)
             }
         }
@@ -109,16 +145,14 @@ class AsyncNode private constructor(
     /**
      * End the stream: mark the logical end of the data, and close the writer.
      *
-     * The one call an ordinary producer needs. [value] is written as the final
-     * fragment; passing nothing (or null) writes a null terminator instead,
-     * which is the form to use once the last visible value has already gone out
-     * with [put]. Unless [close] is cleared the writer is closed too, so
-     * readers waiting for data that can no longer arrive are released and a
-     * peer's mirror of the node closes as well.
+     * The one call an ordinary producer needs. [value] is written as the final fragment; passing
+     * nothing (or null) writes a null terminator instead, which is the form to use once the last
+     * visible value has already gone out with [put]. Unless [close] is cleared the writer is closed
+     * too, so readers waiting for data that can no longer arrive are released and a peer's mirror
+     * of the node closes as well.
      *
-     * [wait] exists for byte-compatibility with the other A11 runtimes: this
-     * port keeps its log in memory, so the write and the close are done by the
-     * time this returns either way.
+     * [wait] exists for byte-compatibility with the other A11 runtimes: this port keeps its log in
+     * memory, so the write and the close are done by the time this returns either way.
      */
     suspend fun finalize(
         value: Any? = null,
@@ -129,52 +163,62 @@ class AsyncNode private constructor(
     ): Status {
         when (value) {
             null -> putChunk(makeNullChunk(), seq, final = true)
-            is NodeFragment -> putChunk(
-                value.getChunk().orElse { return it },
-                value.seq,
-                final = true,
-            )
+            is NodeFragment ->
+                putChunk(
+                    value.getChunk().orElse { status ->
+                        return status
+                    },
+                    value.seq?.toLong(),
+                    final = true,
+                )
             is Chunk -> putChunk(value, seq, final = true)
             else -> put(value, seq, final = true, mimetype = mimetype)
-        }.orElse { return it }
+        }.orElse { status ->
+            return status
+        }
         return if (close) this.close() else Status.ok()
     }
 
     /**
      * Flush queued writes and close the producing half, marking nothing final.
      *
-     * The specialised half of [finalize]: closure without finality, for a
-     * producer that cannot say which chunk was the last one -- a log, say -- but
-     * can say that no more are coming.
+     * The specialised half of [finalize]: closure without finality, for a producer that cannot say
+     * which chunk was the last one -- a log, say -- but can say that no more are coming.
      *
-     * Attached streams are told, because a peer ends a node on a not-continued
-     * fragment and closing writes none: after the last teed fragment the node
-     * sends one closure marker, so a mirror of this node on the far side closes
-     * its write half too.
+     * Attached streams are told, because a peer ends a node on a not-continued fragment and closing
+     * writes none: after the last teed fragment the node sends one closure marker, so a mirror of
+     * this node on the far side closes its write half too.
      */
     suspend fun close(): Status {
         val alreadyClosed: Boolean
-        mutex.withLock {
+        synchronized(lock) {
             alreadyClosed = writerClosed
             writerClosed = true
             notifyChange()
         }
         if (alreadyClosed) return Status.ok()
-        val marker = statusToChunk(Status.ok(), closing = true).orElse { return it }
-        val fragment = NodeFragment(id = id, data = marker, seq = 0L, continued = false)
+        val marker =
+            statusToChunk(Status.ok(), closing = true).orElse { status ->
+                return status
+            }
+        val fragment = NodeFragment(id = id, data = marker, seq = 0u, continued = false)
         for (stream in streamsSnapshot()) {
             val sent = stream.send(WireMessage(nodeFragments = mutableListOf(fragment.copy())))
-            if (!sent.isOk) return sent
+            sent.orElse { status ->
+                return status
+            }
         }
         return Status.ok()
     }
 
     /** Fail the producing half so readers observe a structured terminal error. */
     suspend fun abortWithStatus(status: Status): Status {
+        if (status.ok()) return invalidArgument("Abort status must be non-OK.")
         val notify: Boolean
-        mutex.withLock {
-            if (abortStatus == null && !status.isOk) {
-                abortStatus = status
+        synchronized(lock) {
+            if (writerClosed) return failedPrecondition("AsyncNode writer is closed.")
+            if (abortStatus == null) {
+                abortStatus = Err(status)
                 notify = true
             } else notify = false
             if (notify) notifyChange()
@@ -182,102 +226,164 @@ class AsyncNode private constructor(
         return Status.ok()
     }
 
-    suspend fun isWritable(): StatusOr<Boolean> = mutex.withLock { Ok(!writerClosed && abortStatus == null) }
+    suspend fun isWritable(): StatusOr<Boolean> =
+        synchronized(lock) { Ok(!writerClosed && abortStatus == null) }
 
-    fun getWriterAbortStatus(): Status? = abortStatus?.takeIf { !it.isOk }
+    fun getWriterAbortStatus(): Status? = abortStatus
 
-    suspend fun size(): StatusOr<Int> = mutex.withLock { Ok(nextWriteSeq.toInt()) }
+    suspend fun size(): StatusOr<Int> = synchronized(lock) { Ok(bySeq.size) }
 
-    fun attachStream(stream: WritableWireStream): Status {
+    fun attachStream(stream: WireStream): Status {
         synchronized(streams) { if (stream !in streams) streams.add(stream) }
         return Status.ok()
     }
 
-    fun detachStream(stream: WritableWireStream): Status {
+    fun detachStream(stream: WireStream): Status {
         synchronized(streams) { streams.remove(stream) }
         return Status.ok()
     }
 
-    private fun streamsSnapshot(): List<WritableWireStream> = synchronized(streams) { streams.toList() }
+    private fun streamsSnapshot(): List<WireStream> = synchronized(streams) { streams.toList() }
 
     fun cancelReader(): Status {
-        readerCancelled = true
+        synchronized(lock) {
+            readerCancelled = true
+            notifyChange()
+        }
         return Status.ok()
     }
 
-    suspend fun cancelWriter(): Status = close()
+    suspend fun cancelWriter(): Status = abortWithStatus(aborted("ChunkStoreWriter was cancelled"))
 
     // --- consuming half ------------------------------------------------------
 
     /** Read the next raw fragment in seq order, or null at clean end of stream. */
     suspend fun nextFragment(timeoutMs: Long? = null): StatusOr<NodeFragment?> {
-        val deadline = timeoutMs?.let { System.currentTimeMillis() + it }
+        if (timeoutMs != null && timeoutMs < 0)
+            return invalidArgument("Timeout must be non-negative.")
+        val started = System.nanoTime()
         while (true) {
             val waiter: Deferred<Unit>
-            mutex.withLock {
-                abortStatus?.let { if (!it.isOk) return it }
-                if (readerCancelled) return Ok(null)
-                val fragment = bySeq.remove(nextReadSeq)
-                if (fragment != null) {
-                    nextReadSeq += 1
-                    return Ok(fragment)
-                }
+            synchronized(lock) {
+                if (readerCancelled) return aborted("ChunkStoreReader was cancelled")
                 val fin = finalSeq
                 if (fin != null && nextReadSeq > fin) return Ok(null)
-                if (writerClosed && nextReadSeq >= nextWriteSeq) return Ok(null)
-                waiter = Deferred<Unit>().also { changeWaiters.add(it) }
+                val fragment = bySeq[nextReadSeq]
+                if (fragment != null) {
+                    nextReadSeq += 1
+                    return Ok(
+                        fragment.copy().also { value ->
+                            value.continued = fin == null || value.seq!!.toLong() < fin
+                        }
+                    )
+                }
+                abortStatus?.let { value ->
+                    return value
+                }
+                if (writerClosed) {
+                    if (
+                        nextReadSeq >= nextWriteSeq &&
+                            bySeq.keys.none { item -> item >= nextReadSeq }
+                    )
+                        return Ok(null)
+                    return notFound("The closed node has no fragment at sequence $nextReadSeq.")
+                }
+                waiter = Deferred<Unit>().also { value -> changeWaiters.add(value) }
             }
-            val remaining = deadline?.let { it - System.currentTimeMillis() }
-            if (remaining != null && remaining <= 0) return deadlineExceeded("AsyncNode read timed out.")
-            when (val waited = waitFor(remaining) { waiter.await() }) {
-                is Ok -> Unit
-                is Status -> return waited
+            try {
+                val remaining =
+                    timeoutMs?.let { value ->
+                        maxOf(0L, value - (System.nanoTime() - started) / 1_000_000)
+                    }
+                when (val waited = waitFor(remaining) { waiter.await() }) {
+                    is Ok -> Unit
+                    is Err -> return waited
+                }
+            } finally {
+                synchronized(lock) { changeWaiters.remove(waiter) }
             }
         }
     }
 
     suspend fun nextChunk(timeoutMs: Long? = null): StatusOr<Chunk?> {
-        val fragment = nextFragment(timeoutMs).orElse { return it } ?: return Ok(null)
-        return fragment.getChunk().let { if (it is Ok) Ok(it.value) else it as Status }
+        val fragment =
+            nextFragment(timeoutMs).orElse { status ->
+                return status
+            } ?: return Ok(null)
+        return fragment.getChunk()
     }
 
     /**
      * The next fragment carrying a value, or null once the node ends.
      *
-     * A null chunk is a marker, not a value: a final one says the node is
-     * finished, and a non-final one says nothing at all. Neither is something a
-     * reader asked for, so both are skipped here rather than surfaced as a
-     * value or rejected — which is what lets a node be closed with nothing in
-     * it.
+     * A null chunk is a marker, not a value: a final one says the node is finished, and a non-final
+     * one says nothing at all. Neither is something a reader asked for, so both are skipped here
+     * rather than surfaced as a value or rejected — which is what lets a node be closed with
+     * nothing in it.
      */
     private suspend fun nextValueFragment(timeoutMs: Long?): StatusOr<NodeFragment?> {
-        val started = System.currentTimeMillis()
+        if (timeoutMs != null && timeoutMs < 0)
+            return invalidArgument("Timeout must be non-negative.")
+        val started = System.nanoTime()
         while (true) {
-            val remaining = timeoutMs?.let { maxOf(0L, it - (System.currentTimeMillis() - started)) }
-            val fragment = nextFragment(remaining).orElse { return it } ?: return Ok(null)
-            val chunk = fragment.getChunk().orElse { return it }
+            val remaining =
+                timeoutMs?.let { value ->
+                    maxOf(0L, value - ((System.nanoTime() - started) / 1_000_000))
+                }
+            val fragment =
+                nextFragment(remaining).orElse { status ->
+                    return status
+                } ?: return Ok(null)
+            val chunk =
+                fragment.getChunk().orElse { status ->
+                    return status
+                }
             if (!chunk.isNull) return Ok(fragment)
             if (!fragment.continued) return Ok(null)
         }
     }
 
-    /** Read one value, or null at finality / clean closure. */
+    /** Read a value, preserving the distinction between JSON null and end. */
+    suspend fun read(
+        timeoutMs: Long? = null,
+        mimetypePatterns: List<String>? = null,
+        expectedTag: String? = null,
+    ): StatusOr<NodeRead<Any?>> {
+        val fragment =
+            nextValueFragment(timeoutMs).orElse { status ->
+                return status
+            } ?: return Ok(NodeRead.End)
+        val chunk =
+            fragment.getChunk().orElse { status ->
+                return status
+            }
+        return registry
+            .fromChunk(chunk, mimetypePatterns ?: expectedPatterns, expectedTag ?: this.expectedTag)
+            .map { value -> NodeRead.Value(value) }
+    }
+
+    /**
+     * Read a value, returning null for JSON null or clean end. Use [read] when nullable payloads
+     * need an explicit end marker.
+     */
     suspend fun next(
         timeoutMs: Long? = null,
         mimetypePatterns: List<String>? = null,
         expectedTag: String? = null,
-    ): StatusOr<Any?> {
-        val fragment = nextValueFragment(timeoutMs).orElse { return it } ?: return Ok(null)
-        val chunk = fragment.getChunk().orElse { return it }
-        return registry.fromChunk(chunk, mimetypePatterns ?: expectedPatterns, expectedTag ?: this.expectedTag)
-    }
+    ): StatusOr<Any?> =
+        read(timeoutMs, mimetypePatterns, expectedTag).map { element ->
+            when (element) {
+                is NodeRead.Value -> element.value
+                NodeRead.End -> null
+            }
+        }
 
     /**
      * Consume exactly one whole unary value and validate its terminator.
      *
-     * Two spellings are accepted: the value written as final, or the value
-     * followed by a null final chunk. With [allowNone] a node holding no value
-     * — closed empty, or holding nothing but a null final — yields null.
+     * Two spellings are accepted: the value written as final, or the value followed by a null final
+     * chunk. With [allowNone] a node holding no value — closed empty, or holding nothing but a null
+     * final — yields null.
      */
     suspend fun consume(
         timeoutMs: Long? = null,
@@ -285,18 +391,40 @@ class AsyncNode private constructor(
         mimetypePatterns: List<String>? = null,
         expectedTag: String? = null,
     ): StatusOr<Any?> {
-        val first = nextValueFragment(timeoutMs).orElse { return it }
-            ?: return if (allowNone) Ok(null) else failedPrecondition("AsyncNode is empty at the current reader offset.")
-        val chunk = first.getChunk().orElse { return it }
+        val first =
+            nextValueFragment(timeoutMs).orElse { status ->
+                return status
+            }
+                ?: return if (allowNone) Ok(null)
+                else failedPrecondition("AsyncNode is empty at the current reader offset.")
+        val chunk =
+            first.getChunk().orElse { status ->
+                return status
+            }
         if (first.continued) {
-            val terminator = nextFragment(timeoutMs).orElse { return it }
-                ?: return failedPrecondition("A continued consumed value must be followed by a null final chunk.")
-            val terminatorChunk = terminator.getChunk().orElse { return it }
+            val terminator =
+                nextFragment(timeoutMs).orElse { status ->
+                    return status
+                }
+                    ?: return failedPrecondition(
+                        "A continued consumed value must be followed by a null final chunk."
+                    )
+
+            val terminatorChunk =
+                terminator.getChunk().orElse { status ->
+                    return status
+                }
             if (terminator.continued || !terminatorChunk.isNull) {
-                return failedPrecondition("The only fragment allowed after a consumed value is a null final chunk.")
+                return failedPrecondition(
+                    "The only fragment allowed after a consumed value is a null final chunk."
+                )
             }
         }
-        return registry.fromChunk(chunk, mimetypePatterns ?: expectedPatterns, expectedTag ?: this.expectedTag)
+        return registry.fromChunk(
+            chunk,
+            mimetypePatterns ?: expectedPatterns,
+            expectedTag ?: this.expectedTag,
+        )
     }
 
     private fun notifyChange() {
@@ -306,8 +434,13 @@ class AsyncNode private constructor(
     }
 
     companion object {
-        fun create(id: String, registry: SerializationRegistry = SerializationRegistry.getGlobal()): StatusOr<AsyncNode> {
-            validateName(id).let { if (!it.isOk) return it }
+        fun create(
+            id: String,
+            registry: SerializationRegistry = SerializationRegistry.getGlobal(),
+        ): StatusOr<AsyncNode> {
+            validateName(id).orElse { status ->
+                return status
+            }
             return Ok(AsyncNode(id, registry))
         }
     }
@@ -320,22 +453,33 @@ class NodeMap {
 
     /** Return the canonical node, creating it on first access. */
     fun get(nodeId: String): StatusOr<AsyncNode> {
-        validateName(nodeId).let { if (!it.isOk) return it }
+        validateName(nodeId).orElse { status ->
+            return status
+        }
         synchronized(lock) {
-            nodes[nodeId]?.let { return Ok(it) }
-            val node = AsyncNode.create(nodeId).orElse { return it }
+            nodes[nodeId]?.let { value ->
+                return Ok(value)
+            }
+            val node =
+                AsyncNode.create(nodeId).orElse { status ->
+                    return status
+                }
             nodes[nodeId] = node
             return Ok(node)
         }
     }
 
     fun getIfExists(nodeId: String): StatusOr<AsyncNode?> {
-        validateName(nodeId).let { if (!it.isOk) return it }
+        validateName(nodeId).orElse { status ->
+            return status
+        }
         return Ok(synchronized(lock) { nodes[nodeId] })
     }
 
     fun discard(nodeId: String, expected: AsyncNode? = null): StatusOr<AsyncNode?> {
-        validateName(nodeId).let { if (!it.isOk) return it }
+        validateName(nodeId).orElse { status ->
+            return status
+        }
         synchronized(lock) {
             val found = nodes[nodeId] ?: return Ok(null)
             if (expected != null && found !== expected) return Ok(null)
@@ -345,5 +489,7 @@ class NodeMap {
     }
 
     fun contains(nodeId: String): Boolean = synchronized(lock) { nodes.containsKey(nodeId) }
-    val size: Int get() = synchronized(lock) { nodes.size }
+
+    val size: Int
+        get() = synchronized(lock) { nodes.size }
 }

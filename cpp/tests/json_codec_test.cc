@@ -81,4 +81,33 @@ TEST(JsonCodecTest, DumpStillWorksOnEverythingElse) {
 }
 
 }  // namespace
+
+TEST(JsonCodecTest, MalformedTextReturnsStatusWithParserDiagnostics) {
+  for (const std::string text : {"{", "01", "[1,]", "\"\\uD800\""}) {
+    const auto result = ParseJson(text, "untrusted document");
+    ASSERT_FALSE(result.ok()) << text;
+    EXPECT_EQ(result.status().code(), absl::StatusCode::kInvalidArgument);
+    EXPECT_NE(
+        result.status().message().find("Failed to parse untrusted document:"),
+        std::string::npos);
+    EXPECT_NE(result.status().message().find("parse_error"), std::string::npos);
+  }
+}
+
+TEST(JsonCodecTest, HostJsonRetainsNestedFieldOrder) {
+  const std::string text = R"({"z":{"b":1,"a":2},"a":false})";
+  auto parsed = ParseOrderedJson(text, "host fields");
+  ASSERT_TRUE(parsed.ok()) << parsed.status();
+  auto dumped = DumpOrderedJson(*parsed, "host fields");
+  ASSERT_TRUE(dumped.ok()) << dumped.status();
+  EXPECT_EQ(*dumped, text);
+  auto packed = PackOrderedMsgpack(*parsed, "host fields");
+  ASSERT_TRUE(packed.ok()) << packed.status();
+  const auto restored = nlohmann::ordered_json::from_msgpack(*packed);
+  EXPECT_EQ(restored, *parsed);
+  (*parsed)["bad"] = kBadBytes;
+  EXPECT_EQ(DumpOrderedJson(*parsed, "host fields").status().code(),
+            absl::StatusCode::kInvalidArgument);
+}
+
 }  // namespace a11

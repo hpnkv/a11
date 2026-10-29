@@ -43,7 +43,6 @@ constexpr size_t kChunkMetadataSize =
     sizeof(std::uint32_t) + sizeof(std::uint64_t) + 1;
 constexpr size_t kFirstChunkMetadataSize =
     sizeof(std::uint32_t) + sizeof(std::uint32_t) + sizeof(std::uint64_t) + 1;
-constexpr size_t kMinimumPacketSize = kFirstChunkMetadataSize + 1;
 
 template <typename Integer>
 void AppendLittleEndian(std::string* output, Integer value) {
@@ -96,9 +95,9 @@ std::string SerializeChunk(std::string_view payload, std::uint64_t transient_id,
 }  // namespace
 
 absl::Status ByteChunkingOptions::Validate() const {
-  if (packet_size < kMinimumPacketSize) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("byte packet_size must be at least ", kMinimumPacketSize));
+  if (packet_size < kMinimumBytePacketSize) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "byte packet_size must be at least ", kMinimumBytePacketSize));
   }
   if (max_message_size == 0 || max_pending_messages == 0 ||
       max_pending_bytes == 0) {
@@ -114,9 +113,9 @@ absl::Status ByteChunkingOptions::Validate() const {
 
 absl::StatusOr<std::vector<std::string>> SplitBytesIntoPackets(
     std::string_view bytes, std::uint64_t transient_id, size_t packet_size) {
-  if (packet_size < kMinimumPacketSize) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("byte packet_size must be at least ", kMinimumPacketSize));
+  if (packet_size < kMinimumBytePacketSize) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "byte packet_size must be at least ", kMinimumBytePacketSize));
   }
   if (bytes.size() <= packet_size - kCompleteMetadataSize) {
     std::vector<std::string> packets;
@@ -206,9 +205,9 @@ absl::StatusOr<size_t> ParseBytePacketMetadata(std::string_view packet,
 
 absl::StatusOr<std::vector<std::string>> SplitOwnedBytesIntoPackets(
     std::string bytes, std::uint64_t transient_id, size_t packet_size) {
-  if (packet_size < kMinimumPacketSize) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("byte packet_size must be at least ", kMinimumPacketSize));
+  if (packet_size < kMinimumBytePacketSize) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "byte packet_size must be at least ", kMinimumBytePacketSize));
   }
   if (bytes.size() > packet_size - kCompleteMetadataSize) {
     return SplitBytesIntoPackets(bytes, transient_id, packet_size);

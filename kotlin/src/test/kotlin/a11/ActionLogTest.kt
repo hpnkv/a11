@@ -18,31 +18,33 @@ package a11
 
 import java.nio.file.Files
 import java.nio.file.Path
-import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.runBlocking
 
 /**
  * `Action.log`: what it writes, where it goes, and when it refuses.
  *
- * The lifecycle is the same as the C++ layer's and is pinned there; what is worth
- * pinning here is that the Kotlin port agrees about the port name, the metadata and
- * the refusals, so a Kotlin peer and a C++ peer read one contract.
+ * The lifecycle is the same as the C++ layer's and is pinned there; what is worth pinning here is
+ * that the Kotlin port agrees about the port name, the metadata and the refusals, so a Kotlin peer
+ * and a C++ peer read one contract.
  */
 class ActionLogTest {
-    private fun <T> ok(value: StatusOr<T>): T = when (value) {
-        is Ok<T> -> value.value
-        is Status -> throw AssertionError("expected ok, got $value")
-    }
+    private fun <T> ok(value: StatusOr<T>): T =
+        when (value) {
+            is Ok<T> -> value.value
+            is Err -> throw AssertionError("expected ok, got $value")
+        }
 
-    private fun schema(name: String = "quiet") = ActionSchema(
-        name = name,
-        outputs = linkedMapOf("out" to ActionPortSchema(name = "out", type = "text/plain")),
-    )
+    private fun schema(name: String = "quiet") =
+        ActionSchema(
+            name = name,
+            outputs = linkedMapOf("out" to ActionPortSchema(name = "out", type = "text/plain")),
+        )
 
     /** Collects what the process sink is handed, and puts the sink back after. */
     private fun <T> capturing(body: (MutableList<LogRecord>) -> T): T {
@@ -56,28 +58,34 @@ class ActionLogTest {
     }
 
     private suspend fun runWith(action: Action, body: suspend (Action) -> Unit) {
-        action.bindHandler { running -> body(running); Status.ok() }
+        action.bindHandler { running ->
+            body(running)
+            Status.ok()
+        }
         ok(action.run())
         action.wait()
     }
 
     @Test
     fun theLogPortCannotBeDeclaredInASchema() {
-        val invalid = ActionSchema(
-            name = "declared",
-            outputs = linkedMapOf(
-                ACTION_LOG_OUTPUT to ActionPortSchema(name = ACTION_LOG_OUTPUT, type = "text/plain"),
-            ),
-        )
+        val invalid =
+            ActionSchema(
+                name = "declared",
+                outputs =
+                    linkedMapOf(
+                        ACTION_LOG_OUTPUT to
+                            ActionPortSchema(name = ACTION_LOG_OUTPUT, type = "text/plain")
+                    ),
+            )
         val status = invalid.validate()
-        assertFalse(status.isOk)
+        assertFalse(status.ok())
         assertTrue(status.message.contains("is reserved"), status.message)
     }
 
     @Test
     fun theLogPortIsInNoSchemaAndNoActionMessage() = runBlocking {
         val action = ok(Action.create(schema(), ActionCreateOptions(id = "hidden")))
-        assertFalse(action.getSchema().outputs.containsKey(ACTION_LOG_OUTPUT))
+        assertFalse(action.schema.outputs.containsKey(ACTION_LOG_OUTPUT))
         assertEquals(listOf("out"), action.getActionMessage().outputs.map { it.name })
     }
 
@@ -120,7 +128,7 @@ class ActionLogTest {
     @Test
     fun onlyARunningActionMayLogAndOnlyAtAKnownLevel() = runBlocking {
         val early = ok(Action.create(schema(), ActionCreateOptions(id = "early")))
-        assertFalse(early.log("too soon").isOk)
+        assertFalse(early.log("too soon").ok())
 
         capturing { records ->
             runBlocking {
@@ -130,7 +138,7 @@ class ActionLogTest {
                     refused = running.log("noisy", LogOptions(level = "verbose"))
                 }
                 assertNotNull(refused)
-                assertFalse(refused!!.isOk)
+                assertFalse(refused!!.ok())
                 assertEquals(0, records.size)
             }
         }
@@ -148,7 +156,8 @@ class ActionLogTest {
                     running.log("second", LogOptions(level = "warning"))
                 }
 
-                // A claimed port owns presentation, so the sink is not also told.
+                // A claimed port owns presentation, so the sink is not also
+                // told.
                 assertEquals(0, records.size)
 
                 val seen = mutableListOf<Chunk>()
@@ -184,7 +193,8 @@ class ActionLogTest {
     @Suppress("UNCHECKED_CAST")
     fun theReservedPortAndItsMetadataMatchTheFixture() {
         // The log port and its attribute names are a cross-language contract: a
-        // peer in another language reads these chunks, so the words have to be the
+        // peer in another language reads these chunks, so the words have to be
+        // the
         // same words. Pinned beside the status chunk for the same reason.
         val fixture = ok(A11Json.parse(testdata("log_chunk.json"))) as Map<*, *>
         assertEquals(ACTION_LOG_OUTPUT, fixture["port"])

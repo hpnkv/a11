@@ -851,7 +851,7 @@ class IdeTools(private val project: Project) {
             // Never a port: the log port is in no schema, so what a tool says
             // about itself cannot become part of the result a model is shown.
             logNarration(action, outputs[RUN_LOG_KEY])
-            writeOutputs(action, schema, outputs).let { if (!it.isOk) return@handler it }
+            writeOutputs(action, schema, outputs).orElse { status -> return@handler status }
             Status.ok()
         }
     }
@@ -907,7 +907,7 @@ class IdeTools(private val project: Project) {
                 node.finalize()
             }
         }.awaitAll()
-        written.firstOrNull { !it.isOk } ?: Status.ok()
+        written.firstOrNull { !it.ok() } ?: Status.ok()
     }
 
     /**

@@ -19,14 +19,14 @@ package a11
 /**
  * The actions every A11 peer answers, whatever it was built to do.
  *
- * This is the Kotlin counterpart of `cpp/a11/actions/builtins.h`. A gateway
- * discovers what this side serves by calling these actions.
+ * This is the Kotlin counterpart of `cpp/a11/actions/builtins.h`. A gateway discovers what this
+ * side serves by calling these actions.
  *
- * These are not registrations. Discovery must remain available for an empty or
- * modified registry, so [ActionRegistry] consults this table on a miss.
+ * These are not registrations. Discovery must remain available for an empty or modified registry,
+ * so [ActionRegistry] consults this table on a miss.
  *
- * The handlers reach their registry through the action they were given rather
- * than capturing one, which is what keeps this an object and not a cycle.
+ * The handlers reach their registry through the action they were given rather than capturing one,
+ * which is what keeps this an object and not a cycle.
  */
 
 /** Lists the actions a peer serves, with their schemas. */
@@ -42,8 +42,7 @@ const val PING_NAME = "__ping"
 class BuiltinAction(val schema: ActionSchema, val handler: ActionHandler)
 
 /** Whether a name is one of A11's own rather than an application's. */
-fun isReservedActionName(name: String): Boolean =
-    name.length > 4 && name.startsWith("__")
+fun isReservedActionName(name: String): Boolean = name.length > 4 && name.startsWith("__")
 
 private fun port(
     name: String,
@@ -51,13 +50,14 @@ private fun port(
     description: String,
     required: Boolean,
     unary: Boolean,
-): ActionPortSchema = ActionPortSchema(
-    name = name,
-    type = type,
-    description = description,
-    required = required,
-    unary = unary,
-)
+): ActionPortSchema =
+    ActionPortSchema(
+        name = name,
+        type = type,
+        description = description,
+        required = required,
+        unary = unary,
+    )
 
 private fun textChunk(text: String, mimetype: String): Chunk =
     Chunk(data = utf8Encode(text), metadata = ChunkMetadata(mimetype = mimetype))
@@ -65,8 +65,8 @@ private fun textChunk(text: String, mimetype: String): Chunk =
 /**
  * The text on a unary input, or "" where it said nothing.
  *
- * Reads bytes rather than deserialising: the two things a builtin accepts are a
- * JSON request document and an action name, which are text either way.
+ * Reads bytes rather than deserialising: the two things a builtin accepts are a JSON request
+ * document and an action name, which are text either way.
  */
 private suspend fun readUnaryText(action: Action, portName: String): String {
     val node = action.getInput(portName)
@@ -86,9 +86,9 @@ private suspend fun writeUnary(
     mimetype: String,
 ): Status {
     val node = action.getOutput(portName)
-    if (node !is Ok) return node as Status
+    if (node !is Ok) return node.status
     val written = node.value.finalize(textChunk(text, mimetype))
-    return if (written.isOk) Status.ok() else written
+    return if (written.ok()) Status.ok() else written
 }
 
 /** Which schemas a request asked for, and how much of each. */
@@ -139,10 +139,11 @@ private fun accepts(query: SchemaQuery, name: String): Boolean {
 }
 
 private suspend fun runListActions(action: Action): Status {
-    val registry = action.getRegistry() as? ActionRegistry
-        ?: return failedPrecondition(
-            "This action was not dispatched through a registry, so there is nothing to describe.",
-        )
+    val registry =
+        action.registry as? ActionRegistry
+            ?: return failedPrecondition(
+                "This action was not dispatched through a registry, so there is nothing to describe."
+            )
     val query = parseQuery(readUnaryText(action, "request"))
     val entries = mutableListOf<Map<String, Any?>>()
     for (name in registry.listRegisteredActions().sorted()) {
@@ -154,30 +155,30 @@ private suspend fun runListActions(action: Action): Status {
         entries.add(schemaToJson(schema.value, runnable, query.ports))
     }
     val encoded = A11Json.encodeToString(schemaDocument(entries))
-    if (encoded !is Ok) return encoded as Status
+    if (encoded !is Ok) return encoded.status
     return writeUnary(action, "actions", encoded.value, JSON_MIMETYPE)
 }
 
 private suspend fun runGetSchema(action: Action): Status {
-    val registry = action.getRegistry() as? ActionRegistry
-        ?: return failedPrecondition(
-            "This action was not dispatched through a registry, so there is nothing to describe.",
-        )
+    val registry =
+        action.registry as? ActionRegistry
+            ?: return failedPrecondition(
+                "This action was not dispatched through a registry, so there is nothing to describe."
+            )
     val name = readUnaryText(action, "action")
     if (name.isEmpty()) {
-        return invalidArgument(
-            "__get_schema__ needs the name of an action on its 'action' input.",
-        )
+        return invalidArgument("__get_schema__ needs the name of an action on its 'action' input.")
     }
     // NotFound rather than an empty document, and distinct from the
     // InvalidArgument an unnameable id gets.
     val schema = registry.getSchema(name)
-    if (schema !is Ok) return schema as Status
+    if (schema !is Ok) return schema.status
     val runnable = registry.getHandler(name) is Ok
-    val encoded = A11Json.encodeToString(
-        schemaDocument(listOf(schemaToJson(schema.value, runnable, PortView.ALL))),
-    )
-    if (encoded !is Ok) return encoded as Status
+    val encoded =
+        A11Json.encodeToString(
+            schemaDocument(listOf(schemaToJson(schema.value, runnable, PortView.ALL)))
+        )
+    if (encoded !is Ok) return encoded.status
     return writeUnary(action, "schema", encoded.value, JSON_MIMETYPE)
 }
 
@@ -186,71 +187,97 @@ private suspend fun runPing(action: Action): Status =
 
 private val builtinTable: Map<String, BuiltinAction> by lazy {
     linkedMapOf(
-        LIST_ACTIONS_NAME to BuiltinAction(
-            ActionSchema(
-                name = LIST_ACTIONS_NAME,
-                description =
-                    "List the actions this peer serves, with their schemas, as one" +
-                        " a11.actions/v1 document. Takes an optional request object on" +
-                        " 'request': 'names' (full-match patterns), 'exact' (names)," +
-                        " 'ports' (\"callable\" or \"all\"), 'include_reserved', and" +
-                        " 'runnable_only'.",
-                inputs = linkedMapOf(
-                    "request" to port(
-                        "request", JSON_MIMETYPE,
-                        "Which actions to describe. Absent means all of them.",
-                        false, true,
-                    ),
+        LIST_ACTIONS_NAME to
+            BuiltinAction(
+                ActionSchema(
+                    name = LIST_ACTIONS_NAME,
+                    description =
+                        "List the actions this peer serves, with their schemas, as one" +
+                            " a11.actions/v1 document. Takes an optional request object on" +
+                            " 'request': 'names' (full-match patterns), 'exact' (names)," +
+                            " 'ports' (\"callable\" or \"all\"), 'include_reserved', and" +
+                            " 'runnable_only'.",
+                    inputs =
+                        linkedMapOf(
+                            "request" to
+                                port(
+                                    "request",
+                                    JSON_MIMETYPE,
+                                    "Which actions to describe. Absent means all of them.",
+                                    false,
+                                    true,
+                                )
+                        ),
+                    outputs =
+                        linkedMapOf(
+                            "actions" to
+                                port(
+                                    "actions",
+                                    JSON_MIMETYPE,
+                                    "The a11.actions/v1 document, whole.",
+                                    true,
+                                    true,
+                                )
+                        ),
                 ),
-                outputs = linkedMapOf(
-                    "actions" to port(
-                        "actions", JSON_MIMETYPE,
-                        "The a11.actions/v1 document, whole.", true, true,
-                    ),
-                ),
+                ::runListActions,
             ),
-            ::runListActions,
-        ),
-        GET_SCHEMA_NAME to BuiltinAction(
-            ActionSchema(
-                name = GET_SCHEMA_NAME,
-                description =
-                    "Describe one action this peer serves, as an a11.actions/v1" +
-                        " document. Fails NOT_FOUND when the name is not registered here.",
-                inputs = linkedMapOf(
-                    "action" to port(
-                        "action", TEXT_MIMETYPE,
-                        "Name of the action to describe.", true, true,
-                    ),
+        GET_SCHEMA_NAME to
+            BuiltinAction(
+                ActionSchema(
+                    name = GET_SCHEMA_NAME,
+                    description =
+                        "Describe one action this peer serves, as an a11.actions/v1" +
+                            " document. Fails NOT_FOUND when the name is not registered here.",
+                    inputs =
+                        linkedMapOf(
+                            "action" to
+                                port(
+                                    "action",
+                                    TEXT_MIMETYPE,
+                                    "Name of the action to describe.",
+                                    true,
+                                    true,
+                                )
+                        ),
+                    outputs =
+                        linkedMapOf(
+                            "schema" to
+                                port(
+                                    "schema",
+                                    JSON_MIMETYPE,
+                                    "The a11.actions/v1 document for that one action.",
+                                    true,
+                                    true,
+                                )
+                        ),
                 ),
-                outputs = linkedMapOf(
-                    "schema" to port(
-                        "schema", JSON_MIMETYPE,
-                        "The a11.actions/v1 document for that one action.", true, true,
-                    ),
-                ),
+                ::runGetSchema,
             ),
-            ::runGetSchema,
-        ),
         // Wording and shape kept exactly: four languages' clients probe with
         // this, and a probe that started describing itself differently would be
         // the first thing anybody diffing two peers noticed.
-        PING_NAME to BuiltinAction(
-            ActionSchema(
-                name = PING_NAME,
-                description =
-                    "Ping the server to check if it is alive. Requires a single value" +
-                        " on the port `input`, which it returns as a single value on the" +
-                        " port `output`.",
-                inputs = linkedMapOf(
-                    "input" to port("input", TEXT_MIMETYPE, "Ping input value", false, false),
+        PING_NAME to
+            BuiltinAction(
+                ActionSchema(
+                    name = PING_NAME,
+                    description =
+                        "Ping the server to check if it is alive. Requires a single value" +
+                            " on the port `input`, which it returns as a single value on the" +
+                            " port `output`.",
+                    inputs =
+                        linkedMapOf(
+                            "input" to
+                                port("input", TEXT_MIMETYPE, "Ping input value", false, false)
+                        ),
+                    outputs =
+                        linkedMapOf(
+                            "output" to
+                                port("output", TEXT_MIMETYPE, "Pong response value", false, false)
+                        ),
                 ),
-                outputs = linkedMapOf(
-                    "output" to port("output", TEXT_MIMETYPE, "Pong response value", false, false),
-                ),
+                ::runPing,
             ),
-            ::runPing,
-        ),
     )
 }
 

@@ -26,13 +26,11 @@ import a11.SerializationRegistry
 import a11.Status
 import a11.StatusOr
 import a11.base64Decode
-import a11.errorOrNull
 import a11.invalidArgument
 import a11.orElse
 import a11.registerWireValueCodec
 import a11.testSerializable
 import a11.utf8Decode
-import a11.valueOrNull
 import a11.wireValueCodec
 import a11.wireValueCodecByTag
 import java.util.UUID
@@ -46,24 +44,26 @@ enum class LlmHeaders(val header: String) {
     ALLOWED_LLM_ACTIONS("x-a11-allowed-llm-actions"),
 }
 
-/**
- * Conversation roles. `model` is the assistant role, matching the Python SDK.
- */
+/** Conversation roles. `model` is the assistant role, matching the Python SDK. */
 enum class Role(val value: String) {
-    SYSTEM("system"), ASSISTANT("model"), USER("user")
+    SYSTEM("system"),
+    ASSISTANT("model"),
+    USER("user"),
 }
 
 /**
  * Portable, backend-independent record of one turn; JSON object on the wire.
  *
- * The map retains the `a11.sdk.Interaction` type tag through serialization, so
- * it can be nested in another value and accepted by strict interaction ports.
+ * The map retains the `a11.sdk.Interaction` type tag through serialization, so it can be nested in
+ * another value and accepted by strict interaction ports.
  */
 class Interaction : LinkedHashMap<String, Any?>, A11Serializable {
     constructor() : super()
+
     constructor(source: Map<String, Any?>) : super(source)
 
-    override val a11SerialTag: String get() = SerialTags.INTERACTION
+    override val a11SerialTag: String
+        get() = SerialTags.INTERACTION
 }
 
 /** Build a fully-defaulted interaction from a partial one. */
@@ -78,7 +78,8 @@ fun makeInteraction(partial: Map<String, Any?> = emptyMap()): Interaction {
     result["action_calls"] = partial["action_calls"] ?: emptyList<Any?>()
     result["action_inputs"] = partial["action_inputs"] ?: emptyMap<String, Any?>()
     result["action_outputs"] = partial["action_outputs"] ?: emptyMap<String, Any?>()
-    result["backend_specific_metadata"] = partial["backend_specific_metadata"] ?: emptyMap<String, Any?>()
+    result["backend_specific_metadata"] =
+        partial["backend_specific_metadata"] ?: emptyMap<String, Any?>()
     for ((k, v) in partial) if (!result.containsKey(k)) result[k] = v
     return result
 }
@@ -86,11 +87,10 @@ fun makeInteraction(partial: Map<String, Any?> = emptyMap()): Interaction {
 /**
  * Build an interaction carrying a single text message.
  *
- * The content is the backend-neutral `{role, content: [text part]}` envelope,
- * so a plain text turn stays portable across a mid-conversation model switch.
+ * The content is the backend-neutral `{role, content: [text part]}` envelope, so a plain text turn
+ * stays portable across a mid-conversation model switch.
  *
- * `content` and `system_instructions`
- * contain [Chunk] values, as required by the
+ * `content` and `system_instructions` contain [Chunk] values, as required by the
  * backend-independent interaction schema.
  */
 fun makeTextMessageInteraction(
@@ -99,29 +99,47 @@ fun makeTextMessageInteraction(
     role: Role = Role.USER,
     registry: SerializationRegistry = SerializationRegistry.getGlobal(),
 ): StatusOr<Interaction> {
-    if (role == Role.SYSTEM) return invalidArgument("A text message interaction cannot use the system role as content.")
+    if (role == Role.SYSTEM)
+        return invalidArgument("A text message interaction cannot use the system role as content.")
+
     val roleStr = if (role == Role.ASSISTANT) "model" else "user"
-    val content = registry.toChunk(linkedMapOf<String, Any?>(
-        "role" to roleStr,
-        "content" to listOf(linkedMapOf<String, Any?>("type" to "text", "text" to text)),
-    )).orElse { return it }
-    val instructions = if (systemPrompt.isEmpty()) emptyList() else {
-        listOf(registry.toChunk(systemPrompt).orElse { return it })
-    }
-    return Ok(makeInteraction(mapOf(
-        "role" to role.value,
-        "content" to listOf(content),
-        "system_instructions" to instructions,
-    )))
+    val content =
+        registry
+            .toChunk(
+                linkedMapOf<String, Any?>(
+                    "role" to roleStr,
+                    "content" to listOf(linkedMapOf<String, Any?>("type" to "text", "text" to text)),
+                )
+            )
+            .orElse { status ->
+                return status
+            }
+    val instructions =
+        if (systemPrompt.isEmpty()) emptyList()
+        else {
+            listOf(
+                registry.toChunk(systemPrompt).orElse { status ->
+                    return status
+                }
+            )
+        }
+    return Ok(
+        makeInteraction(
+            mapOf(
+                "role" to role.value,
+                "content" to listOf(content),
+                "system_instructions" to instructions,
+            )
+        )
+    )
 }
 
 /**
  * A model an interaction nests, held as a map that knows its own name.
  *
- * Kotlin has no field-by-field port of these — an interaction is a map here,
- * and so is everything inside it — but they still have to arrive at a Python
- * peer as their own types rather than as anonymous objects. Naming them is
- * enough for that; the fields ride along untouched.
+ * Kotlin has no field-by-field port of these — an interaction is a map here, and so is everything
+ * inside it — but they still have to arrive at a Python peer as their own types rather than as
+ * anonymous objects. Naming them is enough for that; the fields ride along untouched.
  */
 class TaggedModel(override val a11SerialTag: String, source: Map<String, Any?> = emptyMap()) :
     LinkedHashMap<String, Any?>(source), A11Serializable
@@ -152,10 +170,10 @@ private fun registerMapModel(tag: String, build: (Map<String, Any?>) -> Any): St
             test = testSerializable(tag),
             dump = { value ->
                 @Suppress("UNCHECKED_CAST")
-                Ok(Fields().also { it.putAll(value as Map<String, Any?>) })
+                Ok(Fields().also { element -> element.putAll(value as Map<String, Any?>) })
             },
             load = { fields -> Ok(build(fields)) },
-        ),
+        )
     )
 
 // --- Reading an interaction's fields -----------------------------------------
@@ -168,80 +186,122 @@ private fun registerMapModel(tag: String, build: (Map<String, Any?>) -> Any): St
 /** Rebuild one value that the field's declared type identifies as [tag]. */
 private fun loadTagged(tag: String, value: Any?): StatusOr<Any?> {
     if (value == null) return Ok(null)
-    val codec = wireValueCodecByTag(tag)
-        ?: return invalidArgument("No wire value codec is registered for $tag.")
+    val codec =
+        wireValueCodecByTag(tag)
+            ?: return invalidArgument("No wire value codec is registered for $tag.")
     // An instance a caller built, or one a peer already sent us, is left alone.
     if (codec.test(value)) return Ok(value)
     if (value !is Map<*, *>) return invalidArgument("Expected the fields of a $tag.")
-    return codec.load(value.entries.associate { it.key.toString() to it.value })
+    return codec.load(value.entries.associate { item -> item.key.toString() to item.value })
 }
 
 private fun loadTaggedList(tag: String, value: Any?): StatusOr<List<Any?>> {
-    val items = value as? List<*> ?: return Ok(emptyList())
+    val items = value as? List<*> ?: return invalidArgument("Expected an array.")
     val result = ArrayList<Any?>(items.size)
-    for (item in items) result.add(loadTagged(tag, item).orElse { return it })
+    for (item in items) result.add(
+        loadTagged(tag, item).orElse { status ->
+            return status
+        }
+    )
     return Ok(result)
 }
 
 private fun loadTaggedListMap(tag: String, value: Any?): StatusOr<Map<String, Any?>> {
-    val entries = value as? Map<*, *> ?: return Ok(emptyMap())
+    val entries = value as? Map<*, *> ?: return invalidArgument("Expected an object.")
     val result = LinkedHashMap<String, Any?>()
     for ((key, item) in entries) {
-        result[key.toString()] = loadTaggedList(tag, item).orElse { return it }
+        result[key.toString()] =
+            loadTaggedList(tag, item).orElse { status ->
+                return status
+            }
     }
     return Ok(result)
 }
 
 private fun loadTaggedMap(tag: String, value: Any?): StatusOr<Map<String, Any?>> {
-    val entries = value as? Map<*, *> ?: return Ok(emptyMap())
+    val entries = value as? Map<*, *> ?: return invalidArgument("Expected an object.")
     val result = LinkedHashMap<String, Any?>()
     for ((key, item) in entries) {
-        result[key.toString()] = loadTagged(tag, item).orElse { return it }
+        result[key.toString()] =
+            loadTagged(tag, item).orElse { status ->
+                return status
+            }
     }
     return Ok(result)
 }
 
 /** A `dict[str, bytes]` field, whose values the wire spells as base64. */
-private fun loadByteMap(value: Any?): Map<String, Any?> {
-    val entries = value as? Map<*, *> ?: return emptyMap()
-    val result = LinkedHashMap<String, Any?>()
+private fun loadByteMap(value: Any?): StatusOr<Map<String, ByteArray>> {
+    val entries = value as? Map<*, *> ?: return invalidArgument("Expected a byte map.")
+    val result = LinkedHashMap<String, ByteArray>()
     for ((key, item) in entries) {
-        result[key.toString()] = when (item) {
-            is ByteArray -> item
-            is String -> base64Decode(item).valueOrNull() ?: ByteArray(0)
-            else -> item
-        }
+        if (key !is String) return invalidArgument("Byte map keys must be strings.")
+        result[key] =
+            when (item) {
+                is ByteArray -> item.copyOf()
+                is String ->
+                    base64Decode(item).orElse { status ->
+                        return status
+                    }
+                else -> return invalidArgument("Byte map values must be bytes or base64 text.")
+            }
     }
-    return result
+    return Ok(result)
 }
 
 /**
  * Rebuild an interaction from the bare tree a peer sent.
  *
- * Only fields that are actually present are rewritten, so an interaction that
- * is decoded and sent straight back is byte-identical to the one that arrived.
+ * Only fields that are actually present are rewritten, so an interaction that is decoded and sent
+ * straight back is byte-identical to the one that arrived.
  */
 private fun loadInteraction(fields: Map<String, Any?>): StatusOr<Any?> {
     val result = Interaction(fields)
-    fun <T> put(key: String, load: (Any?) -> StatusOr<T>): Status? {
-        if (!fields.containsKey(key)) return null
-        val loaded = load(fields[key])
-        val failure = loaded.errorOrNull()
-        if (failure != null) return failure
-        result[key] = loaded.valueOrNull()
-        return null
+    fun <T> put(key: String, load: (Any?) -> StatusOr<T>): Status {
+        if (!fields.containsKey(key)) return Status.ok()
+        result[key] =
+            load(fields[key]).orElse { status ->
+                return status
+            }
+        return Status.ok()
     }
-    put("status") { loadTagged(SerialTags.STATUS, it) }?.let { return it }
-    put("content") { loadTaggedList(SerialTags.CHUNK, it) }?.let { return it }
-    put("system_instructions") { loadTaggedList(SerialTags.CHUNK, it) }?.let { return it }
-    put("action_calls") { loadTaggedList(SerialTags.ACTION_MESSAGE, it) }?.let { return it }
-    put("action_inputs") { loadTaggedListMap(SerialTags.NODE_FRAGMENT, it) }?.let { return it }
-    put("action_outputs") { loadTaggedListMap(SerialTags.NODE_FRAGMENT, it) }?.let { return it }
-    put("action_configs") { loadTaggedMap(SerialTags.ACTION_CONFIG, it) }?.let { return it }
-    put("usage_metadata") { loadTagged(SerialTags.USAGE_METADATA, it) }?.let { return it }
+    put("status") { value -> loadTagged(SerialTags.STATUS, value) }
+        .orElse { status ->
+            return status
+        }
+    put("content") { value -> loadTaggedList(SerialTags.CHUNK, value) }
+        .orElse { status ->
+            return status
+        }
+    put("system_instructions") { value -> loadTaggedList(SerialTags.CHUNK, value) }
+        .orElse { status ->
+            return status
+        }
+    put("action_calls") { value -> loadTaggedList(SerialTags.ACTION_MESSAGE, value) }
+        .orElse { status ->
+            return status
+        }
+    put("action_inputs") { value -> loadTaggedListMap(SerialTags.NODE_FRAGMENT, value) }
+        .orElse { status ->
+            return status
+        }
+    put("action_outputs") { value -> loadTaggedListMap(SerialTags.NODE_FRAGMENT, value) }
+        .orElse { status ->
+            return status
+        }
+    put("action_configs") { value -> loadTaggedMap(SerialTags.ACTION_CONFIG, value) }
+        .orElse { status ->
+            return status
+        }
+    put("usage_metadata") { value -> loadTagged(SerialTags.USAGE_METADATA, value) }
+        .orElse { status ->
+            return status
+        }
     if (fields.containsKey("backend_specific_metadata")) {
         result["backend_specific_metadata"] =
-            loadByteMap(fields["backend_specific_metadata"])
+            loadByteMap(fields["backend_specific_metadata"]).orElse { status ->
+                return status
+            }
     }
     return Ok(result)
 }
@@ -250,10 +310,16 @@ private fun loadInteraction(fields: Map<String, Any?>): StatusOr<Any?> {
 private fun loadActionConfig(fields: Map<String, Any?>): StatusOr<Any?> {
     val result = TaggedModel(SerialTags.ACTION_CONFIG, fields)
     if (fields.containsKey("peer") && fields["peer"] !is String) {
-        result["peer"] = loadTagged(SerialTags.PEER, fields["peer"]).orElse { return it }
+        result["peer"] =
+            loadTagged(SerialTags.PEER, fields["peer"]).orElse { status ->
+                return status
+            }
     }
     if (fields.containsKey("header_autofills")) {
-        result["header_autofills"] = loadByteMap(fields["header_autofills"])
+        result["header_autofills"] =
+            loadByteMap(fields["header_autofills"]).orElse { status ->
+                return status
+            }
     }
     return Ok(result)
 }
@@ -265,10 +331,10 @@ private val sdkCodecsInstalled: Unit = run {
             test = testSerializable(SerialTags.INTERACTION),
             dump = { value ->
                 @Suppress("UNCHECKED_CAST")
-                Ok(Fields().also { it.putAll(value as Map<String, Any?>) })
+                Ok(Fields().also { element -> element.putAll(value as Map<String, Any?>) })
             },
             load = ::loadInteraction,
-        ),
+        )
     )
     registerWireValueCodec(
         wireValueCodec(
@@ -276,13 +342,13 @@ private val sdkCodecsInstalled: Unit = run {
             test = testSerializable(SerialTags.ACTION_CONFIG),
             dump = { value ->
                 @Suppress("UNCHECKED_CAST")
-                Ok(Fields().also { it.putAll(value as Map<String, Any?>) })
+                Ok(Fields().also { element -> element.putAll(value as Map<String, Any?>) })
             },
             load = ::loadActionConfig,
-        ),
+        )
     )
-    registerMapModel(SerialTags.PEER) { makePeer(it) }
-    registerMapModel(SerialTags.USAGE_METADATA) { makeUsageMetadata(it) }
+    registerMapModel(SerialTags.PEER) { fields -> makePeer(fields) }
+    registerMapModel(SerialTags.USAGE_METADATA) { fields -> makeUsageMetadata(fields) }
 }
 
 /** Force the SDK codecs to be installed; safe to call repeatedly. */
@@ -292,17 +358,28 @@ fun ensureInteractionCodec() {
 
 /** Regex patterns for the actions the LLM may invoke as tools. */
 fun getAllowedLlmActionPatterns(action: Action): StatusOr<List<String>> {
-    val header = action.getHeader(LlmHeaders.ALLOWED_LLM_ACTIONS.header).orElse { return it } ?: return Ok(emptyList())
-    val decoded = utf8Decode(header).orElse { return it }
-    return Ok(decoded.split(",").map { it.trim() }.filter { it.isNotEmpty() })
+    val header =
+        action.getHeader(LlmHeaders.ALLOWED_LLM_ACTIONS.header).orElse { status ->
+            return status
+        } ?: return Ok(emptyList())
+    val decoded =
+        utf8Decode(header).orElse { status ->
+            return status
+        }
+    return Ok(decoded.split(",").map { value -> value.trim() }.filter { item -> item.isNotEmpty() })
 }
 
 /** Whether an action name is fully matched by any allowed regex pattern. */
 fun actionNameMatchesAllowed(name: String, patterns: List<String>): StatusOr<Boolean> {
     for (pattern in patterns) {
-        val regex = try { Regex("^(?:$pattern)$") } catch (error: Throwable) {
-            return invalidArgument("Allowed LLM action pattern \"$pattern\" is not a valid regular expression.")
-        }
+        val regex =
+            try {
+                Regex("^(?:$pattern)$")
+            } catch (error: IllegalArgumentException) {
+                return invalidArgument(
+                    "Allowed LLM action pattern \"$pattern\" is not a valid regular expression."
+                )
+            }
         if (regex.matches(name)) return Ok(true)
     }
     return Ok(false)

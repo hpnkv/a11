@@ -178,3 +178,11 @@ if (A11_BUILD_AUDIO)
                                    a11::nodes GTest::gtest_main a11::warnings)
   add_test(NAME a11_audio_actions_test COMMAND a11_audio_actions_test)
 endif ()
+
+if(A11_BUILD_JVM)
+  add_executable(a11_jvm_test jvm_bridge_test.cc)
+  target_link_libraries(a11_jvm_test PRIVATE a11_jvm_runtime GTest::gtest_main)
+  target_compile_options(a11_jvm_test PRIVATE
+      $<$<CXX_COMPILER_ID:AppleClang,Clang,GNU>:-fno-exceptions>)
+  add_test(NAME a11_jvm_test COMMAND a11_jvm_test)
+endif()

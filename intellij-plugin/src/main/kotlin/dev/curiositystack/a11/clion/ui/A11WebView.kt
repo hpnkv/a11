@@ -17,7 +17,8 @@
 package dev.curiositystack.a11.clion.ui
 
 import a11.A11Json
-import a11.valueOrThrow
+import a11.orElse
+import a11.StatusException
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationInfo
 import com.intellij.openapi.application.ApplicationManager
@@ -130,14 +131,14 @@ class A11WebView(private val project: Project, private val view: String, parent:
             browser.cefBrowser,
         )
 
-        listActionsQuery.addHandler { respond { A11Json.encodeToString(ideTools.listDescriptors()).valueOrThrow() } }
+        listActionsQuery.addHandler { respond { A11Json.encodeToString(ideTools.listDescriptors()).orElse { throw StatusException(it) } } }
         helloQuery.addHandler { respond { hello() } }
         runActionQuery.addHandler { request -> respond { runAction(request) } }
         getConfigQuery.addHandler { respond { config() } }
         readFlowQuery.addHandler { name -> respond { readFlow(name) } }
         highlightFlowQuery.addHandler { source -> respond {
             A11Json.encodeToString(FlowEngine.instance().tokens(source) ?: mapOf("tokens" to emptyList<Any>()))
-                .valueOrThrow()
+                .orElse { throw StatusException(it) }
         } }
         requestFlowLanguageQuery.addHandler { request -> respond { requestFlowLanguage(request) } }
         suggestOnHighlightQuery.addHandler { note -> respond { suggestOnHighlight(note) } }
@@ -160,7 +161,7 @@ class A11WebView(private val project: Project, private val view: String, parent:
 
     /** Push the declaration currently selected in an editor into the runner. */
     fun openFlow(flow: Map<String, Any?>) {
-        val encoded = A11Json.encodeToString(flow).valueOrThrow()
+        val encoded = A11Json.encodeToString(flow).orElse { throw StatusException(it) }
             .replace("</script", "<\\/script")
         browser.cefBrowser.executeJavaScript(
             "window.__A11_OPEN_FLOW && window.__A11_OPEN_FLOW($encoded);",
@@ -278,13 +279,13 @@ class A11WebView(private val project: Project, private val view: String, parent:
     private fun runAction(request: String): String {
         GatewayConnection.getInstance(project).ensureConnected()
         @Suppress("UNCHECKED_CAST")
-        val parsed = A11Json.parse(request).valueOrThrow() as? Map<String, Any?>
+        val parsed = A11Json.parse(request).orElse { throw StatusException(it) } as? Map<String, Any?>
             ?: error("Malformed runAction request.")
         val name = parsed["name"] as? String ?: error("runAction requires a 'name'.")
         @Suppress("UNCHECKED_CAST")
         val inputs = (parsed["inputs"] as? Map<String, Any?>) ?: emptyMap()
         val result = ideTools.runByName(name, inputs)
-        return A11Json.encodeToString(result).valueOrThrow()
+        return A11Json.encodeToString(result).orElse { throw StatusException(it) }
     }
 
     private fun hello(): String = A11Json.encodeToString(
@@ -297,12 +298,12 @@ class A11WebView(private val project: Project, private val view: String, parent:
                 "typedValues" to true,
             ),
         ),
-    ).valueOrThrow()
+    ).orElse { throw StatusException(it) }
 
     /** Forward the framework-neutral editor controller to the one native Flow service. */
     private fun requestFlowLanguage(encoded: String): String {
         @Suppress("UNCHECKED_CAST")
-        val request = A11Json.parse(encoded).valueOrThrow() as? Map<String, Any?>
+        val request = A11Json.parse(encoded).orElse { throw StatusException(it) } as? Map<String, Any?>
             ?: error("A Flow language request must be a JSON object.")
         val method = request["method"] as? String ?: error("A Flow language request needs a method.")
         val source = request["source"] as? String ?: ""
@@ -326,7 +327,7 @@ class A11WebView(private val project: Project, private val view: String, parent:
         } else {
             linkedMapOf<String, Any?>("ok" to true, "result" to result)
         }
-        return A11Json.encodeToString(reply).valueOrThrow()
+        return A11Json.encodeToString(reply).orElse { throw StatusException(it) }
     }
 
     /**
@@ -345,12 +346,12 @@ class A11WebView(private val project: Project, private val view: String, parent:
      */
     private fun suggestOnHighlight(note: String): String {
         @Suppress("UNCHECKED_CAST")
-        val parsed = A11Json.parse(note).valueOrThrow() as? Map<String, Any?>
+        val parsed = A11Json.parse(note).orElse { throw StatusException(it) } as? Map<String, Any?>
             ?: error("A highlight note must be a JSON object.")
         val suggestion = HighlightSuggestions.getInstance(project).suggest(HighlightNote.fromJson(parsed))
         return A11Json.encodeToString(
             linkedMapOf<String, Any?>("path" to suggestion.path, "has_patch" to suggestion.patch.isNotEmpty()),
-        ).valueOrThrow()
+        ).orElse { throw StatusException(it) }
     }
 
     /**
@@ -418,7 +419,7 @@ class A11WebView(private val project: Project, private val view: String, parent:
             // rather than telling the model the project lives at "null".
             "projectPath" to project.basePath,
         )
-        return A11Json.encodeToString(config).valueOrThrow()
+        return A11Json.encodeToString(config).orElse { throw StatusException(it) }
     }
 
     /**
@@ -441,7 +442,7 @@ class A11WebView(private val project: Project, private val view: String, parent:
 
     /** Update an open page after an IDE light/dark theme change. */
     private fun applyTheme() {
-        val declarations = A11Json.encodeToString(themeVars()).valueOrThrow()
+        val declarations = A11Json.encodeToString(themeVars()).orElse { throw StatusException(it) }
         browser.cefBrowser.executeJavaScript(
             "document.documentElement.style.cssText = $declarations;",
             browser.cefBrowser.url,
@@ -627,7 +628,7 @@ class A11WebView(private val project: Project, private val view: String, parent:
                     val output = process.inputStream.bufferedReader().use { it.readText() }
                     process.waitFor()
                     @Suppress("UNCHECKED_CAST")
-                    val root = A11Json.parse(output).valueOrThrow() as? Map<String, Any?>
+                    val root = A11Json.parse(output).orElse { throw StatusException(it) } as? Map<String, Any?>
                         ?: return@supplyAsync emptyMap()
                     val adapters = root["SPDisplaysDataType"] as? List<Map<String, Any?>>
                         ?: return@supplyAsync emptyMap()

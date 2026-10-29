@@ -17,57 +17,61 @@
 package a11
 
 import a11.net.WireStream
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
-/**
- * Asynchronous application work invoked by [Action.run]; null result means OK.
- */
-typealias ActionHandler = suspend (Action) -> Status?
+/** Asynchronous application work invoked by [Action.run], returning its completion status. */
+typealias ActionHandler = suspend (Action) -> Status
 
 /** Synchronous hook run when cancellation is first requested. */
-typealias OnActionCancelled = (Action) -> Status?
-
-/** Minimal registry contract used to resolve a nested action by name. */
-interface ActionRegistryLike {
-    fun getSchema(actionName: String): StatusOr<ActionSchema>
-    fun getHandler(actionName: String): StatusOr<ActionHandler>
-}
-
-/** Session operations an Action needs for dispatch and lifetime tracking. */
-interface ActionSessionContext {
-    fun getNodeMap(): NodeMap
-    fun getActionRegistry(): ActionRegistryLike?
-    fun send(message: WireMessage, streamId: String = ""): Status
-    fun trackAction(action: Action): Status
-    fun untrackAction(action: Action)
-    suspend fun acquireActionSlot(nested: Boolean): Status = Status.ok()
-    fun releaseActionSlot(nested: Boolean) {}
-}
+typealias OnActionCancelled = (Action) -> Status
 
 /** Collaborators and instance policy supplied when creating an [Action]. */
-class ActionCreateOptions(
-    var id: String? = null,
-    var handler: ActionHandler? = null,
-    var nodeMap: NodeMap? = null,
-    var stream: WireStream? = null,
-    var session: ActionSessionContext? = null,
-    var registry: ActionRegistryLike? = null,
-    var settings: ActionSettings = ActionSettings(),
+data class ActionCreateOptions(
+    val id: String? = null,
+    val handler: ActionHandler? = null,
+    val nodeMap: NodeMap? = null,
+    val stream: WireStream? = null,
+    val session: Session? = null,
+    val registry: ActionRegistry? = null,
+    val settings: ActionSettings = ActionSettings(),
 )
 
-private enum class ActionMode { NONE, RUN, CALL, CANCELLED }
+private enum class ActionMode {
+    NONE,
+    RUN,
+    CALL,
+    CANCELLED,
+}
 
 /** One schema-described unit of local work or remote agent work. */
-class Action private constructor(
-    private var schema: ActionSchema,
-    options: ActionCreateOptions,
-    private var id: String,
-) {
-    private var handler: ActionHandler? = options.handler
-    private var session: ActionSessionContext? = options.session
-    private var nodeMap: NodeMap = options.nodeMap ?: session?.getNodeMap() ?: NodeMap()
-    private var stream: WireStream? = options.stream
-    private var registry: ActionRegistryLike? = options.registry ?: session?.getActionRegistry()
+class Action private constructor(schema: ActionSchema, options: ActionCreateOptions, id: String) {
+    var schema: ActionSchema = schema
+        private set
+
+    var id: String = id
+        private set
+
+    var handler: ActionHandler? = options.handler
+        private set
+
+    var session: Session? = options.session
+        private set
+
+    var nodeMap: NodeMap = options.nodeMap ?: session?.getNodeMap() ?: NodeMap()
+        private set
+
+    var stream: WireStream? = options.stream
+        private set
+
+    var registry: ActionRegistry? = options.registry ?: session?.getActionRegistry()
+        private set
+
     private var settings: ActionSettings = options.settings.copy()
 
     private val headers: ByteMap = ByteMap()
@@ -75,10 +79,14 @@ class Action private constructor(
     private val outputIds = LinkedHashMap<String, String>()
     private val boundNodes = mutableSetOf<AsyncNode>()
     private var mode = ActionMode.NONE
-    private var completionStatus: Status? = null
-    private var dispatchStatus: Status? = null
-    @Volatile private var cancelRequested = false
-    private var finishing = false
+    @Volatile private var completionStatus: Status? = null
+    private var dispatchOutcome: Status? = null
+    private val cancellationRequested = AtomicBoolean(false)
+    private val cancelRequested: Boolean
+        get() = cancellationRequested.get()
+
+    private val finishing = AtomicBoolean(false)
+    @Volatile private var handlerJob: Job? = null
     private var inputAutofillsApplied = false
     private var tracked = false
     // Set once a consumer has taken the log port through getLogNode(). It then
@@ -91,41 +99,59 @@ class Action private constructor(
 
     init {
         for ((name, header) in schema.headers) {
-            header.defaultValue?.let { headers[name.lowercase()] = it.copyOf() }
+            header.defaultValue?.let { value -> headers[name.lowercase()] = value.copyOf() }
         }
         remapDefaultPorts()
     }
 
-    val isCancelled: Boolean get() = cancelRequested || completionStatus?.code == StatusCode.CANCELLED
-    fun getId(): String = id
-    fun getSchema(): ActionSchema = schema
-    fun getHandler(): ActionHandler? = handler
-    fun getNodeMap(): NodeMap = nodeMap
-    fun getStream(): WireStream? = stream
-    fun getRegistry(): ActionRegistryLike? = registry
-    fun getSession(): ActionSessionContext? = session
-    fun getStatus(): Status = completionStatus ?: Status.ok()
-    fun getDispatchStatus(): Status? = dispatchStatus
-    fun isDone(): Boolean = completionStatus != null
+    val isCancelled: Boolean
+        get() = cancelRequested || completionStatus?.code == StatusCode.CANCELLED
+
+    val status: Status
+        get() = completionStatus ?: Status.ok()
+
+    val dispatchStatus: Status?
+        get() = dispatchOutcome
+
+    val isDone: Boolean
+        get() = completionStatus != null
 
     fun setId(id: String): Status {
-        validateName(id).let { if (!it.isOk) return it }
-        if (mode != ActionMode.NONE) return failedPrecondition("Cannot change Action id after it has started.")
+        validateName(id).orElse { status ->
+            return status
+        }
+        if (mode != ActionMode.NONE)
+            return failedPrecondition("Cannot change Action id after it has started.")
         this.id = id
         return remapDefaultPorts()
     }
 
     fun bindHandler(handler: ActionHandler): Status {
-        if (mode != ActionMode.NONE) return failedPrecondition("Cannot change Action handler after it has started.")
+        if (mode != ActionMode.NONE)
+            return failedPrecondition("Cannot change Action handler after it has started.")
         this.handler = handler
         return Status.ok()
     }
 
-    fun bindNodeMap(nodeMap: NodeMap): Status { this.nodeMap = nodeMap; return Status.ok() }
-    fun bindRegistry(registry: ActionRegistryLike?): Status { this.registry = registry; return Status.ok() }
-    fun bindSession(session: ActionSessionContext?): Status {
-        if (!tracked || this.session === session) { this.session = session; return Status.ok() }
-        if (session != null) session.trackAction(this).let { if (!it.isOk) return it }
+    fun bindNodeMap(nodeMap: NodeMap): Status {
+        this.nodeMap = nodeMap
+        return Status.ok()
+    }
+
+    fun bindRegistry(registry: ActionRegistry?): Status {
+        this.registry = registry
+        return Status.ok()
+    }
+
+    fun bindSession(session: Session?): Status {
+        if (!tracked || this.session === session) {
+            this.session = session
+            return Status.ok()
+        }
+        if (session != null)
+            session.trackAction(this).orElse { status ->
+                return status
+            }
         this.session?.untrackAction(this)
         this.session = session
         tracked = session != null
@@ -136,8 +162,8 @@ class Action private constructor(
         if (stream === this.stream) return Status.ok()
         val previous = this.stream
         for (node in boundNodes) {
-            previous?.let { node.detachStream(it) }
-            stream?.let { node.attachStream(it) }
+            previous?.let { value -> node.detachStream(value) }
+            stream?.let { value -> node.attachStream(value) }
         }
         this.stream = stream
         return Status.ok()
@@ -147,7 +173,10 @@ class Action private constructor(
 
     suspend fun getInput(name: String, bindStream: Boolean? = null): StatusOr<AsyncNode> {
         val id = inputIds[name] ?: return notFound("Action input '$name' is not mapped.")
-        val node = nodeMap.get(id).orElse { return it }
+        val node =
+            nodeMap.get(id).orElse { status ->
+                return status
+            }
         val bind = bindStream ?: settings.bindStreamsOnInputsByDefault ?: (mode != ActionMode.RUN)
         attachStreamIfRequested(node, bind)
         return Ok(node)
@@ -155,41 +184,49 @@ class Action private constructor(
 
     suspend fun getOutput(name: String, bindStream: Boolean? = null): StatusOr<AsyncNode> {
         val id = outputIds[name] ?: return notFound("Action output '$name' is not mapped.")
-        val node = nodeMap.get(id).orElse { return it }
+        val node =
+            nodeMap.get(id).orElse { status ->
+                return status
+            }
         val bind = bindStream ?: settings.bindStreamsOnOutputsByDefault ?: (mode == ActionMode.RUN)
-        attachStreamIfRequested(node, bind && name != ACTION_STATUS_OUTPUT && name != ACTION_DISPATCH_STATUS_OUTPUT)
+        attachStreamIfRequested(
+            node,
+            bind && name != ACTION_STATUS_OUTPUT && name != ACTION_DISPATCH_STATUS_OUTPUT,
+        )
         return Ok(node)
     }
 
     /**
      * Log [value] on the reserved [ACTION_LOG_OUTPUT] port.
      *
-     * The value becomes a chunk the way `node.put(value)` would make one -- a
-     * `String` is `text/plain`, a
-     * `ByteArray` is `application/octet-stream` -- and
-     * the chunk always carries a timestamp.
+     * The value becomes a chunk the way `node.put(value)` would make one -- a `String` is
+     * `text/plain`, a `ByteArray` is `application/octet-stream` -- and the chunk always carries a
+     * timestamp.
      *
-     * Only a running handler may log: logging before `run`, or on the calling
-     * side of a `call`, is a failed precondition, because the port would have
-     * nowhere to go and no reader to close it. Nothing else about logging fails
-     * the action
-     * -- once the chunk is built, a transport or lifecycle problem is reported
-     * through the sink rather than returned.
+     * Only a running handler may log: logging before `run`, or on the calling side of a `call`, is
+     * a failed precondition, because the port would have nowhere to go and no reader to close it.
+     * Nothing else about logging fails the action -- once the chunk is built, a transport or
+     * lifecycle problem is reported through the sink rather than returned.
      *
-     * Where it goes: always to the process's action log sink, and additionally
-     * onto the log port when something could read it -- a peer is attached, or
-     * a local consumer claimed the port with [getLogNode]. Nobody has to drain
-     * it and nobody has to close it.
+     * Where it goes: always to the process's action log sink, and additionally onto the log port
+     * when something could read it -- a peer is attached, or a local consumer claimed the port with
+     * [getLogNode]. Nobody has to drain it and nobody has to close it.
      */
     suspend fun log(value: Any?, options: LogOptions = LogOptions()): Status {
         val chunk: Chunk
         if (value is Chunk) {
             if (options.mimetype.isNotEmpty()) {
-                return invalidArgument("Cannot give a log mimetype for a chunk that already has one.")
+                return invalidArgument(
+                    "Cannot give a log mimetype for a chunk that already has one."
+                )
             }
             chunk = value
         } else {
-            chunk = SerializationRegistry.getGlobal().toChunk(value, options.mimetype).orElse { return it }
+            chunk =
+                SerializationRegistry.getGlobal().toChunk(value, options.mimetype).orElse { status
+                    ->
+                    return status
+                }
         }
         return writeLog(chunk, options)
     }
@@ -197,17 +234,17 @@ class Action private constructor(
     /**
      * Log a formatted line: `%s` is replaced by each argument in turn.
      *
-     * Uses positional `%s` replacements and `%%` for literal percent signs
-     * across language runtimes.
+     * Uses positional `%s` replacements and `%%` for literal percent signs across language
+     * runtimes.
      */
-    suspend fun logf(format: String, vararg args: Any?): Status = logfWith(LogOptions(), format, *args)
+    suspend fun logf(format: String, vararg args: Any?): Status =
+        logfWith(LogOptions(), format, *args)
 
     /**
      * Log a formatted line with explicit options.
      *
-     * A second name rather than an overload, so it matches the C++ surface,
-     * where a leading-options overload of `Logf` is ambiguous against the
-     * format spec.
+     * A second name rather than an overload, so it matches the C++ surface, where a leading-options
+     * overload of `Logf` is ambiguous against the format spec.
      */
     suspend fun logfWith(options: LogOptions, format: String, vararg args: Any?): Status {
         val filled = StringBuilder()
@@ -217,7 +254,11 @@ class Action private constructor(
             val char = format[at]
             if (char == '%' && at + 1 < format.length) {
                 when (format[at + 1]) {
-                    '%' -> { filled.append('%'); at += 2; continue }
+                    '%' -> {
+                        filled.append('%')
+                        at += 2
+                        continue
+                    }
                     's' -> {
                         filled.append(if (index < args.size) args[index++].toString() else "")
                         at += 2
@@ -234,31 +275,31 @@ class Action private constructor(
     /**
      * Return the log port's node, claiming it for this consumer.
      *
-     * Claiming suppresses the process sink for this action, so a consumer that
-     * presents the logs itself does not also have them reported twice. Claim
-     * before the action runs: logs written earlier have already gone to the
-     * sink.
+     * Claiming suppresses the process sink for this action, so a consumer that presents the logs
+     * itself does not also have them reported twice. Claim before the action runs: logs written
+     * earlier have already gone to the sink.
      *
-     * The stream is not bound: on the calling side, binding an output would
-     * echo received fragments back to the peer.
+     * The stream is not bound: on the calling side, binding an output would echo received fragments
+     * back to the peer.
      */
     suspend fun getLogNode(): StatusOr<AsyncNode> {
         logClaimed = true
         return getOutput(ACTION_LOG_OUTPUT, bindStream = false)
     }
 
-    /**
-     * Apply [options] to [chunk], report
-     * it, and write it where anything reads.
-     */
+    /** Apply [options] to [chunk], report it, and write it where anything reads. */
     private suspend fun writeLog(chunk: Chunk, options: LogOptions): Status {
-        val level = parseLogLevel(options.level)
-            ?: return invalidArgument(
-                "Unknown log level '${options.level}'; expected one of " +
-                    LOG_LEVELS.joinToString(", ") + "."
-            )
+        val level =
+            parseLogLevel(options.level)
+                ?: return invalidArgument(
+                    "Unknown log level '${options.level}'; expected one of " +
+                        LOG_LEVELS.joinToString(", ") +
+                        "."
+                )
         if (mode != ActionMode.RUN) {
-            return failedPrecondition("Only a running Action may log; a caller logs on its own action.")
+            return failedPrecondition(
+                "Only a running Action may log; a caller logs on its own action."
+            )
         }
         val metadata = chunk.metadata ?: ChunkMetadata()
         if (metadata.mimetype.isEmpty()) metadata.mimetype = OCTET_STREAM_MIMETYPE
@@ -272,9 +313,13 @@ class Action private constructor(
         metadata.attributes[LOG_LEVEL_ATTRIBUTE] = level.toByteArray()
         metadata.attributes[LOG_INTERNAL_ATTRIBUTE] =
             (if (options.internal) LOG_INTERNAL_TRUE else LOG_INTERNAL_FALSE).toByteArray()
-        if (options.channel.isNotEmpty()) metadata.attributes[LOG_CHANNEL_ATTRIBUTE] = options.channel.toByteArray()
-        if (options.file.isNotEmpty()) metadata.attributes[LOG_FILE_ATTRIBUTE] = options.file.toByteArray()
-        options.lineno?.let { metadata.attributes[LOG_LINENO_ATTRIBUTE] = it.toString().toByteArray() }
+        if (options.channel.isNotEmpty())
+            metadata.attributes[LOG_CHANNEL_ATTRIBUTE] = options.channel.toByteArray()
+        if (options.file.isNotEmpty())
+            metadata.attributes[LOG_FILE_ATTRIBUTE] = options.file.toByteArray()
+        options.lineno?.let { value ->
+            metadata.attributes[LOG_LINENO_ATTRIBUTE] = value.toString().toByteArray()
+        }
         chunk.metadata = metadata
 
         if (!logClaimed) reportLog(logRecordFromChunk(chunk, schema.name, id))
@@ -283,36 +328,52 @@ class Action private constructor(
         // run and then throw them away. A peer is always a reader: it is
         // mirroring the node.
         val readable = logClaimed || stream != null || session != null
-        if (!readable || finishing) return Status.ok()
+        if (!readable || finishing.get()) return Status.ok()
 
         // From here on nothing is returned to the handler: a log that could not
         // be written is a fault in the logging, not in the action.
-        val node = getOutput(ACTION_LOG_OUTPUT, bindStream = stream != null).orElse { return Status.ok() }
+        val node =
+            getOutput(ACTION_LOG_OUTPUT, bindStream = stream != null).orElse {
+                return Status.ok()
+            }
         node.putChunk(chunk)
         return Status.ok()
     }
 
-    fun containsPort(name: String): Boolean = inputIds.containsKey(name) || outputIds.containsKey(name)
+    fun containsPort(name: String): Boolean =
+        inputIds.containsKey(name) || outputIds.containsKey(name)
 
     /** Snapshot the call id, name, port mappings, and headers for dispatch. */
-    fun getActionMessage(): ActionMessage = ActionMessage(
-        id = id,
-        name = schema.name,
-        inputs = schema.inputs.keys.map { Port(it, inputIds[it] ?: "") }.toMutableList(),
-        outputs = schema.outputs.keys.map { Port(it, outputIds[it] ?: "") }.toMutableList(),
-        headers = copyByteMap(headers),
-    )
+    fun getActionMessage(): ActionMessage =
+        ActionMessage(
+            id = id,
+            name = schema.name,
+            inputs =
+                schema.inputs.keys
+                    .map { value -> Port(value, inputIds[value] ?: "") }
+                    .toMutableList(),
+            outputs =
+                schema.outputs.keys
+                    .map { value -> Port(value, outputIds[value] ?: "") }
+                    .toMutableList(),
+            headers = copyByteMap(headers),
+        )
 
     /** Adopt validated caller-supplied port node ids before local execution. */
     fun mapPortsFromMessage(message: ActionMessage): Status {
-        if (mode != ActionMode.NONE) return failedPrecondition("Cannot remap Action ports after it has started.")
-        message.validate().let { if (!it.isOk) return it }
+        if (mode != ActionMode.NONE)
+            return failedPrecondition("Cannot remap Action ports after it has started.")
+        message.validate().orElse { status ->
+            return status
+        }
         for (port in message.inputs) {
-            if (!schema.inputs.containsKey(port.name)) return failedPrecondition("Unknown Action input port '${port.name}'.")
+            if (!schema.inputs.containsKey(port.name))
+                return failedPrecondition("Unknown Action input port '${port.name}'.")
             inputIds[port.name] = port.id
         }
         for (port in message.outputs) {
-            if (!schema.outputs.containsKey(port.name)) return failedPrecondition("Unknown Action output port '${port.name}'.")
+            if (!schema.outputs.containsKey(port.name))
+                return failedPrecondition("Unknown Action output port '${port.name}'.")
             outputIds[port.name] = port.id
         }
         return Status.ok()
@@ -321,13 +382,18 @@ class Action private constructor(
     // --- headers -------------------------------------------------------------
 
     fun getHeaders(): ByteMap = copyByteMap(headers)
+
     fun getHeader(name: String): StatusOr<ByteArray?> {
-        validateName(name).let { if (!it.isOk) return it }
+        validateName(name).orElse { status ->
+            return status
+        }
         return Ok(headers[name.lowercase()]?.copyOf())
     }
 
     fun setHeader(name: String, value: ByteArray): Status {
-        validateName(name).let { if (!it.isOk) return it }
+        validateName(name).orElse { status ->
+            return status
+        }
         headers[name.lowercase()] = value.copyOf()
         return Status.ok()
     }
@@ -335,32 +401,63 @@ class Action private constructor(
     fun setHeader(name: String, value: String): Status = setHeader(name, utf8Encode(value))
 
     fun removeHeader(name: String): Status {
-        validateName(name).let { if (!it.isOk) return it }
+        validateName(name).orElse { status ->
+            return status
+        }
         headers.remove(name.lowercase())
         return Status.ok()
     }
 
     fun forwardHeadersWithPrefix(target: Action, prefix: String = ACTION_HEADER_PREFIX): Status {
         val folded = prefix.lowercase()
-        for ((name, value) in headers) if (name.startsWith(folded) && name != AUTHORIZATION_REFERENCE_HEADER) target.setHeader(name, value).let { if (!it.isOk) return it }
+        for ((name, value) in headers) if (
+            name.startsWith(folded) && name != AUTHORIZATION_REFERENCE_HEADER
+        )
+            target.setHeader(name, value).orElse { status ->
+                return status
+            }
         return Status.ok()
     }
 
     // --- nested --------------------------------------------------------------
 
-    fun makeNested(name: String, propagateIo: Boolean = true, forwardHeaders: Boolean = true): StatusOr<Action> {
-        val reg = registry ?: return failedPrecondition("Cannot resolve a nested Action without a registry.")
-        val schema = reg.getSchema(name).orElse { return it }
-        val handler = when (val h = reg.getHandler(name)) { is Ok -> h.value; is Status -> null }
-        val child = create(schema, ActionCreateOptions(
-            handler = handler,
-            nodeMap = if (propagateIo) nodeMap else null,
-            stream = if (propagateIo) stream else null,
-            session = if (propagateIo) session else null,
-            registry = registry,
-        )).orElse { return it }
+    fun makeNested(
+        name: String,
+        propagateIo: Boolean = true,
+        forwardHeaders: Boolean = true,
+    ): StatusOr<Action> {
+        val reg =
+            registry
+                ?: return failedPrecondition("Cannot resolve a nested Action without a registry.")
+
+        val schema =
+            reg.getSchema(name).orElse { status ->
+                return status
+            }
+        val handler =
+            when (val h = reg.getHandler(name)) {
+                is Ok -> h.value
+                is Err -> if (h.status.code == StatusCode.NOT_FOUND) null else return h
+            }
+        val child =
+            create(
+                    schema,
+                    ActionCreateOptions(
+                        handler = handler,
+                        nodeMap = if (propagateIo) nodeMap else null,
+                        stream = if (propagateIo) stream else null,
+                        session = if (propagateIo) session else null,
+                        registry = registry,
+                    ),
+                )
+                .orElse { status ->
+                    return status
+                }
         child.parent = this
-        if (forwardHeaders) forwardHeadersWithPrefix(child).let { if (!it.isOk) return it }
+        if (forwardHeaders)
+            forwardHeadersWithPrefix(child).orElse { status ->
+                return status
+            }
         return Ok(child)
     }
 
@@ -369,57 +466,99 @@ class Action private constructor(
     /** Start the bound handler locally and return immediately. */
     fun run(): StatusOr<Action> {
         if (handler == null) return failedPrecondition("Action handler has not been set.")
-        begin(ActionMode.RUN).let { if (!it.isOk) return it }
-        trackInSession().let { if (!it.isOk) { mode = ActionMode.NONE; return it } }
-        A11Runtime.scope.launch { runHandler() }
+        begin(ActionMode.RUN).orElse { status ->
+            return status
+        }
+        trackInSession().orElse { status ->
+            mode = ActionMode.NONE
+            return status
+        }
+        handlerJob = A11Runtime.scope.launch(start = CoroutineStart.LAZY) { runHandler() }
+        handlerJob!!.start()
         return Ok(this)
     }
 
-    /**
-     * Queue this action for remote dispatch;
-     * use [waitForDispatch] for acceptance.
-     */
+    /** Queue this action for remote dispatch; use [waitForDispatch] for acceptance. */
     suspend fun call(wireHeaders: ByteMap = ByteMap()): StatusOr<Action> {
-        begin(ActionMode.CALL).let { if (!it.isOk) return it }
-        trackInSession().let { if (!it.isOk) { mode = ActionMode.NONE; return it } }
+        begin(ActionMode.CALL).orElse { status ->
+            return status
+        }
+        trackInSession().orElse { status ->
+            mode = ActionMode.NONE
+            return status
+        }
         val autofills = collectAutofillFragments()
-        val message = WireMessage(
-            nodeFragments = autofills.toMutableList(),
-            actions = mutableListOf(getActionMessage()),
-            headers = copyByteMap(wireHeaders),
-        )
-        val sent = stream?.send(message) ?: session?.send(message)
-            ?: failedPrecondition("Calling an Action requires an attached WireStream or Session.")
-        if (!sent.isOk) { untrackFromSession(); mode = ActionMode.NONE; return sent }
+        val message =
+            WireMessage(
+                nodeFragments = autofills.toMutableList(),
+                actions = mutableListOf(getActionMessage()),
+                headers = copyByteMap(wireHeaders),
+            )
+        val sent =
+            stream?.send(message)
+                ?: session?.send(message)
+                ?: failedPrecondition(
+                    "Calling an Action requires an attached WireStream or Session."
+                )
+        sent.orElse { status ->
+            untrackFromSession()
+            mode = ActionMode.NONE
+            return status
+        }
         return Ok(this)
     }
 
     suspend fun waitForDispatch(timeoutMs: Long? = null): Status {
-        if (mode != ActionMode.CALL) return failedPrecondition("Only a called Action has a dispatch status.")
-        return when (val r = waitFor(timeoutMs, "Action dispatch timed out.") { dispatched.await() }) {
-            is Ok -> r.value; is Status -> r
+        if (mode != ActionMode.CALL)
+            return failedPrecondition("Only a called Action has a dispatch status.")
+        return when (
+            val r = waitFor(timeoutMs, "Action dispatch timed out.") { dispatched.await() }
+        ) {
+            is Ok -> r.value
+            is Err -> r.status
         }
     }
 
     suspend fun wait(timeoutMs: Long? = null): StatusOr<Action> {
         if (mode == ActionMode.NONE) return failedPrecondition("Action has not been run or called.")
-        return when (val r = waitFor(timeoutMs, "Action wait timed out.") { done.await() }) {
-            is Ok -> if (r.value.isOk) Ok(this) else r.value
-            is Status -> r
+        val completed =
+            waitFor(timeoutMs, "Action wait timed out.") { done.await() }
+                .orElse { status ->
+                    return status
+                }
+        completed.orElse { status ->
+            return status
         }
+        return Ok(this)
     }
 
     fun cancel(): Status {
-        if (completionStatus != null || finishing || cancelRequested) return Status.ok()
-        cancelRequested = true
-        for (cb in cancelCallbacks) cb(this)
+        if (
+            completionStatus != null ||
+                finishing.get() ||
+                !cancellationRequested.compareAndSet(false, true)
+        )
+            return Status.ok()
+        var first = Status.ok()
+        for (callback in cancelCallbacks) {
+            val status =
+                try {
+                    callback(this)
+                } catch (error: Exception) {
+                    Status.fromException(error)
+                }
+            first = first.updated(status)
+        }
         val cancelledStatus = cancelled("Action was cancelled.")
         when (mode) {
             ActionMode.CALL -> {
                 sendRemoteCancel()
                 completeCall(cancelledStatus, removeFromSession = false)
             }
-            ActionMode.RUN -> A11Runtime.scope.launch { finishRun(cancelledStatus) }
+            ActionMode.RUN -> {
+                handlerJob?.cancel()
+                A11Runtime.scope.launch { finishRun(cancelledStatus) }
+            }
             ActionMode.NONE -> {
                 mode = ActionMode.CANCELLED
                 completionStatus = cancelledStatus
@@ -427,15 +566,18 @@ class Action private constructor(
             }
             ActionMode.CANCELLED -> {}
         }
+        return first
+    }
+
+    fun setOnCancelled(callback: OnActionCancelled): Status {
+        cancelCallbacks.add(callback)
         return Status.ok()
     }
 
-    fun setOnCancelled(callback: OnActionCancelled): Status { cancelCallbacks.add(callback); return Status.ok() }
-
     /** Session protocol hook for the reserved dispatch-status node. */
     fun setDispatchStatus(status: Status): Status {
-        if (mode != ActionMode.CALL || dispatchStatus != null) return Status.ok()
-        dispatchStatus = status
+        if (mode != ActionMode.CALL || dispatchOutcome != null) return Status.ok()
+        dispatchOutcome = status
         dispatched.resolve(status)
         return Status.ok()
     }
@@ -443,7 +585,10 @@ class Action private constructor(
     /** Session protocol hook for the reserved completion-status node. */
     fun setCompletionStatus(status: Status): Status {
         if (mode != ActionMode.CALL) return failedPrecondition("Action is not a call.")
-        if (dispatchStatus == null) { dispatchStatus = Status.ok(); dispatched.resolve(Status.ok()) }
+        if (dispatchOutcome == null) {
+            dispatchOutcome = Status.ok()
+            dispatched.resolve(Status.ok())
+        }
         if (completionStatus == null) completeCall(status, removeFromSession = true)
         else if (cancelRequested) untrackFromSession()
         return Status.ok()
@@ -454,25 +599,40 @@ class Action private constructor(
         for ((name, port) in schema.inputs) {
             if (port.autofills.isEmpty()) continue
             val id = inputIds[name] ?: continue
-            val node = nodeMap.get(id).orElse { return it }
+            val node =
+                nodeMap.get(id).orElse { status ->
+                    return status
+                }
             for (autofill in port.autofills) {
                 if (autofill == null) {
-                    node.finalize(wait = true, close = false).let { if (!it.isOk) return it }
+                    node.finalize(wait = true, close = false).orElse { status ->
+                        return status
+                    }
                 } else {
-                    val stored = node.putFragment(
-                        NodeFragment(id, autofill.data, autofill.seq, autofill.continued),
-                    )
-                    if (stored is Status && !stored.isOk) return stored
+                    val stored =
+                        node.putFragment(
+                            NodeFragment(id, autofill.data, autofill.seq, autofill.continued)
+                        )
+                    if (stored is Err) return stored.status
                 }
             }
-            node.close().let { if (!it.isOk) return it }
+            node.close().orElse { status ->
+                return status
+            }
         }
         inputAutofillsApplied = true
         return Status.ok()
     }
 
-    fun clearInputsAfterRun(clear: Boolean = true): Status { settings.clearInputsAfterRun = clear; return Status.ok() }
-    fun clearOutputsAfterRun(clear: Boolean = true): Status { settings.clearOutputsAfterRun = clear; return Status.ok() }
+    fun clearInputsAfterRun(clear: Boolean = true): Status {
+        settings.clearInputsAfterRun = clear
+        return Status.ok()
+    }
+
+    fun clearOutputsAfterRun(clear: Boolean = true): Status {
+        settings.clearOutputsAfterRun = clear
+        return Status.ok()
+    }
 
     // --- internals -----------------------------------------------------------
 
@@ -484,11 +644,22 @@ class Action private constructor(
     }
 
     private fun remapDefaultPorts(): Status {
-        inputIds.clear(); outputIds.clear()
-        for (name in schema.inputs.keys) inputIds[name] = makeNodeId(id, name).orElse { return it }
-        for (name in schema.outputs.keys) outputIds[name] = makeNodeId(id, name).orElse { return it }
-        for (name in listOf(ACTION_STATUS_OUTPUT, ACTION_DISPATCH_STATUS_OUTPUT, ACTION_LOG_OUTPUT)) {
-            outputIds[name] = makeNodeId(id, name).orElse { return it }
+        inputIds.clear()
+        outputIds.clear()
+        for (name in schema.inputs.keys) inputIds[name] =
+            makeNodeId(id, name).orElse { status ->
+                return status
+            }
+        for (name in schema.outputs.keys) outputIds[name] =
+            makeNodeId(id, name).orElse { status ->
+                return status
+            }
+        for (name in
+            listOf(ACTION_STATUS_OUTPUT, ACTION_DISPATCH_STATUS_OUTPUT, ACTION_LOG_OUTPUT)) {
+            outputIds[name] =
+                makeNodeId(id, name).orElse { status ->
+                    return status
+                }
         }
         return Status.ok()
     }
@@ -507,7 +678,14 @@ class Action private constructor(
             val id = inputIds[name] ?: continue
             val start = fragments.size
             for (autofill in port.autofills) {
-                fragments.add(NodeFragment(id, autofill?.data ?: makeNullChunk(), autofill?.seq, autofill?.continued ?: false))
+                fragments.add(
+                    NodeFragment(
+                        id,
+                        autofill?.data ?: makeNullChunk(),
+                        autofill?.seq,
+                        autofill?.continued ?: false,
+                    )
+                )
             }
             if (fragments.size > start) fragments.last().continued = false
         }
@@ -519,23 +697,27 @@ class Action private constructor(
         val nested = parent != null
         var acquired = false
         try {
-            session?.let {
-                status = it.acquireActionSlot(nested)
-                acquired = status.isOk
+            session?.let { value ->
+                status = value.acquireActionSlot(nested)
+                acquired = status.ok()
             }
-            if (status.isOk) {
+            if (status.ok()) {
                 if (cancelRequested) status = cancelled("Action was cancelled.")
                 else {
                     status = applyInputAutofills()
-                    if (status.isOk) {
-                        status = try {
-                            handler!!(this) ?: Status.ok()
-                        } catch (error: Throwable) {
-                            Status.fromException(error, "Action handler raised an exception.")
-                        }
+                    if (status.ok()) {
+                        status =
+                            try {
+                                handler!!(this)
+                            } catch (error: Exception) {
+                                Status.fromException(error, "Action handler raised an exception.")
+                            }
                     }
                 }
             }
+        } catch (error: CancellationException) {
+            withContext(NonCancellable) { finishRun(cancelled("Action handler was cancelled.")) }
+            throw error
         } finally {
             if (acquired) session?.releaseActionSlot(nested)
         }
@@ -544,13 +726,12 @@ class Action private constructor(
     }
 
     private suspend fun finishRun(initialStatus: Status) {
-        if (finishing || completionStatus != null) return
-        finishing = true
+        if (completionStatus != null || !finishing.compareAndSet(false, true)) return
         var finalStatus = initialStatus
         val outputStatus = finishOutputNodes(finalStatus)
-        if (finalStatus.isOk && !outputStatus.isOk) finalStatus = outputStatus
+        finalStatus = finalStatus.updated(outputStatus)
         val communicated = communicateStatus(finalStatus)
-        if (finalStatus.isOk && !communicated.isOk) finalStatus = communicated
+        finalStatus = finalStatus.updated(communicated)
         releaseNodesAfterRun()
         completionStatus = finalStatus
         done.resolve(finalStatus)
@@ -560,42 +741,69 @@ class Action private constructor(
     private suspend fun finishOutputNodes(status: Status): Status {
         // Close the log port with ordinary outputs. Handlers do not close this
         // reserved port themselves.
-        val ids = (schema.outputs.keys + ACTION_LOG_OUTPUT).mapNotNull { outputIds[it] }
+        val ids = (schema.outputs.keys + ACTION_LOG_OUTPUT).mapNotNull { item -> outputIds[item] }
         var first: Status = Status.ok()
         val s = stream
-        if (!status.isOk && s != null && ids.isNotEmpty()) {
+        if (!status.ok() && s != null && ids.isNotEmpty()) {
             val chunk = statusToChunk(status)
             if (chunk is Ok) {
-                val fragments = ids.map { NodeFragment(it, chunk.value, 0, false) }.toMutableList()
-                s.send(WireMessage(nodeFragments = fragments))
+                val fragments =
+                    ids.map { element -> NodeFragment(element, chunk.value, 0u, false) }
+                        .toMutableList()
+                first = first.updated(s.send(WireMessage(nodeFragments = fragments)))
             }
         }
         for (id in ids) {
-            val node = nodeMap.get(id).orElse { first = firstError(first, it); continue }
-            val writable = node.isWritable().orElse { first = firstError(first, it); continue }
+            val node =
+                nodeMap.get(id).orElse { status ->
+                    first = first.updated(status)
+                    continue
+                }
+            val writable =
+                node.isWritable().orElse { status ->
+                    first = first.updated(status)
+                    continue
+                }
             if (!writable) continue
-            val closed = if (status.isOk) node.close() else node.abortWithStatus(status)
-            first = firstError(first, closed)
+            val closed = if (status.ok()) node.close() else node.abortWithStatus(status)
+            first = first.updated(closed)
         }
         return first
     }
 
     private suspend fun communicateStatus(status: Status): Status {
-        val chunk = statusToChunk(status).orElse { return it }
-        val id = outputIds[ACTION_STATUS_OUTPUT] ?: return internal("Action status output is not mapped.")
-        val node = nodeMap.get(id).orElse { return it }
-        val writable = node.isWritable().orElse { return it }
+        val chunk =
+            statusToChunk(status).orElse { status ->
+                return status
+            }
+        val id =
+            outputIds[ACTION_STATUS_OUTPUT]
+                ?: return internal("Action status output is not mapped.")
+        val node =
+            nodeMap.get(id).orElse { status ->
+                return status
+            }
+        val writable =
+            node.isWritable().orElse { status ->
+                return status
+            }
         if (!writable) return failedPrecondition("Action status node was already finalized.")
-        stream?.let { node.attachStream(it); boundNodes.add(node) }
-        node.putFragment(NodeFragment(id, chunk, 0, false)).let { if (it is Status && !it.isOk) return it }
+        stream?.let { value ->
+            node.attachStream(value)
+            boundNodes.add(node)
+        }
+        node.putFragment(NodeFragment(id, chunk, 0u, false)).let { value ->
+            if (value is Err) return value.status
+        }
         return node.close()
     }
 
     private suspend fun releaseNodesAfterRun(): Status {
         var first = detachBoundNodes()
-        if (settings.clearInputsAfterRun == true) for (id in inputIds.values) {
-            (nodeMap.discard(id) as? Ok)?.value?.cancelReader()
-        }
+        if (settings.clearInputsAfterRun == true)
+            for (id in inputIds.values) {
+                (nodeMap.discard(id) as? Ok)?.value?.cancelReader()
+            }
         if (settings.clearOutputsAfterRun == true) for (id in outputIds.values) nodeMap.discard(id)
         return first
     }
@@ -610,7 +818,7 @@ class Action private constructor(
         val s = session ?: return Status.ok()
         if (tracked) return Status.ok()
         val status = s.trackAction(this)
-        if (status.isOk) tracked = true
+        if (status.ok()) tracked = true
         return status
     }
 
@@ -621,13 +829,15 @@ class Action private constructor(
     }
 
     private fun sendRemoteCancel(): Status {
-        val cancel = ActionMessage(
-            id = randomId("action-"),
-            name = CANCEL_ACTION_NAME,
-            headers = ByteMap().apply { put(CANCEL_ACTION_HEADER, utf8Encode(id)) },
-        )
+        val cancel =
+            ActionMessage(
+                id = randomId("action-"),
+                name = CANCEL_ACTION_NAME,
+                headers = ByteMap().apply { put(CANCEL_ACTION_HEADER, utf8Encode(id)) },
+            )
         val message = WireMessage(actions = mutableListOf(cancel))
-        return stream?.send(message) ?: session?.send(message)
+        return stream?.send(message)
+            ?: session?.send(message)
             ?: failedPrecondition("Cancelling a called Action requires a WireStream or Session.")
     }
 
@@ -641,25 +851,33 @@ class Action private constructor(
     }
 
     companion object {
-        fun create(schema: ActionSchema, options: ActionCreateOptions = ActionCreateOptions()): StatusOr<Action> {
-            schema.validate().let { if (!it.isOk) return it }
+        fun create(
+            schema: ActionSchema,
+            options: ActionCreateOptions = ActionCreateOptions(),
+        ): StatusOr<Action> {
+            schema.validate().orElse { status ->
+                return status
+            }
             val id = options.id ?: randomId("action-")
-            validateName(id).let { if (!it.isOk) return it }
-            return Ok(Action(schema, options, id))
+            validateName(id).orElse { status ->
+                return status
+            }
+            return Ok(Action(schema.copy(), options, id))
         }
 
-        /**
-         * Derive the stable `action-id#port-name` id for one action port node.
-         */
+        /** Derive the stable `action-id#port-name` id for one action port node. */
         fun makeNodeId(actionId: String, nodeName: String): StatusOr<String> {
-            validateName(actionId).let { if (!it.isOk) return it }
-            validateName(nodeName).let { if (!it.isOk) return it }
+            validateName(actionId).orElse { status ->
+                return status
+            }
+            validateName(nodeName).orElse { status ->
+                return status
+            }
             val result = "$actionId#$nodeName"
-            validateName(result).let { if (!it.isOk) return it }
+            validateName(result).orElse { status ->
+                return status
+            }
             return Ok(result)
         }
     }
 }
-
-internal fun firstError(first: Status, next: Status): Status =
-    if (first.isOk && !next.isOk) next else first

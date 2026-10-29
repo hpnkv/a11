@@ -36,6 +36,7 @@ include(FetchContent)
 include(GNUInstallDirs)
 
 option(A11_BUILD_PYTHON "Build the pybind11 extension" ON)
+option(A11_BUILD_JVM "Build the JNI bindings for JVM languages" OFF)
 # The standalone language tool is not part of a wheel: the wheel installs only the
 # `python` component, so building it there would be work thrown away. Everywhere
 # else it is on, because it costs seconds and is what editors and CI run.
@@ -310,7 +311,7 @@ set(WITH_OTLP_GRPC OFF CACHE BOOL "" FORCE)
 set(WITH_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(WITH_FUNC_TESTS OFF CACHE BOOL "" FORCE)
 set(WITH_BENCHMARK OFF CACHE BOOL "" FORCE)
-set(OPENTELEMETRY_INSTALL OFF CACHE BOOL "" FORCE)
+set(OPENTELEMETRY_INSTALL ON CACHE BOOL "" FORCE)
 # Use the non-deprecated SDK factory path (A11 builds the provider from a
 # TracerContext), silencing opentelemetry-cpp's temporary migration warning.
 set(WITH_DEPRECATED_SDK_FACTORY OFF CACHE BOOL "" FORCE)
@@ -1144,8 +1145,7 @@ target_include_directories(
 
 # Observability (tracing) core. OpenTelemetry is linked PRIVATE and never
 # appears in a11_obs's public headers (they use a fast pImpl), so it is fully
-# absorbed into the static archive and does not leak into the exported package
-# interface.
+# linked through the installed target without exposing OTel in A11 headers.
 # The Flow language: text to tokens to a syntax tree to a resolved plan, plus
 # the diagnostics, highlighting, formatting and completion every editor and CI
 # job needs. Nothing here touches a socket or a node, and nothing here links
@@ -1346,7 +1346,7 @@ target_include_directories(
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 target_link_libraries(
         a11_net PUBLIC a11::concurrency a11::data $<BUILD_INTERFACE:absl::status> $<INSTALL_INTERFACE:absl::status> $<BUILD_INTERFACE:absl::statusor> $<INSTALL_INTERFACE:absl::statusor>
-        PRIVATE $<BUILD_INTERFACE:a11::obs> $<BUILD_INTERFACE:absl::random_random> $<INSTALL_INTERFACE:absl::random_random> $<BUILD_INTERFACE:absl::strings> $<INSTALL_INTERFACE:absl::strings> a11::warnings
+        PRIVATE a11::obs $<BUILD_INTERFACE:absl::random_random> $<INSTALL_INTERFACE:absl::random_random> $<BUILD_INTERFACE:absl::strings> $<INSTALL_INTERFACE:absl::strings> a11::warnings
 )
 if (A11_BUILD_WEBRTC)
     target_link_libraries(a11_net PUBLIC LibDataChannel::LibDataChannel)
@@ -1380,14 +1380,10 @@ target_include_directories(
 target_link_libraries(
         a11_actions PUBLIC a11::data a11::net a11::nodes a11::stores
         $<BUILD_INTERFACE:absl::status> $<INSTALL_INTERFACE:absl::status> $<BUILD_INTERFACE:absl::statusor> $<INSTALL_INTERFACE:absl::statusor>
-        # a11::obs (and the OpenTelemetry it privately links) is an
-        # implementation detail carried only in the build interface for now, so
-        # it stays out of the exported/installed package. The full relocatable
-        # install + OTLP story lands in a later phase.
         # nlohmann for a11/actions/describe.cc, which builds the a11.actions/v1
         # document. Private, and the public header includes only json_fwd.hpp,
         # so describing an action costs a consumer no nlohmann dependency.
-        PRIVATE $<BUILD_INTERFACE:a11::obs> $<BUILD_INTERFACE:absl::random_random> $<INSTALL_INTERFACE:absl::random_random> $<BUILD_INTERFACE:absl::strings> $<INSTALL_INTERFACE:absl::strings> a11::warnings nlohmann_json::nlohmann_json)
+        PRIVATE a11::obs $<BUILD_INTERFACE:absl::random_random> $<INSTALL_INTERFACE:absl::random_random> $<BUILD_INTERFACE:absl::strings> $<INSTALL_INTERFACE:absl::strings> a11::warnings nlohmann_json::nlohmann_json)
 
 add_library(a11_service STATIC ${A11_SERVICE_SOURCES})
 add_library(a11::service ALIAS a11_service)
@@ -1399,7 +1395,7 @@ target_include_directories(
 target_link_libraries(
         a11_service PUBLIC a11::actions a11::data a11::net a11::nodes
         $<BUILD_INTERFACE:absl::status> $<INSTALL_INTERFACE:absl::status> $<BUILD_INTERFACE:absl::statusor> $<INSTALL_INTERFACE:absl::statusor>
-        PRIVATE $<BUILD_INTERFACE:a11::obs> $<BUILD_INTERFACE:absl::random_random> $<INSTALL_INTERFACE:absl::random_random> $<BUILD_INTERFACE:absl::strings> $<INSTALL_INTERFACE:absl::strings> a11::warnings
+        PRIVATE a11::obs $<BUILD_INTERFACE:absl::random_random> $<INSTALL_INTERFACE:absl::random_random> $<BUILD_INTERFACE:absl::strings> $<INSTALL_INTERFACE:absl::strings> a11::warnings
         nlohmann_json::nlohmann_json)
 
 # Action method bodies call Session hooks, while Session owns Actions. Static
@@ -1625,6 +1621,54 @@ if (A11_BUILD_FLOW_ACTIONS)
             absl::time nlohmann_json::nlohmann_json a11::warnings
             a11::allocator)
     a11_disallow_exceptions(a11_flow_interpreter)
+endif ()
+
+if (A11_BUILD_JVM)
+    find_package(JNI REQUIRED COMPONENTS JVM)
+    add_subdirectory(jvm)
+    add_library(a11_jvm_runtime STATIC ${A11_JVM_SOURCES})
+    set_target_properties(a11_jvm_runtime PROPERTIES
+            CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
+    target_include_directories(a11_jvm_runtime PUBLIC
+            ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(a11_jvm_runtime PUBLIC a11::core a11::data
+            a11::concurrency a11::nodes a11::stores a11::net a11::actions
+            a11::service a11::obs a11::flow_lang a11::flow_runtime a11::warnings)
+    target_compile_definitions(a11_jvm_runtime PRIVATE A11_VERSION="${PROJECT_VERSION}")
+    target_compile_options(a11_jvm_runtime PRIVATE
+            $<$<CXX_COMPILER_ID:AppleClang,Clang,GNU>:-fno-exceptions>)
+    if (A11_BUILD_SQLITE)
+        target_compile_definitions(a11_jvm_runtime PRIVATE A11_BUILD_SQLITE=1)
+    endif ()
+    if (A11_BUILD_REDIS)
+        target_compile_definitions(a11_jvm_runtime PRIVATE A11_BUILD_REDIS=1)
+        target_link_libraries(a11_jvm_runtime PUBLIC a11::redis)
+    endif ()
+    if (A11_BUILD_AUDIO)
+        target_compile_definitions(a11_jvm_runtime PRIVATE A11_BUILD_AUDIO=1)
+        target_link_libraries(a11_jvm_runtime PUBLIC a11::audio a11::audio_actions)
+    endif ()
+    if (A11_BUILD_HTTP)
+        target_compile_definitions(a11_jvm_runtime PRIVATE A11_BUILD_HTTP=1)
+        target_link_libraries(a11_jvm_runtime PUBLIC a11::http_actions)
+    endif ()
+    if (A11_BUILD_FLOW_ACTIONS)
+        target_compile_definitions(a11_jvm_runtime PRIVATE A11_BUILD_FLOW_ACTIONS=1)
+        target_link_libraries(a11_jvm_runtime PUBLIC a11::flow_interpreter_lib
+                a11::flow_actions)
+    endif ()
+    if (A11_BUILD_WEBRTC)
+        target_compile_definitions(a11_jvm_runtime PRIVATE A11_BUILD_WEBRTC=1)
+    endif ()
+    add_library(a11_jvm MODULE ${A11_JVM_JNI_SOURCES})
+    set_target_properties(a11_jvm PROPERTIES
+            SUFFIX "${CMAKE_SHARED_LIBRARY_SUFFIX}"
+            CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
+    target_include_directories(a11_jvm PRIVATE ${JNI_INCLUDE_DIRS})
+    target_link_libraries(a11_jvm PRIVATE a11_jvm_runtime)
+    target_compile_options(a11_jvm PRIVATE
+            $<$<CXX_COMPILER_ID:AppleClang,Clang,GNU>:-fno-exceptions>)
+    install(TARGETS a11_jvm LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
 endif ()
 
 if (A11_BUILD_PYTHON)
@@ -1961,7 +2005,7 @@ if (A11_BUILD_FLOW_TOOL)
 endif ()
 
 set(A11_INSTALL_TARGETS
-        a11_warnings a11_core a11_data a11_concurrency a11_flow_lang a11_stores
+        a11_warnings a11_core a11_data a11_concurrency a11_obs a11_flow_lang a11_stores
         a11_net a11_nodes a11_actions a11_service Thread)
 if (A11_BUILD_REDIS)
     list(APPEND A11_INSTALL_TARGETS a11_redis)

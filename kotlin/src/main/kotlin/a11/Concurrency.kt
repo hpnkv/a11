@@ -16,35 +16,26 @@
 
 package a11
 
+import java.util.concurrent.Executors
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.withTimeout
-import java.util.concurrent.Executors
-
-/**
- * Coroutine equivalents of the primitives in `js/src/concurrency.ts`.
- *
- * The TypeScript runtime is single-threaded and drives its state machines with
- * microtasks; the Kotlin port runs the same pumps as coroutines. Blocking edges
- * (WebSocket I/O, IDE tool handlers) are pushed onto Java 21 virtual threads via
- * [A11Runtime.blockingScope] so the cooperative pumps never stall a carrier.
- */
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** A small externally-completable promise used by the stackless pumps. */
 class Deferred<T> {
     private val delegate = CompletableDeferred<T>()
 
-    val settled: Boolean get() = delegate.isCompleted
+    val settled: Boolean
+        get() = delegate.isCompleted
 
-    /** Resolve once; later resolutions are ignored, matching the TS semantics. */
-    fun resolve(value: T): Status {
-        delegate.complete(value)
-        return Status.ok()
-    }
+    /** Complete once; repeated completion returns ALREADY_EXISTS. */
+    fun resolve(value: T): Status =
+        if (delegate.complete(value)) Status.ok()
+        else alreadyExists("Promise has already been completed")
 
     suspend fun await(): T = delegate.await()
 }
@@ -66,10 +57,11 @@ suspend fun <T> waitFor(
         return invalidArgument("timeoutMs must be a non-negative finite number.")
     }
     return try {
-        if (timeoutMs == null) Ok(block()) else Ok(withTimeout(timeoutMs) { block() })
-    } catch (error: TimeoutCancellationException) {
-        deadlineExceeded(timeoutMessage)
-    } catch (error: Throwable) {
+        if (timeoutMs == null) Ok(block())
+        else withTimeoutOrNull(timeoutMs) { Ok(block()) } ?: deadlineExceeded(timeoutMessage)
+    } catch (error: CancellationException) {
+        throw error
+    } catch (error: Exception) {
         Status.fromException(error)
     }
 }
@@ -77,13 +69,11 @@ suspend fun <T> waitFor(
 /**
  * Process-wide scheduling contexts for the runtime.
  *
- * [scope] drives the cooperative message pumps; [blockingScope] uses a
- * virtual-thread-per-task executor so a blocking call parks a virtual thread
- * rather than a platform carrier.
+ * [scope] drives the cooperative message pumps; [blockingDispatcher] uses a virtual-thread-per-task
+ * executor so a blocking call parks a virtual thread rather than a platform carrier.
  */
 object A11Runtime {
-    private val virtualThreadExecutor =
-        Executors.newVirtualThreadPerTaskExecutor()
+    private val virtualThreadExecutor = Executors.newVirtualThreadPerTaskExecutor()
 
     val blockingDispatcher = virtualThreadExecutor.asCoroutineDispatcher()
 

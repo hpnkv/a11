@@ -27,17 +27,17 @@ import kotlin.test.assertTrue
 /**
  * The Kotlin half of the schema-document contract.
  *
- * `testdata/actions/schema_document.json` is one `a11.actions/v1` document as
- * the native writer produces it. These tests pin that this side reads it into
- * the same schema and writes the same document back -- which is what replaces
- * four hand-copied handshake schemas, and the only reason to trust that a
- * gateway asking the IDE plugin what it serves gets an answer it understands.
+ * `testdata/actions/schema_document.json` is one `a11.actions/v1` document as the native writer
+ * produces it. These tests pin that this side reads it into the same schema and writes the same
+ * document back -- which is what replaces four hand-copied handshake schemas, and the only reason
+ * to trust that a gateway asking the IDE plugin what it serves gets an answer it understands.
  */
 class SchemaDocumentTest {
-    private fun <T> ok(value: StatusOr<T>): T = when (value) {
-        is Ok<T> -> value.value
-        is Status -> throw AssertionError("expected ok, got $value")
-    }
+    private fun <T> ok(value: StatusOr<T>): T =
+        when (value) {
+            is Ok<T> -> value.value
+            is Err -> throw AssertionError("expected ok, got $value")
+        }
 
     private fun testdata(name: String): String {
         // The Gradle build runs in kotlin/; the shared fixtures sit beside it.
@@ -84,9 +84,8 @@ class SchemaDocumentTest {
     fun `a defaulted port field is omitted, as the native writer omits it`() {
         val schema = ok(schemaFromJson(fixture("callable")[0]))
         val written = schemaToJson(schema, false)
-        fun port(key: String, name: String) = (written[key] as List<*>)
-            .map { it as Map<*, *> }
-            .single { it["name"] == name }
+        fun port(key: String, name: String) =
+            (written[key] as List<*>).map { it as Map<*, *> }.single { it["name"] == name }
 
         val streaming = port("outputs", "output_lines")
         assertFalse(streaming.containsKey("unary"), "$streaming")
@@ -103,7 +102,7 @@ class SchemaDocumentTest {
         val registry = ActionRegistry()
         // Schema only, no handler -- which is what `runnable: false` in the
         // fixture says, and how "this one lives on the peer" is spelled.
-        assertTrue(registry.register(schema.name, schema).isOk)
+        assertTrue(registry.register(schema.name, schema).ok())
 
         val own = registry.listRegisteredActions().filterNot { it.startsWith("__") }
         assertEquals(listOf("shell_execute"), own)
@@ -116,28 +115,27 @@ class SchemaDocumentTest {
     @Test
     fun `a builtin is answered by a registry that holds nothing`() {
         val registry = ActionRegistry()
-        assertEquals(
-            listOf("__get_schema__", "__list_actions__", "__ping"),
-            builtinActionNames(),
-        )
+        assertEquals(listOf("__get_schema__", "__list_actions__", "__ping"), builtinActionNames())
         for (name in builtinActionNames()) {
             assertTrue(registry.isRegistered(name), name)
             assertTrue(registry.getSchema(name) is Ok, name)
             assertTrue(registry.getHandler(name) is Ok, name)
         }
         // Refused rather than shadowed: a peer must always be answerable.
-        val impostor = ok(
-            schemaFromJson(
-                mapOf(
-                    "name" to LIST_ACTIONS_NAME,
-                    "outputs" to listOf(
-                        mapOf("name" to "actions", "type" to JSON_MIMETYPE, "unary" to true),
-                    ),
-                ),
-            ),
-        )
-        assertFalse(registry.register(LIST_ACTIONS_NAME, impostor).isOk)
-        assertFalse(registry.unregister(PING_NAME).isOk)
+        val impostor =
+            ok(
+                schemaFromJson(
+                    mapOf(
+                        "name" to LIST_ACTIONS_NAME,
+                        "outputs" to
+                            listOf(
+                                mapOf("name" to "actions", "type" to JSON_MIMETYPE, "unary" to true)
+                            ),
+                    )
+                )
+            )
+        assertFalse(registry.register(LIST_ACTIONS_NAME, impostor).ok())
+        assertFalse(registry.unregister(PING_NAME).ok())
     }
 
     @Test

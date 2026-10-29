@@ -17,7 +17,11 @@
 package dev.curiositystack.a11.clion
 
 import a11.sdk.getToolDefinitions
-import a11.valueOrThrow
+import a11.orElse
+import a11.StatusException
+import com.intellij.codeInsight.CodeInsightSettings
+import com.intellij.openapi.command.WriteCommandAction
+import com.intellij.openapi.vfs.VfsUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VfsUtilCore
@@ -39,6 +43,15 @@ import dev.curiositystack.a11.clion.tools.RUN_LOG_KEY
  * EDT, where `invokeAndWait` runs synchronously and nothing is left pending.
  */
 class IdeToolsTest : BasePlatformTestCase() {
+
+    override fun tearDown() {
+        try {
+            CodeInsightSettings.getInstance().AUTO_POPUP_JAVADOC_INFO =
+                CodeInsightSettings().AUTO_POPUP_JAVADOC_INFO
+        } finally {
+            super.tearDown()
+        }
+    }
 
     fun testRegistryExposesExpectedTools() {
         val (registry, descriptors) = IdeTools(project).buildRegistry()
@@ -203,7 +216,7 @@ class IdeToolsTest : BasePlatformTestCase() {
         // declared JSON Schema, not a bare `{"type": "object"}` derived from
         // its MIME type.
         val (registry, _) = IdeTools(project).buildRegistry()
-        val definition = getToolDefinitions(registry, listOf("ide__find_file")).valueOrThrow().single()
+        val definition = getToolDefinitions(registry, listOf("ide__find_file")).orElse { status -> throw StatusException(status) }.single()
 
         @Suppress("UNCHECKED_CAST")
         val request = ((definition["input_schema"] as Map<String, Any?>)["properties"] as Map<String, Any?>)
@@ -610,8 +623,12 @@ class IdeToolsTest : BasePlatformTestCase() {
         val createdMetadata = created["metadata"] as Map<String, Any?>
         val createdFile = LocalFileSystem.getInstance().findFileByPath(createdMetadata["path"] as String)
         assertNotNull(createdFile)
-        assertEquals("created  \n", VfsUtilCore.loadText(createdFile!!))
+        assertEquals("created\n", VfsUtilCore.loadText(createdFile!!))
 
+        // Creation normalizes added lines; a rename preserves existing bytes.
+        WriteCommandAction.runWriteCommandAction(project) {
+            VfsUtil.saveText(createdFile, "created  \n")
+        }
         val renamed = tools.runByName(
             "ide__apply_patch",
             mapOf("path" to "created.txt", "patch" to "rename from created.txt\nrename to moved.txt"),

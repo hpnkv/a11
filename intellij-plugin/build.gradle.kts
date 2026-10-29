@@ -20,7 +20,7 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 plugins {
     kotlin("jvm") version "2.2.0"
     // IntelliJ Platform Gradle Plugin 2.x.
-    id("org.jetbrains.intellij.platform") version "2.2.1"
+    id("org.jetbrains.intellij.platform") version "2.19.0"
 }
 
 group = providers.gradleProperty("pluginGroup").get()
@@ -188,6 +188,7 @@ tasks {
         // what a *word means* need it and skip without it (see FlowLexerTest);
         // the ones that assert the platform's own contract run either way.
         for (candidate in listOf(
+            "../cmake-build-debug/cpp/a11-flow",
             "../build/ctests/cpp/a11-flow",
             "../build/debug/cpp/a11-flow",
             "../build/release/cpp/a11-flow",

@@ -18,8 +18,8 @@ package a11.sdk
 
 /**
  * Default model ids and config-port key names for the server backends, mirroring
- * `js/src/sdk/config_schemas.ts`. The `config` port carries a JSON object of
- * provider-specific options; a Kotlin caller builds it as a plain map.
+ * `js/src/sdk/config_schemas.ts`. The `config` port carries a JSON object of provider-specific
+ * options; a Kotlin caller builds it as a plain map.
  */
 const val GEMINI_DEFAULT_MODEL = "gemini-3.5-flash"
 const val OLLAMA_DEFAULT_MODEL = "llama3.2"

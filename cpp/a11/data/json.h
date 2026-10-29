@@ -27,6 +27,42 @@
 
 namespace a11::data {
 
+/// Encode a ChunkMetadata using the native wire JSON representation.
+absl::StatusOr<nlohmann::json> ChunkMetadataToJsonValue(
+    const ChunkMetadata& value);
+/// Decode and validate a ChunkMetadata from native wire JSON.
+absl::StatusOr<ChunkMetadata> ChunkMetadataFromJsonValue(
+    const nlohmann::json& value);
+
+/// Encode a Chunk using the native wire JSON representation.
+absl::StatusOr<nlohmann::json> ChunkToJsonValue(const Chunk& value);
+/// Decode and validate a Chunk from native wire JSON.
+absl::StatusOr<Chunk> ChunkFromJsonValue(const nlohmann::json& value);
+
+/// Encode a NodeRef using the native wire JSON representation.
+absl::StatusOr<nlohmann::json> NodeRefToJsonValue(const NodeRef& value);
+/// Decode and validate a NodeRef from native wire JSON.
+absl::StatusOr<NodeRef> NodeRefFromJsonValue(const nlohmann::json& value);
+
+/// Encode a NodeFragment using the native wire JSON representation.
+absl::StatusOr<nlohmann::json> NodeFragmentToJsonValue(
+    const NodeFragment& value);
+/// Decode and validate a NodeFragment from native wire JSON.
+absl::StatusOr<NodeFragment> NodeFragmentFromJsonValue(
+    const nlohmann::json& value);
+
+/// Encode a Port using the native wire JSON representation.
+absl::StatusOr<nlohmann::json> PortToJsonValue(const Port& value);
+/// Decode and validate a Port from native wire JSON.
+absl::StatusOr<Port> PortFromJsonValue(const nlohmann::json& value);
+
+/// Encode a ActionMessage using the native wire JSON representation.
+absl::StatusOr<nlohmann::json> ActionMessageToJsonValue(
+    const ActionMessage& value);
+/// Decode and validate a ActionMessage from native wire JSON.
+absl::StatusOr<ActionMessage> ActionMessageFromJsonValue(
+    const nlohmann::json& value);
+
 // JSON encoding used by A11's HTTP/SSE transports.
 absl::StatusOr<nlohmann::json> WireMessageToJsonValue(
     const WireMessage& message);

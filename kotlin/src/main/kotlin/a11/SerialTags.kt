@@ -19,35 +19,29 @@ package a11
 /**
  * The canonical cross-language serialization tags.
  *
- * A serialized A11 value names its type with a *tag*: the `type` parameter of
- * the chunk's MIME type (`application/json;type=a11.Chunk`). That is the only
- * place a type is ever named. Nothing inside the payload repeats it — a
- * declared model's fields say what they hold, and schemaless data is just data.
- * A value the format already describes (an object, an array, a string) carries
- * no tag at all, so a bare `application/json` is a complete description.
+ * A serialized A11 value names its type with a *tag*: the `type` parameter of the chunk's MIME type
+ * (`application/json;type=a11.Chunk`). That is the only place a type is ever named. Nothing inside
+ * the payload repeats it — a declared model's fields say what they hold, and schemaless data is
+ * just data. A value the format already describes (an object, an array, a string) carries no tag at
+ * all, so a bare `application/json` is a complete description.
  *
- * The tag is what a peer in another language matches on, so the same class must
- * carry the same tag in every implementation — this object is that table for
- * Kotlin, and its siblings hold the identical strings:
+ * The tag is what a peer in another language matches on, so the same class must carry the same tag
+ * in every implementation — this object is that table for Kotlin, and its siblings hold the
+ * identical strings:
+ * * Python — `a11/data/serial_tags.py` (declared per class with an `A11_SERIAL_TAG` ClassVar).
+ * * C++ — `cpp/a11/data/serial_tags.h` (returned by the `A11SerialTag` ADL customization point).
+ * * TypeScript — `js/src/serial_tags.ts`.
  *
- *  * Python — `a11/data/serial_tags.py` (declared per class with an
- *    `A11_SERIAL_TAG` ClassVar).
- *  * C++ — `cpp/a11/data/serial_tags.h` (returned by the `A11SerialTag` ADL
- *    customization point).
- *  * TypeScript — `js/src/serial_tags.ts`.
- *
- * `testdata/serial_tags.json` holds the same table once more, and each
- * language's test suite asserts its own constants against it — so a tag added or
- * renamed in one language and forgotten in another fails a test rather than a
- * conversation.
+ * `testdata/serial_tags.json` holds the same table once more, and each language's test suite
+ * asserts its own constants against it — so a tag added or renamed in one language and forgotten in
+ * another fails a test rather than a conversation.
  *
  * Conventions:
- *
- *  * `a11.<Class>` for the runtime's own data and status types.
- *  * `a11.sdk.<Class>` for the SDKs, with subpackages omitted and names chosen
- *    for what the type *is* rather than where it lives.
- *  * JSON-native values keep their language-neutral tags (`object`, `array`,
- *    `string`, …); they are not listed here.
+ * * `a11.<Class>` for the runtime's own data and status types.
+ * * `a11.sdk.<Class>` for the SDKs, with subpackages omitted and names chosen for what the type
+ *   *is* rather than where it lives.
+ * * JSON-native values keep their language-neutral tags (`object`, `array`, `string`, …); they are
+ *   not listed here.
  *
  * A Kotlin type publishes its tag by implementing [A11Serializable].
  */
@@ -95,10 +89,9 @@ object SerialTags {
 /**
  * A type that names itself on the wire.
  *
- * This is Kotlin's counterpart of Python's `A11_SERIAL_TAG` ClassVar and C++'s
- * `A11SerialTag` ADL customization point: a value that implements it can be
- * nested inside a serialized A11 value and rebuilt as itself by a peer in any
- * language, instead of arriving as an anonymous map.
+ * This is Kotlin's counterpart of Python's `A11_SERIAL_TAG` ClassVar and C++'s `A11SerialTag` ADL
+ * customization point: a value that implements it can be nested inside a serialized A11 value and
+ * rebuilt as itself by a peer in any language, instead of arriving as an anonymous map.
  */
 interface A11Serializable {
     /** This value's entry in [SerialTags]. */

@@ -44,6 +44,10 @@ namespace a11 {
 absl::StatusOr<nlohmann::json> ParseJson(std::string_view encoded,
                                          std::string_view what);
 
+/** Parse host fields retaining their declared insertion order. */
+absl::StatusOr<nlohmann::ordered_json> ParseOrderedJson(
+    std::string_view encoded, std::string_view what);
+
 /**
  * @brief Whether @p text is valid UTF-8.
  *
@@ -101,6 +105,10 @@ const nlohmann::json* FindUnencodableString(const nlohmann::json& value);
 absl::StatusOr<std::string> DumpJson(const nlohmann::json& value,
                                      std::string_view what);
 
+/** Serialize host fields retaining their declared insertion order. */
+absl::StatusOr<std::string> DumpOrderedJson(const nlohmann::ordered_json& value,
+                                            std::string_view what);
+
 /**
  * @brief Serializes @p value, replacing anything that is not valid UTF-8.
  *
@@ -112,6 +120,10 @@ std::string DumpJsonLossy(const nlohmann::json& value);
 /** @brief Encodes @p value as MessagePack, or says why it cannot be. */
 absl::StatusOr<std::string> PackMsgpack(const nlohmann::json& value,
                                         std::string_view what);
+
+/** Encode host fields retaining their declared insertion order. */
+absl::StatusOr<std::string> PackOrderedMsgpack(
+    const nlohmann::ordered_json& value, std::string_view what);
 
 /** @brief Decodes MessagePack bytes, or explains why they are not. */
 absl::StatusOr<nlohmann::json> UnpackMsgpack(std::string_view encoded,

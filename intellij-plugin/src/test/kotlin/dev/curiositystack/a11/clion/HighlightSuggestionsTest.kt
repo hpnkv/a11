@@ -16,6 +16,7 @@
 
 package dev.curiositystack.a11.clion
 
+import com.intellij.codeInsight.CodeInsightSettings
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.command.undo.UndoManager
 import com.intellij.openapi.editor.Document
@@ -367,6 +368,8 @@ class HighlightSuggestionsTest : BasePlatformTestCase() {
     override fun tearDown() {
         try {
             HighlightSuggestions.getInstance(project).clearAll()
+            CodeInsightSettings.getInstance().AUTO_POPUP_JAVADOC_INFO =
+                CodeInsightSettings().AUTO_POPUP_JAVADOC_INFO
         } finally {
             super.tearDown()
         }

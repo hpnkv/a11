@@ -23,17 +23,21 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * Proves the Kotlin msgpack framing is byte-for-byte compatible with the native
- * A11 encoder: each vector was produced by the installed Python `a11` package
- * (`to_msgpack()`), decoded here, and re-encoded — the bytes must match exactly.
+ * Proves the Kotlin msgpack framing is byte-for-byte compatible with the native A11 encoder: each
+ * vector was produced by the installed Python `a11` package (`to_msgpack()`), decoded here, and
+ * re-encoded — the bytes must match exactly.
  */
 class GoldenVectorsTest {
     private val vectors: Map<String, ByteArray> by lazy {
-        val text = javaClass.getResourceAsStream("/golden_vectors.txt")!!.bufferedReader().readText()
-        text.lineSequence().filter { it.contains('=') }.associate {
-            val (k, v) = it.split("=", limit = 2)
-            k to Base64.getDecoder().decode(v)
-        }
+        val text =
+            javaClass.getResourceAsStream("/golden_vectors.txt")!!.bufferedReader().readText()
+        text
+            .lineSequence()
+            .filter { it.contains('=') }
+            .associate {
+                val (k, v) = it.split("=", limit = 2)
+                k to Base64.getDecoder().decode(v)
+            }
     }
 
     private fun <T> ok(value: StatusOr<T>): T = (value as Ok<T>).value
@@ -60,7 +64,7 @@ class GoldenVectorsTest {
         val golden = vectors.getValue("fragment")
         val fragment = ok(NodeFragment.fromMsgpack(golden))
         assertEquals("a1#text_output", fragment.id)
-        assertEquals(0L, fragment.seq)
+        assertEquals(0u, fragment.seq)
         assertEquals(false, fragment.continued)
         assertContentEquals(golden, ok(fragment.toMsgpack()))
     }
@@ -82,6 +86,8 @@ class GoldenVectorsTest {
 
     @Test
     fun allVectorsLoaded() {
-        assertTrue(vectors.keys.containsAll(listOf("chunk_json", "chunk_text", "fragment", "wire_message")))
+        assertTrue(
+            vectors.keys.containsAll(listOf("chunk_json", "chunk_text", "fragment", "wire_message"))
+        )
     }
 }

@@ -39,8 +39,7 @@ class RoundTripTest {
         val value = linkedMapOf<String, Any?>("a" to 1L, "b" to listOf("x", "y"), "c" to true)
         val chunk = ok(registry.toChunk(value, "application/json"))
         assertTrue(chunk.mimetype.startsWith("application/json"))
-        @Suppress("UNCHECKED_CAST")
-        val back = ok(registry.fromChunk(chunk)) as Map<String, Any?>
+        @Suppress("UNCHECKED_CAST") val back = ok(registry.fromChunk(chunk)) as Map<String, Any?>
         assertEquals(1L, back["a"])
         assertEquals(listOf("x", "y"), back["b"])
         assertEquals(true, back["c"])

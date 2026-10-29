@@ -23,26 +23,31 @@ import java.util.Base64
 import java.util.UUID
 
 /** Owned binary metadata map used for headers and chunk attributes. */
-typealias ByteMap = LinkedHashMap<String, ByteArray>
+typealias ByteMap = MutableMap<String, ByteArray>
+
+/** Create an owned byte map. Native records expose the same map protocol. */
+fun ByteMap(): ByteMap = linkedMapOf()
 
 private val strictDecoder
-    get() = StandardCharsets.UTF_8.newDecoder()
-        .onMalformedInput(CodingErrorAction.REPORT)
-        .onUnmappableCharacter(CodingErrorAction.REPORT)
+    get() =
+        StandardCharsets.UTF_8.newDecoder()
+            .onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT)
 
 /** Encode application/header text as UTF-8 bytes. */
 fun utf8Encode(value: String): ByteArray = value.toByteArray(StandardCharsets.UTF_8)
 
 /** Decode strict UTF-8, returning [invalidArgument] instead of replacement text. */
-fun utf8Decode(value: ByteArray): StatusOr<String> = try {
-    Ok(strictDecoder.decode(ByteBuffer.wrap(value)).toString())
-} catch (error: Throwable) {
-    invalidArgument("Byte data is not valid UTF-8.")
-}
+fun utf8Decode(value: ByteArray): StatusOr<String> =
+    try {
+        Ok(strictDecoder.decode(ByteBuffer.wrap(value)).toString())
+    } catch (error: java.nio.charset.CharacterCodingException) {
+        invalidArgument("Byte data is not valid UTF-8.")
+    }
 
 /** Join packet or serialized-record pieces into one owned byte array. */
 fun concatBytes(parts: List<ByteArray>): ByteArray {
-    val total = parts.sumOf { it.size }
+    val total = parts.sumOf { item -> item.size }
     val result = ByteArray(total)
     var offset = 0
     for (part in parts) {
@@ -56,11 +61,12 @@ fun concatBytes(parts: List<ByteArray>): ByteArray {
 fun base64Encode(bytes: ByteArray): String = Base64.getEncoder().encodeToString(bytes)
 
 /** Decode canonical base64 and reject malformed input. */
-fun base64Decode(value: String): StatusOr<ByteArray> = try {
-    Ok(Base64.getDecoder().decode(value))
-} catch (error: IllegalArgumentException) {
-    invalidArgument("Value is not valid base64.")
-}
+fun base64Decode(value: String): StatusOr<ByteArray> =
+    try {
+        Ok(Base64.getDecoder().decode(value))
+    } catch (error: IllegalArgumentException) {
+        invalidArgument("Value is not valid base64.")
+    }
 
 /** Deep-copy a byte map so caller mutation cannot change retained headers. */
 fun copyByteMap(values: Map<String, ByteArray>): ByteMap {
@@ -70,8 +76,8 @@ fun copyByteMap(values: Map<String, ByteArray>): ByteMap {
 }
 
 /**
- * Copy a map boundary into an owned byte map with optional per-key validation.
- * String values are UTF-8 encoded; ByteArray values are copied.
+ * Copy a map boundary into an owned byte map with optional per-key validation. String values are
+ * UTF-8 encoded; ByteArray values are copied.
  */
 fun normalizeByteMap(
     values: Map<String, Any>?,
@@ -83,11 +89,12 @@ fun normalizeByteMap(
         if (validateKey != null && !validateKey(key)) {
             return invalidArgument("Invalid byte-map key: $key.")
         }
-        val bytes = when (source) {
-            is ByteArray -> source.copyOf()
-            is String -> utf8Encode(source)
-            else -> return invalidArgument("Expected bytes or a string for key $key.")
-        }
+        val bytes =
+            when (source) {
+                is ByteArray -> source.copyOf()
+                is String -> utf8Encode(source)
+                else -> return invalidArgument("Expected bytes or a string for key $key.")
+            }
         result[key] = bytes
     }
     return Ok(result)
@@ -99,9 +106,8 @@ private const val ID_HEX_DIGITS = 12
 /**
  * Generate a validated-name-friendly id for actions, nodes, sessions, or streams.
  *
- * Twelve hex digits, as [a11.uuid.NewShortId] produces on the native side. Every
- * character is a hex digit, so a node id stays `<action id>#<port>` with exactly
- * one `#` for [Session] to split on.
+ * Twelve hex digits, as [a11.uuid.NewShortId] produces on the native side. Every character is a hex
+ * digit, so a node id stays `<action id>#<port>` with exactly one `#` for [Session] to split on.
  */
 fun randomId(prefix: String): String {
     val uuid = UUID.randomUUID()

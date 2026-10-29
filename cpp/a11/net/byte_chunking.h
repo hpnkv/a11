@@ -38,6 +38,10 @@
 
 namespace a11::net {
 
+/// Smallest packet that holds framing metadata and one payload byte.
+inline constexpr size_t kMinimumBytePacketSize =
+    sizeof(std::uint64_t) + 2 * sizeof(std::uint32_t) + 2;
+
 /// Packet shapes in the A11 byte-chunking wire format.
 enum class BytePacketType : std::uint8_t {
   kCompleteBytes = 0x00,

@@ -186,3 +186,7 @@ if(A11_BUILD_JVM)
       $<$<CXX_COMPILER_ID:AppleClang,Clang,GNU>:-fno-exceptions>)
   add_test(NAME a11_jvm_test COMMAND a11_jvm_test)
 endif()
+
+add_executable(a11_llm_context_test llm_context_transform_test.cc)
+target_link_libraries(a11_llm_context_test PRIVATE a11::llm_context GTest::gtest_main a11::warnings)
+add_test(NAME a11_llm_context_test COMMAND a11_llm_context_test)

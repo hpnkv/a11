@@ -14,14 +14,19 @@
 
 import logging
 
-from a11 import actions
-from a11 import net
-from a11.gateway import conversations
+from a11 import actions, net
+from a11.gateway import conversation_actions, conversations
 from a11.gateway.config import GatewayConfig
-from a11.gateway import conversation_actions
 from a11.gateway.tool_bridge import RemoteToolBridge
 from a11.sdk import bash, flow_tools
 from a11.sdk.audio import actions as audio_actions
+from a11.sdk.llm_context.actions import register as register_llm_context
+from a11.sdk.llm_context.config import (
+    LlmContextServices,
+    bind_services,
+    configure_registry,
+    decode_config,
+)
 from a11.service.service import Service, ServiceOptions
 from a11.service.session import Session
 
@@ -36,6 +41,13 @@ def _make_action_registry(
     registry = actions.ActionRegistry()
 
     conversation_actions.install(registry, conversation_store)
+    if config.llm_context_config is not None:
+        configure_registry(
+            registry,
+            decode_config(config.llm_context_config),
+            services=config.llm_context_services,
+        )
+        register_llm_context(registry, services=config.llm_context_services)
 
     if config.coding_tools:
         from a11.cli.coding_agent import ApprovalMode, CodingAgent, SandboxMode
@@ -91,9 +103,12 @@ class A11Gateway:
         self,
         conversation_store: conversations.ConversationStore,
         action_registry: actions.ActionRegistry,
+        *,
+        llm_context_services: LlmContextServices | None = None,
     ):
         self._conversation_store = conversation_store
         self._action_registry = action_registry
+        self._llm_context_services = llm_context_services
         self.service = Service(
             action_registry=action_registry,
             on_connection=self._on_connection,
@@ -128,6 +143,8 @@ class A11Gateway:
         # own tools on it: those actions belong to this peer and must not be
         # visible (or callable) on anyone else's session.
         registry = self._action_registry.copy()
+        if self._llm_context_services is not None:
+            bind_services(registry, self._llm_context_services)
         bridge = RemoteToolBridge()
         bridge.install(registry)
         session.set_action_registry(registry)
@@ -152,4 +169,8 @@ def init_app(config: GatewayConfig | None = None) -> A11Gateway:
     )
     action_registry = _make_action_registry(resolved, conversation_store)
 
-    return A11Gateway(conversation_store, action_registry)
+    return A11Gateway(
+        conversation_store,
+        action_registry,
+        llm_context_services=resolved.llm_context_services,
+    )

@@ -16,23 +16,26 @@ import asyncio
 import traceback
 from typing import Any
 
-from absl import logging
-
-import a11
 import pydantic_core
-
+from absl import logging
 from google.genai import errors as genai_errors
 
-from a11.status import Status, StatusCode, StatusException
-
+import a11
+from a11.sdk import llm
 from a11.sdk.gemini.client import get_gemini_client
 from a11.sdk.gemini.interact_with_gemini_schema import (
-    CreateInteractionConfig,
     DEFAULT_MODEL,
+    CreateInteractionConfig,
 )
-from a11.sdk import llm
-from a11.sdk.usage import UsageReporter, provider_event, closing_stream
+from a11.sdk.llm_context.runtime import (
+    llm_context_handler,
+    prepare_interaction_result,
+    prepare_interaction_stream,
+    prepare_messages,
+)
 from a11.sdk.llm_tools import runner
+from a11.sdk.usage import UsageReporter, closing_stream, provider_event
+from a11.status import Status, StatusCode, StatusException
 
 # The Gemini server-side interaction id is stashed here on an assistant
 # interaction's `backend_specific_metadata` so subsequent turns can resume the
@@ -293,7 +296,16 @@ def _gemini_from_normalized(
     return steps
 
 
-llm.register_interaction_normalizer(llm.Backend.GEMINI, _gemini_to_normalized)
+llm.register_interaction_normalizer(
+    llm.Backend.GEMINI,
+    _gemini_to_normalized,
+    replay_metadata_keys=(
+        "gemini_interaction_id",
+        "status",
+        "service_tier",
+        "object",
+    ),
+)
 
 
 class Conversation:
@@ -569,6 +581,7 @@ class _StepAccumulator:
 async def _build_tool_results_from_outputs(
     executed: runner.ExecutedActions,
     call_names: dict[str, str],
+    action=None,
 ) -> list[dict[str, Any]]:
     """Turn each nested-action output or failure into a function result.
 
@@ -611,7 +624,9 @@ async def _build_tool_results_from_outputs(
             )
         return steps
 
-    return await llm.build_tool_results(executed, as_function_result)
+    return await llm.build_tool_results(
+        executed, as_function_result, action=action
+    )
 
 
 def _build_usage_metadata(
@@ -702,6 +717,7 @@ def _build_tools(
     return tools
 
 
+@llm_context_handler
 async def interact_with_gemini(action: a11.Action):
     output = llm.OrderedOutputStreams(action)
     deadline = a11.get_deadline(action)
@@ -730,7 +746,17 @@ async def interact_with_gemini(action: a11.Action):
 
     previous_interaction_id = ""
     conversation = Conversation()
-    async for interaction in action["interactions"]:
+    async for interaction in prepare_interaction_stream(
+        action,
+        action["interactions"],
+        stateful=lambda sources: (
+            config.state_mode != "full-history"
+            and any(
+                item.backend_specific_metadata.get(_GEMINI_INTERACTION_ID)
+                for item in sources
+            )
+        ),
+    ):
         interaction = conversation.feed_next_interaction(interaction)
         previous_interaction_id = interaction.id
 
@@ -756,7 +782,7 @@ async def interact_with_gemini(action: a11.Action):
     # starts by chaining and flips this flag on the first unresolvable id.
     replay_full_history = state_mode == "full-history"
 
-    def build_create_kwargs(full: bool) -> dict[str, Any]:
+    async def build_create_kwargs(full: bool) -> dict[str, Any]:
         kwargs: dict[str, Any] = {
             "model": model,
             "input": (
@@ -775,6 +801,9 @@ async def interact_with_gemini(action: a11.Action):
             kwargs["previous_interaction_id"] = (
                 conversation.previous_server_interaction_id
             )
+        kwargs["input"] = await prepare_messages(
+            action, kwargs["input"], stateful=not full
+        )
         return kwargs
 
     try:
@@ -801,12 +830,12 @@ async def interact_with_gemini(action: a11.Action):
                     # previous turn was produced by another backend — so the
                     # whole transcript has to be replayed.
                     stream = await client.aio.interactions.create(
-                        **build_create_kwargs(full=True)
+                        **await build_create_kwargs(full=True)
                     )
                 elif state_mode == "auto":
                     try:
                         stream = await client.aio.interactions.create(
-                            **build_create_kwargs(full=False)
+                            **await build_create_kwargs(full=False)
                         )
                     except genai_errors.APIError as exc:
                         logging.warning(
@@ -828,12 +857,12 @@ async def interact_with_gemini(action: a11.Action):
                             llm.UsageMetadata(), complete=False
                         )
                         stream = await client.aio.interactions.create(
-                            **build_create_kwargs(full=True)
+                            **await build_create_kwargs(full=True)
                         )
                 else:
                     # "last-id" with a resumable server-side interaction.
                     stream = await client.aio.interactions.create(
-                        **build_create_kwargs(full=False)
+                        **await build_create_kwargs(full=False)
                     )
             except genai_errors.APIError as exc:
                 raise Status(
@@ -969,15 +998,17 @@ async def interact_with_gemini(action: a11.Action):
                         {
                             "role": "user",
                             "content": await _build_tool_results_from_outputs(
-                                executed, call_names
+                                executed, call_names, action=action
                             ),
                         }
                     )
                 ],
             )
             previous_interaction_id = tool_output_interaction.id
-            tool_output_interaction = conversation.feed_next_interaction(
-                tool_output_interaction
+            conversation.feed_next_interaction(
+                await prepare_interaction_result(
+                    action, tool_output_interaction
+                )
             )
 
             await action["new_interactions"].put(tool_output_interaction)

@@ -140,6 +140,14 @@ def _add_serving_flags(
         help="Disable transcription actions.",
     )
     parser.add_argument(
+        "--llm-context-config",
+        default=argparse.SUPPRESS if inherit_defaults else None,
+        help=(
+            "Default JSON context policy for LLM actions (disabled when"
+            " absent)."
+        ),
+    )
+    parser.add_argument(
         "--no-flow-tools",
         action="store_true",
         default=argparse.SUPPRESS if inherit_defaults else False,
@@ -327,6 +335,8 @@ def _detach(args: argparse.Namespace) -> int:
         "--coding-sandbox",
         args.coding_sandbox,
     ]
+    if getattr(args, "llm_context_config", None) is not None:
+        passthrough += ["--llm-context-config", args.llm_context_config]
     for extra in args.coding_add_dir:
         passthrough += ["--coding-add-dir", extra]
 

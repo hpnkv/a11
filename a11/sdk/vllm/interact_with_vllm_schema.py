@@ -16,11 +16,12 @@
 
 from typing import Any, ClassVar
 
-import a11
 from pydantic import BaseModel, Field
 
+import a11
 from a11.data import serial_tags
 from a11.sdk.llm import Interaction, InteractionAdapter, LlmHeaders, Role
+from a11.sdk.llm_context.config import LLM_CONTEXT_HEADERS
 from a11.status import Status, StatusCode
 
 
@@ -197,6 +198,7 @@ INTERACT_WITH_VLLM_SCHEMA = a11.ActionSchema(
         ),
     },
     headers=a11.DEFAULT_ACTION_HEADERS
+    | LLM_CONTEXT_HEADERS
     | {
         LlmHeaders.API_KEY: a11.ActionHeaderSchema(
             LlmHeaders.API_KEY,
@@ -236,10 +238,12 @@ def make_text_message_interaction(
     return Interaction(
         role=role,
         content=[
-            a11.to_chunk({
-                "role": role_str,
-                "content": text,
-            })
+            a11.to_chunk(
+                {
+                    "role": role_str,
+                    "content": text,
+                }
+            )
         ],
         system_instructions=system_instructions,
     )

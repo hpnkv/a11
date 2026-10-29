@@ -50,10 +50,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from a11 import _native
-
-from a11._native import DownloadOptions
-from a11._native import FetchOptions
-from a11._native import ParsedUrl
+from a11._native import DownloadOptions, FetchOptions, ParsedUrl
 
 if TYPE_CHECKING:
     from a11._native import HttpResponse
@@ -64,6 +61,7 @@ DownloadOptions.__module__ = __name__
 
 parse_url = _native.parse_url
 resolve_url_reference = _native.resolve_url_reference
+relay_http = _native.relay_http
 fetch = _native.fetch
 
 
@@ -116,6 +114,7 @@ __all__ = [
     "ParsedUrl",
     "download",
     "fetch",
+    "relay_http",
     "file_sha1",
     "parse_url",
     "resolve_url_reference",

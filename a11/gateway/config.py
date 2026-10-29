@@ -29,6 +29,7 @@ import dataclasses
 import pathlib
 
 from a11.gateway import conversations
+from a11.sdk.llm_context.config import LlmContextServices
 
 #: Where a gateway listens unless told otherwise, and where a client looks for
 #: one. Shared with the IntelliJ plugin's default setting.
@@ -63,6 +64,9 @@ class GatewayConfig:
     audio_capture: bool = True
     #: Serve ``capture_transcription`` and ``transcribe_audio``.
     speech_recognition: bool = True
+    #: Default LLM context header and receiving-host dependencies.
+    llm_context_config: str | None = None
+    llm_context_services: LlmContextServices | None = None
 
     @property
     def url(self) -> str:
@@ -77,6 +81,7 @@ class GatewayConfig:
         double negative stops at this boundary.
         """
         return cls(
+            llm_context_config=getattr(args, "llm_context_config", None),
             host=getattr(args, "host", DEFAULT_HOST),
             a11_port=getattr(args, "a11_port", DEFAULT_A11_PORT),
             conversation_store_root=getattr(

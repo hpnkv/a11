@@ -17,30 +17,45 @@ import dataclasses
 import traceback
 from typing import Any
 
-from absl import logging
-
-import a11
 import anthropic
-import pydantic_core
 import httpx
-
-from a11.status import Status, StatusCode, StatusException
-from anthropic.lib.streaming._messages import accumulate_event
+import pydantic_core
+from absl import logging
 from anthropic.lib.streaming._beta_messages import (
     accumulate_event as accumulate_beta_event,
 )
+from anthropic.lib.streaming._messages import accumulate_event
 
+import a11
+from a11.sdk import llm
 from a11.sdk.anthropic.client import get_anthropic_client
 from a11.sdk.anthropic.interact_with_claude_schema import (
-    CreateMessageConfig,
     DEFAULT_MODEL,
+    CreateMessageConfig,
 )
-from a11.sdk import llm
-from a11.sdk.usage import UsageReporter, provider_event, closing_stream
 from a11.sdk.anthropic.messages import Conversation, to_normalized
+from a11.sdk.llm_context.runtime import (
+    llm_context_handler,
+    prepare_interaction_result,
+    prepare_interaction_stream,
+    prepare_messages,
+)
 from a11.sdk.llm_tools import runner
+from a11.sdk.usage import UsageReporter, closing_stream, provider_event
+from a11.sdk.usage import anthropic_usage as _build_usage_metadata
+from a11.status import Status, StatusCode, StatusException
 
-llm.register_interaction_normalizer(llm.Backend.CLAUDE, to_normalized)
+llm.register_interaction_normalizer(
+    llm.Backend.CLAUDE,
+    to_normalized,
+    replay_metadata_keys=(
+        "stop_reason",
+        "service_tier",
+        "inference_geo",
+        "server_tool_use",
+        "cache_creation",
+    ),
+)
 
 
 @dataclasses.dataclass
@@ -61,6 +76,7 @@ class _ToolCall(llm.ToolCall):
 
 async def _build_tool_results_from_outputs(
     executed: runner.ExecutedActions,
+    action=None,
 ) -> list[dict[str, Any]]:
     """One `tool_result` per call: its outputs, or why it failed.
 
@@ -89,7 +105,7 @@ async def _build_tool_results_from_outputs(
             result["is_error"] = True
         return result
 
-    return await llm.build_tool_results(executed, as_tool_result)
+    return await llm.build_tool_results(executed, as_tool_result, action=action)
 
 
 def _image_block(image: llm.NormalizedPart) -> dict[str, Any]:
@@ -126,66 +142,6 @@ def _cached_prefix(
     if cached_tools:
         cached_tools[-1]["cache_control"] = cache_control
     return anthropic.Omit(), cached_tools
-
-
-def _build_usage_metadata(
-    usage: anthropic.types.Usage | anthropic.types.beta.BetaUsage | None,
-) -> llm.UsageMetadata | None:
-    """Map Anthropic's `Usage` onto the provider-independent `UsageMetadata`."""
-    if usage is None:
-        return None
-
-    reasoning_tokens = None
-    if usage.output_tokens_details is not None:
-        reasoning_tokens = usage.output_tokens_details.thinking_tokens
-
-    cache_read = usage.cache_read_input_tokens or 0
-    cache_write = usage.cache_creation_input_tokens or 0
-    # Anthropic reports `input_tokens` as the uncached remainder, so the full
-    # token count for the interaction adds the cached-read and cache-write
-    # input tokens on top of the (uncached) input and the output tokens.
-    total_tokens = (
-        usage.input_tokens + usage.output_tokens + cache_read + cache_write
-    )
-
-    result = llm.UsageMetadata(
-        input_tokens=usage.input_tokens,
-        output_tokens=usage.output_tokens,
-        total_tokens=total_tokens,
-        cached_input_tokens=usage.cache_read_input_tokens,
-        cache_write_tokens=usage.cache_creation_input_tokens,
-        reasoning_tokens=reasoning_tokens,
-    )
-    iterations = getattr(usage, "iterations", None)
-    if iterations:
-        fields = {
-            "input_tokens": "input_tokens",
-            "output_tokens": "output_tokens",
-            "cached_input_tokens": "cache_read_input_tokens",
-            "cache_write_tokens": "cache_creation_input_tokens",
-        }
-        for target, source in fields.items():
-            values = [getattr(item, source, None) for item in iterations]
-            setattr(
-                result,
-                target,
-                sum(values) if all(v is not None for v in values) else None,
-            )
-        result.total_tokens = (
-            sum(getattr(result, name) or 0 for name in fields)
-            if result.input_tokens is not None
-            and result.output_tokens is not None
-            else None
-        )
-        last = iterations[-1]
-        result.context_tokens = (
-            last.input_tokens
-            + last.output_tokens
-            + (last.cache_read_input_tokens or 0)
-            + (last.cache_creation_input_tokens or 0)
-        )
-        result.context_source = "request_estimate"
-    return result
 
 
 def _build_backend_specific_metadata(
@@ -260,6 +216,7 @@ def _build_server_tools(config: CreateMessageConfig) -> list[dict[str, Any]]:
     return tools
 
 
+@llm_context_handler
 async def interact_with_claude(action: a11.Action):
     output = llm.OrderedOutputStreams(action)
     deadline = a11.get_deadline(action)
@@ -288,7 +245,9 @@ async def interact_with_claude(action: a11.Action):
 
     previous_interaction_id = ""
     conversation = Conversation()
-    async for interaction in action["interactions"]:
+    async for interaction in prepare_interaction_stream(
+        action, action["interactions"]
+    ):
         interaction = conversation.feed_next_interaction(interaction)
         previous_interaction_id = interaction.id
 
@@ -331,6 +290,7 @@ async def interact_with_claude(action: a11.Action):
                     {"role": message["role"], "content": message["content"]}
                     for message in conversation.messages
                 ]
+                messages = await prepare_messages(action, messages)
                 beta_path = bool(config.betas or config.context_management)
                 request_options = {}
                 if beta_path:
@@ -498,15 +458,17 @@ async def interact_with_claude(action: a11.Action):
                         {
                             "role": "user",
                             "content": await _build_tool_results_from_outputs(
-                                executed
+                                executed, action=action
                             ),
                         }
                     )
                 ],
             )
             previous_interaction_id = tool_output_interaction.id
-            tool_output_interaction = conversation.feed_next_interaction(
-                tool_output_interaction
+            conversation.feed_next_interaction(
+                await prepare_interaction_result(
+                    action, tool_output_interaction
+                )
             )
 
             await action["new_interactions"].put(tool_output_interaction)

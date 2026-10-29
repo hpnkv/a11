@@ -241,6 +241,10 @@ __all__: list[str] = [
     "is_status_chunk",
     "is_textual_log_mimetype",
     "list_audio_devices",
+    "llm_context_compact_json",
+    "llm_context_encode",
+    "llm_context_estimate_tokens",
+    "llm_context_expand",
     "log_record_from_chunk",
     "lookup_asr_model",
     "lookup_vad_model",
@@ -256,6 +260,7 @@ __all__: list[str] = [
     "register_audio_actions",
     "register_http_actions",
     "registry_to_json",
+    "relay_http",
     "release_deferred_python_refs",
     "request_fiber_dump",
     "reset_default_redis_client",
@@ -3777,6 +3782,11 @@ class Http2Options:
     def __init__(self) -> None:
         """
         Construct default HTTP/2 options.
+        """
+
+    def set_stream_request_body(self, enabled: bool) -> None:
+        """
+        Accept every request body as a pull stream when enabled; restore buffered bodies when disabled.
         """
 
     def validate(self) -> None:
@@ -9700,6 +9710,34 @@ def list_audio_devices() -> list[AudioDeviceInfo]:
     Return metadata for every audio device, in index order.
     """
 
+def llm_context_compact_json(
+    text: str,
+    max_bytes: typing.SupportsInt = 8388608,
+    max_depth: typing.SupportsInt = 128,
+) -> str:
+    """
+    Compact JSON without changing its string or number tokens.
+    """
+
+def llm_context_encode(
+    text: str, format: str, max_bytes: typing.SupportsInt = 8388608
+) -> str:
+    """
+    Encode content in a reversible model-facing envelope.
+    """
+
+def llm_context_estimate_tokens(text: str) -> int:
+    """
+    Estimate tokens from bytes; not a provider-authoritative count.
+    """
+
+def llm_context_expand(
+    text: str, max_bytes: typing.SupportsInt = 8388608
+) -> str:
+    """
+    Expand a context envelope with a hard output byte limit.
+    """
+
 def log_record_from_chunk(
     chunk: Chunk, action_name: str = "", action_id: str = ""
 ) -> dict:
@@ -9794,6 +9832,19 @@ def registry_to_json(
 ) -> str:
     """
     Describe every action in the registry as one a11.actions/v1 JSON document. `request` is the same object __list_actions__ takes on its `request` port: a mapping, a list of patterns, or None.
+    """
+
+def relay_http(
+    target: str,
+    request: HttpRequest,
+    writer: Http2ResponseWriter,
+    options: Http2Options = ...,
+    deadline: Time | None = None,
+    observer: typing.Any | None = None,
+    max_observed_bytes: typing.SupportsInt = 8388608,
+) -> asyncio.Future[None]:
+    """
+    Relay an HTTP exchange without retries, preserving response bytes and trailers.
     """
 
 def release_deferred_python_refs() -> None:

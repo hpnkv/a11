@@ -14,15 +14,16 @@
 
 import json
 
-import a11
 from pydantic import TypeAdapter
 
+import a11
 from a11.sdk.anthropic.interact_with_claude_code_schema import (
     CreateSessionConfig as ClaudeCodeConfig,
 )
 from a11.sdk.anthropic.interact_with_claude_schema import CreateMessageConfig
 from a11.sdk.gemini.interact_with_gemini_schema import CreateInteractionConfig
 from a11.sdk.llm import Interaction, LlmHeaders
+from a11.sdk.llm_context.config import LLM_CONTEXT_HEADERS
 from a11.sdk.ollama.interact_with_ollama_schema import CreateChatConfig
 from a11.sdk.openai.interact_with_codex_schema import CreateCodexSessionConfig
 from a11.sdk.openai.interact_with_gpt_schema import CreateChatCompletionConfig
@@ -93,6 +94,7 @@ INTERACT_WITH_LLM_SCHEMA = a11.ActionSchema(
         ),
     },
     headers=a11.DEFAULT_ACTION_HEADERS
+    | LLM_CONTEXT_HEADERS
     | {
         LlmHeaders.API_KEY: a11.ActionHeaderSchema(
             LlmHeaders.API_KEY, "API key for the downstream provider."

@@ -38,7 +38,6 @@ from a11.sdk.anthropic.interact_with_claude_code_schema import (
     INTERACT_WITH_CLAUDE_CODE_SCHEMA,
 )
 
-
 # -- a trivial registry tool the model can call -------------------------------
 
 _GET_INFO = a11.ActionSchema(
@@ -189,8 +188,7 @@ async def _run(
     registry.register("get_info", _GET_INFO, _get_info)
 
     action = (
-        a11
-        .Action(INTERACT_WITH_CLAUDE_CODE_SCHEMA)
+        a11.Action(INTERACT_WITH_CLAUDE_CODE_SCHEMA)
         .bind_handler(mod.interact_with_claude_code)
         .bind_registry(registry)
         .set_header(LlmHeaders.MODEL.value, b"claude-sonnet-4-6")
@@ -591,10 +589,12 @@ async def test_history_resumes_the_recorded_session(monkeypatch):
         previous_interaction_id=first.id,
         role=Role.ASSISTANT,
         content=[
-            a11.to_chunk({
-                "role": "assistant",
-                "content": [{"type": "text", "text": "hi there"}],
-            })
+            a11.to_chunk(
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "hi there"}],
+                }
+            )
         ],
         backend_specific_metadata={
             "backend": b"claude_code",
@@ -659,10 +659,12 @@ async def test_history_without_a_session_is_replayed(monkeypatch):
         previous_interaction_id=first.id,
         role=Role.ASSISTANT,
         content=[
-            a11.to_chunk({
-                "role": "assistant",
-                "content": [{"type": "text", "text": "hi there"}],
-            })
+            a11.to_chunk(
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "hi there"}],
+                }
+            )
         ],
     )
     follow_up = Interaction(
@@ -696,10 +698,12 @@ async def test_a_resumed_session_needs_a_new_turn(monkeypatch):
         previous_interaction_id=first.id,
         role=Role.ASSISTANT,
         content=[
-            a11.to_chunk({
-                "role": "assistant",
-                "content": [{"type": "text", "text": "hi there"}],
-            })
+            a11.to_chunk(
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "hi there"}],
+                }
+            )
         ],
         backend_specific_metadata={
             "backend": b"claude_code",
@@ -779,3 +783,71 @@ async def test_the_client_is_always_disconnected(monkeypatch):
     await _run(script, monkeypatch)
 
     assert _FakeClient.last.disconnected is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cli_version", ("2.1.251", "2.1.266", "2.1.277"))
+async def test_native_compaction_keeps_init_version_and_separate_usage(
+    monkeypatch,
+    cli_version,
+):
+    commands = []
+    phase = 0
+
+    async def query(self, prompt):
+        if isinstance(prompt, str):
+            commands.append(prompt)
+        else:
+            self.prompt = [item async for item in prompt]
+            commands.append("pending input")
+
+    monkeypatch.setattr(_FakeClient, "query", query, raising=False)
+
+    async def script():
+        nonlocal phase
+        phase += 1
+        result = _result("session")
+        result.model_usage = {
+            "model": {
+                "inputTokens": 20 if phase == 1 else 30,
+                "outputTokens": 4 if phase == 1 else 6,
+                "cacheReadInputTokens": 0,
+                "cacheCreationInputTokens": 0,
+            }
+        }
+        if phase == 1:
+            return [
+                cc.SystemMessage(
+                    subtype="init",
+                    data={
+                        "claude_code_version": cli_version,
+                        "session_id": "session",
+                    },
+                ),
+                cc.SystemMessage(subtype="compact_boundary", data={}),
+                result,
+            ]
+        return [result]
+
+    events, _ = await _run(
+        script,
+        monkeypatch,
+        read="event_stream",
+        config=CreateSessionConfig(resume="session"),
+        headers={"x-a11-llm-context-config": '{"compaction":"native"}'},
+    )
+    assert commands == ["/compact", "pending input"]
+    usage = [row for row in events if row.get("type") == "a11.usage"]
+    generation = [
+        row
+        for row in usage
+        if row.get("operation", "generation") == "generation"
+    ][-1]
+    assert generation["usage"]["input_tokens"] == 10
+    assert generation["usage"]["output_tokens"] == 2
+    assert generation["scope"]["reporting"] == "delta"
+    assert generation["scope"]["session_id"] == "session"
+    auxiliary = [
+        row for row in usage if row.get("operation") == "native_compaction"
+    ][-1]
+    assert auxiliary["usage"].get("complete") is False

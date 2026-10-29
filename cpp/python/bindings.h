@@ -21,6 +21,7 @@
 
 namespace a11::python {
 
+void BindLlmContext(pybind11::module_& module);
 void BindCore(pybind11::module_& module);
 void BindData(pybind11::module_& module);
 void BindDebug(pybind11::module_& module);

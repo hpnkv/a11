@@ -14,6 +14,7 @@
 
 set(A11_PYTHON_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/actions_bindings.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/llm_context_bindings.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/core_bindings.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/data_bindings.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/debug_bindings.cc

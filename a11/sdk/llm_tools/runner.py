@@ -14,31 +14,29 @@
 
 import asyncio
 import dataclasses
-from copy import deepcopy
 import json
 from collections import defaultdict
 from collections.abc import AsyncIterator, Mapping
+from copy import deepcopy
 from typing import Any
 
 from absl import logging
 
+import a11
 from a11 import _native
 from a11._native import NodeFragment
-
-import a11
 from a11.actions import describe
 from a11.actions.jsonschema import organise_and_deduplicate_jsonschema
-from a11.status import Status, StatusCode, StatusException
-
 from a11.sdk.llm import (
-    action_name_matches_allowed,
-    get_allowed_llm_action_patterns,
-    Interaction,
     TOOL_LOGS_METADATA_KEY,
     TOOL_STATUSES_METADATA_KEY,
     WHOLE_JSON_FRAGMENT_ID,
+    Interaction,
+    action_name_matches_allowed,
+    get_allowed_llm_action_patterns,
 )
 from a11.sdk.llm_tools.adapter import WHOLE_JSON_OUTPUT
+from a11.status import Status, StatusCode, StatusException
 
 MAX_MODEL_TOOL_OUTPUT_BYTES = 128 * 1024
 
@@ -283,6 +281,7 @@ class ExecutedActions:
     outputs: dict[str, list[NodeFragment]]
     errors: dict[str, Status]
     logs: dict[str, str] = dataclasses.field(default_factory=dict)
+    action_names: dict[str, str] = dataclasses.field(default_factory=dict)
 
     def log_metadata(self) -> dict[str, bytes]:
         """This round's logs as interaction metadata; ``{}`` if there are none.
@@ -682,4 +681,9 @@ async def execute_actions_from_interaction(
                 await asyncio.gather(task, return_exceptions=True)
                 logging.debug("a tool's log port did not end")
 
-    return ExecutedActions(outputs=dict(all_outputs), errors=errors, logs=logs)
+    return ExecutedActions(
+        outputs=dict(all_outputs),
+        errors=errors,
+        logs=logs,
+        action_names={call.id: call.name for call in interaction.action_calls},
+    )

@@ -21,22 +21,26 @@ import warnings
 from collections.abc import Callable
 from typing import Any
 
+import ollama
 from absl import logging
 
 import a11
-import ollama
-
-from a11.status import Status, StatusCode, StatusException
-
+from a11.sdk import llm
+from a11.sdk.llm_context.runtime import (
+    llm_context_handler,
+    prepare_interaction_result,
+    prepare_interaction_stream,
+    prepare_messages,
+)
+from a11.sdk.llm_tools import runner
 from a11.sdk.ollama.client import get_ollama_client
 from a11.sdk.ollama.interact_with_ollama_schema import (
-    CreateChatConfig,
     DEFAULT_MODEL,
     MAX_OUTPUT_TOKENS_HEADER,
+    CreateChatConfig,
 )
-from a11.sdk import llm
-from a11.sdk.usage import UsageReporter, provider_event, closing_stream
-from a11.sdk.llm_tools import runner
+from a11.sdk.usage import UsageReporter, closing_stream, provider_event
+from a11.status import Status, StatusCode, StatusException
 
 
 def _message_from_neutral_parts(role: str, parts: list[Any]) -> dict[str, Any]:
@@ -236,7 +240,17 @@ def _ollama_from_normalized(
     return messages
 
 
-llm.register_interaction_normalizer(llm.Backend.OLLAMA, _ollama_to_normalized)
+llm.register_interaction_normalizer(
+    llm.Backend.OLLAMA,
+    _ollama_to_normalized,
+    replay_metadata_keys=(
+        "done_reason",
+        "total_duration",
+        "load_duration",
+        "prompt_eval_duration",
+        "eval_duration",
+    ),
+)
 
 
 class Conversation:
@@ -489,6 +503,7 @@ class _StreamAccumulator:
 async def _build_tool_results_from_outputs(
     executed: runner.ExecutedActions,
     call_names: dict[str, str],
+    action=None,
 ) -> list[dict[str, Any]]:
     """Turn each nested-action output or failure into a tool message.
 
@@ -521,7 +536,9 @@ async def _build_tool_results_from_outputs(
             )
         return messages
 
-    return await llm.build_tool_results(executed, as_tool_message)
+    return await llm.build_tool_results(
+        executed, as_tool_message, action=action
+    )
 
 
 def _build_usage_metadata(snapshot: Any | None) -> llm.UsageMetadata | None:
@@ -660,6 +677,7 @@ def _build_tools(
     return tools
 
 
+@llm_context_handler
 async def interact_with_ollama(action: a11.Action):
     deadline = a11.get_deadline(action)
 
@@ -706,7 +724,9 @@ async def interact_with_ollama(action: a11.Action):
 
     previous_interaction_id = ""
     conversation = Conversation()
-    async for interaction in action["interactions"]:
+    async for interaction in prepare_interaction_stream(
+        action, action["interactions"]
+    ):
         interaction = conversation.feed_next_interaction(interaction)
         previous_interaction_id = interaction.id
 
@@ -748,6 +768,7 @@ async def interact_with_ollama(action: a11.Action):
                     }
                 )
             messages.extend(conversation.messages)
+            messages = await prepare_messages(action, messages)
             await action.logf(
                 "Ollama round %d sends %d %s to %s; %d %s available.",
                 round_number,
@@ -887,15 +908,17 @@ async def interact_with_ollama(action: a11.Action):
                     a11.to_chunk(
                         {
                             "messages": await _build_tool_results_from_outputs(
-                                executed, call_names
+                                executed, call_names, action=action
                             )
                         }
                     )
                 ],
             )
             previous_interaction_id = tool_output_interaction.id
-            tool_output_interaction = conversation.feed_next_interaction(
-                tool_output_interaction
+            conversation.feed_next_interaction(
+                await prepare_interaction_result(
+                    action, tool_output_interaction
+                )
             )
 
             await action["new_interactions"].put(tool_output_interaction)

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import uuid
-import inspect
 import asyncio
+import inspect
+import uuid
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from typing import Any, Literal
@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 from pydantic_core import to_json
 
 from a11.sdk.llm import UsageMetadata
+from a11.sdk.llm_context.config import config_for, services_for
 
 EVENT_TYPE = "a11.usage"
 METADATA_KEY = "a11.usage"
@@ -162,7 +163,12 @@ class UsageReporter:
         self.revision = 0
         self.usage: UsageMetadata | None = None
         self.scope = UsageScope()
-        self.operation = "generation"
+        get_header = getattr(action, "get_header", None)
+        self.operation = (
+            get_header("x-a11-llm-context-operation", decode=True)
+            if get_header is not None
+            else None
+        ) or "generation"
 
     async def report(
         self,
@@ -220,6 +226,17 @@ class UsageReporter:
 
     async def _publish(self, update: UsageUpdate) -> None:
         event = update.model_dump(mode="json")
+        services = services_for(self.action)
+        if services.recorder is not None:
+            config = config_for(self.action)
+            await asyncio.to_thread(
+                services.recorder.record,
+                {
+                    **event,
+                    "run_id": config.measurement.run_id,
+                    "arm": config.measurement.arm,
+                },
+            )
         if observer := usage_observer.get():
             await observer(event)
         flushed = await self.action["event_stream"].put(event)
@@ -352,3 +369,124 @@ def usage_delta(
         if value is not None and values[field] is None:
             complete = False
     return current.model_copy(update={**values, "complete": complete})
+
+
+def provider_usage(profile: str, usage: Any) -> UsageMetadata | None:
+    """Normalize provider wire counts for SDK clients and passive observers.
+
+    Args:
+        profile: chat, responses, or anthropic API shape.
+        usage: Mapping or provider SDK object, including partial snapshots.
+
+    Returns:
+        The shared usage model with unknown counters preserved. Input excludes
+        separately reported cache reads/writes; output includes reasoning.
+    """
+    if usage is None:
+        return None
+
+    def field(source, name):
+        return (
+            source.get(name)
+            if isinstance(source, dict)
+            else getattr(source, name, None)
+        )
+
+    if profile in ("chat", "responses"):
+        details = field(
+            usage,
+            (
+                "prompt_tokens_details"
+                if profile == "chat"
+                else "input_tokens_details"
+            ),
+        )
+        output_details = field(
+            usage,
+            (
+                "completion_tokens_details"
+                if profile == "chat"
+                else "output_tokens_details"
+            ),
+        )
+        cached, written = field(details, "cached_tokens"), field(
+            details, "cache_write_tokens"
+        )
+        prompt = field(
+            usage, "prompt_tokens" if profile == "chat" else "input_tokens"
+        )
+        return UsageMetadata(
+            input_tokens=(
+                prompt - (cached or 0) - (written or 0)
+                if prompt is not None
+                else None
+            ),
+            output_tokens=field(
+                usage,
+                "completion_tokens" if profile == "chat" else "output_tokens",
+            ),
+            total_tokens=field(usage, "total_tokens"),
+            cached_input_tokens=cached,
+            cache_write_tokens=written,
+            reasoning_tokens=field(output_details, "reasoning_tokens"),
+        )
+    if profile != "anthropic":
+        raise ValueError(f"Unknown provider usage profile: {profile}")
+    fields = {
+        "input_tokens": "input_tokens",
+        "output_tokens": "output_tokens",
+        "cached_input_tokens": "cache_read_input_tokens",
+        "cache_write_tokens": "cache_creation_input_tokens",
+    }
+    counts = {target: field(usage, source) for target, source in fields.items()}
+    total = (
+        sum(v or 0 for v in counts.values())
+        if counts["input_tokens"] is not None
+        and counts["output_tokens"] is not None
+        else None
+    )
+    result = UsageMetadata(
+        **counts,
+        total_tokens=total,
+        reasoning_tokens=field(
+            field(usage, "output_tokens_details"), "thinking_tokens"
+        ),
+    )
+    iterations = field(usage, "iterations")
+    if iterations:
+        for target, source in fields.items():
+            values = [field(item, source) for item in iterations]
+            setattr(
+                result,
+                target,
+                sum(values) if all(v is not None for v in values) else None,
+            )
+        result.total_tokens = (
+            sum(getattr(result, name) or 0 for name in fields)
+            if result.input_tokens is not None
+            and result.output_tokens is not None
+            else None
+        )
+        last = [field(iterations[-1], source) for source in fields.values()]
+        result.context_tokens = (
+            sum(v or 0 for v in last)
+            if last[0] is not None and last[1] is not None
+            else None
+        )
+        result.context_source = "request_estimate"
+    return result
+
+
+def chat_usage(usage: Any) -> UsageMetadata | None:
+    """Normalize OpenAI-compatible Chat token usage."""
+    return provider_usage("chat", usage)
+
+
+def responses_usage(usage: Any) -> UsageMetadata | None:
+    """Normalize Responses token usage."""
+    return provider_usage("responses", usage)
+
+
+def anthropic_usage(usage: Any) -> UsageMetadata | None:
+    """Normalize Anthropic usage, including per-iteration consumption."""
+    return provider_usage("anthropic", usage)

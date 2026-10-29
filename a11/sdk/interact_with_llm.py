@@ -17,7 +17,9 @@
 `interact_with_llm` inspects the action's headers, imports the selected provider
 lazily, and runs its handler as a nested action. Fragment pumps connect the
 router's ports to the backend's matching ports. The child retains the session,
-registry, headers, and nested tool-call context.
+registry, headers, and nested tool-call context. The selected backend owns
+Interaction view validation and request projection; the router forwards input
+fragments and accepted-view provenance unchanged.
 
 The router claims the backend action's log and relays each record with its
 level, channel, source location, and structured value intact. A caller therefore
@@ -45,6 +47,8 @@ from absl import logging
 import a11
 from a11 import _native
 from a11.sdk.llm import Interaction, LlmHeaders
+from a11.sdk.llm_context.config import LLM_CONTEXT_HEADERS
+from a11.sdk.llm_context.runtime import llm_context_handler
 from a11.sdk.usage import usage_observer
 from a11.status import Status, StatusCode
 
@@ -174,6 +178,7 @@ INTERACT_WITH_LLM_SCHEMA = a11.ActionSchema(
         ),
     },
     headers=a11.DEFAULT_ACTION_HEADERS
+    | LLM_CONTEXT_HEADERS
     | {
         LlmHeaders.API_KEY: a11.ActionHeaderSchema(
             LlmHeaders.API_KEY, "The backend API key."
@@ -309,6 +314,7 @@ async def _run_backend(
     """Run the selected backend and connect all of its ports to the router."""
     backend = action.make_nested(_backend_schema(provider))
     backend.bind_stream(None)
+
     async def run_handler(child):
         token = usage_observer.set(event_observer)
         try:
@@ -324,9 +330,7 @@ async def _run_backend(
         for name in INTERACT_WITH_LLM_SCHEMA.inputs
     ]
     pumps.extend(
-        asyncio.create_task(
-            _pump_fragments(backend[name], action[name])
-        )
+        asyncio.create_task(_pump_fragments(backend[name], action[name]))
         for name in INTERACT_WITH_LLM_SCHEMA.outputs
     )
     pumps.append(asyncio.create_task(_forward_logs(logs, action, backend)))
@@ -374,6 +378,7 @@ def load_provider(provider: str) -> None:
     _load_handler(provider)
 
 
+@llm_context_handler
 async def interact_with_llm(action: a11.Action, *, event_observer=None) -> None:
     """Route the interaction through a nested provider action."""
     provider = _resolve_provider(action)

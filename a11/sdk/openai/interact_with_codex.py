@@ -19,7 +19,6 @@ import base64
 import binascii
 import contextlib
 import hashlib
-from pydantic_core import from_json, to_json
 import mimetypes
 import os
 import re
@@ -29,17 +28,27 @@ from pathlib import Path
 from typing import Any
 
 from absl import logging
+from pydantic_core import from_json, to_json
 
 import a11
 from a11.sdk import llm
-from a11.sdk.usage import UsageReporter, UsageScope
+from a11.sdk.llm_context.adapters import compact_codex_thread
+from a11.sdk.llm_context.config import config_for
+from a11.sdk.llm_context.runtime import (
+    emit_report,
+    llm_context_handler,
+    prepare_interactions,
+    prepare_text,
+    prepare_tool_result,
+)
 from a11.sdk.llm_tools import runner
 from a11.sdk.openai._codex_mcp import ToolHandler, serve_tools
 from a11.sdk.openai.interact_with_codex_schema import (
-    CreateCodexSessionConfig,
     DEFAULT_MODEL,
     THREAD_ID_METADATA_KEY,
+    CreateCodexSessionConfig,
 )
+from a11.sdk.usage import UsageReporter, UsageScope
 from a11.sdk.vllm import interact_with_vllm as chat
 from a11.status import Status, StatusCode, StatusException
 
@@ -389,6 +398,16 @@ async def _run_codex_session(
     usage_baseline: dict[str, int] | None,
 ) -> tuple[str, str, llm.UsageMetadata | None]:
     """Run the app-server session while its MCP endpoint is available."""
+    api_key = env.get("CODEX_API_KEY")
+    if api_key:
+        config = config.model_copy(
+            update={
+                "config_overrides": {
+                    **config.config_overrides,
+                    "cli_auth_credentials_store": "ephemeral",
+                }
+            }
+        )
     try:
         process = await asyncio.create_subprocess_exec(
             *_app_server_command(config),
@@ -443,6 +462,7 @@ async def _run_codex_session(
     child_reporters: dict[str, UsageReporter] = {}
     active_children: set[str] = set()
     turn_done = False
+    compaction_events = None
     seen_questions: set[str] = set()
     read_task: asyncio.Task[None] | None = None
 
@@ -565,6 +585,8 @@ async def _run_codex_session(
                 message=f"Codex emitted invalid JSONL: {exc}",
             ).to_exception() from exc
         await action["event_stream"].put(message)
+        if compaction_events is not None and "method" in message:
+            compaction_events.append(message)
         if "id" in message and "method" not in message:
             if message["id"] in resume_requests:
                 resume_requests.remove(message["id"])
@@ -600,7 +622,7 @@ async def _run_codex_session(
                     session_id=child,
                     agent_id=child,
                     parent_agent_id=event_thread,
-                    reporting="cumulative",
+                    reporting="delta",
                 )
                 child_reporters[child] = child_reporter
                 await child_reporter.report(
@@ -619,7 +641,7 @@ async def _run_codex_session(
                 agent_id=event_thread,
                 parent_agent_id=root_thread_id,
                 turn_id=params.get("turnId"),
-                reporting="cumulative",
+                reporting="delta",
             )
             if method == "thread/tokenUsage/updated":
                 state.turn_id = params.get("turnId")
@@ -745,6 +767,11 @@ async def _run_codex_session(
         )
         await wait_response(initialize_id)
         await send({"method": "initialized", "params": {}})
+        if api_key:
+            login_id = await request(
+                "account/login/start", {"type": "apiKey", "apiKey": api_key}
+            )
+            await wait_response(login_id)
         workspace_roots = [
             str(Path(path).resolve())
             for path in ([config.cwd] if config.cwd else []) + config.add_dirs
@@ -781,8 +808,45 @@ async def _run_codex_session(
         if usage_details is not None:
             usage_details["root_thread_id"] = thread_id.encode()
         reporter.scope = UsageScope(
-            session_id=thread_id, agent_id=thread_id, reporting="cumulative"
+            session_id=thread_id, agent_id=thread_id, reporting="delta"
         )
+        policy = config_for(action)
+        if (
+            resume
+            and policy.enabled
+            and policy.compaction == "native"
+            and policy.measurement.mode != "shadow"
+        ):
+            compaction_events = []
+            reporter.operation = "native_compaction"
+
+            async def compact_request(method, params):
+                return await wait_response(
+                    await request(method, params), thread_id
+                )
+
+            async def next_compaction_event():
+                while not compaction_events:
+                    await read_one(thread_id)
+                return compaction_events.pop(0)
+
+            try:
+                await compact_codex_thread(
+                    compact_request,
+                    next_compaction_event,
+                    thread_id,
+                    reporter=lambda report: emit_report(action, report),
+                )
+            finally:
+                compaction_events = None
+            compact_snapshot = turn_usage.snapshot
+            turn_usage = _TurnUsage()
+            turn_usage.baseline = (compact_snapshot or {}).get("total")
+            reporter = UsageReporter(action, "codex", model)
+            reporter.scope = UsageScope(
+                session_id=thread_id, agent_id=thread_id, reporting="delta"
+            )
+            turn_done = False
         turn_input = [{"type": "text", "text": prompt}]
         turn_input.extend(
             {"type": "localImage", "path": path} for path in image_paths or []
@@ -874,6 +938,7 @@ def _metadata(thread_id: str, tools_digest: bytes) -> dict[str, bytes]:
     }
 
 
+@llm_context_handler
 async def interact_with_codex(action: a11.Action) -> None:
     """Run a Codex turn with A11 actions exposed as parallel MCP tools."""
     deadline = a11.get_deadline(action)
@@ -900,6 +965,9 @@ async def interact_with_codex(action: a11.Action) -> None:
     tools, tool_names, tools_digest = _mcp_tools(definitions)
     recorded_thread, recorded_at = _latest_thread(interactions, tools_digest)
     resume = config.resume or recorded_thread
+    interactions = await prepare_interactions(
+        action, interactions, stateful=bool(resume)
+    )
     if config.resume:
         prompt_interactions = interactions[-1:]
     elif recorded_thread:
@@ -911,9 +979,14 @@ async def interact_with_codex(action: a11.Action) -> None:
             ).to_exception()
     else:
         prompt_interactions = interactions
-    prompt = _build_prompt(prompt_interactions, resume)
+    prompt = await prepare_text(
+        action,
+        _build_prompt(prompt_interactions, resume),
+        stateful=bool(resume),
+        native_compaction=True,
+    )
     developer_instructions = (
-        None if resume else _system_instructions(interactions)
+        None if resume else _system_instructions(prompt_interactions)
     )
     env = dict(os.environ)
     if api_key := action.get_header(llm.LlmHeaders.API_KEY.value, decode=True):
@@ -997,6 +1070,9 @@ async def interact_with_codex(action: a11.Action) -> None:
             text, images = await llm.decoded_output_content(
                 executed.outputs.get(call.id, [])
             )
+        text = await prepare_tool_result(
+            action, text, failure, source=call.name
+        )
         result_content = [{"type": "text", "text": text}]
         result_content.extend(
             {

@@ -14,11 +14,12 @@
 
 from typing import Any, ClassVar, Literal
 
-import a11
 from pydantic import BaseModel, Field
 
+import a11
 from a11.data import serial_tags
 from a11.sdk.llm import Interaction, InteractionAdapter, LlmHeaders, Role
+from a11.sdk.llm_context.config import LLM_CONTEXT_HEADERS
 from a11.status import Status, StatusCode
 
 
@@ -185,6 +186,7 @@ INTERACT_WITH_CLAUDE_SCHEMA = a11.ActionSchema(
         ),
     },
     headers=a11.DEFAULT_ACTION_HEADERS
+    | LLM_CONTEXT_HEADERS
     | {
         LlmHeaders.API_KEY: a11.ActionHeaderSchema(
             LlmHeaders.API_KEY, "Anthropic API key."

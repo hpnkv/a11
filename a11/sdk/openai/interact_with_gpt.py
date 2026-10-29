@@ -16,25 +16,31 @@
 
 import asyncio
 import hashlib
-from pydantic_core import from_json, to_json
 import os
 import traceback
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
+import openai
 from absl import logging
+from pydantic_core import from_json, to_json
 
 import a11
-import openai
-
 from a11.sdk import llm
-from a11.sdk.usage import UsageReporter, provider_event, closing_stream
+from a11.sdk.llm_context.runtime import (
+    llm_context_handler,
+    prepare_interaction_result,
+    prepare_interaction_stream,
+    prepare_messages,
+)
 from a11.sdk.llm_tools import runner
 from a11.sdk.openai.interact_with_gpt_schema import (
-    CreateChatCompletionConfig,
     DEFAULT_MODEL,
+    CreateChatCompletionConfig,
 )
+from a11.sdk.usage import UsageReporter, closing_stream, provider_event
+from a11.sdk.usage import responses_usage as _responses_usage
 from a11.sdk.vllm import interact_with_vllm as chat
 from a11.status import Status, StatusCode, StatusException
 
@@ -114,7 +120,11 @@ def _responses_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _responses_input(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Translate persisted Chat messages into Responses input items."""
+    """Translate Chat history at the Responses request boundary.
+
+    Text and image parts convert in new containers. Stored Chat messages,
+    plain strings, and the function-call/result mapping retain their formats.
+    """
     items = []
     for message in messages:
         role = message.get("role")
@@ -128,6 +138,33 @@ def _responses_input(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
             )
             continue
         content = message.get("content")
+        if isinstance(content, list):
+            parts = []
+            for part in content:
+                if not isinstance(part, dict):
+                    parts.append(part)
+                elif part.get("type") == "text":
+                    parts.append(
+                        {
+                            **part,
+                            "type": (
+                                "output_text"
+                                if role == "assistant"
+                                else "input_text"
+                            ),
+                        }
+                    )
+                elif part.get("type") == "image_url":
+                    image = part.get("image_url")
+                    converted = {**part, "type": "input_image"}
+                    if isinstance(image, dict):
+                        converted["image_url"] = image.get("url")
+                        if "detail" in image:
+                            converted["detail"] = image["detail"]
+                    parts.append(converted)
+                else:
+                    parts.append(part)
+            content = parts
         if content:
             items.append({"role": role, "content": content})
         for call in message.get("tool_calls") or []:
@@ -174,7 +211,11 @@ def _gpt_to_normalized(interaction: llm.Interaction) -> llm.NormalizedMessage:
     return chat._vllm_to_normalized(interaction)
 
 
-llm.register_interaction_normalizer(llm.Backend.GPT, _gpt_to_normalized)
+llm.register_interaction_normalizer(
+    llm.Backend.GPT,
+    _gpt_to_normalized,
+    replay_metadata_keys=("response_id", "finish_reason"),
+)
 
 
 def _api_status(exc: openai.APIError) -> Status:
@@ -192,34 +233,6 @@ def _api_status(exc: openai.APIError) -> Status:
         if isinstance(exc, error_type):
             return Status(code=code, message=str(exc))
     return Status(code=StatusCode.INTERNAL, message=str(exc))
-
-
-def _responses_usage(usage: Any | None) -> llm.UsageMetadata | None:
-    if usage is None:
-        return None
-
-    def value(source: Any, name: str) -> Any:
-        if isinstance(source, dict):
-            return source.get(name)
-        return getattr(source, name, None)
-
-    input_details = value(usage, "input_tokens_details")
-    output_details = value(usage, "output_tokens_details")
-    cached = value(input_details, "cached_tokens")
-    written = value(input_details, "cache_write_tokens")
-    prompt = value(usage, "input_tokens")
-    return llm.UsageMetadata(
-        input_tokens=(
-            prompt - (cached or 0) - (written or 0)
-            if prompt is not None
-            else None
-        ),
-        output_tokens=value(usage, "output_tokens"),
-        total_tokens=value(usage, "total_tokens"),
-        cached_input_tokens=cached,
-        cache_write_tokens=written,
-        reasoning_tokens=value(output_details, "reasoning_tokens"),
-    )
 
 
 async def _raw_response_events(
@@ -299,7 +312,7 @@ async def _run_responses_turn(
     while True:
         request: dict[str, Any] = {
             "model": model,
-            "input": response_input,
+            "input": await prepare_messages(action, response_input),
             "tools": _responses_tools(tools),
             "tool_choice": "auto",
             "stream": True,
@@ -416,7 +429,9 @@ async def _run_responses_turn(
             action.get_registry(),
             rejected=rejected,
         )
-        tool_messages = await chat._build_tool_results_from_outputs(executed)
+        tool_messages = await chat._build_tool_results_from_outputs(
+            executed, action=action
+        )
         result = llm.Interaction(
             previous_interaction_id=previous_interaction_id,
             role=llm.Role.USER,
@@ -429,9 +444,13 @@ async def _run_responses_turn(
             content=[a11.to_chunk({"messages": tool_messages})],
         )
         previous_interaction_id = result.id
-        await action["new_interactions"].put(
-            conversation.feed_next_interaction(result)
-        )
+        projected_result = await prepare_interaction_result(action, result)
+        conversation.feed_next_interaction(projected_result)
+        await action["new_interactions"].put(result)
+        if projected_result is not result:
+            tool_messages = chat._vllm_from_normalized(
+                llm.normalize_interaction(projected_result)
+            )
         response_output = _event_value(response, "output", [])
         response_input.extend(
             [
@@ -456,6 +475,7 @@ async def _run_responses_turn(
             break
 
 
+@llm_context_handler
 async def interact_with_gpt(action: a11.Action) -> None:
     """Run one OpenAI turn, including any registry-backed tool rounds."""
     output = llm.OrderedOutputStreams(action)
@@ -481,7 +501,11 @@ async def interact_with_gpt(action: a11.Action) -> None:
 
     previous_interaction_id = ""
     conversation = chat.Conversation(llm.Backend.GPT)
-    async for interaction in action["interactions"]:
+    async for interaction in prepare_interaction_stream(
+        action,
+        action["interactions"],
+        stateful=bool(config.extra_body.get("previous_response_id")),
+    ):
         interaction = conversation.feed_next_interaction(interaction)
         previous_interaction_id = interaction.id
 
@@ -534,6 +558,7 @@ async def interact_with_gpt(action: a11.Action) -> None:
                     }
                 )
             messages.extend(conversation.messages)
+            messages = await prepare_messages(action, messages)
             request: dict[str, Any] = {
                 "model": model,
                 "messages": messages,
@@ -614,7 +639,7 @@ async def interact_with_gpt(action: a11.Action) -> None:
                         {
                             "messages": (
                                 await chat._build_tool_results_from_outputs(
-                                    executed
+                                    executed, action=action
                                 )
                             )
                         }
@@ -622,9 +647,10 @@ async def interact_with_gpt(action: a11.Action) -> None:
                 ],
             )
             previous_interaction_id = result.id
-            await action["new_interactions"].put(
-                conversation.feed_next_interaction(result)
+            conversation.feed_next_interaction(
+                await prepare_interaction_result(action, result)
             )
+            await action["new_interactions"].put(result)
             if not failed_rounds.record(executed):
                 break
     except StatusException:

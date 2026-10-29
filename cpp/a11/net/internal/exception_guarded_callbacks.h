@@ -34,6 +34,7 @@
 #ifndef A11_NET_INTERNAL_EXCEPTION_GUARDED_CALLBACKS_H_
 #define A11_NET_INTERNAL_EXCEPTION_GUARDED_CALLBACKS_H_
 
+#include "a11/net/http/relay.h"
 #include "a11/net/http2.h"
 #include "a11/net/http_sse_wire_stream.h"
 #include "a11/net/signalling.h"
@@ -41,6 +42,9 @@
 #include "a11/net/wire_stream.h"
 
 namespace a11::net::internal {
+
+/// Wrap a relay observer at adoption so exceptions become statuses.
+[[nodiscard]] HttpRelayObserver GuardRelayObserver(HttpRelayObserver observer);
 
 /// Wraps `on_message` so a raised exception becomes a failed Task.
 [[nodiscard]] OnMessage GuardOnMessage(OnMessage callback);

@@ -25,22 +25,27 @@ import traceback
 import uuid
 from typing import Any
 
+import openai
+import pydantic_core
 from absl import logging
 
 import a11
-import openai
-import pydantic_core
-
-from a11.status import Status, StatusCode, StatusException
-
+from a11.sdk import llm
+from a11.sdk.llm_context.runtime import (
+    llm_context_handler,
+    prepare_interaction_result,
+    prepare_interaction_stream,
+    prepare_messages,
+)
+from a11.sdk.llm_tools import runner
+from a11.sdk.usage import UsageReporter, closing_stream, provider_event
+from a11.sdk.usage import chat_usage as _build_usage_metadata
 from a11.sdk.vllm.client import get_vllm_client
 from a11.sdk.vllm.interact_with_vllm_schema import (
-    CreateChatCompletionConfig,
     DEFAULT_MODEL,
+    CreateChatCompletionConfig,
 )
-from a11.sdk import llm
-from a11.sdk.usage import UsageReporter, provider_event, closing_stream
-from a11.sdk.llm_tools import runner
+from a11.status import Status, StatusCode, StatusException
 
 DEFAULT_IMAGE_MIME_TYPE = "image/png"
 
@@ -316,7 +321,11 @@ def _vllm_from_normalized(
     return messages
 
 
-llm.register_interaction_normalizer(llm.Backend.VLLM, _vllm_to_normalized)
+llm.register_interaction_normalizer(
+    llm.Backend.VLLM,
+    _vllm_to_normalized,
+    replay_metadata_keys=("response_id", "finish_reason"),
+)
 
 
 class Conversation:
@@ -628,6 +637,7 @@ class _StreamAccumulator:
 
 async def _build_tool_results_from_outputs(
     executed: runner.ExecutedActions,
+    action=None,
 ) -> list[dict[str, Any]]:
     """Turn each nested-action output or failure into a tool message.
 
@@ -665,30 +675,8 @@ async def _build_tool_results_from_outputs(
             )
         return messages
 
-    return await llm.build_tool_results(executed, as_tool_message)
-
-
-def _build_usage_metadata(usage: Any | None) -> llm.UsageMetadata | None:
-    """Map the completion's token counts onto the shared usage metadata."""
-    if usage is None:
-        return None
-
-    prompt_details = getattr(usage, "prompt_tokens_details", None)
-    completion_details = getattr(usage, "completion_tokens_details", None)
-    cached = getattr(prompt_details, "cached_tokens", None)
-    written = getattr(prompt_details, "cache_write_tokens", None)
-    prompt = getattr(usage, "prompt_tokens", None)
-    return llm.UsageMetadata(
-        input_tokens=(
-            prompt - (cached or 0) - (written or 0)
-            if prompt is not None
-            else None
-        ),
-        output_tokens=getattr(usage, "completion_tokens", None),
-        total_tokens=getattr(usage, "total_tokens", None),
-        cached_input_tokens=cached,
-        cache_write_tokens=written,
-        reasoning_tokens=getattr(completion_details, "reasoning_tokens", None),
+    return await llm.build_tool_results(
+        executed, as_tool_message, action=action
     )
 
 
@@ -799,6 +787,7 @@ async def _resolve_model(client: Any, model: str) -> str:
     ).to_exception()
 
 
+@llm_context_handler
 async def interact_with_vllm(action: a11.Action):
     output = llm.OrderedOutputStreams(action)
     deadline = a11.get_deadline(action)
@@ -824,7 +813,9 @@ async def interact_with_vllm(action: a11.Action):
 
     previous_interaction_id = ""
     conversation = Conversation()
-    async for interaction in action["interactions"]:
+    async for interaction in prepare_interaction_stream(
+        action, action["interactions"]
+    ):
         interaction = conversation.feed_next_interaction(interaction)
         previous_interaction_id = interaction.id
 
@@ -862,6 +853,7 @@ async def interact_with_vllm(action: a11.Action):
                     }
                 )
             messages.extend(conversation.messages)
+            messages = await prepare_messages(action, messages)
 
             request: dict[str, Any] = {
                 "model": model,
@@ -959,15 +951,17 @@ async def interact_with_vllm(action: a11.Action):
                     a11.to_chunk(
                         {
                             "messages": await _build_tool_results_from_outputs(
-                                executed
+                                executed, action=action
                             )
                         }
                     )
                 ],
             )
             previous_interaction_id = tool_output_interaction.id
-            tool_output_interaction = conversation.feed_next_interaction(
-                tool_output_interaction
+            conversation.feed_next_interaction(
+                await prepare_interaction_result(
+                    action, tool_output_interaction
+                )
             )
 
             await action["new_interactions"].put(tool_output_interaction)

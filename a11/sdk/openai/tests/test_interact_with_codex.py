@@ -24,11 +24,25 @@ import a11
 from a11.sdk import llm
 from a11.sdk.openai import interact_with_codex as mod
 from a11.sdk.openai.interact_with_codex_schema import (
-    CreateCodexSessionConfig,
     INTERACT_WITH_CODEX_SCHEMA,
     THREAD_ID_METADATA_KEY,
+    CreateCodexSessionConfig,
 )
 from a11.status import StatusException
+
+
+@pytest.fixture(autouse=True)
+def _context_policy_for_sink_actions(monkeypatch):
+    original = mod.config_for
+
+    def policy(action):
+        if isinstance(action, dict):
+            from a11.sdk.llm_context.config import DISABLED
+
+            return DISABLED
+        return original(action)
+
+    monkeypatch.setattr(mod, "config_for", policy)
 
 
 async def _collect(node):
@@ -684,6 +698,7 @@ async def test_live_child_trace_keeps_parent_running_and_counts_each_thread(
     monkeypatch,
 ):
     from pydantic_core import from_json
+
     from a11.sdk.usage import UsageLedger, parse_update
 
     fixture = from_json(
@@ -741,3 +756,122 @@ async def test_live_child_trace_keeps_parent_running_and_counts_each_thread(
     assert ledger.totals().total_tokens == sum(
         row["expected"]["total_tokens"] for row in case["comparison"]
     )
+
+
+@pytest.mark.asyncio
+async def test_native_compaction_finishes_before_next_turn(monkeypatch):
+    process = _Process(
+        [
+            {"id": 1, "result": {}},
+            {"id": 2, "result": {"thread": {"id": "root"}}},
+            {"id": 3, "result": {}},
+            {
+                "method": "item/completed",
+                "params": {
+                    "threadId": "root",
+                    "turnId": "compact",
+                    "item": {"type": "contextCompaction"},
+                },
+            },
+            {
+                "method": "turn/completed",
+                "params": {
+                    "threadId": "root",
+                    "turn": {"id": "compact", "status": "completed"},
+                },
+            },
+            {"id": 4, "result": {"turn": {"id": "generation"}}},
+            {
+                "method": "turn/completed",
+                "params": {
+                    "threadId": "root",
+                    "turn": {"id": "generation", "status": "completed"},
+                },
+            },
+        ]
+    )
+
+    async def create(*args, **kwargs):
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create)
+
+    async def handler(action):
+        await mod._run_codex(
+            action,
+            CreateCodexSessionConfig(),
+            "test",
+            "pending input",
+            "root",
+            None,
+            [],
+            None,
+            {},
+        )
+
+    schema = a11.ActionSchema(
+        name="probe",
+        outputs={
+            name: a11.ActionPortSchema(name, "application/json")
+            for name in ("event_stream", "thoughts", "text_output")
+        },
+    )
+    action = a11.Action(schema).bind_handler(handler)
+    action.set_header("x-a11-llm-context-config", '{"compaction":"native"}')
+    action = action.run()
+    await asyncio.gather(*(_collect(action[name]) for name in schema.outputs))
+    await action.wait()
+    methods = [
+        json.loads(line).get("method")
+        for line in process.stdin.data.splitlines()
+    ]
+    assert methods.index("thread/compact/start") < methods.index("turn/start")
+
+
+@pytest.mark.asyncio
+async def test_explicit_api_key_logs_into_ephemeral_app_server(monkeypatch):
+    process = _Process(
+        [
+            {"id": 1, "result": {}},
+            {"id": 2, "result": {"type": "apiKey"}},
+            {"id": 3, "result": {"thread": {"id": "thread"}}},
+            {"id": 4, "result": {"turn": {"id": "turn"}}},
+            {
+                "method": "turn/completed",
+                "params": {
+                    "threadId": "thread",
+                    "turn": {"id": "turn", "status": "completed"},
+                },
+            },
+        ]
+    )
+    commands = []
+
+    async def create(*args, **kwargs):
+        commands.append(args)
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create)
+    sinks = {
+        name: _Sink() for name in ("event_stream", "thoughts", "text_output")
+    }
+    await mod._run_codex(
+        sinks,
+        CreateCodexSessionConfig(),
+        "model",
+        "prompt",
+        None,
+        None,
+        [],
+        None,
+        {"CODEX_API_KEY": "test-api-key"},
+    )
+    messages = [json.loads(line) for line in process.stdin.data.splitlines()]
+    login = next(
+        m for m in messages if m.get("method") == "account/login/start"
+    )
+    assert login["params"] == {"type": "apiKey", "apiKey": "test-api-key"}
+    methods = [m.get("method") for m in messages]
+    assert methods.index("account/login/start") < methods.index("thread/start")
+    assert 'cli_auth_credentials_store="ephemeral"' in commands[0]
+    assert "test-api-key" not in " ".join(commands[0])

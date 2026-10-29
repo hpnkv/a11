@@ -15,11 +15,12 @@
 import enum
 from typing import Any, ClassVar, Literal
 
-import a11
 from pydantic import BaseModel, ConfigDict, Field
 
+import a11
 from a11.data import serial_tags
 from a11.sdk.llm import Interaction, InteractionAdapter, LlmHeaders, Role
+from a11.sdk.llm_context.config import LLM_CONTEXT_HEADERS
 from a11.status import Status, StatusCode
 
 
@@ -269,6 +270,7 @@ INTERACT_WITH_CLAUDE_CODE_SCHEMA = a11.ActionSchema(
     },
     # No API key: the credential is the subscription the `claude` CLI holds.
     headers=a11.DEFAULT_ACTION_HEADERS
+    | LLM_CONTEXT_HEADERS
     | {
         LlmHeaders.MODEL: a11.ActionHeaderSchema(
             LlmHeaders.MODEL,

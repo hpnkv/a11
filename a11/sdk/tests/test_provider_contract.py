@@ -33,18 +33,20 @@ from a11.sdk.anthropic.interact_with_claude_code import (
     to_normalized as _claude_code_loaded,
 )
 from a11.sdk.anthropic.interact_with_claude_code_schema import (
-    ClaudeCodeInteractionAdapter,
     INTERACT_WITH_CLAUDE_CODE_SCHEMA,
+    ClaudeCodeInteractionAdapter,
 )
 from a11.sdk.anthropic.interact_with_claude_schema import (
-    ClaudeInteractionAdapter,
     INTERACT_WITH_CLAUDE_SCHEMA,
+    ClaudeInteractionAdapter,
 )
 from a11.sdk.gemini import interact_with_gemini as gemini
 from a11.sdk.gemini.interact_with_gemini_schema import (
-    GeminiInteractionAdapter,
     INTERACT_WITH_GEMINI_SCHEMA,
+    GeminiInteractionAdapter,
 )
+from a11.sdk.llm_context import LlmContextConfig, project_messages
+from a11.sdk.llm_context.config import LLM_CONTEXT_HEADERS
 from a11.sdk.ollama import interact_with_ollama as ollama
 from a11.sdk.ollama.interact_with_ollama_schema import (
     INTERACT_WITH_OLLAMA_SCHEMA,
@@ -52,13 +54,13 @@ from a11.sdk.ollama.interact_with_ollama_schema import (
 )
 from a11.sdk.openai.interact_with_codex import _codex_to_normalized
 from a11.sdk.openai.interact_with_codex_schema import (
-    CodexInteractionAdapter,
     INTERACT_WITH_CODEX_SCHEMA,
+    CodexInteractionAdapter,
 )
 from a11.sdk.openai.interact_with_gpt import _gpt_to_normalized
 from a11.sdk.openai.interact_with_gpt_schema import (
-    GptInteractionAdapter,
     INTERACT_WITH_GPT_SCHEMA,
+    GptInteractionAdapter,
 )
 from a11.sdk.vllm import interact_with_vllm as chat
 from a11.sdk.vllm.interact_with_vllm_schema import (
@@ -283,3 +285,56 @@ assert all(
         _codex_to_normalized,
     )
 )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", CASES, ids=lambda case: str(case.backend))
+@pytest.mark.parametrize("mode", ("disabled", "shadow", "enabled"))
+async def test_llm_context_preserves_provider_shapes_and_opt_in(case, mode):
+    raw = "{ " + " " * 200 + '"value":1 }'
+    message = llm.NormalizedMessage(
+        role=llm.Role.USER,
+        parts=[
+            llm.NormalizedPart(type=llm.NormalizedContentType.TEXT, text=raw)
+        ],
+    )
+    source = case.encode(message)
+    assistant = case.encode(
+        message.model_copy(update={"role": llm.Role.ASSISTANT})
+    )
+    source_items = source if isinstance(source, list) else [source]
+    assistant_items = assistant if isinstance(assistant, list) else [assistant]
+    projected = await project_messages(
+        [*source_items, *assistant_items],
+        LlmContextConfig(
+            enabled=mode != "disabled",
+            input_content="lossless",
+            measurement={"mode": "shadow" if mode == "shadow" else "observe"},
+        ),
+    )
+    assert projected[len(source_items) :] == assistant_items
+    assert set(LLM_CONTEXT_HEADERS) <= set(case.schema.headers)
+    normalized = llm.normalize_interaction(
+        llm.Interaction(
+            role=llm.Role.USER,
+            content=[
+                a11.to_chunk(
+                    projected[: len(source_items)]
+                    if isinstance(source, list)
+                    else projected[0]
+                )
+            ],
+            backend_specific_metadata={
+                llm.BACKEND_METADATA_KEY: str(case.backend).encode()
+            },
+        ),
+        strict=True,
+    )
+    expected = '{"value":1}' if mode == "enabled" else raw
+    assert normalized.parts[0].text == expected
+    assert (
+        llm.normalize_interaction(_interaction(case, message), strict=True)
+        .parts[0]
+        .text
+        == raw
+    )

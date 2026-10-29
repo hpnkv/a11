@@ -1051,6 +1051,7 @@ endif ()
 if (A11_BUILD_BENCH)
     add_subdirectory(bench)
 endif ()
+add_subdirectory(sdk/llm_context)
 add_subdirectory(python)
 
 # The bundled thread library is the scheduling substrate for every A11 task.
@@ -1449,6 +1450,15 @@ if (A11_BUILD_AUDIO)
             nlohmann_json::nlohmann_json a11::warnings)
 endif ()
 
+add_library(a11_llm_context STATIC ${A11_LLM_CONTEXT_SOURCES})
+add_library(a11::llm_context ALIAS a11_llm_context)
+set_target_properties(a11_llm_context PROPERTIES EXPORT_NAME llm_context)
+target_include_directories(a11_llm_context PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+target_link_libraries(a11_llm_context PUBLIC a11::core absl::status absl::statusor
+    PRIVATE absl::flat_hash_map nlohmann_json::nlohmann_json a11::warnings)
+
 if (A11_BUILD_HTTP)
     # HTTP as Actions. Above a11::net because it
     # is a client of it, and above a11::actions because that is what it produces;
@@ -1839,7 +1849,7 @@ if (A11_BUILD_PYTHON)
             a11_python SYSTEM BEFORE PRIVATE ${abseil-cpp_SOURCE_DIR})
     target_link_libraries(
             a11_python
-            PRIVATE a11::actions a11::concurrency a11::core a11::data
+            PRIVATE a11::llm_context a11::actions a11::concurrency a11::core a11::data
             a11::flow_lang a11::flow_runtime a11::net
             a11::nodes a11::obs a11::service a11::stores
             pybind11_abseil::status_casters a11::warnings
@@ -1941,7 +1951,7 @@ endif ()
 # that can throw. Catching an exception that A11 itself would have to raise is not
 # a reason, because A11 does not raise any.
 a11_disallow_exceptions(
-        a11_core a11_data a11_concurrency a11_obs a11_stores a11_net a11_nodes
+        a11_llm_context a11_core a11_data a11_concurrency a11_obs a11_stores a11_net a11_nodes
         a11_actions a11_service a11_flow_lang a11_flow_runtime)
 if (A11_BUILD_REDIS)
     a11_disallow_exceptions(a11_redis)
@@ -2027,7 +2037,7 @@ if (A11_BUILD_FLOW_ACTIONS)
     # the Python module are both built here.
     list(APPEND A11_INSTALL_TARGETS a11_flow_actions)
 endif ()
-list(APPEND A11_INSTALL_TARGETS a11_uv)
+list(APPEND A11_INSTALL_TARGETS a11_llm_context a11_uv)
 if (A11_BUILD_FLOW_TOOL)
     list(APPEND A11_INSTALL_TARGETS a11_flow_tool)
 endif ()
@@ -2052,6 +2062,9 @@ if (A11_BUILD_REDIS)
             DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/redis
             FILES_MATCHING PATTERN "*.h")
 endif ()
+install(DIRECTORY sdk/llm_context/
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/sdk/llm_context
+        FILES_MATCHING PATTERN "*.h")
 if (A11_BUILD_AUDIO)
     install(
             DIRECTORY sdk/

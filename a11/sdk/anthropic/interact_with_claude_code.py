@@ -24,33 +24,39 @@ rather than running tool calls between rounds itself.
 from __future__ import annotations
 
 import dataclasses
-from pydantic_core import from_json, to_json
-from pydantic import BaseModel
 import traceback
 import uuid
 from typing import Any, AsyncIterator
 
+import claude_agent_sdk as cc
 from absl import logging
+from pydantic import BaseModel
+from pydantic_core import from_json, to_json
 
 import a11
-import claude_agent_sdk as cc
-
-from a11.status import Status, StatusCode, StatusException
-
 from a11.sdk import llm
-from a11.sdk.usage import (
-    UsageReporter,
-    UsageScope,
-    usage_delta,
-    interaction_updates,
-)
 from a11.sdk.anthropic.interact_with_claude_code_schema import (
     CLAUDE_CODE_PRESET,
     ClaudeCodeHeaders,
     CreateSessionConfig,
 )
 from a11.sdk.anthropic.messages import Conversation, to_normalized
+from a11.sdk.llm_context.adapters import compact_claude_session
+from a11.sdk.llm_context.config import config_for
+from a11.sdk.llm_context.runtime import (
+    emit_report,
+    llm_context_handler,
+    prepare_interaction_stream,
+    prepare_messages,
+)
 from a11.sdk.llm_tools import runner
+from a11.sdk.usage import (
+    UsageReporter,
+    UsageScope,
+    interaction_updates,
+    usage_delta,
+)
+from a11.status import Status, StatusCode, StatusException
 
 llm.register_interaction_normalizer(llm.Backend.CLAUDE_CODE, to_normalized)
 
@@ -142,7 +148,9 @@ def _sdk_tool(
             holder, action, registry, rejected=rejected
         )
         logs.update(executed.logs)
-        results = await llm.build_tool_results(executed, _as_mcp_result)
+        results = await llm.build_tool_results(
+            executed, _as_mcp_result, action=action
+        )
         return results[0] if results else {"content": []}
 
     return run
@@ -585,6 +593,7 @@ def _check_result(message: cc.ResultMessage) -> None:
 # --- handler -----------------------------------------------------------------
 
 
+@llm_context_handler
 async def interact_with_claude_code(action: a11.Action):
     output = llm.OrderedOutputStreams(action)
     deadline = a11.get_deadline(action)
@@ -605,7 +614,17 @@ async def interact_with_claude_code(action: a11.Action):
 
     previous_interaction_id = ""
     conversation = Conversation(native_backends=_NATIVE_BACKENDS)
-    async for interaction in action["interactions"]:
+    async for interaction in prepare_interaction_stream(
+        action,
+        action["interactions"],
+        stateful=lambda sources: bool(
+            config.resume
+            or any(
+                item.backend_specific_metadata.get(SESSION_ID_METADATA_KEY)
+                for item in sources
+            )
+        ),
+    ):
         interaction = conversation.feed_next_interaction(interaction)
         previous_interaction_id = interaction.id
 
@@ -645,6 +664,9 @@ async def interact_with_claude_code(action: a11.Action):
         ]
 
     resume, pending = _resume_point(conversation, config)
+    pending = await prepare_messages(
+        action, pending, stateful=bool(resume), native_compaction=True
+    )
     prompt = _prompt_content(pending)
     if not prompt:
         raise Status(
@@ -669,6 +691,7 @@ async def interact_with_claude_code(action: a11.Action):
     compact_context: int | None = None
     cli_version: tuple[int, ...] | None = None
     baseline: llm.UsageMetadata | None = None
+    baseline_from_compaction = False
     if resume:
         for previous in reversed(conversation.interactions):
             for update in reversed(interaction_updates(previous)):
@@ -700,9 +723,97 @@ async def interact_with_claude_code(action: a11.Action):
             await action["new_interactions"].put(pending_assistant)
             pending_assistant = None
 
+    def observe_session_init(message):
+        nonlocal cli_version, session_id
+        if (
+            not isinstance(message, cc.SystemMessage)
+            or message.subtype != "init"
+        ):
+            return
+        session_id = (
+            getattr(message, "session_id", None)
+            or message.data.get("session_id")
+            or session_id
+        )
+        version = message.data.get("claude_code_version", "")
+        try:
+            cli_version = tuple(int(p) for p in version.split("."))
+        except ValueError:
+            cli_version = None
+        reporter.scope = UsageScope(
+            session_id=session_id,
+            agent_id=session_id,
+            turn_id=action.id,
+            reporting=(
+                "delta"
+                if cli_version is not None and cli_version >= (2, 1, 277)
+                else "snapshot"
+            ),
+        )
+
     try:
         try:
-            await client.connect(_prompt_stream(prompt))
+            policy = config_for(action)
+            if (
+                resume
+                and policy.enabled
+                and policy.compaction == "native"
+                and policy.measurement.mode != "shadow"
+            ):
+                await client.connect()
+                compact_reporter = UsageReporter(
+                    action, "claude_code", model or ""
+                )
+                compact_reporter.operation = "native_compaction"
+                compact_reporter.scope = UsageScope(session_id=resume)
+
+                async def compact_message(message):
+                    nonlocal baseline, baseline_from_compaction
+                    await action["event_stream"].put(_as_event(message))
+                    observe_session_init(message)
+                    if isinstance(message, cc.ResultMessage):
+                        source = _as_event(message)
+                        current = _build_usage_metadata(
+                            getattr(message, "usage", None),
+                            getattr(message, "model_usage", None),
+                        )
+                        observed = current
+                        if current is not None:
+                            if cli_version is not None and cli_version >= (
+                                2,
+                                1,
+                                277,
+                            ):
+                                observed = usage_delta(current, baseline)
+                            else:
+                                observed = current.model_copy(
+                                    update={"complete": False}
+                                )
+                        compact_reporter.scope.reporting = (
+                            reporter.scope.reporting
+                        )
+                        await compact_reporter.report(
+                            observed,
+                            source,
+                            coverage="native_compaction_result",
+                        )
+                        if getattr(message, "model_usage", None):
+                            baseline = current
+                            baseline_from_compaction = True
+                    if getattr(message, "subtype", None) == "compact_boundary":
+                        await compact_reporter.invalidate_context(
+                            _as_event(message),
+                            operation="compaction",
+                        )
+
+                await compact_claude_session(
+                    client,
+                    reporter=lambda report: emit_report(action, report),
+                    on_message=compact_message,
+                )
+                await client.query(_prompt_stream(prompt))
+            else:
+                await client.connect(_prompt_stream(prompt))
         except cc.CLINotFoundError as exc:
             raise Status(
                 code=StatusCode.FAILED_PRECONDITION,
@@ -721,26 +832,7 @@ async def interact_with_claude_code(action: a11.Action):
             await action["event_stream"].put(_as_event(message))
             session_id = getattr(message, "session_id", None) or session_id
 
-            if (
-                isinstance(message, cc.SystemMessage)
-                and message.subtype == "init"
-            ):
-                version = message.data.get("claude_code_version", "")
-                try:
-                    cli_version = tuple(int(p) for p in version.split("."))
-                except ValueError:
-                    cli_version = None
-                reporter.scope = UsageScope(
-                    session_id=session_id,
-                    agent_id=session_id,
-                    turn_id=action.id,
-                    reporting=(
-                        "cumulative"
-                        if cli_version is not None
-                        and cli_version >= (2, 1, 277)
-                        else "snapshot"
-                    ),
-                )
+            observe_session_init(message)
 
             if (
                 isinstance(message, cc.SystemMessage)
@@ -874,8 +966,11 @@ async def interact_with_claude_code(action: a11.Action):
                     message.usage, message.model_usage
                 )
                 if resume and usage is not None:
-                    if cli_version is not None and cli_version >= (2, 1, 277):
+                    if baseline_from_compaction or (
+                        cli_version is not None and cli_version >= (2, 1, 277)
+                    ):
                         usage = usage_delta(usage, baseline)
+                        reporter.scope.reporting = "delta"
                     elif cli_version is None:
                         usage.complete = False
                 if (

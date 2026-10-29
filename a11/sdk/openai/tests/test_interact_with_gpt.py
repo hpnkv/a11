@@ -15,6 +15,7 @@
 """Offline tests for the OpenAI API interaction provider."""
 
 import asyncio
+import copy
 import json
 
 import pytest
@@ -31,10 +32,21 @@ from openai.types.responses import (
 
 import a11
 from a11.sdk import llm
+from a11.sdk.interact_with_llm import (
+    INTERACT_WITH_LLM_SCHEMA,
+    interact_with_llm,
+)
+from a11.sdk.llm_context import (
+    LlmContextConfig,
+    LlmContextHeaders,
+    LlmContextServices,
+    bind_services,
+    encode_interactions,
+)
 from a11.sdk.openai import interact_with_gpt as mod
 from a11.sdk.openai.interact_with_gpt_schema import (
-    CreateChatCompletionConfig,
     INTERACT_WITH_GPT_SCHEMA,
+    CreateChatCompletionConfig,
 )
 
 
@@ -177,8 +189,7 @@ async def test_streams_text_and_records_usage_and_structured_options(
     client = _Client([_chunk("Hel"), _chunk("lo"), _chunk(usage=usage)])
     monkeypatch.setattr(mod, "get_openai_client", lambda *args: client)
     action = (
-        a11
-        .Action(INTERACT_WITH_GPT_SCHEMA)
+        a11.Action(INTERACT_WITH_GPT_SCHEMA)
         .bind_handler(mod.interact_with_gpt)
         .set_header(llm.LlmHeaders.API_KEY.value, b"test-key")
         .set_header(llm.LlmHeaders.MODEL.value, b"gpt-test")
@@ -238,8 +249,7 @@ async def test_tool_turn_preserves_explicit_reasoning_effort(monkeypatch):
 
     registry.register("lookup", schema, lookup)
     action = (
-        a11
-        .Action(INTERACT_WITH_GPT_SCHEMA)
+        a11.Action(INTERACT_WITH_GPT_SCHEMA)
         .bind_handler(mod.interact_with_gpt)
         .bind_registry(registry)
         .set_header(llm.LlmHeaders.API_KEY.value, b"test-key")
@@ -344,9 +354,260 @@ async def test_raw_response_stream_tolerates_null_function_name():
 
     decoded = [
         event
-        async for event in mod._raw_response_events(
-            client, {"stream": True}
-        )
+        async for event in mod._raw_response_events(client, {"stream": True})
     ]
 
     assert decoded == events
+
+
+def test_responses_input_converts_parts_without_mutating_chat_history():
+    messages = [
+        {"role": "system", "content": "keep this string"},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Inspect the picture"},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "data:image/png;base64,QUJD",
+                        "detail": "high",
+                    },
+                },
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "I see it"}],
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {
+                        "name": "lookup",
+                        "arguments": '{"query":"picture"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call-1",
+            "content": "original output",
+        },
+        {"role": "user", "content": "next plain-string request"},
+    ]
+    before = copy.deepcopy(messages)
+    assert mod._responses_input(messages) == [
+        {"role": "system", "content": "keep this string"},
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "Inspect the picture"},
+                {
+                    "type": "input_image",
+                    "image_url": "data:image/png;base64,QUJD",
+                    "detail": "high",
+                },
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "I see it"}],
+        },
+        {
+            "type": "function_call",
+            "call_id": "call-1",
+            "name": "lookup",
+            "arguments": '{"query":"picture"}',
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call-1",
+            "output": "original output",
+        },
+        {"role": "user", "content": "next plain-string request"},
+    ]
+    assert messages == before
+
+
+@pytest.mark.parametrize("detail", (None, "auto", "low", "high"))
+def test_responses_input_preserves_image_urls_and_optional_detail(detail):
+    image = {"url": "https://example.test/image.png"}
+    if detail is not None:
+        image["detail"] = detail
+    converted = mod._responses_input(
+        [
+            {
+                "role": "user",
+                "content": [{"type": "image_url", "image_url": image}],
+            }
+        ]
+    )[0]["content"][0]
+    expected = {"type": "input_image", "image_url": image["url"]}
+    if detail is not None:
+        expected["detail"] = detail
+    assert converted == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("responses", (False, True))
+async def test_text_image_history_replay_is_converted_only_for_responses(
+    monkeypatch,
+    responses,
+):
+    client = _Client([_chunk("done")], _response_events("done"))
+    monkeypatch.setattr(mod, "get_openai_client", lambda *args: client)
+    user = {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Inspect this picture"},
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": "data:image/png;base64,QUJD",
+                    "detail": "high",
+                },
+            },
+        ],
+    }
+    assistant = {
+        "role": "assistant",
+        "content": [
+            {"type": "text", "text": "a "},
+            {"type": "text", "text": "picture"},
+        ],
+    }
+    original = copy.deepcopy([user, assistant])
+    action = (
+        a11.Action(INTERACT_WITH_GPT_SCHEMA)
+        .bind_handler(mod.interact_with_gpt)
+        .set_header(llm.LlmHeaders.API_KEY.value, b"test-key")
+        .set_header(llm.LlmHeaders.MODEL.value, b"gpt-test")
+        .set_header(llm.LlmHeaders.ALLOWED_LLM_ACTIONS.value, b"lookup")
+        .run()
+    )
+    for message in (user, assistant):
+        await action["interactions"].put(
+            llm.Interaction(
+                role=(
+                    llm.Role.USER
+                    if message["role"] == "user"
+                    else llm.Role.ASSISTANT
+                ),
+                content=[a11.to_chunk(message)],
+            )
+        )
+    await action["interactions"].finalize(
+        llm.Interaction(
+            role=llm.Role.USER,
+            content=[a11.to_chunk({"role": "user", "content": "continue"})],
+        )
+    )
+    await action["config"].finalize(CreateChatCompletionConfig())
+    if responses:
+        await action["tools"].put(
+            {
+                "name": "lookup",
+                "description": "Look up a fact",
+                "input_schema": {"type": "object", "properties": {}},
+            }
+        )
+    await action["tools"].finalize()
+    await asyncio.gather(
+        *(
+            _drain(action[port])
+            for port in (
+                "event_stream",
+                "thoughts",
+                "text_output",
+                "new_interactions",
+            )
+        )
+    )
+    await action.wait()
+    if responses:
+        request = client.responses.request["input"]
+        assert request[0]["content"][0]["type"] == "input_text"
+        assert request[0]["content"][1] == {
+            "type": "input_image",
+            "image_url": "data:image/png;base64,QUJD",
+            "detail": "high",
+        }
+        assert request[1]["content"] == [
+            {"type": "output_text", "text": "a "},
+            {"type": "output_text", "text": "picture"},
+        ]
+        assert client.completions.request is None
+    else:
+        request = client.completions.request["messages"]
+        assert request[0] == user
+        assert request[1] == assistant
+        assert client.responses.request is None
+    assert [user, assistant] == original
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("routed", [False, True])
+async def test_interaction_compaction_runs_once_at_backend_boundary(
+    monkeypatch, routed
+):
+    client = _Client([_chunk("ALPHA-17")])
+    monkeypatch.setattr(mod, "get_openai_client", lambda *args: client)
+    calls = []
+
+    def summarize(prefix):
+        calls.append(prefix)
+        return "identifier ALPHA-17"
+
+    registry = a11.ActionRegistry()
+    bind_services(
+        registry, LlmContextServices(summarizers={"summary": summarize})
+    )
+    policy = LlmContextConfig(
+        boundary="interaction",
+        compaction="summary",
+        summarizer="summary",
+        max_tokens=400,
+        reserve_tokens=0,
+        retain_recent=1,
+    )
+    schema = INTERACT_WITH_LLM_SCHEMA if routed else INTERACT_WITH_GPT_SCHEMA
+    handler = interact_with_llm if routed else mod.interact_with_gpt
+    action = (
+        a11.Action(schema)
+        .bind_handler(handler)
+        .bind_registry(registry)
+        .set_header(llm.LlmHeaders.MODEL, "gpt-test")
+        .set_header(llm.LlmHeaders.API_KEY, "mock")
+        .set_header(LlmContextHeaders.CONFIG, policy.model_dump_json())
+        .run()
+    )
+    original = [
+        llm.Interaction(content=[a11.to_chunk("record " * 2000)]),
+        llm.Interaction(content=[a11.to_chunk("Return the identifier")]),
+    ]
+    before = encode_interactions(original)
+    for interaction in original:
+        await action["interactions"].put(interaction)
+    await action["interactions"].finalize()
+    await action["tools"].finalize()
+    await action["config"].finalize({})
+    await asyncio.gather(
+        *(
+            _drain(action[name])
+            for name in (
+                "text_output",
+                "thoughts",
+                "event_stream",
+                "new_interactions",
+            )
+        )
+    )
+    await action.wait()
+    assert len(calls) == 1
+    request = json.dumps(client.completions.request)
+    assert "ALPHA-17" in request
+    assert "record record" not in request
+    assert "Return the identifier" in request
+    assert encode_interactions(original) == before

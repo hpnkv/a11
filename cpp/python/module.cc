@@ -57,14 +57,13 @@ void InstallFailureSignalHandler() {
 // See thread/executor.h's SchedulerParkGuard.
 void InstallSchedulerParkGuard() {
   thread::SetSchedulerParkGuard(thread::SchedulerParkGuard{
-      .release =
-          []() -> void* {
-            // Save only an active interpreter thread state.
-            if (PyGILState_Check() == 0 || a11::python::InterpreterIsGoingAway()) {
-              return nullptr;
-            }
-            return PyEval_SaveThread();
-          },
+      .release = []() -> void* {
+        // Save only an active interpreter thread state.
+        if (PyGILState_Check() == 0 || a11::python::InterpreterIsGoingAway()) {
+          return nullptr;
+        }
+        return PyEval_SaveThread();
+      },
       .acquire =
           [](void* held) {
             if (held != nullptr && !a11::python::InterpreterIsGoingAway()) {
@@ -121,6 +120,7 @@ PYBIND11_MODULE(_native, module) {
 
   // Value types must be registered before any API uses them in a signature.
   a11::python::BindCore(module);
+  a11::python::BindLlmContext(module);
   a11::python::BindData(module);
 #ifdef A11_BUILD_REDIS
   a11::python::BindRedis(module);

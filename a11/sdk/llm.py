@@ -21,20 +21,21 @@ import functools
 import logging
 import re
 import uuid
+from collections.abc import Iterable
 from typing import Any, Callable, ClassVar, Literal
 
-import a11
 import pydantic_core
-
-from a11.data import serial_tags
-from a11.data.serialization import get_global_serialization_registry
-from a11.status import Status, StatusCode, StatusException
 from pydantic import (
     BaseModel,
     Field,
-    model_validator,
     field_serializer,
+    model_validator,
 )
+
+import a11
+from a11.data import serial_tags
+from a11.data.serialization import get_global_serialization_registry
+from a11.status import Status, StatusCode, StatusException
 
 
 class LlmHeaders(enum.StrEnum):
@@ -631,13 +632,49 @@ class NormalizedMessage(BaseModel):
 _INTERACTION_NORMALIZERS: dict[
     str, Callable[[Interaction], NormalizedMessage]
 ] = {}
+_INTERACTION_REPLAY_METADATA: dict[str, frozenset[str]] = {}
 
 
 def register_interaction_normalizer(
-    backend: str, normalizer: Callable[[Interaction], NormalizedMessage]
+    backend: str,
+    normalizer: Callable[[Interaction], NormalizedMessage],
+    *,
+    replay_metadata_keys: Iterable[str] = (),
 ) -> None:
-    """Register a backend's native-content -> `NormalizedMessage` producer."""
+    """Register a backend's native-content -> `NormalizedMessage` producer.
+
+    Args:
+        backend: Producer identity carried in Interaction backend metadata.
+        normalizer: Existing native-to-portable content converter.
+        replay_metadata_keys: Provider metadata keys whose values are retained
+            in canonical history and require no model-facing replay. Unknown
+            metadata remains opaque to Interaction projection. Providers own
+            this declaration alongside their normalizer and wire formatter.
+    """
     _INTERACTION_NORMALIZERS[str(backend)] = normalizer
+    _INTERACTION_REPLAY_METADATA[str(backend)] = frozenset(replay_metadata_keys)
+
+
+def interaction_metadata_is_portable(interaction: Interaction) -> bool:
+    """Check whether a producer declares all metadata safe for portable replay.
+
+    Args:
+        interaction: Canonical record with provider-specific metadata.
+
+    Returns:
+        True for declared diagnostic fields and shared usage/tool narration.
+        Metadata remains in canonical sources independently of the projection.
+    """
+    allowed = _INTERACTION_REPLAY_METADATA.get(
+        interaction_backend(interaction) or "", frozenset()
+    ) | {
+        BACKEND_METADATA_KEY,
+        TOOL_LOGS_METADATA_KEY,
+        TOOL_STATUSES_METADATA_KEY,
+        "a11.usage",
+        "provider_usage",
+    }
+    return not (set(interaction.backend_specific_metadata) - allowed)
 
 
 def interaction_backend(interaction: Interaction) -> str | None:
@@ -758,13 +795,12 @@ def _shape_parts(value: Any) -> list[NormalizedPart]:
 
 
 def normalized_parts_by_shape(value: Any) -> list[NormalizedPart]:
-    """The portable text and image parts one decoded content value carries.
+    """Extract portable text and image parts from decoded content.
 
-    The block-level half of [normalize_by_shape][a11.sdk.llm.normalize_by_shape], for a consumer
-    holding content rather than a whole interaction: a backend translating a client's content
-    into its own parts reads the portable image shapes here -- Anthropic's
-    ``source``/``media_type`` envelope, OpenAI's ``image_url`` data URL, a native
-    ``data``/``mime_type`` pair -- instead of hand-rolling each.
+    Backend adapters read Anthropic source/media_type envelopes, OpenAI
+    image_url data URLs, and native data/mime_type pairs through these parts.
+    Whole-interaction consumers use
+    [normalize_by_shape][a11.sdk.llm.normalize_by_shape].
     """
     return _shape_parts(value)
 
@@ -1042,17 +1078,11 @@ async def decoded_output_content(
 
 
 def _argument_for_port(value: Any, port: Any) -> Any:
-    """One tool-call argument as the value its port's own declared type wants.
+    """Convert JSON strings for structured tool-argument ports.
 
-    A model asked for an object sometimes sends that object *as a string*: one JSON document
-    inside a JSON string. Put verbatim it reaches the port as ``text/plain``, and no codec
-    builds the port's type out of text -- the call then fails with a mimetype the model never
-    chose and cannot see. Where the port declares a structured type and the string parses as a
-    JSON object or array, the parsed value is what the port was given.
-
-    Everything else arrives exactly as it was sent: a text port keeps its text, a string that
-    is not JSON stays a string, and base64 for an ``image/*`` port is untouched. A payload the
-    port still refuses is refused by the port, with the port's own error.
+    A string holding a JSON object or array is parsed for a port whose media
+    type declares a structured value. Text ports and scalar strings retain
+    their values. Port serialization reports incompatible data.
     """
     if not isinstance(value, str) or port is None:
         return value
@@ -1297,6 +1327,8 @@ async def build_tool_results(
         [str, str, str | None, list[NormalizedPart]],
         dict[str, Any] | list[dict[str, Any]],
     ],
+    *,
+    action=None,
 ) -> list[dict[str, Any]]:
     """One or more provider-shaped result messages per executed action call.
 
@@ -1314,10 +1346,13 @@ async def build_tool_results(
         executed: The `llm_tools.runner.ExecutedActions` to report on. Untyped
             here because `runner` imports this module.
         format_result: Builds one provider-shaped message, or several.
+        action: Optional action providing opt-in LLM context policy and reports.
 
     Returns:
         The messages, in the order the calls were run.
     """
+    from a11.sdk.llm_context.runtime import prepare_tool_result
+
     results: list[dict[str, Any]] = []
     for call_id, fragments in executed.outputs.items():
         failure = executed.error_message(call_id)
@@ -1326,6 +1361,12 @@ async def build_tool_results(
             content = failure
         else:
             content, images = await decoded_output_content(fragments)
+        content = await prepare_tool_result(
+            action,
+            content,
+            failure,
+            source=getattr(executed, "action_names", {}).get(call_id),
+        )
         formatted = format_result(call_id, content, failure, images)
         results.extend(
             formatted if isinstance(formatted, list) else [formatted]

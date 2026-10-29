@@ -40,6 +40,7 @@
 #include "a11/net/http/connection_pool.h"
 #include "a11/net/http/download.h"
 #include "a11/net/http/fetch.h"
+#include "a11/net/http/relay.h"
 #include "a11/net/http/url.h"
 #include "a11/net/http2.h"
 #include "a11/net/http_sse_wire_stream.h"
@@ -301,9 +302,36 @@ net::OnFetchProgress ProgressFromPython(const py::object& on_progress) {
   };
 }
 
+net::HttpRelayObserver RelayObserverFromPython(const py::object& observer) {
+  if (observer.is_none()) {
+    return {};
+  }
+  auto retained = std::shared_ptr<PyObject>(observer.inc_ref().ptr(),
+                                            &DeferredPythonRefs::Retire);
+  return [retained](std::string_view event, const net::HttpResponseHead& head,
+                    std::string_view data) -> absl::Status {
+    if (InterpreterIsGoingAway()) {
+      return absl::CancelledError("Interpreter is closing");
+    }
+    py::gil_scoped_acquire acquire;
+    DeferredPythonRefs::Drain();
+    try {
+      py::object result = py::reinterpret_borrow<py::object>(retained.get())(
+          py::str(event), py::cast(head), py::bytes(data));
+      if (result.is_none()) {
+        return absl::OkStatus();
+      }
+      return StatusFromPython(result);
+    } catch (py::error_already_set& error) {
+      return StatusFromPythonException(error);
+    }
+  };
+}
+
 }  // namespace
 
 void BindHttp(py::module_& module) {
+
   py::classh<net::Http2RequestBodyStream>(module, "Http2RequestBodyStream")
       .def(
           "read",
@@ -486,6 +514,21 @@ void BindHttp(py::module_& module) {
 
   py::class_<net::Http2Options>(module, "Http2Options")
       .def(py::init<>(), "Construct default HTTP/2 options.")
+      .def(
+          "set_stream_request_body",
+          [](net::Http2Options& self, bool enabled) {
+            if (enabled) {
+              self.stream_request_body = [](std::string_view, std::string_view,
+                                            const net::HttpHeaders&) {
+                return true;
+              };
+            } else {
+              self.stream_request_body = nullptr;
+            }
+          },
+          py::arg("enabled"),
+          "Accept every request body as a pull stream when enabled; restore "
+          "buffered bodies when disabled.")
       .def_readwrite("max_request_body_size",
                      &net::Http2Options::max_request_body_size,
                      "Maximum accepted request body size in bytes.")
@@ -1349,6 +1392,28 @@ void BindHttp(py::module_& module) {
             options.on_progress = ProgressFromPython(on_progress);
           },
           "Callable taking (bytes_done, bytes_total); write-only.");
+
+  module.def(
+      "relay_http",
+      [](std::string target, net::HttpRequest request,
+         std::shared_ptr<net::Http2ResponseWriter> writer,
+         const net::Http2Options& options,
+         const py::typing::Optional<NativeTime>& deadline,
+         const py::object& observer, size_t max_observed_bytes) {
+        const auto until = ValueOrThrow(TimeFromPython(deadline));
+        auto observe = RelayObserverFromPython(observer);
+        return FutureToPython(WithoutGil([&] {
+          return net::RelayHttp(std::move(target), std::move(request),
+                                std::move(writer), options, until,
+                                std::move(observe), max_observed_bytes);
+        }));
+      },
+      py::arg("target"), py::arg("request"), py::arg("writer"),
+      py::arg("options") = net::Http2Options{},
+      py::arg("deadline") = py::none(), py::arg("observer") = py::none(),
+      py::arg("max_observed_bytes") = 8 * 1024 * 1024,
+      "Relay an HTTP exchange without retries, preserving response bytes and "
+      "trailers.");
 
   module.def(
       "fetch",

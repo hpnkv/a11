@@ -7,6 +7,34 @@
 .venv
 __pycache__/
 *.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.hypothesis/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.egg-info/
+.eggs/
+
+# Compiled libraries, objects, and distribution packages.
+*.so
+*.dylib
+*.dll
+*.o
+*.obj
+*.a
+*.lib
+*.class
+*.tsbuildinfo
+*.whl
+*.vsix
+node_modules/
+dist/
+.DS_Store
 
 build*/
 cmake-build-debug/
@@ -17,6 +45,8 @@ CMakeUserPresets.json
 a11/libexec/a11-web-render-webkit
 
 **/.gradle/
+**/.gradle-user-home/
+**/.kotlin/
 **/.intellijPlatform/
 # tools/vcpkg was recorded as a gitlink with no .gitmodules entry and nothing in
 # the build referencing it, which made every recursive clone (and any CI
@@ -24,7 +54,11 @@ a11/libexec/a11-web-render-webkit
 # Untracked now; keep a stray local checkout out of git's way.
 tools/vcpkg/
 
-intellij-plugin/
+# Gradle builds these webview resources from the shared UI sources.
+/intellij-plugin/src/main/resources/webview/app.js
+/intellij-plugin/src/main/resources/webview/app.js.map
+/intellij-plugin/src/main/resources/webview/index.html
+/intellij-plugin/bin/
 
 vscode-plugin/dist/
 vscode-plugin/node_modules/
@@ -39,8 +73,4 @@ vscode-plugin/node_modules/
 # Local campaign plans, reports, exports, and draft creative.
 .campaign/
 
-COMPACTION.md
-TOKEN_ACCOUNTING.md
-TOKEN_ACCOUNTING_2.md
-WEB_RENDER.md
-WEB_RENDER_IMPL.md
+HEADROOM.md

@@ -39,6 +39,12 @@
 
 namespace a11::net::internal {
 
+HttpRelayObserver GuardRelayObserver(HttpRelayObserver observer) {
+  return exception_guard::Wrap<absl::Status, std::string_view,
+                               const HttpResponseHead&, std::string_view>(
+      std::move(observer), "HTTP relay observer");
+}
+
 OnMessage GuardOnMessage(OnMessage callback) {
   return exception_guard::Wrap<a11::Task, std::optional<data::WireMessage>>(
       std::move(callback), "on_message");

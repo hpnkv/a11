@@ -162,6 +162,13 @@ nav:
           - Observability: api/observability.md
           - Status & timing: api/status-timing.md
       - LLM SDK:
+          - LLM context:
+              - Portable Interaction views: llm-sdk/context/interactions.md
+              - Direct calls and Flow: llm-sdk/context/actions.md
+              - External harnesses: llm-sdk/context/harnesses.md
+              - Measurement: llm-sdk/context/measurement.md
+              - Validation results: llm-sdk/context/validation.md
+              - Reference: llm-sdk/context/reference.md
           - Interactions: llm-sdk/interactions.md
           - Actions as LLM tools: llm-sdk/action-tools.md
           - MCP servers as Actions: llm-sdk/mcp-tools.md

@@ -30,6 +30,7 @@ from a11.cli.commands.account import (
     WHOAMI_COMMAND,
 )
 from a11.cli.commands.chat import CHAT_COMMAND
+from a11.cli.commands.llm_context import LLM_CONTEXT_COMMAND
 from a11.cli.commands.discover import DISCOVER_COMMAND
 from a11.cli.commands.flow import FLOW_COMMAND
 from a11.cli.commands.gateway import GATEWAY_COMMAND
@@ -37,6 +38,7 @@ from a11.cli.commands.serve import SERVE_COMMAND
 
 COMMANDS: list[Command] = [
     CHAT_COMMAND,
+    LLM_CONTEXT_COMMAND,
     DISCOVER_COMMAND,
     FLOW_COMMAND,
     GATEWAY_COMMAND,

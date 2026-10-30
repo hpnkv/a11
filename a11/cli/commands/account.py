@@ -42,6 +42,7 @@ from a11.client.credentials import (
 from a11.client.exchange import ExchangeClient
 from a11.cli import console as console_module
 from a11.cli.app import Command
+from a11.cli.commands import _command_help
 from a11.status import StatusException
 
 
@@ -201,7 +202,9 @@ async def run_login(args: argparse.Namespace) -> int:
     _remember(_store(args), exchange, token, whoami)
     console.print(f"Logged in to {exchange} as {args.username}.")
     if whoami.get("relay_ws_url"):
-        console.print(f"Hosted agents will answer at {whoami['relay_ws_url']}/<identity>.")
+        console.print(
+            f"Hosted agents will answer at {whoami['relay_ws_url']}/<identity>."
+        )
     return 0
 
 
@@ -363,7 +366,7 @@ async def run_identity(args: argparse.Namespace) -> int:
 
 REGISTER_COMMAND = Command(
     name="register",
-    help="Create an account on an A11 exchange.",
+    help=_command_help("register"),
     run=run_register,
     configure=configure_register,
     description=(
@@ -374,7 +377,7 @@ REGISTER_COMMAND = Command(
 
 LOGIN_COMMAND = Command(
     name="login",
-    help="Log in to an A11 exchange.",
+    help=_command_help("login"),
     run=run_login,
     configure=configure_login,
     description=(
@@ -386,21 +389,21 @@ LOGIN_COMMAND = Command(
 
 LOGOUT_COMMAND = Command(
     name="logout",
-    help="Forget this machine's exchange credential.",
+    help=_command_help("logout"),
     run=run_logout,
     configure=configure_logout,
 )
 
 WHOAMI_COMMAND = Command(
     name="whoami",
-    help="Show the stored credential and what it may do.",
+    help=_command_help("whoami"),
     run=run_whoami,
     configure=configure_whoami,
 )
 
 IDENTITY_COMMAND = Command(
     name="identity",
-    help="Register and list hosted identities.",
+    help=_command_help("identity"),
     run=run_identity,
     configure=configure_identity,
 )

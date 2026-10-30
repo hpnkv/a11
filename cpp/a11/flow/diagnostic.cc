@@ -52,6 +52,8 @@ constexpr std::array kCodes = {
              "A repeat carries the same name twice."},
     CodeInfo{"flow.barrier.duplicate-until", Family::kBarrier, Severity::kError,
              "A loop is given a second stop condition."},
+    CodeInfo{"flow.barrier.expression-cycle", Family::kBarrier,
+             Severity::kError, "Expression cycle."},
     CodeInfo{"flow.barrier.unordered-clock", Family::kBarrier,
              Severity::kWarning,
              "A statement reads the clock against something the flow produced, "
@@ -87,6 +89,14 @@ constexpr std::array kCodes = {
     CodeInfo{"flow.form.count-not-positive", Family::kForm, Severity::kWarning,
              "A count that is not a number of anything: 'parallel 0', "
              "'skip -1'."},
+    CodeInfo{"flow.form.declaration-attribute", Family::kForm, Severity::kError,
+             "Declaration attribute."},
+    CodeInfo{"flow.form.declaration-body", Family::kForm, Severity::kError,
+             "Declaration body."},
+    CodeInfo{"flow.form.declaration-conflict", Family::kForm, Severity::kError,
+             "Declaration conflict."},
+    CodeInfo{"flow.form.declaration-schema-mismatch", Family::kForm,
+             Severity::kError, "Declaration schema mismatch."},
     CodeInfo{"flow.form.default-on-required", Family::kForm, Severity::kWarning,
              "A field is required and also given a default, so the default "
              "could never be used."},
@@ -94,6 +104,8 @@ constexpr std::array kCodes = {
              "A field is declared twice in one shape."},
     CodeInfo{"flow.form.duplicate-flow", Family::kForm, Severity::kError,
              "Two flows in one file are declared with the same name."},
+    CodeInfo{"flow.form.duplicate-header", Family::kForm, Severity::kError,
+             "A normalized header name is declared more than once."},
     CodeInfo{"flow.form.duplicate-port", Family::kForm, Severity::kError,
              "A port is declared twice in one direction."},
     CodeInfo{"flow.form.duplicate-struct", Family::kForm, Severity::kError,
@@ -115,6 +127,14 @@ constexpr std::array kCodes = {
              "the field holds."},
     CodeInfo{"flow.form.forward-headers", Family::kForm, Severity::kError,
              "'headers' without the 'forward' that owns it."},
+    CodeInfo{"flow.form.handle-escape", Family::kForm, Severity::kError,
+             "Handle escape."},
+    CodeInfo{"flow.form.import-context", Family::kForm, Severity::kError,
+             "Import context."},
+    CodeInfo{"flow.form.import-scope", Family::kForm, Severity::kError,
+             "Import scope."},
+    CodeInfo{"flow.form.invalid-action-target", Family::kForm, Severity::kError,
+             "Invalid action target."},
     CodeInfo{"flow.form.log-format", Family::kForm, Severity::kError,
              "A 'logf' written without a format to fill."},
     CodeInfo{"flow.form.log-value", Family::kForm, Severity::kError,
@@ -123,12 +143,16 @@ constexpr std::array kCodes = {
         "flow.form.missing-field", Family::kForm, Severity::kError,
         "A value of a declared shape leaves out a field the shape requires "
         "and gives no default for."},
+    CodeInfo{"flow.form.multiple-implementations", Family::kForm,
+             Severity::kWarning, "Multiple implementations."},
     CodeInfo{"flow.form.node-parentheses", Family::kForm, Severity::kError,
              "Making a node takes parentheses: 'node()' or 'node(id)'."},
     CodeInfo{"flow.form.not-json-representable", Family::kForm,
              Severity::kError,
              "A value holding bytes is asked for as JSON, which has nothing to "
              "carry them in; 'packb' is the one that does."},
+    CodeInfo{"flow.form.not-waitable", Family::kForm, Severity::kError,
+             "Not waitable."},
     CodeInfo{"flow.form.one-of-empty", Family::kForm, Severity::kError,
              "'one of []' allows nothing, so nothing would validate."},
     CodeInfo{"flow.form.one-of-not-a-list", Family::kForm, Severity::kError,
@@ -136,11 +160,15 @@ constexpr std::array kCodes = {
     CodeInfo{"flow.form.port-modifier-order", Family::kForm, Severity::kError,
              "'stream' or 'required' is written in front of the port's type "
              "instead of after it."},
+    CodeInfo{"flow.form.private-type-exposed", Family::kForm, Severity::kError,
+             "Private type exposed."},
     CodeInfo{"flow.form.repeated-modifier", Family::kForm, Severity::kError,
              "A modifier that says one thing is written twice."},
     CodeInfo{"flow.form.stage-argument", Family::kForm, Severity::kError,
              "A stage is missing the argument it takes, or was given one of "
              "the wrong kind."},
+    CodeInfo{"flow.form.statement-as-value", Family::kForm, Severity::kError,
+             "Statement as value."},
     CodeInfo{"flow.form.struct-shadows-builtin", Family::kForm,
              Severity::kError,
              "A struct is named after a built-in type, which nothing could "
@@ -149,20 +177,20 @@ constexpr std::array kCodes = {
              "A 'repeat' with no 'until', no 'while' and no 'max': nothing "
              "ends it."},
     CodeInfo{"flow.form.unconditional-abort", Family::kForm, Severity::kError,
-             "An 'abort' at the top of a flow's body with no 'after': it runs "
-             "at once rather than where it is written."},
+             "A top-level 'abort' has no condition, 'after', or data-dependent "
+             "argument, so it can run immediately."},
     CodeInfo{"flow.form.unconditional-cancel", Family::kForm, Severity::kError,
              "A 'cancel' at the top of a flow's body with no 'after': it runs "
              "at once rather than where it is written."},
     CodeInfo{"flow.form.unconditional-fail", Family::kForm, Severity::kError,
-             "A 'fail' at the top of a flow's body with no 'after': it runs at "
-             "once rather than where it is written."},
+             "A top-level 'fail' has no condition, 'after', or data-dependent "
+             "argument, so it can run immediately."},
     CodeInfo{"flow.form.unconditional-log", Family::kForm, Severity::kError,
-             "A 'log' at the top of a flow's body with no 'after': it runs at "
-             "once rather than where it is written."},
+             "A top-level 'log' has no condition, 'after', or data-dependent "
+             "argument, so it can run immediately."},
     CodeInfo{"flow.form.unconditional-logf", Family::kForm, Severity::kError,
-             "A 'logf' at the top of a flow's body with no 'after': it runs at "
-             "once rather than where it is written."},
+             "A top-level 'logf' has no condition, 'after', or data-dependent "
+             "argument, so it can run immediately."},
     CodeInfo{"flow.form.unknown-builtin", Family::kForm, Severity::kError,
              "A function call naming something that is not one of the "
              "language's fixed functions."},
@@ -181,6 +209,8 @@ constexpr std::array kCodes = {
              "nor written as a registry tag or a quoted mimetype."},
     CodeInfo{"flow.form.zip-empty", Family::kForm, Severity::kError,
              "'zip' reads streams in step, so it takes at least one."},
+    CodeInfo{"flow.name.ambiguous-implementation", Family::kName,
+             Severity::kError, "Ambiguous implementation."},
     CodeInfo{"flow.name.call-as-stream", Family::kName, Severity::kError,
              "A call used where one of its ports was meant."},
     CodeInfo{"flow.name.discard-bound", Family::kName, Severity::kError,
@@ -190,9 +220,15 @@ constexpr std::array kCodes = {
              "'_' read: as a pipeline source, as something to wait on, drain "
              "or abort, or inside an expression. It keeps nothing, so there is "
              "nothing there to read."},
+    CodeInfo{"flow.name.import-alias-conflict", Family::kName, Severity::kError,
+             "Import alias conflict."},
+    CodeInfo{"flow.name.import-shadowing", Family::kName, Severity::kWarning,
+             "Import shadowing."},
     CodeInfo{"flow.name.it-outside-stage", Family::kName, Severity::kError,
              "'it' outside the 'where', 'map' or 'group' stage whose value it "
              "names."},
+    CodeInfo{"flow.name.module-not-found", Family::kName, Severity::kError,
+             "Module not found."},
     CodeInfo{"flow.name.no-status", Family::kName, Severity::kError,
              "A status asked of something that has none."},
     CodeInfo{"flow.name.not-a-call", Family::kName, Severity::kError,
@@ -206,6 +242,8 @@ constexpr std::array kCodes = {
     CodeInfo{"flow.name.not-writable", Family::kName, Severity::kError,
              "A stream is written somewhere that cannot be written: an 'in' "
              "port, a call's output, a barrier."},
+    CodeInfo{"flow.name.private-member", Family::kName, Severity::kError,
+             "Private member."},
     CodeInfo{"flow.name.taken", Family::kName, Severity::kError,
              "A name is bound twice in one scope."},
     CodeInfo{"flow.name.unknown", Family::kName, Severity::kError,
@@ -215,13 +253,37 @@ constexpr std::array kCodes = {
              "A node map used before 'nodes' declares it."},
     CodeInfo{"flow.name.unknown-port", Family::kName, Severity::kError,
              "A port the action being called does not declare."},
+    CodeInfo{"flow.name.unresolved-declaration", Family::kName,
+             Severity::kError, "Unresolved declaration."},
+    CodeInfo{"flow.schema.not-a-record", Family::kForm, Severity::kWarning,
+             "A JSON Schema cannot be represented as a Flow struct."},
+    CodeInfo{"flow.schema.unsupported-keyword", Family::kForm,
+             Severity::kWarning,
+             "A JSON Schema contains a constraint without a Flow spelling."},
     CodeInfo{"flow.sequence.impossible", Family::kSequence, Severity::kWarning,
              "A sequence of stages that cannot produce what it appears to: "
              "dropping from one value, counting a reduced stream, 'first 0'."},
+    CodeInfo{"flow.sequence.redundant-declaration", Family::kSequence,
+             Severity::kInformation, "Redundant declaration."},
+    CodeInfo{"flow.sequence.redundant-definition", Family::kSequence,
+             Severity::kInformation, "Redundant definition."},
+    CodeInfo{"flow.sequence.redundant-import", Family::kSequence,
+             Severity::kInformation, "Redundant import."},
+    CodeInfo{"flow.sequence.redundant-parentheses", Family::kSequence,
+             Severity::kInformation, "Redundant parentheses."},
     CodeInfo{"flow.sequence.redundant-stage", Family::kSequence,
              Severity::kWeakWarning,
              "A stage with nothing to do: choosing between the single value a "
              "reducing stage left, or the same reshaping twice."},
+    CodeInfo{"flow.sequence.rename-graph-boundary", Family::kSequence,
+             Severity::kInformation,
+             "A source rename covers only the supplied module graph."},
+    CodeInfo{"flow.sequence.scalar-rvalue-read", Family::kSequence,
+             Severity::kInformation, "Scalar rvalue read."},
+    CodeInfo{"flow.sequence.schema-refined", Family::kSequence,
+             Severity::kInformation, "Schema refined."},
+    CodeInfo{"flow.sequence.schema-refinement-unproven", Family::kSequence,
+             Severity::kInformation, "Schema refinement unproven."},
     CodeInfo{"flow.sequence.skip-count-target", Family::kSequence,
              Severity::kError,
              "A counted 'skip' applied to something that is not a port or a "
@@ -250,6 +312,8 @@ constexpr std::array kCodes = {
              "there, so the name is the dead part."},
     CodeInfo{"flow.unused.header", Family::kUnused, Severity::kWeakWarning,
              "A header declared under an alias nothing uses."},
+    CodeInfo{"flow.unused.import", Family::kUnused, Severity::kWeakWarning,
+             "Import."},
     CodeInfo{"flow.unused.loop-variable", Family::kUnused,
              Severity::kWeakWarning,
              "A 'for' variable no pass of the loop reads."},

@@ -174,8 +174,15 @@ flow ask-twice {                  # and a composition of it
 ## Grammar
 
 ```
-program    := flow+
-flow       := "flow" name "{" item* "}"
+program    := (import | struct | flow | declaration)*
+import     := "import" string "as" name
+            | "from" string "import" name ["as" name]
+              ("," name ["as" name])*
+flow       := "flow" [name ["exported"]] "{" (item | import | declaration | struct)* "}"
+declaration := "declare" "flow" name ["exported"] "{" interface-item* "}"
+interface-item := "describe" description
+            | ("in"|"out") name ":" type ["stream"] ["required"] [description]
+            | "header" string ["as" name] ["default" literal] [description]
 item       := "describe" description
             | ("in"|"out") name ":" type ["stream"] ["required"] [description]
             | "header" string ["as" name] ["default" literal] [description]
@@ -184,13 +191,14 @@ statement  := [name "="] call
             | name "=" "node" "(" [expr] ")" ["in" name]
             | [name "="] "wait" reference ["timeout" duration]
             | [name "="] "drain" reference
-            | pipeline "->" destination ("," destination)*
+            | [name "="] pipeline "->" destination ("," destination)*
             | "skip" number reference
             | "cancel" name
             | "abort" reference [expr [expr]]
             | "fail" [expr [expr]]
             | "log" [level] expr
             | "logf" [level] string [expr ("," expr)*]
+            | [name "="] ["try"] "after" subject ("," subject)* block
             | "for" name "in" pipeline ["parallel" number] block
             | "repeat" [name "=" expr] ["max" number] block
             | name "<-" pipeline
@@ -201,16 +209,17 @@ destination := reference | "_"      # `_` keeps nothing, and is not a name
 call       := ["try"] ("run" | "call") action "(" [name ":" pipeline, ...] ")"
                   modifier*
 modifier   := "tee" | "via" name | "timeout" duration
-            | "after" name ("," name)* | "id" expr
+            | "after" subject ("," subject)* | "id" expr
             | "with" string ":" expr ("," string ":" expr)*
             | "forward" "headers" string ("," string)*
 pipeline   := expr (("|" stage) | bare-stage)*
 bare-stage := ("then" source | "where" expr)   # the pipe is optional here
-stage      := "first" n | "drop" n | "truncate" n | "batch" n | "window" n
+stage      := "take" ("while" | "until") expr
+            | "first" n | "drop" n | "truncate" n | "batch" n | "window" n
             | "group" expr | "scan" literal "as" name "," expr
             | "match" pattern
             | "then" source | "where" expr | "map" expr | "join" [string]
-            | "strformat" string | "mime" string | "collect" | "count"
+            | "strformat" string | "mime" string | "collect" | "consume" | "count"
             | "distinct" | "text" | "json" | "packb"
             | "log" [level] [expr] | "logf" [level] string [expr ("," expr)*]
 level      := "debug" | "info" | "warning" | "error" | "critical"
@@ -219,7 +228,10 @@ description := string | newline string   # alone on its line, at any indent
 string     := '"' ... '"' | '"""' ... '"""'   # the second may hold line breaks
 expr        := literal | name | expr "." name | expr "[" expr "]"
             | builtin "(" expr* ")" | "(" pipeline ")" | "it"
-            | "status" reference | name ".id"
+            | call | "node" "(" [expr] ")" ["in" name]
+            | "status" subject | "wait" subject ["timeout" duration]
+            | "wait" ("first"|"all") "of" subject ("," subject)*
+            | "drain" subject | name ".id"
             | type "{" [name ":" expr, ...] "}" | expr "as" type
             | expr ("==" | "!=" | "<" | "<=" | ">" | ">=" | "in") expr
             | expr ("+" | "-") expr        # numbers, durations, instants
@@ -311,7 +323,7 @@ Both spellings mean the same thing: take what the expression produced, partial
 as hand-written things are, and make it that type — filling in what the type
 defaults and failing where it will not fit. A tag resolves against the
 serialisation registries of the process the flow runs in, so which types exist
-is the host's decision: a flow cannot import anything. `Tag{...}` is not
+is the host's decision. Module imports provide Flow source; they do not import Python code. `Tag{...}` is not
 available where a `{` would open a block instead — an `if` condition, a `for`'s
 source — so `if step.next.done {` keeps meaning what it looks like; brackets
 lift the restriction, as in `if (T{a: 1}).ok {`.
@@ -323,7 +335,7 @@ import a11
 from a11 import flow
 
 program = flow.loads(source, "shout.flow")
-program.register_all(registry)              # now they are actions
+program.register_all(registry)              # publish root implementations
 
 result = await program["shout"].invoke(words=["hi", "there"])
 ```
@@ -345,6 +357,19 @@ from typing import Any
 from a11._native import flow as _flow
 from a11.flow.diagnostics import FlowSyntaxError
 from a11.flow.plan import TYPE_NAMES, FlowPlan, Program, compile_source
+from a11._native.flow import (
+    Expression,
+    Statement,
+    CallOptions,
+    Type,
+    StructBuilder,
+    FlowBuilder,
+    ModuleDocument,
+    DocumentSymbolHandle,
+    SourceEdit,
+    DocumentChange,
+    ModuleGraphChange,
+)
 from a11.flow.runtime import invoke
 
 #: Every function an expression may call, read from the language's own table.
@@ -364,6 +389,44 @@ FAIL_CODES: tuple[str, ...] = tuple(
 REFERENCE = '''\
 A11 Flow — a composition of actions that is itself an action.
 Every keyword may be written in lower case or UPPER CASE, but not Mixed.
+
+Root modules need no export attributes: their named implementations can be
+registered and their local types used directly. Imported modules are private by
+default. Write `flow NAME exported { ... }`, `declare flow NAME exported { ... }`,
+or `struct NAME exported { ... }` to expose a member to an importer.
+`import "library.flow" as lib` is allowed at module or implemented-flow scope;
+imports are lexical and hoisted. Use `run lib.NAME(...)` and `lib.TYPE`.
+`from "library.flow" import NAME, TYPE as LocalType` introduces direct local names.
+Same-name declarations constrain imported callables; compatible contracts merge.
+Implemented flows may contain `declare flow` and `struct` declarations, visible
+throughout that flow. Local declarations can bind module implementations,
+direct imports or registry actions. Local structs have distinct scoped identities.
+Move executable flow definitions to module scope; local symbols cannot be exported.
+Imported implementations retain access to their private dependencies.
+`declare flow NAME { describe "..."; in value: TYPE; out result: TYPE }`
+specifies an action interface, including ordinary header declarations, with no
+executable body. Compatible declarations conjoin their constraints. A bound
+implementation must refine all declarations. Used unresolved declarations,
+ambiguous implementations and incompatible schemas fail before any Flow work.
+
+Operations are expressions: `(run render(data: data)).text -> result`,
+`let outcome = wait try run check()`, and `let done = drain existing_node`.
+Use parentheses before selecting a result of a multi-part operation:
+`(run fetch(url: url)).metadata.title`; `run fetch(url: url).metadata` is an
+invalid action target. Prefix chains need no extra parentheses when used whole.
+Arguments, object fields, lists, indices and stage expressions accept operations.
+Written occurrences are distinct calls; bind a call to share several ports.
+Scalar reads take a value from a stream; `| consume` requires exactly one item
+and waits for end-of-stream, failing with FAILED_PRECONDITION for zero or many.
+Anonymous stream-to-scalar reads receive an optional informational consume tip.
+Demand and short-circuiting determine activation. Statement order does not.
+Activated work belongs to its execution scope. Dropped readers drain; they do
+not cancel producers. Races publish a winner before losers finish, while the
+owning scope joins all activated children. Failure/cancellation stops owned work;
+Flow retains the initiating status and details, and child Action::Cancel remains
+ordinary cancellation. Cleanup is structurally owned; a non-cooperative external
+action or a stream that never closes has no implicit termination deadline.
+
 
 flow NAME {
   describe "what this does"
@@ -388,9 +451,9 @@ flow NAME {
   fail [CODE] [MESSAGE]                    # end the flow with a status
   log [LEVEL] WHAT                         # write to the flow's own log
   logf [LEVEL] "fmt" [ARG, ...]            # the same, formatted
-           # `fail`, `cancel`, `abort` and `log` wait for nothing, so they
-           # go in an `if` or a loop body, or carry an `after`: at the top of
-           # a body they race every other statement, and are refused there.
+           # Data-dependent log/logf/fail/abort arguments synchronize the effect.
+           # Constant-only effects need an `if`, loop body, or `after`.
+           # `cancel` always needs a condition, loop body, or `after`.
            # `drain NODE` and `abort NODE` are the two endings a stream can
            # have: drain marks it final and closes it, which says it is over;
            # abort says it went wrong. A reader cannot otherwise tell a stream
@@ -489,8 +552,9 @@ like any other — `wait`, `drain`, `| first n`, `| drop n`, `| count` all work
 on one.
 DEST is an out-port, X.in-port, or a node.
 SUBJECT is a call, a node, a port, or a named wait/drain.
-`wait first of a, b` holds until the first of several *calls* finishes and lets
-the rest carry on; `wait all of a, b` holds for every one of them.
+`wait first of a, b` races calls, nodes/ports, and named block, loop or wait
+completions in any combination. Node observation is passive and leaves data
+available. It holds until one subject finishes and lets the rest carry on; `wait all of a, b` holds for every one of them.
 A race is a value too: which one won, from zero. `wait first of a, b -> n`,
 `let n = wait first of a, b` and `n = wait first of a, b` all name it.
 `wait all of` has no winner, so it is a barrier only.
@@ -507,13 +571,30 @@ MODIFIERS: tee | via MAP | timeout 30s | after X, Y, ... (steps or ports/nodes
            Either may name another flow of the same file, in any order, and
            needs nothing registered for it: a composition can be factored into
            several flows and still arrive as one text.
-STAGES: first N | last N | drop N | truncate N | batch N | window N | flatten |
+STAGES: take while EXPR | take until EXPR | first N | last N | drop N | truncate N | batch N | window N | flatten |
         chunk N | group EXPR | sort [by EXPR] [desc] | then SOURCE |
         where EXPR | map EXPR | join "sep" | strformat "fmt" | mime "text/*" |
-        collect | count | sum [EXPR] | min [EXPR] | max [EXPR] | avg [EXPR] |
+        collect | consume | count | sum [EXPR] | min [EXPR] | max [EXPR] | avg [EXPR] |
         fold LITERAL as NAME, EXPR | scan LITERAL as NAME, EXPR | distinct |
         text | json | packb | timeout 30s | pace 100ms | log [LEVEL] [EXPR] |
         logf [LEVEL] "fmt" [ARG, ...]
+      take while EXPR forwards items while its predicate is true; take until
+      EXPR forwards items until its predicate is true. Both exclude the boundary
+      item and stop this reader, leaving the producer running. Predicates use
+      `it`, evaluate in input order, and accept neither parallel nor unordered.
+      A try predicate stage drops a failed item and continues; source failures
+      still propagate. Empty sources produce nothing.
+      NAME = SOURCE | STAGE -> DEST names the completion of one pipeline,
+      equivalent to NAME = { SOURCE | STAGE -> DEST }. The name is a completion
+      subject for after/wait/status. All destinations and anonymous children
+      finish before the group completes. Use let NAME = SOURCE | STAGE to bind
+      a lazy stream value instead.
+      after X, Y { ... } waits for all named completion subjects before
+      activating any body statement or argument. The body is concurrent and
+      lexical: its local bindings stay inside. A named block exposes its
+      completion: cleanup = after done { ... }. try after tolerates body
+      failures and retains their status. Parent failure/cancellation stops the
+      group through ordinary scope propagation; this is not a finally handler.
       try SOURCE -> DEST is the pipe's own form of the same word: a failure
       arriving from the source, or refused by the destination, becomes a status
       value. Bind it -- `p = try src -> dest` -- and
@@ -642,7 +723,9 @@ for every reader at once, `-> _` performs a pipeline and keeps none of it, and
 EXTENSION = ".flow"
 
 
-def loads(source: str, source_name: str = "") -> Program:
+def loads(
+    source: str, source_name: str = "", *, modules: dict[str, str] | None = None
+) -> Program:
     """Compile Flow source into a [Program][a11.flow.plan.Program].
 
     Args:
@@ -652,17 +735,19 @@ def loads(source: str, source_name: str = "") -> Program:
     Raises:
         FlowSyntaxError: On any problem, with the line and column it was at.
     """
-    return compile_source(source, source_name)
+    return compile_source(source, source_name, modules=modules)
 
 
 def load(path: str | os.PathLike[str]) -> Program:
     """Compile a ``.flow`` file."""
     with open(path, encoding="utf-8") as handle:
-        return compile_source(handle.read(), str(path))
+        return compile_source(
+            handle.read(), os.path.realpath(path), resolve_files=True
+        )
 
 
 def register(source: str, registry: Any, source_name: str = "") -> Program:
-    """Compile Flow source and register every flow in it as an action.
+    """Compile Flow source and register its root implementations as actions.
 
     The one call a service needs to accept a composition from outside and
     make it runnable: after this the flows are in the registry, and a session
@@ -847,6 +932,17 @@ __all__ = [
     "BUILTINS",
     "EXTENSION",
     "FAIL_CODES",
+    "Expression",
+    "Statement",
+    "CallOptions",
+    "Type",
+    "StructBuilder",
+    "FlowBuilder",
+    "ModuleDocument",
+    "DocumentSymbolHandle",
+    "SourceEdit",
+    "DocumentChange",
+    "ModuleGraphChange",
     "FlowPlan",
     "FlowSyntaxError",
     "Program",

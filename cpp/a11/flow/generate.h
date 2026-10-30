@@ -58,6 +58,8 @@ enum class SyntaxTarget {
   /// decide
   /// *whether* a string is a flow before colouring any of it.
   kVsCodeInjection,
+  /// Native vocabulary data for the browser fallback highlighter.
+  kBrowser,
 };
 
 /// Every target, for a command that offers a choice of them.

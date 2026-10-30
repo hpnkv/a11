@@ -53,6 +53,44 @@ A direct tool call is clearer for one action. Split the work into separate flows
 A11 Flow — a composition of actions that is itself an action.
 Every keyword may be written in lower case or UPPER CASE, but not Mixed.
 
+Root modules need no export attributes: their named implementations can be
+registered and their local types used directly. Imported modules are private by
+default. Write `flow NAME exported { ... }`, `declare flow NAME exported { ... }`,
+or `struct NAME exported { ... }` to expose a member to an importer.
+`import "library.flow" as lib` is allowed at module or implemented-flow scope;
+imports are lexical and hoisted. Use `run lib.NAME(...)` and `lib.TYPE`.
+`from "library.flow" import NAME, TYPE as LocalType` introduces direct local names.
+Same-name declarations constrain imported callables; compatible contracts merge.
+Implemented flows may contain `declare flow` and `struct` declarations, visible
+throughout that flow. Local declarations can bind module implementations,
+direct imports or registry actions. Local structs have distinct scoped identities.
+Move executable flow definitions to module scope; local symbols cannot be exported.
+Imported implementations retain access to their private dependencies.
+`declare flow NAME { describe "..."; in value: TYPE; out result: TYPE }`
+specifies an action interface, including ordinary header declarations, with no
+executable body. Compatible declarations conjoin their constraints. A bound
+implementation must refine all declarations. Used unresolved declarations,
+ambiguous implementations and incompatible schemas fail before any Flow work.
+
+Operations are expressions: `(run render(data: data)).text -> result`,
+`let outcome = wait try run check()`, and `let done = drain existing_node`.
+Use parentheses before selecting a result of a multi-part operation:
+`(run fetch(url: url)).metadata.title`; `run fetch(url: url).metadata` is an
+invalid action target. Prefix chains need no extra parentheses when used whole.
+Arguments, object fields, lists, indices and stage expressions accept operations.
+Written occurrences are distinct calls; bind a call to share several ports.
+Scalar reads take a value from a stream; `| consume` requires exactly one item
+and waits for end-of-stream, failing with FAILED_PRECONDITION for zero or many.
+Anonymous stream-to-scalar reads receive an optional informational consume tip.
+Demand and short-circuiting determine activation. Statement order does not.
+Activated work belongs to its execution scope. Dropped readers drain; they do
+not cancel producers. Races publish a winner before losers finish, while the
+owning scope joins all activated children. Failure/cancellation stops owned work;
+Flow retains the initiating status and details, and child Action::Cancel remains
+ordinary cancellation. Cleanup is structurally owned; a non-cooperative external
+action or a stream that never closes has no implicit termination deadline.
+
+
 flow NAME {
   describe "what this does"
   in  PORT: TYPE [stream] [required] "description"     # no `stream` = one value
@@ -76,9 +114,9 @@ flow NAME {
   fail [CODE] [MESSAGE]                    # end the flow with a status
   log [LEVEL] WHAT                         # write to the flow's own log
   logf [LEVEL] "fmt" [ARG, ...]            # the same, formatted
-           # `fail`, `cancel`, `abort` and `log` wait for nothing, so they
-           # go in an `if` or a loop body, or carry an `after`: at the top of
-           # a body they race every other statement, and are refused there.
+           # Data-dependent log/logf/fail/abort arguments synchronize the effect.
+           # Constant-only effects need an `if`, loop body, or `after`.
+           # `cancel` always needs a condition, loop body, or `after`.
            # `drain NODE` and `abort NODE` are the two endings a stream can
            # have: drain marks it final and closes it, which says it is over;
            # abort says it went wrong. A reader cannot otherwise tell a stream
@@ -177,8 +215,9 @@ like any other — `wait`, `drain`, `| first n`, `| drop n`, `| count` all work
 on one.
 DEST is an out-port, X.in-port, or a node.
 SUBJECT is a call, a node, a port, or a named wait/drain.
-`wait first of a, b` holds until the first of several *calls* finishes and lets
-the rest carry on; `wait all of a, b` holds for every one of them.
+`wait first of a, b` races calls, nodes/ports, and named block, loop or wait
+completions in any combination. Node observation is passive and leaves data
+available. It holds until one subject finishes and lets the rest carry on; `wait all of a, b` holds for every one of them.
 A race is a value too: which one won, from zero. `wait first of a, b -> n`,
 `let n = wait first of a, b` and `n = wait first of a, b` all name it.
 `wait all of` has no winner, so it is a barrier only.
@@ -195,13 +234,30 @@ MODIFIERS: tee | via MAP | timeout 30s | after X, Y, ... (steps or ports/nodes
            Either may name another flow of the same file, in any order, and
            needs nothing registered for it: a composition can be factored into
            several flows and still arrive as one text.
-STAGES: first N | last N | drop N | truncate N | batch N | window N | flatten |
+STAGES: take while EXPR | take until EXPR | first N | last N | drop N | truncate N | batch N | window N | flatten |
         chunk N | group EXPR | sort [by EXPR] [desc] | then SOURCE |
         where EXPR | map EXPR | join "sep" | strformat "fmt" | mime "text/*" |
-        collect | count | sum [EXPR] | min [EXPR] | max [EXPR] | avg [EXPR] |
+        collect | consume | count | sum [EXPR] | min [EXPR] | max [EXPR] | avg [EXPR] |
         fold LITERAL as NAME, EXPR | scan LITERAL as NAME, EXPR | distinct |
         text | json | packb | timeout 30s | pace 100ms | log [LEVEL] [EXPR] |
         logf [LEVEL] "fmt" [ARG, ...]
+      take while EXPR forwards items while its predicate is true; take until
+      EXPR forwards items until its predicate is true. Both exclude the boundary
+      item and stop this reader, leaving the producer running. Predicates use
+      `it`, evaluate in input order, and accept neither parallel nor unordered.
+      A try predicate stage drops a failed item and continues; source failures
+      still propagate. Empty sources produce nothing.
+      NAME = SOURCE | STAGE -> DEST names the completion of one pipeline,
+      equivalent to NAME = { SOURCE | STAGE -> DEST }. The name is a completion
+      subject for after/wait/status. All destinations and anonymous children
+      finish before the group completes. Use let NAME = SOURCE | STAGE to bind
+      a lazy stream value instead.
+      after X, Y { ... } waits for all named completion subjects before
+      activating any body statement or argument. The body is concurrent and
+      lexical: its local bindings stay inside. A named block exposes its
+      completion: cleanup = after done { ... }. try after tolerates body
+      failures and retains their status. Parent failure/cancellation stops the
+      group through ordinary scope propagation; this is not a finally handler.
       try SOURCE -> DEST is the pipe's own form of the same word: a failure
       arriving from the source, or refused by the destination, becomes a status
       value. Bind it -- `p = try src -> dest` -- and

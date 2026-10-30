@@ -248,8 +248,7 @@ WaitScope::WaitScope(WaitKind kind, const void* absl_nullable object,
   }
   // Outermost wins; see the header. A placeholder records an OS thread as idle
   // between A11 calls.
-  const WaitKind entered =
-      record_->wait_kind.load(std::memory_order_relaxed);
+  const WaitKind entered = record_->wait_kind.load(std::memory_order_relaxed);
   placeholder_ = entered == WaitKind::kThreadPlaceholder;
   if (entered != WaitKind::kRunning && !placeholder_) {
     record_ = nullptr;

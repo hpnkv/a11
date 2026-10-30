@@ -45,6 +45,9 @@ data class FlowProblem(
     val fixes: List<FlowFix>,
 )
 
+/** An immutable document snapshot for background native analysis. */
+data class FlowAnalysisInput(val text: String, val sourceContext: FlowSourceContext)
+
 /**
  * Displays diagnostics returned by `a11-flow check`.
  *
@@ -56,17 +59,22 @@ data class FlowProblem(
  * Ranges use offsets into the annotated file. For injected Flow, IntelliJ maps
  * fragment offsets back to the host document.
  */
-class FlowAnnotator : ExternalAnnotator<String, List<FlowProblem>>() {
+class FlowAnnotator : ExternalAnnotator<FlowAnalysisInput, List<FlowProblem>>() {
 
-    override fun collectInformation(file: PsiFile): String? =
-        if (file is FlowPsiFile) file.text else null
+    override fun collectInformation(file: PsiFile): FlowAnalysisInput? =
+        if (file is FlowPsiFile) FlowAnalysisInput(file.text, FlowSourceContext.fromFile(file)) else null
 
     @Suppress("UNCHECKED_CAST")
-    override fun doAnnotate(collectedInfo: String?): List<FlowProblem> {
-        val text = collectedInfo ?: return emptyList()
-        val payload = FlowEngine.instance().check(text) ?: return emptyList()
+    override fun doAnnotate(collectedInfo: FlowAnalysisInput?): List<FlowProblem> {
+        val input = collectedInfo ?: return emptyList()
+        val payload = FlowEngine.instance().check(input.text, input.sourceContext) ?: return emptyList()
         val listed = payload["diagnostics"] as? List<*> ?: return emptyList()
-        return listed.mapNotNull { entry -> problemOf(entry as? Map<*, *> ?: return@mapNotNull null) }
+        return listed.mapNotNull { entry ->
+            val diagnostic = entry as? Map<*, *> ?: return@mapNotNull null
+            val source = diagnostic["source"] as? String
+            if (!source.isNullOrEmpty() && source != (input.sourceContext.path ?: "-")) return@mapNotNull null
+            problemOf(diagnostic)
+        }
     }
 
     override fun apply(

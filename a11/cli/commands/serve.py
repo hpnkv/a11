@@ -118,6 +118,7 @@ import a11
 from a11 import net
 from a11.cli import console as console_module
 from a11.cli.app import Command
+from a11.cli.commands import _command_help
 from a11.cli.signals import stop_on_signals
 from a11.status import StatusException
 
@@ -1063,7 +1064,7 @@ async def run(args: argparse.Namespace) -> int:
 
 SERVE_COMMAND = Command(
     name="serve",
-    help="Serve an Action registry from a module.",
+    help=_command_help("serve"),
     description=(
         "Import a module, take its ActionRegistry or Service, and expose it on"
         " the transports asked for -- WebSocket, HTTP SSE, WebRTC, or any"

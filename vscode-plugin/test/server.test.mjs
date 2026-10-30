@@ -143,6 +143,49 @@ if (missing) {
   );
 }
 
+test('incomplete module targets offer exported symbols and diagnose private ones', {skip: missing}, async () => {
+  const uri = 'file:///probe/modules/root.flow';
+  const nestedUri = 'file:///probe/modules/nested.flow';
+  const completeText = 'declare flow test { out output: string stream }\n' +
+    'flow main {\n import "./nested.flow" as nested\n t = run nested.test()\n}\n';
+  const text = completeText.replace('nested.test()', 'nested.');
+  const at = text.indexOf('nested.\n') + 'nested.'.length;
+  const before = text.slice(0, at).split('\n');
+  const position = {line: before.length - 1, character: before.at(-1).length};
+  for (const exported of [false, true]) {
+    const dependency = `flow test${exported ? ' exported' : ''} { out output: integer stream }`;
+    const result = await handshake(executable, [...declaredArgs(), ...transportArgs()], [
+      {jsonrpc: '2.0', id: 0, method: 'initialize', params: {capabilities: {}}},
+      {jsonrpc: '2.0', method: 'initialized', params: {}},
+      {jsonrpc: '2.0', method: 'textDocument/didOpen', params: {
+        textDocument: {uri: nestedUri, languageId: 'a11flow', version: 1, text: dependency},
+      }},
+      {jsonrpc: '2.0', method: 'textDocument/didOpen', params: {
+        textDocument: {uri, languageId: 'a11flow', version: 1, text: completeText},
+      }},
+      {jsonrpc: '2.0', method: 'textDocument/didChange', params: {
+        textDocument: {uri, version: 2}, contentChanges: [{text}],
+      }},
+      {jsonrpc: '2.0', id: 1, method: 'textDocument/completion', params: {
+        textDocument: {uri}, position,
+      }},
+    ]);
+    const items = result.frames.find((one) => one.id === 1)?.result.items ?? [];
+    assert.equal(items.some((one) => one.label === 'test'), exported, JSON.stringify(items));
+    const diagnostics = result.frames.find((one) =>
+      one.method === 'textDocument/publishDiagnostics' && one.params.uri === uri,
+    )?.params.diagnostics ?? [];
+    if (!exported) {
+      const privateMember = diagnostics.find((one) => one.code === 'flow.name.private-member');
+      assert.ok(privateMember, JSON.stringify(diagnostics));
+      assert.match(privateMember.message, /exists.*private/);
+      assert.match(privateMember.message, /exported/);
+      assert.equal(privateMember.relatedInformation[0].location.uri, nestedUri);
+      assert.ok(!diagnostics.some((one) => one.code === 'flow.name.unknown'));
+    }
+  }
+});
+
 test('the tool accepts the exact argv the client spawns', {skip: missing}, async () => {
   const args = [...declaredArgs(), ...transportArgs()];
   const result = await handshake(executable, args, [
@@ -383,4 +426,39 @@ test('an unknown option is still refused', {skip: missing}, async () => {
   const result = await handshake(executable, ['serve', '--protocol', 'lsp', '--nonsense'], []);
   assert.equal(result.code, 2, 'an unknown option was accepted');
   assert.match(result.stderr, /--nonsense/);
+});
+
+test('direct imports complete and report flow-local contract conflicts', {skip: missing}, async () => {
+  const uri = 'file:///probe/direct/root.flow';
+  const dependencyUri = 'file:///probe/direct/library.flow';
+  const text = 'flow main {\n declare flow render { out value: string }\n' +
+    ' from "./library.flow" import render\n run render()\n}\n';
+  const selecting = 'flow main {\n from "./library.flow" import ';
+  const result = await handshake(executable, [...declaredArgs(), ...transportArgs()], [
+    {jsonrpc: '2.0', id: 0, method: 'initialize', params: {capabilities: {}}},
+    {jsonrpc: '2.0', method: 'initialized', params: {}},
+    {jsonrpc: '2.0', method: 'textDocument/didOpen', params: {
+      textDocument: {uri: dependencyUri, languageId: 'a11flow', version: 1,
+        text: 'flow render exported { out value: integer }\nflow hidden {}'},
+    }},
+    {jsonrpc: '2.0', method: 'textDocument/didOpen', params: {
+      textDocument: {uri, languageId: 'a11flow', version: 1, text},
+    }},
+    {jsonrpc: '2.0', method: 'textDocument/didChange', params: {
+      textDocument: {uri, version: 2}, contentChanges: [{text: selecting}],
+    }},
+    {jsonrpc: '2.0', id: 1, method: 'textDocument/completion', params: {
+      textDocument: {uri}, position: {line: 1, character: selecting.split('\n')[1].length},
+    }},
+  ]);
+  const diagnostics = result.frames.find((one) =>
+    one.method === 'textDocument/publishDiagnostics' && one.params.uri === uri,
+  )?.params.diagnostics ?? [];
+  const conflict = diagnostics.find((one) => one.code === 'flow.form.declaration-schema-mismatch');
+  assert.ok(conflict, JSON.stringify(diagnostics));
+  assert.equal(conflict.range.start.line, 1);
+  assert.ok(conflict.relatedInformation.some((one) => one.location.uri === dependencyUri));
+  const items = result.frames.find((one) => one.id === 1)?.result.items ?? [];
+  assert.ok(items.some((one) => one.label === 'render'), JSON.stringify(items));
+  assert.ok(!items.some((one) => one.label === 'hidden'));
 });

@@ -1,0 +1,125 @@
+# Copyright 2026 The A11 Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Top-level argument parsing and command dispatch for the ``a11`` CLI.
+
+The CLI is intentionally thin: `build_parser` assembles an
+`argparse` parser from a registry of `Command` objects, and
+`main` parses ``argv``, then runs the selected command's coroutine on a
+fresh event loop. Commands are async by default so they compose naturally with
+A11's asyncio-based runtime.
+
+Adding a command is a two-step affair: write a module under
+[a11.cli.commands][a11.cli.commands] that builds a `Command`, then register its
+metadata in `a11_cli.commands`. Only the selected implementation is imported.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import dataclasses
+import sys
+from typing import Awaitable, Callable, Sequence
+
+_PROG = "a11"
+_DESCRIPTION = "A11 — concurrent action and streaming runtime."
+
+
+@dataclasses.dataclass(frozen=True)
+class Command:
+    """A single ``a11 <name>`` subcommand.
+
+    Attributes:
+        name: The subcommand token, e.g. ``"chat"``.
+        help: One-line summary shown in ``a11 --help``.
+        run: Coroutine invoked with the parsed
+        [argparse.Namespace][argparse.Namespace].
+            Returns a process exit code (0 for success).
+        configure: Optional hook that receives the subcommand's
+            [argparse.ArgumentParser][argparse.ArgumentParser] to declare its
+            arguments.
+        description: Longer help shown in ``a11 <name> --help`` (defaults to
+            ``help``).
+        loader: Deferred command constructor used by the command registry.
+    """
+
+    name: str
+    help: str
+    run: Callable[[argparse.Namespace], Awaitable[int]]
+    configure: Callable[[argparse.ArgumentParser], None] | None = None
+    description: str | None = None
+    loader: Callable[[], Command] | None = None
+
+
+def build_parser(
+    commands: Sequence[Command], *, selected: str | None = None
+) -> argparse.ArgumentParser:
+    """Build the command parser, loading only ``selected`` when supplied.
+
+    Other commands retain their top-level help entries. With no selection,
+    all argument definitions are loaded for callers that reuse the parser.
+    """
+    parser = argparse.ArgumentParser(prog=_PROG, description=_DESCRIPTION)
+    parser.set_defaults(_command=None)
+
+    subparsers = parser.add_subparsers(
+        title="commands", metavar="<command>", dest="command"
+    )
+    for command in commands:
+        configure = selected is None or selected == command.name
+        if configure and command.loader is not None:
+            command = command.loader()
+        sub = subparsers.add_parser(
+            command.name,
+            help=command.help,
+            description=command.description or command.help,
+        )
+        if configure and command.configure is not None:
+            command.configure(sub)
+        sub.set_defaults(_command=command)
+
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Parse ``argv`` and dispatch to the selected command.
+
+    Returns the command's exit code. Intended as the ``a11`` console entry
+    point, so it also serves as ``python -m a11.cli``.
+    """
+    from a11_cli.commands import COMMANDS
+
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    parser = build_parser(COMMANDS, selected=arguments[0] if arguments else "")
+    args = parser.parse_args(arguments)
+
+    command: Command | None = getattr(args, "_command", None)
+    if command is None:
+        parser.print_help()
+        return 2
+
+    from a11 import observability
+
+    if not observability.configure_langfuse_from_env():
+        observability.configure_otel_from_env()
+
+    try:
+        return asyncio.run(command.run(args))
+    except KeyboardInterrupt:
+        return 130
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

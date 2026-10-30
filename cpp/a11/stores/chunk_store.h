@@ -254,6 +254,12 @@ class ChunkStore {
    */
   virtual a11::Future<std::optional<std::uint32_t>> GetFinalSeq() = 0;
 
+  /// Observe write closure without changing the shared read cursor.
+  virtual a11::Future<std::optional<absl::Status>> GetWriteStatus() {
+    return a11::FailedFuture<std::optional<absl::Status>>(
+        absl::UnimplementedError("This store does not expose write status"));
+  }
+
   /** @brief
    *    Seal the store against further writes with a terminal status.
    *

@@ -35,6 +35,7 @@
 #include "a11/actions/schema.h"
 #include "a11/concurrency/future.h"
 #include "a11/data/types.h"
+#include "a11/flow/file_modules.h"
 #include "a11/flow/plan.h"
 #include "a11/flow/runtime.h"
 #include "a11/flow/syntax.h"
@@ -144,8 +145,10 @@ std::vector<Diagnostic> WarningsOf(const CompiledProgram& program) {
 
 absl::StatusOr<std::shared_ptr<CompiledProgram>> CompileWithEntry(
     const Source& source) {
-  ABSL_ASSIGN_OR_RETURN(std::shared_ptr<CompiledProgram> program,
-                        CompiledProgram::Compile(source.text, source.name));
+  ABSL_ASSIGN_OR_RETURN(
+      std::shared_ptr<CompiledProgram> program,
+      CompiledProgram::Compile(source.text, FileModuleIdentity(source.name), {},
+                               FileModuleResolver()));
   if (program->Entry() == nullptr) {
     return absl::NotFoundError(absl::StrCat(
         source.name.empty() ? "this program" : source.name,

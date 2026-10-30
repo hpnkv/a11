@@ -46,15 +46,17 @@ ActionPortSchema Port(std::string name, std::string type, std::string desc,
 
 /// A type written as a call rather than as a literal, which is what leaves a
 /// port with no type: the scanner reads literals and does not run anything.
-std::string JsonType() { return "application/json"; }
+std::string JsonType() {
+  return "application/json";
+}
 
 /// A helper that fills in a schema it was handed. The ports it adds are *not*
 /// found, because following it would mean following a call across functions --
 /// the documented limit, and the reason this file has a port here at all.
 void AddSharedInputs(ActionSchema& schema) {
-  schema.inputs.emplace(
-      "settings", Port("settings", JsonType(), "Request settings, all optional.",
-                       /*required=*/false, /*unary=*/true));
+  schema.inputs.emplace("settings", Port("settings", JsonType(),
+                                         "Request settings, all optional.",
+                                         /*required=*/false, /*unary=*/true));
 }
 
 }  // namespace
@@ -69,23 +71,21 @@ ActionSchema AssembledSchema() {
   schema.inputs.emplace("url", Port("url", "text/plain", "What to fetch.",
                                     /*required=*/true, /*unary=*/true));
   schema.outputs.emplace(
-      "status_code", Port("status_code", "integer",
-                          "The response's status code.",
-                          /*required=*/false, /*unary=*/true));
-  schema.outputs.emplace("body",
-                         Port("body", std::string(kOctetStream),
-                              "Response body chunks, in order.",
-                              /*required=*/false, /*unary=*/false));
+      "status_code",
+      Port("status_code", "integer", "The response's status code.",
+           /*required=*/false, /*unary=*/true));
+  schema.outputs.emplace("body", Port("body", std::string(kOctetStream),
+                                      "Response body chunks, in order.",
+                                      /*required=*/false, /*unary=*/false));
   // A type that is a call rather than a literal: the port is found and its type
   // is not, which is the degradation this file exists to pin.
-  schema.outputs.emplace("headers",
-                         Port("headers", JsonType(),
-                              "Response header fields as an object.",
-                              /*required=*/false, /*unary=*/true));
-  schema.headers.emplace("x-a11-deadline",
-                         Port("x-a11-deadline", "text/plain",
-                              "Absolute execution deadline.",
-                              /*required=*/false, /*unary=*/true));
+  schema.outputs.emplace("headers", Port("headers", JsonType(),
+                                         "Response header fields as an object.",
+                                         /*required=*/false, /*unary=*/true));
+  schema.headers.emplace(
+      "x-a11-deadline",
+      Port("x-a11-deadline", "text/plain", "Absolute execution deadline.",
+           /*required=*/false, /*unary=*/true));
   return schema;
 }
 

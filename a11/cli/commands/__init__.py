@@ -12,42 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Registry of ``a11`` subcommands.
+"""Registry of lazily loaded A11 subcommands."""
 
-Every entry in `COMMANDS` becomes an ``a11 <name>`` subcommand. To add a
-command, define a [Command][a11.cli.app.Command] in a sibling module and append
-it here.
-"""
-
-from __future__ import annotations
-
-from a11.cli.app import Command
-from a11.cli.commands.account import (
-    IDENTITY_COMMAND,
-    LOGIN_COMMAND,
-    LOGOUT_COMMAND,
-    REGISTER_COMMAND,
-    WHOAMI_COMMAND,
-)
-from a11.cli.commands.chat import CHAT_COMMAND
-from a11.cli.commands.llm_context import LLM_CONTEXT_COMMAND
-from a11.cli.commands.discover import DISCOVER_COMMAND
-from a11.cli.commands.flow import FLOW_COMMAND
-from a11.cli.commands.gateway import GATEWAY_COMMAND
-from a11.cli.commands.serve import SERVE_COMMAND
-
-COMMANDS: list[Command] = [
-    CHAT_COMMAND,
-    LLM_CONTEXT_COMMAND,
-    DISCOVER_COMMAND,
-    FLOW_COMMAND,
-    GATEWAY_COMMAND,
-    IDENTITY_COMMAND,
-    LOGIN_COMMAND,
-    LOGOUT_COMMAND,
-    REGISTER_COMMAND,
-    SERVE_COMMAND,
-    WHOAMI_COMMAND,
-]
+from a11_cli.commands import COMMANDS, _command_help
 
 __all__ = ["COMMANDS"]

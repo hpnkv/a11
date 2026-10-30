@@ -1734,8 +1734,10 @@
           ]
         }
       ],
+      "declaration": false,
       "description": "Read a few pages and answer from them.",
       "entry": false,
+      "exported": false,
       "headers": [
         {
           "alias": "deadline",
@@ -1876,6 +1878,7 @@
     }
   ],
   "format": "flow.syntax/v1",
+  "imports": [],
   "source": "testdata/flow/example.flow",
   "structs": [
     {
@@ -1886,6 +1889,7 @@
         "start": 902
       },
       "description": "Where an answer came from.",
+      "exported": false,
       "fields": [
         {
           "at": {

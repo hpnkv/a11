@@ -54,7 +54,8 @@ class FlowEngine : Disposable {
     private var complained = false
 
     /** The last answer for each method, keyed by the text it was about. */
-    private val cache = HashMap<String, Pair<String, Map<String, Any?>>>()
+    private data class SourceKey(val text: String, val context: FlowSourceContext)
+    private val cache = HashMap<String, Pair<SourceKey, Map<String, Any?>>>()
 
     /** What the world contains, when something has said: see [setContext]. */
     private var context: Map<String, Any?>? = null
@@ -74,7 +75,8 @@ class FlowEngine : Disposable {
      * with the fixes the language itself worked out -- which is why the quick
      * fixes here are edits to apply rather than repairs to invent.
      */
-    fun check(text: String): Map<String, Any?>? = ask("check", text)
+    fun check(text: String, sourceContext: FlowSourceContext = FlowSourceContext()): Map<String, Any?>? =
+        ask("check", text, sourceContext)
 
     /** Every token and what it *means*: `flow.tokens/v1`, or `null`. */
     fun tokens(text: String): Map<String, Any?>? = ask("tokens", text)
@@ -88,10 +90,14 @@ class FlowEngine : Disposable {
      * Not cached: the answer depends on the offset as well as the text, and a
      * caret moves more often than a document changes.
      */
-    fun complete(text: String, offset: Int): Map<String, Any?>? =
+    fun complete(
+        text: String,
+        offset: Int,
+        sourceContext: FlowSourceContext = FlowSourceContext(),
+    ): Map<String, Any?>? =
         request(
             mapOf("method" to "complete", "source" to text, "offset" to offset) +
-                contextArgument(),
+                contextArgument() + sourceContext.arguments(),
         )
 
     /**
@@ -100,10 +106,14 @@ class FlowEngine : Disposable {
      * The language service resolves whether a word is a port or stage and
      * supplies action ports and shape fields.
      */
-    fun describe(text: String, offset: Int): Map<String, Any?>? =
+    fun describe(
+        text: String,
+        offset: Int,
+        sourceContext: FlowSourceContext = FlowSourceContext(),
+    ): Map<String, Any?>? =
         request(
             mapOf("method" to "describe", "source" to text, "offset" to offset) +
-                contextArgument(),
+                contextArgument() + sourceContext.arguments(),
         )
 
     /** What the document declares, nested: `flow.symbols/v1`, or `null`. */
@@ -112,10 +122,14 @@ class FlowEngine : Disposable {
     /**
      * Where the name at `offset` was bound: `flow.definition/v1`, or `null`.
      */
-    fun definition(text: String, offset: Int): Map<String, Any?>? =
+    fun definition(
+        text: String,
+        offset: Int,
+        sourceContext: FlowSourceContext = FlowSourceContext(),
+    ): Map<String, Any?>? =
         request(
             mapOf("method" to "definition", "source" to text, "offset" to offset) +
-                contextArgument(),
+                contextArgument() + sourceContext.arguments(),
         )
 
     /**
@@ -186,14 +200,26 @@ class FlowEngine : Disposable {
     /**
      * One request, with the last answer reused when the text has not changed.
      */
-    private fun ask(method: String, text: String): Map<String, Any?>? {
-        lock.withLock {
-            val held = cache[method]
-            if (held != null && held.first == text) return held.second
+    private fun ask(
+        method: String,
+        text: String,
+        sourceContext: FlowSourceContext = FlowSourceContext(),
+    ): Map<String, Any?>? {
+        val key = SourceKey(text, sourceContext)
+        // Imported files can change while the root text stays unchanged.
+        val cacheable = method != "check" || sourceContext.path == null
+        if (cacheable) {
+            lock.withLock {
+                val held = cache[method]
+                if (held != null && held.first == key) return held.second
+            }
         }
-        val answer = request(mapOf("method" to method, "source" to text))
-        if (answer != null) {
-            lock.withLock { cache[method] = text to answer }
+        val answer = request(
+            mapOf("method" to method, "source" to text) +
+                contextArgument() + sourceContext.arguments(),
+        )
+        if (answer != null && cacheable) {
+            lock.withLock { cache[method] = key to answer }
         }
         return answer
     }

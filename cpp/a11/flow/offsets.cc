@@ -113,6 +113,19 @@ std::pair<int, int> TextIndex::PositionOf(size_t byte_offset) const {
   return {static_cast<int>(line), static_cast<int>(units)};
 }
 
+size_t TextIndex::ByteOfSourcePosition(int line, int column) const {
+  const size_t row = static_cast<size_t>(line > 0 ? line - 1 : 0);
+  if (row >= line_starts_.size()) {
+    return text_.size();
+  }
+  size_t offset = line_starts_[row];
+  const size_t end = LineEnd(row);
+  for (int character = 1; character < column && offset < end; ++character) {
+    offset += Step(offset).first;
+  }
+  return std::min(offset, end);
+}
+
 size_t TextIndex::ByteOfPosition(int line, int character) const {
   if (line < 0) {
     return 0;
@@ -148,21 +161,56 @@ std::string_view OffsetBasisName(OffsetBasis basis) {
 }
 
 void RebaseToUtf16(nlohmann::json& answer, const TextIndex& index) {
+  RebaseToUtf16(answer, index, {});
+}
+
+void RebaseToUtf16(
+    nlohmann::json& answer, const TextIndex& inherited,
+    const absl::flat_hash_map<std::string, TextIndex>& documents) {
+  const TextIndex* index = &inherited;
+  if (answer.is_object()) {
+    if (const auto source = answer.find("source");
+        source != answer.end() && source->is_string()) {
+      if (const auto found = documents.find(source->get<std::string>());
+          found != documents.end()) {
+        index = &found->second;
+      }
+    }
+  }
+  if (answer.is_object() && answer.contains("file") &&
+      answer["file"].is_string()) {
+    if (const auto found = documents.find(answer["file"].get<std::string>());
+        found != documents.end()) {
+      index = &found->second;
+      if (answer.contains("line") && answer["line"].is_number_integer() &&
+          answer.contains("column") && answer["column"].is_number_integer()) {
+        const auto offset = index->ByteOfSourcePosition(
+            answer["line"].get<int>(), answer["column"].get<int>());
+        answer["utf16_column"] = index->PositionOf(offset).second + 1;
+      }
+    }
+  }
   if (answer.is_array()) {
-    for (nlohmann::json& item : answer) {
-      RebaseToUtf16(item, index);
+    for (auto& item : answer) {
+      RebaseToUtf16(item, *index, documents);
     }
     return;
   }
   if (!answer.is_object()) {
     return;
   }
+  if (auto offset = answer.find("offset");
+      offset != answer.end() && offset->is_number_unsigned() &&
+      answer.contains("line") && answer.contains("column")) {
+    const auto position = index->PositionOf(offset->get<size_t>());
+    answer["utf16_column"] = position.second + 1;
+  }
   for (auto& [key, value] : answer.items()) {
     if (value.is_number_unsigned() && IsOffsetField(key)) {
-      value = index.Utf16Of(value.get<size_t>());
-      continue;
+      value = index->Utf16Of(value.get<size_t>());
+    } else {
+      RebaseToUtf16(value, *index, documents);
     }
-    RebaseToUtf16(value, index);
   }
 }
 

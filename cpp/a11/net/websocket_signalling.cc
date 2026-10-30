@@ -707,9 +707,9 @@ a11::Task WebSocketSignallingServer::Register(
       return a11::FailedTask(absl::CancelledError("Signalling server stopped"));
     }
     held_state->connections.insert_or_assign(
-        identity, State::Connection{.channel = *channel,
-                                    .endpoint = *endpoint,
-                                    .serial = serial});
+        identity,
+        State::Connection{
+            .channel = *channel, .endpoint = *endpoint, .serial = serial});
   }
   validation = (*channel)->Open();
   if (!validation.ok()) {

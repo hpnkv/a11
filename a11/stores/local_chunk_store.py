@@ -113,6 +113,10 @@ class LocalChunkStore(_native.ChunkStore):
         """
         return await self._impl.get_final_seq()
 
+    async def get_write_status(self) -> Status | None:
+        """Observe write closure without consuming fragments."""
+        return await self._impl.get_write_status()
+
     async def close_writes_with_status(
         self,
         status: Status,

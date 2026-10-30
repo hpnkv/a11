@@ -18,6 +18,7 @@ package dev.curiositystack.a11.clion.flow
 
 import com.intellij.codeInsight.CodeInsightSettings
 import com.intellij.codeInsight.documentation.DocumentationManager
+import com.intellij.lang.documentation.psi.psiDocumentationTargets
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assume.assumeTrue
 
@@ -128,7 +129,12 @@ class FlowCodeInsightTest : BasePlatformTestCase() {
             myFixture.file.findElementAt(myFixture.caretOffset - 1),
         )
         assertNotNull("no documentation element for a completed stage", element)
-        val html = provider.generateDoc(element!!, null)
+        val target = psiDocumentationTargets(element!!, null).single()
+        assertEquals("collect", target.computePresentation().presentableText)
+        val restored = target.createPointer().dereference()
+        assertNotNull("completion documentation target was lost", restored)
+        assertEquals("collect", restored!!.computePresentation().presentableText)
+        val html = provider.generateDoc(element, null)
         assertTrue(html.orEmpty(), html.orEmpty().contains("a pipeline stage"))
     }
 
@@ -153,7 +159,9 @@ class FlowCodeInsightTest : BasePlatformTestCase() {
             myFixture.file.findElementAt(myFixture.caretOffset - 1),
         )
         assertNotNull("no documentation element for a completed action", element)
-        val html = provider.generateDoc(element!!, null)
+        val target = psiDocumentationTargets(element!!, null).single()
+        assertEquals("interact_with_llm", target.computePresentation().presentableText)
+        val html = provider.generateDoc(element, null)
         assertTrue(html.orEmpty(), html.orEmpty().contains("Route an LLM interaction"))
     }
 }

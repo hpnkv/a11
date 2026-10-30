@@ -17,9 +17,12 @@
 #ifndef A11_FLOW_RESOLVE_H_
 #define A11_FLOW_RESOLVE_H_
 
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
+
+#include <absl/container/flat_hash_map.h>
 
 #include "a11/flow/diagnostic.h"
 #include "a11/flow/graph.h"
@@ -102,6 +105,8 @@ struct Symbol {
   /// what makes "the first use sees the first value" a fact rather than a hope.
   graph::RefId value_source = graph::kNone;
   int value_offset = 0;
+  /// Whether reading this lazy value can read a data or completion stream.
+  bool data_dependency = false;
   // The `match` pattern this value came out of, where it came out of a literal
   // one.
   /// The `match` pattern this value came out of, where it came out of a literal
@@ -114,6 +119,7 @@ struct Symbol {
   /// time -- nothing is known about those and offering a guess would be worse
   /// than offering nothing.
   std::string pattern;
+  std::string shape;
   /// Whether this name is one *part* of a value a `let` took apart.
   ///
   /// A fact rather than something inferred from `value_source` being absent:
@@ -122,9 +128,37 @@ struct Symbol {
   bool value_part = false;
 };
 
+/// Native result categories used by resolution and editor queries.
+enum class ExpressionCategory {
+  kUnknown,
+  kValue,
+  kStream,
+  kCall,
+  kNode,
+  kCompletion
+};
+
+/// The statically known interface of one expression, borrowing its program.
+struct ExpressionInfo {
+  ExpressionCategory category = ExpressionCategory::kUnknown;
+  std::string type;
+  std::string action;
+  std::string port;
+  std::string description;
+  const FlowPlan* absl_nullable callable = nullptr;
+  const DtoPlan* absl_nullable shape = nullptr;
+  std::vector<std::string> fields;
+  bool unary = false;
+  bool cardinality_known = false;
+  bool writable = false;
+};
+
 /// One flow, resolved: its plan, its names, and what is wrong with it.
 struct ResolvedFlow {
   FlowPlan plan;
+  std::optional<FlowPlan> implementation;
+  std::vector<FlowPlan> contracts;
+  bool ambiguous = false;
   // The executable graph, when [Resolve] was asked for one.
   /// The executable graph, when [Resolve] was asked for one. Empty otherwise --
   /// `root` is [graph::kNone] and nothing else is filled in.
@@ -136,6 +170,7 @@ struct ResolvedFlow {
   /// tree: scopes matter while resolving and what an inspector wants
   /// afterwards is the list, with the counts on it.
   std::vector<Symbol> symbols;
+  absl::flat_hash_map<const syntax::Node*, ExpressionInfo> expressions;
   /// The declaration this came from, borrowed. Valid as long as the parse
   /// result
   /// it belongs to is.
@@ -173,7 +208,8 @@ struct ResolveResult {
 /// editor
 /// wants every problem in the file rather than the first.
 ResolveResult Resolve(std::string_view source, const ParseResult& parsed,
-                      bool build_graph = false);
+                      bool build_graph = false,
+                      const Program* absl_nullable context = nullptr);
 
 /// The name of a symbol kind, for a message and for the JSON.
 std::string_view SymbolKindName(SymbolKind kind);

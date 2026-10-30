@@ -67,7 +67,7 @@
     },
     "stage": {
       "//": "A word is a stage after a `|`, and the same word may be a function elsewhere.",
-      "match": "(\\|)\\s*(first|last|drop|truncate|batch|window|flatten|group|sort|where|map|scan|match|distinct|then|log|logf|mime|strformat|chunk|collect|count|sum|min|max|avg|fold|join|text|json|packb|timeout|pace|FIRST|LAST|DROP|TRUNCATE|BATCH|WINDOW|FLATTEN|GROUP|SORT|WHERE|MAP|SCAN|MATCH|DISTINCT|THEN|LOG|LOGF|MIME|STRFORMAT|CHUNK|COLLECT|COUNT|SUM|MIN|MAX|AVG|FOLD|JOIN|TEXT|JSON|PACKB|TIMEOUT|PACE)\\b",
+      "match": "(\\|)\\s*((?:take|TAKE)\s+(?:while|WHILE)|(?:take|TAKE)\s+(?:until|UNTIL)|first|last|drop|truncate|batch|window|flatten|group|sort|where|map|scan|match|distinct|then|log|logf|mime|strformat|chunk|collect|consume|count|sum|min|max|avg|fold|join|text|json|packb|timeout|pace|FIRST|LAST|DROP|TRUNCATE|BATCH|WINDOW|FLATTEN|GROUP|SORT|WHERE|MAP|SCAN|MATCH|DISTINCT|THEN|LOG|LOGF|MIME|STRFORMAT|CHUNK|COLLECT|CONSUME|COUNT|SUM|MIN|MAX|AVG|FOLD|JOIN|TEXT|JSON|PACKB|TIMEOUT|PACE)\\b",
       "captures": {
         "1": {"name": "keyword.operator.pipe.a11flow"},
         "2": {"name": "support.function.stage.a11flow"}
@@ -101,11 +101,11 @@
       ]
     },
     "declaration": {
-      "match": "\\b(flow|struct|describe|in|out|header|as|default|stream|required|node|nodes|FLOW|STRUCT|DESCRIBE|IN|OUT|HEADER|AS|DEFAULT|STREAM|REQUIRED|NODE|NODES)\\b",
+      "match": "\\b(declare|exported|import|from|flow|struct|describe|in|out|header|as|default|stream|required|node|nodes|DECLARE|EXPORTED|IMPORT|FROM|FLOW|STRUCT|DESCRIBE|IN|OUT|HEADER|AS|DEFAULT|STREAM|REQUIRED|NODE|NODES)\\b",
       "name": "keyword.declaration.a11flow"
     },
     "statement": {
-      "match": "\\b(abort|advance|by|call|cancel|desc|drain|else|fail|for|if|interleave|into|let|log|logf|max|nodes|of|parallel|repeat|run|skip|status|try|unordered|until|wait|while|zip|ABORT|ADVANCE|BY|CALL|CANCEL|DESC|DRAIN|ELSE|FAIL|FOR|IF|INTERLEAVE|INTO|LET|LOG|LOGF|MAX|NODES|OF|PARALLEL|REPEAT|RUN|SKIP|STATUS|TRY|UNORDERED|UNTIL|WAIT|WHILE|ZIP)\\b",
+      "match": "\\b(abort|advance|after|by|call|cancel|desc|drain|else|fail|for|if|interleave|into|let|log|logf|max|nodes|of|parallel|repeat|run|skip|status|try|unordered|until|wait|while|zip|ABORT|ADVANCE|AFTER|BY|CALL|CANCEL|DESC|DRAIN|ELSE|FAIL|FOR|IF|INTERLEAVE|INTO|LET|LOG|LOGF|MAX|NODES|OF|PARALLEL|REPEAT|RUN|SKIP|STATUS|TRY|UNORDERED|UNTIL|WAIT|WHILE|ZIP)\\b",
       "name": "keyword.control.a11flow"
     },
     "modifier": {

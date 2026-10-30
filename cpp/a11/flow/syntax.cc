@@ -23,6 +23,9 @@
 
 #include <absl/strings/str_cat.h>
 #include <absl/strings/str_join.h>
+#include <nlohmann/json.hpp>
+
+#include "a11/utf8.h"
 
 namespace a11::flow::syntax {
 
@@ -119,6 +122,38 @@ std::string TypeExpression::ToString() const {
     inside.push_back(parameter.ToString());
   }
   return absl::StrCat(name, "[", absl::StrJoin(inside, ", "), "]");
+}
+
+absl::StatusOr<std::string> TypeExpression::ToSource() const {
+  std::vector<std::pair<const TypeExpression*, size_t>> pending{{this, 0}};
+  while (!pending.empty()) {
+    const auto [type, depth] = pending.back();
+    pending.pop_back();
+    if (depth > 128 || !utf8::IsValid(type->name)) {
+      return absl::InvalidArgumentError("Type nesting or UTF-8 is invalid.");
+    }
+    for (const auto& parameter : type->parameters) {
+      pending.push_back({&parameter, depth + 1});
+    }
+  }
+  const auto emit = [&](const auto& self,
+                        const TypeExpression& type) -> std::string {
+    if (type.quoted) {
+      return nlohmann::json(type.name).dump();
+    }
+    if (type.sugared && type.parameters.size() == 1) {
+      return absl::StrCat(self(self, type.parameters.front()), "[]");
+    }
+    if (type.parameters.empty()) {
+      return type.name;
+    }
+    std::vector<std::string> parameters;
+    for (const auto& parameter : type.parameters) {
+      parameters.push_back(self(self, parameter));
+    }
+    return absl::StrCat(type.name, "[", absl::StrJoin(parameters, ", "), "]");
+  };
+  return emit(emit, *this);
 }
 
 std::string_view NodeKindName(NodeKind kind) {
@@ -307,17 +342,65 @@ void VisitChildren(const Node& node,
                    const std::function<void(const Node&)>& visit) {
   // One child, when there is one. Every field below is optional in practice --
   // the parser leaves a hole where it could not read a value.
-  const auto one = [&](const NodePtr& child) {
+  const auto one = [&](const auto& child) {
     if (child != nullptr) {
       visit(*child);
     }
   };
-  const auto all = [&](const std::vector<NodePtr>& children) {
-    for (const NodePtr& child : children) {
+  const auto all = [&](const auto& children) {
+    for (const auto& child : children) {
       one(child);
     }
   };
 
+  const std::vector<Word>* dependencies = nullptr;
+  if (const auto* value = As<Block>(&node); value != nullptr) {
+    dependencies = &value->after;
+  }
+  if (const auto* value = As<CallModifiers>(&node); value != nullptr) {
+    dependencies = &value->after;
+  }
+  if (const auto* value = As<Pipe>(&node); value != nullptr) {
+    dependencies = &value->after;
+  }
+  if (const auto* value = As<Skip>(&node); value != nullptr) {
+    dependencies = &value->after;
+  }
+  if (const auto* value = As<Wait>(&node); value != nullptr) {
+    dependencies = &value->after;
+  }
+  if (const auto* value = As<Drain>(&node); value != nullptr) {
+    dependencies = &value->after;
+  }
+  if (const auto* value = As<Cancel>(&node); value != nullptr) {
+    dependencies = &value->after;
+  }
+  if (const auto* value = As<Abort>(&node); value != nullptr) {
+    dependencies = &value->after;
+  }
+  if (const auto* value = As<Fail>(&node); value != nullptr) {
+    dependencies = &value->after;
+  }
+  if (const auto* value = As<Log>(&node); value != nullptr) {
+    dependencies = &value->after;
+  }
+  if (const auto* value = As<ForEach>(&node); value != nullptr) {
+    dependencies = &value->after;
+  }
+  if (const auto* value = As<Repeat>(&node); value != nullptr) {
+    dependencies = &value->after;
+  }
+  if (dependencies != nullptr) {
+    for (const auto& word : *dependencies) {
+      if (word.expression != nullptr) {
+        visit(*word.expression);
+      }
+    }
+  }
+  if (const auto* cancel = As<Cancel>(&node);
+      cancel != nullptr && cancel->name.expression != nullptr) {
+    visit(*cancel->name.expression);
+  }
   switch (node.kind) {
     case NodeKind::kError:
     case NodeKind::kLiteral:
@@ -404,6 +487,9 @@ void VisitChildren(const Node& node,
     }
     case NodeKind::kCallExpression: {
       const auto& call = static_cast<const CallExpression&>(node);
+      for (const auto& suffix : call.target_suffixes) {
+        one(suffix.index);
+      }
       for (const CallExpression::Argument& argument : call.args) {
         if (argument.pipeline != nullptr) {
           visit(*argument.pipeline);
@@ -453,6 +539,8 @@ void VisitChildren(const Node& node,
     }
     case NodeKind::kWait:
       one(static_cast<const Wait&>(node).subject);
+      all(static_cast<const Wait&>(node).subjects);
+      all(static_cast<const Wait&>(node).targets);
       return;
     case NodeKind::kDrain:
       one(static_cast<const Drain&>(node).target);
@@ -527,6 +615,8 @@ void VisitChildren(const Node& node,
           visit(*header);
         }
       }
+      all(flow.declarations);
+      all(flow.structs);
       all(flow.body);
       return;
     }
@@ -568,6 +658,11 @@ std::optional<std::string> DottedName(const Node* node) {
   parts.push_back(name->name);
   std::reverse(parts.begin(), parts.end());
   return absl::StrJoin(parts, ".");
+}
+
+void VisitMutableSubtree(Node& node, const std::function<void(Node&)>& visit) {
+  VisitSubtree(node,
+               [&](const Node& child) { visit(const_cast<Node&>(child)); });
 }
 
 }  // namespace a11::flow::syntax

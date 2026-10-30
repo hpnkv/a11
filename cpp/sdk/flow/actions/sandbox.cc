@@ -399,8 +399,9 @@ absl::StatusOr<std::shared_ptr<Sandbox>> Sandbox::Prepare(
     subpaths.push_back(absl::StrCat("(subpath ", QuoteForProfile(root), ")"));
   }
   std::vector<std::string> writable_subpaths;
-  if (filesystem.writable)
+  if (filesystem.writable) {
     writable_subpaths = subpaths;
+  }
   for (const std::string& root : process.write_roots) {
     const std::string clause =
         absl::StrCat("(subpath ", QuoteForProfile(root), ")");

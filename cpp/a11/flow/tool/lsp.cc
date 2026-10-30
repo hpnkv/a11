@@ -37,6 +37,7 @@
 #include "a11/flow/diagnostic.h"
 #include "a11/flow/discover.h"
 #include "a11/flow/emit_json.h"
+#include "a11/flow/file_modules.h"
 #include "a11/flow/highlight.h"
 #include "a11/flow/lexer.h"
 #include "a11/flow/navigate.h"
@@ -267,6 +268,33 @@ class Server {
   }
 
  private:
+  ModuleSources Sources() const {
+    ModuleSources sources;
+    for (const auto& [uri, document] : documents_) {
+      sources.emplace(FileModuleIdentity(uri), document.Text());
+    }
+    return sources;
+  }
+
+  nlohmann::json HostHandle(nlohmann::json request) const {
+    auto sources = Sources();
+    const auto path = request.find("path");
+    if (path != request.end() && path->is_string()) {
+      request["path"] = FileModuleIdentity(path->get<std::string>());
+    }
+    return flow::Handle(
+        request, FileModuleResolver(8 * 1024 * 1024, std::move(sources)));
+  }
+
+  catalogue::Catalogue World(const Document& document, const std::string& uri,
+                             size_t offset) const {
+    auto sources = Sources();
+    const auto linked =
+        LinkModules(document.Text(), FileModuleIdentity(uri), sources,
+                    FileModuleResolver(8 * 1024 * 1024, sources));
+    return known_.MergedWith(linked.CatalogueAt(offset));
+  }
+
   /// One message, headers and all. False at end of stream.
   bool Read(std::string& body) {
     size_t length = 0;
@@ -420,40 +448,99 @@ class Server {
   /// second analysis of the document to know what Alt+Enter offers: the fix was
   /// worked out where the problem was found.
   void Publish(const std::string& uri, const Document& document) {
-    const nlohmann::json answer = Handle(nlohmann::json{
-        {"method", "check"}, {"source", document.Text()}, {"path", uri}});
-    nlohmann::json list = nlohmann::json::array();
+    const nlohmann::json answer =
+        HostHandle(nlohmann::json{{"method", "check"},
+                                  {"source", document.Text()},
+                                  {"path", uri},
+                                  {"offsets", "utf16"}});
+    nlohmann::json groups = nlohmann::json::object();
+    groups[uri] = nlohmann::json::array();
+    const auto range = [](const nlohmann::json& positions) {
+      const auto position = [](const nlohmann::json& one) {
+        return nlohmann::json{
+            {"line", one.value("line", 1) - 1},
+            {"character",
+             one.value("utf16_column", one.value("column", 1)) - 1}};
+      };
+      return nlohmann::json{{"start", position(positions.at("start"))},
+                            {"end", position(positions.at("end"))}};
+    };
     if (answer.value("ok", false)) {
       for (const nlohmann::json& entry :
            answer.at("result").at("diagnostics")) {
         const Diagnostic diagnostic = DiagnosticFromJsonValue(entry);
+        const std::string target =
+            diagnostic.source.empty() ||
+                    diagnostic.source == FileModuleIdentity(uri)
+                ? uri
+                : FileUri(diagnostic.source);
+        if (!groups.contains(target)) {
+          groups[target] = nlohmann::json::array();
+        }
         nlohmann::json written{
-            {"range", RangeOf(document, diagnostic.range)},
+            {"range", range(entry.at("range"))},
             {"severity", Severity(diagnostic.severity)},
             {"code", diagnostic.code},
             {"source", "a11-flow"},
             {"message", diagnostic.message},
         };
-        if (!diagnostic.fixes.empty()) {
+        if (!diagnostic.related.empty()) {
+          written["relatedInformation"] = nlohmann::json::array();
+          for (const auto& related : entry.at("related")) {
+            written["relatedInformation"].push_back(
+                {{"location",
+                  {{"uri", FileUri(related.value("source", diagnostic.source))},
+                   {"range", range(related.at("range"))}}},
+                 {"message", related.at("message")}});
+          }
+        }
+        if (!diagnostic.fixes.empty() && target == uri) {
           nlohmann::json fixes = nlohmann::json::array();
           for (const Fix& fix : diagnostic.fixes) {
             nlohmann::json edits = nlohmann::json::array();
             for (const Edit& edit : fix.edits) {
-              edits.push_back(EditOf(document, edit));
+              Edit bytes = edit;
+              bytes.start = document.ByteOf(edit.start);
+              bytes.end = document.ByteOf(edit.end);
+              edits.push_back(EditOf(document, bytes));
             }
-            fixes.push_back(
-                nlohmann::json{{"label", fix.label}, {"edits", edits}});
+            fixes.push_back(nlohmann::json{{"label", fix.label},
+                                           {"edits", edits},
+                                           {"automatic", fix.automatic}});
           }
           written["data"] = nlohmann::json{{"fixes", fixes}};
         }
-        list.push_back(std::move(written));
+        groups[target].push_back(std::move(written));
       }
     }
-    nlohmann::json params{{"uri", uri}, {"diagnostics", list}};
-    if (document.Version() != 0) {
-      params["version"] = document.Version();
+    auto old = publications_.find(uri);
+    std::vector<std::string> targets;
+    if (old != publications_.end()) {
+      for (const auto& item : old->second.items()) {
+        targets.push_back(item.key());
+      }
     }
-    Notify("textDocument/publishDiagnostics", std::move(params));
+    for (const auto& item : groups.items()) {
+      targets.push_back(item.key());
+    }
+    publications_.insert_or_assign(uri, std::move(groups));
+    std::sort(targets.begin(), targets.end());
+    targets.erase(std::unique(targets.begin(), targets.end()), targets.end());
+    for (const auto& target : targets) {
+      auto list = nlohmann::json::array();
+      for (const auto& [owner, contribution] : publications_) {
+        if (contribution.contains(target)) {
+          for (const auto& diagnostic : contribution.at(target)) {
+            list.push_back(diagnostic);
+          }
+        }
+      }
+      nlohmann::json params{{"uri", target}, {"diagnostics", std::move(list)}};
+      if (target == uri && document.Version() != 0) {
+        params["version"] = document.Version();
+      }
+      Notify("textDocument/publishDiagnostics", std::move(params));
+    }
   }
 
   /// The protocol's severities, which are the language's four in its three.
@@ -502,7 +589,9 @@ class Server {
       }
       Document& held = documents_[uri] = Document(std::move(text));
       held.SetVersion(version);
-      Publish(uri, held);
+      for (const auto& [open_uri, open_document] : documents_) {
+        Publish(open_uri, open_document);
+      }
       return;
     }
     if (method == "textDocument/didChange") {
@@ -518,9 +607,8 @@ class Server {
         }
         documents_[uri] = std::move(held);
       }
-      const auto found = documents_.find(uri);
-      if (found != documents_.end()) {
-        Publish(uri, found->second);
+      for (const auto& [open_uri, open_document] : documents_) {
+        Publish(open_uri, open_document);
       }
       return;
     }
@@ -534,11 +622,28 @@ class Server {
     if (method == "textDocument/didClose") {
       const std::string uri = Uri(params);
       documents_.erase(uri);
-      // An empty list is how a server says "nothing is wrong here any more",
-      // which is what closing a file means.
-      Notify("textDocument/publishDiagnostics",
-             nlohmann::json{{"uri", uri},
-                            {"diagnostics", nlohmann::json::array()}});
+      const auto previous = publications_.find(uri);
+      if (previous != publications_.end()) {
+        const auto targets = previous->second;
+        publications_.erase(previous);
+        for (const auto& target : targets.items()) {
+          Notify("textDocument/publishDiagnostics",
+                 nlohmann::json{{"uri", target.key()},
+                                {"diagnostics", nlohmann::json::array()}});
+        }
+      }
+      for (const auto& [open_uri, open_document] : documents_) {
+        Publish(open_uri, open_document);
+      }
+      bool retained = false;
+      for (const auto& [owner, contribution] : publications_) {
+        retained |= contribution.contains(uri);
+      }
+      if (!retained) {
+        Notify("textDocument/publishDiagnostics",
+               nlohmann::json{{"uri", uri},
+                              {"diagnostics", nlohmann::json::array()}});
+      }
       return;
     }
     if (method == "textDocument/semanticTokens/full") {
@@ -556,7 +661,7 @@ class Server {
         Answer(message, nlohmann::json::array());
         return;
       }
-      const nlohmann::json answer = Handle(
+      const nlohmann::json answer = HostHandle(
           nlohmann::json{{"method", "format"}, {"source", document->Text()}});
       nlohmann::json edits = nlohmann::json::array();
       if (answer.value("ok", false)) {
@@ -623,7 +728,7 @@ class Server {
         context["replace"] = true;
         relayed["context"] = std::move(context);
       }
-      Answer(message, Handle(relayed));
+      Answer(message, HostHandle(relayed));
       return;
     }
     // Anything else: an unknown request still needs an answer, or a client
@@ -653,8 +758,8 @@ class Server {
     }
     const size_t offset = OffsetIn(*document, params);
     // Complete against the catalogue associated with this session.
-    const CompleteResult completed =
-        CompleteAt(document->Text(), offset, known_);
+    const CompleteResult completed = CompleteAt(
+        document->Text(), offset, World(*document, Uri(params), offset));
     // What taking a proposal replaces: the partial word, and nothing else.
     Range replaced;
     replaced.start.offset = std::min(completed.prefix_start, offset);
@@ -740,6 +845,7 @@ class Server {
             actions.push_back(nlohmann::json{
                 {"title", fix.value("label", std::string("Fix"))},
                 {"kind", "quickfix"},
+                {"isPreferred", fix.value("automatic", true)},
                 {"diagnostics", nlohmann::json::array({diagnostic})},
                 {"edit",
                  nlohmann::json{
@@ -762,7 +868,8 @@ class Server {
     // and this adapter has no business doing it a second time. All that happens
     // here is the translation into what the protocol calls a hover.
     const Description about =
-        Describe(document->Text(), OffsetIn(*document, params), known_);
+        Describe(document->Text(), OffsetIn(*document, params),
+                 World(*document, Uri(params), OffsetIn(*document, params)));
     if (!about.found || about.markdown.empty()) {
       Answer(message, nlohmann::json());
       return;
@@ -794,7 +901,8 @@ class Server {
       return;
     }
     const Description about =
-        Describe(document->Text(), OffsetIn(*document, params), known_);
+        Describe(document->Text(), OffsetIn(*document, params),
+                 World(*document, Uri(params), OffsetIn(*document, params)));
     if (about.has_definition) {
       Answer(message,
              nlohmann::json{{"uri", Uri(params)},
@@ -804,10 +912,22 @@ class Server {
     // A name this document did not declare may still have somewhere to go: an
     // action declared in a project file that something scanned.
     if (about.origin.has_value()) {
-      Answer(message,
-             nlohmann::json{{"uri", FileUri(about.origin->file)},
-                            {"range", PositionAt(about.origin->line,
-                                                 about.origin->column)}});
+      auto range = PositionAt(about.origin->line, about.origin->column);
+      const auto identity = FileModuleIdentity(about.origin->file);
+      auto source =
+          FileModuleResolver(8 * 1024 * 1024, Sources())(identity, "<flow>");
+      if (source.ok()) {
+        const TextIndex index(source->source);
+        const auto position = index.PositionOf(index.ByteOfSourcePosition(
+            about.origin->line, about.origin->column));
+        range = nlohmann::json{
+            {"start",
+             {{"line", position.first}, {"character", position.second}}},
+            {"end",
+             {{"line", position.first}, {"character", position.second}}}};
+      }
+      Answer(message, nlohmann::json{{"uri", FileUri(about.origin->file)},
+                                     {"range", range}});
       return;
     }
     // A word that is not a name at all -- a stage, a keyword -- has no
@@ -997,6 +1117,7 @@ class Server {
   std::istream& in_;
   std::ostream& out_;
   absl::flat_hash_map<std::string, Document> documents_;
+  absl::flat_hash_map<std::string, nlohmann::json> publications_;
   /// What the world outside these documents contains, for as long as this
   /// session lasts: see [SetContext].
   catalogue::Catalogue known_ = catalogue::Catalogue::Builtin();

@@ -26,6 +26,7 @@
 #include <absl/strings/str_cat.h>
 #include <absl/strings/str_join.h>
 #include <absl/time/time.h>
+#include <cmath>
 
 #include "a11/flow/diagnostic.h"
 #include "a11/flow/token.h"
@@ -403,7 +404,8 @@ class Lexer {
         source_.substr(unit_start, index_ - unit_start);
 
     double value = 0.0;
-    if (!absl::SimpleAtod(number_text, &value)) {
+    if (!absl::SimpleAtod(number_text, &value) || !std::isfinite(value)) {
+      value = 0.0;
       Report("flow.form.bad-number",
              absl::StrCat("Bad number '", number_text, "'."), start, number_end,
              Family::kForm);
@@ -413,6 +415,13 @@ class Lexer {
       Token& token = Push(TokenKind::kNumber, start, number_end);
       token.number = value;
       token.is_integer = !fractional;
+      if (token.is_integer && !absl::SimpleAtoi(number_text, &token.integer)) {
+        Report("flow.form.bad-number",
+               "An integer must fit in a signed 64-bit value.", start,
+               number_end, Family::kForm);
+        token.is_integer = false;
+        token.integer = 0;
+      }
       return;
     }
 

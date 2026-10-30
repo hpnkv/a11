@@ -112,6 +112,10 @@ class PyChunkStore : public ChunkStore,
     return Call<std::optional<std::uint32_t>>("get_final_seq");
   }
 
+  a11::Future<std::optional<absl::Status>> GetWriteStatus() override {
+    return Call<std::optional<absl::Status>>("get_write_status");
+  }
+
   a11::Future<absl::Status> CloseWritesWithStatus(
       absl::Status status, bool return_status_if_already_closed) override {
     py::gil_scoped_acquire acquire;
@@ -429,6 +433,13 @@ Examples:
           "Await the explicitly marked final sequence, or None if no "
           "fragment has declared finality. Finality is independent of write "
           "closure: closing the store does not create a final sequence.")
+      .def(
+          "get_write_status",
+          [](const std::shared_ptr<ChunkStore>& self) {
+            return StoreFuture(self->GetWriteStatus());
+          },
+          "Read write-closure status without consuming fragments; None while "
+          "open.")
       .def(
           "close_writes_with_status",
           [](const std::shared_ptr<ChunkStore>& self,

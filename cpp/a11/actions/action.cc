@@ -13,7 +13,6 @@
 // limitations under the License.
 
 #include "a11/actions/action.h"
-#include "a11/actions/authorization.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -38,6 +37,7 @@
 #include <absl/time/clock.h>
 #include <absl/time/time.h>
 
+#include "a11/actions/authorization.h"
 #include "a11/actions/internal/exception_guarded_handlers.h"
 #include "a11/actions/log.h"
 #include "a11/actions/registry.h"
@@ -476,8 +476,8 @@ absl::Status Action::BindVerifiedAuthorization(
   return absl::OkStatus();
 }
 
-std::shared_ptr<const VerifiedAuthorization>
-Action::GetVerifiedAuthorization() const {
+std::shared_ptr<const VerifiedAuthorization> Action::GetVerifiedAuthorization()
+    const {
   thread::MutexLock lock(&mu_);
   return verified_authorization_;
 }
@@ -1191,13 +1191,19 @@ absl::Status Action::Cancel() {
     StartFinish(CancelledStatus());
   } else if (mode == Mode::kNone) {
     std::shared_ptr<a11::Promise<a11::Unit>> promise;
+    std::shared_ptr<Action> parent;
     {
       thread::MutexLock lock(&mu_);
       mode_ = Mode::kCancelled;
       completion_status_ = CancelledStatus();
       promise = done_promise_;
+      parent = parent_.lock();
     }
     promise->SetValue(a11::Unit{}).IgnoreError();
+    if (parent != nullptr) {
+      thread::MutexLock lock(&parent->mu_);
+      parent->children_.erase(shared_from_this());
+    }
   }
   return first;
 }
@@ -2009,6 +2015,15 @@ void Action::CompleteCall(const absl::Status& status,
     }
     DetachBoundStreamNodes().IgnoreError();
     promise->SetValue(a11::Unit{}).IgnoreError();
+    std::shared_ptr<Action> parent;
+    {
+      thread::MutexLock lock(&mu_);
+      parent = parent_.lock();
+    }
+    if (parent != nullptr) {
+      thread::MutexLock lock(&parent->mu_);
+      parent->children_.erase(shared_from_this());
+    }
   }
   if (remove_from_session) {
     UntrackFromSession();
@@ -2021,6 +2036,10 @@ void Action::AbortLocalCallOutputs(const absl::Status& status) {
   {
     thread::MutexLock lock(&mu_);
     node_map = node_map_;
+    if (!outputs_finished_) {
+      outputs_finished_ = true;
+      outputs_final_status_ = status;
+    }
     for (const auto& [name, id] : output_ids_) {
       if (name != kActionStatusOutput && name != kActionDispatchStatusOutput) {
         ids.insert(id);
@@ -2036,7 +2055,7 @@ void Action::AbortLocalCallOutputs(const absl::Status& status) {
   checks.reserve(ids.size());
   for (const std::string& id : ids) {
     absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> node = node_map->Get(id);
-    if (!node.ok()) {
+    if (!node.ok() || *node == nullptr) {
       continue;
     }
     ordered.push_back(*node);

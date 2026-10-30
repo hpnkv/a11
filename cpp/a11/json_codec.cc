@@ -362,8 +362,9 @@ absl::StatusOr<JsonValue> ParseJsonImpl(std::string_view encoded,
   StatusJsonParser<JsonValue> parser(value);
   // The local SAX type keeps error handling independent of other translation
   // units' JSON_NOEXCEPTION instantiations and retains nlohmann's diagnostics.
-  if (JsonValue::sax_parse(encoded.begin(), encoded.end(), &parser))
+  if (JsonValue::sax_parse(encoded.begin(), encoded.end(), &parser)) {
     return value;
+  }
   return absl::InvalidArgumentError(
       absl::StrCat("Failed to parse ", what, ": ", parser.diagnostic));
 }

@@ -1333,6 +1333,17 @@ a11::Future<SQLiteChunkStoreMetadata> SQLiteChunkStore::GetMetadata() {
       });
 }
 
+a11::Future<std::optional<absl::Status>> SQLiteChunkStore::GetWriteStatus() {
+  return a11::Then(GetMetadata(),
+                   [](const absl::StatusOr<SQLiteChunkStoreMetadata>& metadata)
+                       -> absl::StatusOr<std::optional<absl::Status>> {
+                     if (!metadata.ok()) {
+                       return metadata.status();
+                     }
+                     return metadata->status;
+                   });
+}
+
 a11::Future<std::vector<data::NodeFragment>> SQLiteChunkStore::FindReferrers(
     size_t limit) {
   const std::string node_id = node_id_;

@@ -43,6 +43,12 @@
       "summary": "A loop is given a second stop condition."
     },
     {
+      "code": "flow.barrier.expression-cycle",
+      "family": "barrier",
+      "severity": "error",
+      "summary": "Expression cycle."
+    },
+    {
       "code": "flow.barrier.unordered-clock",
       "family": "barrier",
       "severity": "warning",
@@ -109,6 +115,30 @@
       "summary": "A count that is not a number of anything: 'parallel 0', 'skip -1'."
     },
     {
+      "code": "flow.form.declaration-attribute",
+      "family": "form",
+      "severity": "error",
+      "summary": "Declaration attribute."
+    },
+    {
+      "code": "flow.form.declaration-body",
+      "family": "form",
+      "severity": "error",
+      "summary": "Declaration body."
+    },
+    {
+      "code": "flow.form.declaration-conflict",
+      "family": "form",
+      "severity": "error",
+      "summary": "Declaration conflict."
+    },
+    {
+      "code": "flow.form.declaration-schema-mismatch",
+      "family": "form",
+      "severity": "error",
+      "summary": "Declaration schema mismatch."
+    },
+    {
       "code": "flow.form.default-on-required",
       "family": "form",
       "severity": "warning",
@@ -125,6 +155,12 @@
       "family": "form",
       "severity": "error",
       "summary": "Two flows in one file are declared with the same name."
+    },
+    {
+      "code": "flow.form.duplicate-header",
+      "family": "form",
+      "severity": "error",
+      "summary": "A normalized header name is declared more than once."
     },
     {
       "code": "flow.form.duplicate-port",
@@ -175,6 +211,30 @@
       "summary": "'headers' without the 'forward' that owns it."
     },
     {
+      "code": "flow.form.handle-escape",
+      "family": "form",
+      "severity": "error",
+      "summary": "Handle escape."
+    },
+    {
+      "code": "flow.form.import-context",
+      "family": "form",
+      "severity": "error",
+      "summary": "Import context."
+    },
+    {
+      "code": "flow.form.import-scope",
+      "family": "form",
+      "severity": "error",
+      "summary": "Import scope."
+    },
+    {
+      "code": "flow.form.invalid-action-target",
+      "family": "form",
+      "severity": "error",
+      "summary": "Invalid action target."
+    },
+    {
       "code": "flow.form.log-format",
       "family": "form",
       "severity": "error",
@@ -193,6 +253,12 @@
       "summary": "A value of a declared shape leaves out a field the shape requires and gives no default for."
     },
     {
+      "code": "flow.form.multiple-implementations",
+      "family": "form",
+      "severity": "warning",
+      "summary": "Multiple implementations."
+    },
+    {
       "code": "flow.form.node-parentheses",
       "family": "form",
       "severity": "error",
@@ -203,6 +269,12 @@
       "family": "form",
       "severity": "error",
       "summary": "A value holding bytes is asked for as JSON, which has nothing to carry them in; 'packb' is the one that does."
+    },
+    {
+      "code": "flow.form.not-waitable",
+      "family": "form",
+      "severity": "error",
+      "summary": "Not waitable."
     },
     {
       "code": "flow.form.one-of-empty",
@@ -223,6 +295,12 @@
       "summary": "'stream' or 'required' is written in front of the port's type instead of after it."
     },
     {
+      "code": "flow.form.private-type-exposed",
+      "family": "form",
+      "severity": "error",
+      "summary": "Private type exposed."
+    },
+    {
       "code": "flow.form.repeated-modifier",
       "family": "form",
       "severity": "error",
@@ -233,6 +311,12 @@
       "family": "form",
       "severity": "error",
       "summary": "A stage is missing the argument it takes, or was given one of the wrong kind."
+    },
+    {
+      "code": "flow.form.statement-as-value",
+      "family": "form",
+      "severity": "error",
+      "summary": "Statement as value."
     },
     {
       "code": "flow.form.struct-shadows-builtin",
@@ -250,7 +334,7 @@
       "code": "flow.form.unconditional-abort",
       "family": "form",
       "severity": "error",
-      "summary": "An 'abort' at the top of a flow's body with no 'after': it runs at once rather than where it is written."
+      "summary": "A top-level 'abort' has no condition, 'after', or data-dependent argument, so it can run immediately."
     },
     {
       "code": "flow.form.unconditional-cancel",
@@ -262,19 +346,19 @@
       "code": "flow.form.unconditional-fail",
       "family": "form",
       "severity": "error",
-      "summary": "A 'fail' at the top of a flow's body with no 'after': it runs at once rather than where it is written."
+      "summary": "A top-level 'fail' has no condition, 'after', or data-dependent argument, so it can run immediately."
     },
     {
       "code": "flow.form.unconditional-log",
       "family": "form",
       "severity": "error",
-      "summary": "A 'log' at the top of a flow's body with no 'after': it runs at once rather than where it is written."
+      "summary": "A top-level 'log' has no condition, 'after', or data-dependent argument, so it can run immediately."
     },
     {
       "code": "flow.form.unconditional-logf",
       "family": "form",
       "severity": "error",
-      "summary": "A 'logf' at the top of a flow's body with no 'after': it runs at once rather than where it is written."
+      "summary": "A top-level 'logf' has no condition, 'after', or data-dependent argument, so it can run immediately."
     },
     {
       "code": "flow.form.unknown-builtin",
@@ -319,6 +403,12 @@
       "summary": "'zip' reads streams in step, so it takes at least one."
     },
     {
+      "code": "flow.name.ambiguous-implementation",
+      "family": "name",
+      "severity": "error",
+      "summary": "Ambiguous implementation."
+    },
+    {
       "code": "flow.name.call-as-stream",
       "family": "name",
       "severity": "error",
@@ -337,10 +427,28 @@
       "summary": "'_' read: as a pipeline source, as something to wait on, drain or abort, or inside an expression. It keeps nothing, so there is nothing there to read."
     },
     {
+      "code": "flow.name.import-alias-conflict",
+      "family": "name",
+      "severity": "error",
+      "summary": "Import alias conflict."
+    },
+    {
+      "code": "flow.name.import-shadowing",
+      "family": "name",
+      "severity": "warning",
+      "summary": "Import shadowing."
+    },
+    {
       "code": "flow.name.it-outside-stage",
       "family": "name",
       "severity": "error",
       "summary": "'it' outside the 'where', 'map' or 'group' stage whose value it names."
+    },
+    {
+      "code": "flow.name.module-not-found",
+      "family": "name",
+      "severity": "error",
+      "summary": "Module not found."
     },
     {
       "code": "flow.name.no-status",
@@ -373,6 +481,12 @@
       "summary": "A stream is written somewhere that cannot be written: an 'in' port, a call's output, a barrier."
     },
     {
+      "code": "flow.name.private-member",
+      "family": "name",
+      "severity": "error",
+      "summary": "Private member."
+    },
+    {
       "code": "flow.name.taken",
       "family": "name",
       "severity": "error",
@@ -397,16 +511,82 @@
       "summary": "A port the action being called does not declare."
     },
     {
+      "code": "flow.name.unresolved-declaration",
+      "family": "name",
+      "severity": "error",
+      "summary": "Unresolved declaration."
+    },
+    {
+      "code": "flow.schema.not-a-record",
+      "family": "form",
+      "severity": "warning",
+      "summary": "A JSON Schema cannot be represented as a Flow struct."
+    },
+    {
+      "code": "flow.schema.unsupported-keyword",
+      "family": "form",
+      "severity": "warning",
+      "summary": "A JSON Schema contains a constraint without a Flow spelling."
+    },
+    {
       "code": "flow.sequence.impossible",
       "family": "sequence",
       "severity": "warning",
       "summary": "A sequence of stages that cannot produce what it appears to: dropping from one value, counting a reduced stream, 'first 0'."
     },
     {
+      "code": "flow.sequence.redundant-declaration",
+      "family": "sequence",
+      "severity": "information",
+      "summary": "Redundant declaration."
+    },
+    {
+      "code": "flow.sequence.redundant-definition",
+      "family": "sequence",
+      "severity": "information",
+      "summary": "Redundant definition."
+    },
+    {
+      "code": "flow.sequence.redundant-import",
+      "family": "sequence",
+      "severity": "information",
+      "summary": "Redundant import."
+    },
+    {
+      "code": "flow.sequence.redundant-parentheses",
+      "family": "sequence",
+      "severity": "information",
+      "summary": "Redundant parentheses."
+    },
+    {
       "code": "flow.sequence.redundant-stage",
       "family": "sequence",
       "severity": "weak-warning",
       "summary": "A stage with nothing to do: choosing between the single value a reducing stage left, or the same reshaping twice."
+    },
+    {
+      "code": "flow.sequence.rename-graph-boundary",
+      "family": "sequence",
+      "severity": "information",
+      "summary": "A source rename covers only the supplied module graph."
+    },
+    {
+      "code": "flow.sequence.scalar-rvalue-read",
+      "family": "sequence",
+      "severity": "information",
+      "summary": "Scalar rvalue read."
+    },
+    {
+      "code": "flow.sequence.schema-refined",
+      "family": "sequence",
+      "severity": "information",
+      "summary": "Schema refined."
+    },
+    {
+      "code": "flow.sequence.schema-refinement-unproven",
+      "family": "sequence",
+      "severity": "information",
+      "summary": "Schema refinement unproven."
     },
     {
       "code": "flow.sequence.skip-count-target",
@@ -467,6 +647,12 @@
       "family": "unused",
       "severity": "weak-warning",
       "summary": "A header declared under an alias nothing uses."
+    },
+    {
+      "code": "flow.unused.import",
+      "family": "unused",
+      "severity": "weak-warning",
+      "summary": "Import."
     },
     {
       "code": "flow.unused.loop-variable",

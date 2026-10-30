@@ -14,20 +14,7 @@
  * limitations under the License.
  */
 
-/**
- * The browser highlighter's vocabulary, pinned to the generated one.
- *
- * `editors/pygments/a11flow_lexer.py` is written by `a11 flow syntax --target
- * pygments --generate`, so it is the language talking about itself. The
- * TypeScript scanner is hand-written -- a web page has no host editor to load a
- * definition file into -- and this is what keeps the two from drifting: a word
- * added to the language fails here rather than being noticed by eye a release
- * later.
- *
- * Only the lists are pinned, not the shape. Pygments needs a rule ordering and a
- * token hierarchy; a page needs a set per colour, and the two will never be the
- * same structure.
- */
+/** Browser fallback colours use the generated native vocabulary. */
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -118,4 +105,16 @@ test('a word is read as what it stands for where it stands', () => {
   // And nothing inside a comment or a string is looked up at all.
   assert.equal(tokenizeFlow('# flow map join').length, 1);
   assert.equal(kindOf('"flow map join"', '"flow map join"'), 'string');
+});
+
+
+test('new Flow syntax uses the generated browser vocabulary', () => {
+  const source = 'declare flow f exported { from "m" import x\n values | take until it == 3 | consume -> out }';
+  const tokens = tokenizeFlow(source);
+  for (const word of ['declare', 'exported', 'from', 'import']) {
+    assert.equal(tokens.find((token) => token.text === word)?.kind, 'keyword');
+  }
+  assert.equal(tokens.find((token) => token.text === 'take until')?.kind, 'stage');
+  assert.equal(tokens.find((token) => token.text === 'consume')?.kind, 'stage');
+  assert.equal(tokens.map((token) => token.text).join(''), source);
 });

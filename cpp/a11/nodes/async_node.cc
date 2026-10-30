@@ -27,6 +27,7 @@
 #include <absl/status/statusor.h>
 #include <absl/time/time.h>
 
+#include "a11/concurrency/callback_scheduler.h"
 #include "a11/concurrency/executor.h"
 #include "a11/concurrency/future.h"
 #include "a11/data/serialization.h"
@@ -38,6 +39,133 @@
 
 namespace a11::nodes {
 namespace {
+
+a11::internal::CallbackScheduler& CompletionScheduler() {
+  static auto* scheduler = new a11::internal::CallbackScheduler();
+  return *scheduler;
+}
+
+struct CompletionWatch : std::enable_shared_from_this<CompletionWatch> {
+  std::shared_ptr<stores::ChunkStore> store;
+  a11::Promise<a11::Unit> result;
+  thread::Mutex mu;
+  bool finished ABSL_GUARDED_BY(mu) = false;
+  std::function<void()> cancel_pending ABSL_GUARDED_BY(mu);
+
+  void Finish(absl::Status status) {
+    std::function<void()> cancel;
+    {
+      thread::MutexLock lock(&mu);
+      if (finished) {
+        return;
+      }
+      finished = true;
+      cancel = std::move(cancel_pending);
+    }
+    if (cancel) {
+      cancel();
+    }
+    if (status.ok()) {
+      result.SetValue(a11::Unit{}).IgnoreError();
+    } else {
+      result.SetStatus(std::move(status)).IgnoreError();
+    }
+  }
+
+  template <typename T, typename F>
+  void Observe(a11::Future<T> future, F continuation) {
+    bool stopped;
+    {
+      thread::MutexLock lock(&mu);
+      stopped = finished;
+      if (!stopped) {
+        cancel_pending = [future] {
+          future.Cancel().IgnoreError();
+        };
+      }
+    }
+    if (stopped) {
+      future.Cancel().IgnoreError();
+      return;
+    }
+    const std::weak_ptr<CompletionWatch> weak = weak_from_this();
+    future.OnReady([weak,
+                    continuation](const absl::StatusOr<T>& value) mutable {
+      auto state = weak.lock();
+      if (state == nullptr) {
+        return;
+      }
+      CompletionScheduler().Schedule([state, continuation, value]() mutable {
+        {
+          thread::MutexLock lock(&state->mu);
+          if (state->finished) {
+            return;
+          }
+          state->cancel_pending = {};
+        }
+        continuation(*state, value);
+      });
+    });
+  }
+
+  void Check() {
+    Observe(store->GetWriteStatus(),
+            [](CompletionWatch& state,
+               const absl::StatusOr<std::optional<absl::Status>>& status) {
+              if (!status.ok()) {
+                state.Finish(status.status());
+              } else if (status->has_value()) {
+                state.Finish(**status);
+              } else {
+                state.CheckFragments();
+              }
+            });
+  }
+
+  void CheckFragments() {
+    Observe(store->Size(), [](CompletionWatch& state,
+                              const absl::StatusOr<size_t>& size) {
+      if (!size.ok()) {
+        state.Finish(size.status());
+        return;
+      }
+      state.Observe(
+          state.store->GetFinalSeq(),
+          [count = *size](
+              CompletionWatch& state,
+              const absl::StatusOr<std::optional<uint32_t>>& final) {
+            if (!final.ok()) {
+              state.Finish(final.status());
+              return;
+            }
+            if (final->has_value() &&
+                count >= static_cast<uint64_t>(**final) + 1) {
+              state.Finish(absl::OkStatus());
+              return;
+            }
+            state.Observe(
+                state.store->GetByArrivalOrder(count),
+                [](CompletionWatch& state,
+                   const absl::StatusOr<data::NodeFragment>& arrived) {
+                  if (!arrived.ok()) {
+                    state.Observe(
+                        state.store->GetWriteStatus(),
+                        [reason = arrived.status()](
+                            CompletionWatch& state,
+                            const absl::StatusOr<std::optional<absl::Status>>&
+                                status) {
+                          state.Finish(status.ok() && status->has_value()
+                                           ? **status
+                                           : reason);
+                        });
+                  } else {
+                    state.Check();
+                  }
+                });
+          });
+    });
+  }
+};
 
 std::shared_ptr<data::SerializationRegistry> GlobalRegistryPointer() {
   return {&data::GlobalSerializationRegistry(),
@@ -216,6 +344,20 @@ absl::Status AsyncNode::GetWriterStatus() const {
   }
   const std::optional<absl::Status> status = writer->GetStatus();
   return status.value_or(absl::OkStatus());
+}
+
+a11::Task AsyncNode::ObserveCompletion() {
+  auto watch = std::make_shared<CompletionWatch>();
+  watch->store = store_;
+  auto future = watch->result.future();
+  watch->result
+      .SetCancellationCallback([watch] {
+        watch->Finish(
+            absl::CancelledError("Node completion observation cancelled"));
+      })
+      .IgnoreError();
+  CompletionScheduler().Schedule([watch] { watch->Check(); });
+  return future;
 }
 
 std::optional<absl::Status> AsyncNode::GetWriterAbortStatus() const {

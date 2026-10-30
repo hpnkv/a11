@@ -22,6 +22,8 @@
 #include <absl/types/span.h>
 #include <nlohmann/json_fwd.hpp>
 
+#include "a11/flow/module.h"
+
 namespace a11::flow {
 
 /// One question about one document, answered.
@@ -51,7 +53,8 @@ namespace a11::flow {
 /// `id` is echoed if it is there and omitted if it is not, so a client that
 /// does
 /// not correlate need not invent one.
-nlohmann::json Handle(const nlohmann::json& request);
+nlohmann::json Handle(const nlohmann::json& request,
+                      ModuleResolver resolver = {});
 
 /// Every method [Handle] knows, in the order `--help` lists them.
 absl::Span<const std::string_view> Methods();

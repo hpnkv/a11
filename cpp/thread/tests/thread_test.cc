@@ -510,13 +510,13 @@ TEST(ThreadExecutorTest, ASchedulerParkDropsAndRestoresTheHostLock) {
     std::atomic<int> acquired{0};
     std::atomic<void*> handed{nullptr};
   };
+
   const auto counts = std::make_shared<Counts>();
   SetSchedulerParkGuard(SchedulerParkGuard{
-      .release =
-          [counts]() -> void* {
-            counts->released.fetch_add(1, std::memory_order_relaxed);
-            return reinterpret_cast<void*>(0x5eed);
-          },
+      .release = [counts]() -> void* {
+        counts->released.fetch_add(1, std::memory_order_relaxed);
+        return reinterpret_cast<void*>(0x5eed);
+      },
       .acquire =
           [counts](void* held) {
             counts->handed.store(held, std::memory_order_relaxed);
@@ -525,9 +525,8 @@ TEST(ThreadExecutorTest, ASchedulerParkDropsAndRestoresTheHostLock) {
   });
 
   PermanentEvent finish;
-  auto blocked = NewTree({.name = "parks-its-thread"}, [&] {
-    Select({finish.OnEvent()});
-  });
+  auto blocked = NewTree({.name = "parks-its-thread"},
+                         [&] { Select({finish.OnEvent()}); });
 
   const absl::Time deadline = absl::Now() + absl::Seconds(5);
   while (counts->released.load(std::memory_order_relaxed) == 0 &&

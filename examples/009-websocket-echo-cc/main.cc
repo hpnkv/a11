@@ -47,8 +47,9 @@ absl::Status Run() {
                       session->Abort(received.status()).IgnoreError();
                       return received.status();
                     }
-                    if (!received->has_value())
+                    if (!received->has_value()) {
                       break;
+                    }
                     ABSL_RETURN_IF_ERROR(session->Send(std::move(**received)));
                   }
                   ABSL_RETURN_IF_ERROR(session->HalfClose());
@@ -71,8 +72,9 @@ absl::Status Run() {
   absl::Status result = absl::OkStatus();
   std::string text;
   while (std::cout << "> " << std::flush, std::getline(std::cin, text)) {
-    if (text == "exit")
+    if (text == "exit") {
       break;
+    }
     a11::data::WireMessage message;
     message.node_fragments.push_back(a11::data::NodeFragment{
         .id = "test",
@@ -84,33 +86,40 @@ absl::Status Run() {
         .seq = std::nullopt,
         .continued = false});
     result = session->Send(std::move(message));
-    if (!result.ok())
+    if (!result.ok()) {
       break;
+    }
     auto received = session->Receive().Await();
     if (!received.ok()) {
       result = received.status();
       break;
     }
-    if (!received->has_value())
+    if (!received->has_value()) {
       break;
+    }
     for (const auto& fragment : (**received).node_fragments) {
       if (const auto* chunk = std::get_if<a11::data::Chunk>(&fragment.data)) {
         std::cout << "Echo: " << chunk->data << '\n';
       }
     }
   }
-  if (result.ok())
+  if (result.ok()) {
     result = session->HalfClose();
-  if (!result.ok())
+  }
+  if (!result.ok()) {
     session->Abort(result).IgnoreError();
+  }
   const auto completed = session->Done().Await();
-  if (result.ok())
+  if (result.ok()) {
     result = completed.status();
-  if (result.ok())
+  }
+  if (result.ok()) {
     result = session->GetStatus();
+  }
   const auto stopped = server->Stop();
-  if (result.ok())
+  if (result.ok()) {
     result = stopped;
+  }
   return result;
 }
 }  // namespace

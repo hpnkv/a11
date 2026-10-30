@@ -15,26 +15,19 @@
  */
 
 /**
- * Flow's token vocabulary, for colouring a flow in a browser.
- *
- * A11 already generates editor definitions from the grammar -- `a11 flow syntax
- * --target sublime|pygments|vscode` writes the files under `editors/` -- and each
- * of those targets is a *file* a host editor loads. A web page has no such host:
- * it has a `<textarea>` and whatever it can render behind it, so it needs the
- * vocabulary as data and a scanner it can call.
- *
- * That makes this the one hand-written member of the family, and the risk is
- * drift: a word added to the language would colour everywhere but here.
- * `js/test/flow_highlight.test.mjs` pins every list below against
- * `editors/pygments/a11flow_lexer.py`, which *is* generated, so the drift fails a
- * test rather than being noticed by eye a release later.
- *
- * It is a scanner and not a parser. Highlighting wants "this word is a stage",
- * not a tree, and being wrong about a word in a comment is worse than being
- * unaware that `log` is a statement here and a stage there -- so words are
- * matched by set, and strings and comments are consumed first so that no word
- * inside one is ever looked up.
+ * Browser fallback colouring from the generated native Flow vocabulary.
+ * Hosts with a language transport use native semantic tokens.
  */
+
+import {
+  FLOW_KEYWORDS, FLOW_TYPES, FLOW_STAGES, FLOW_BUILTINS,
+  FLOW_LOG_LEVELS, FLOW_CONSTANTS, FLOW_OPERATOR_WORDS,
+} from "./flow_vocabulary.js";
+
+export {
+  FLOW_KEYWORDS, FLOW_TYPES, FLOW_STAGES, FLOW_BUILTINS,
+  FLOW_LOG_LEVELS, FLOW_CONSTANTS, FLOW_OPERATOR_WORDS,
+};
 
 /** What a run of characters is, for colouring. */
 export type FlowTokenKind =
@@ -63,175 +56,16 @@ export interface FlowToken {
   text: string;
 }
 
-/** Words that declare, bind, or open a statement. */
-export const FLOW_KEYWORDS: readonly string[] = [
-  "flow",
-  "describe",
-  "struct",
-  "header",
-  "nodes",
-  "in",
-  "out",
-  "stream",
-  "required",
-  "unique",
-  "matching",
-  "default",
-  "as",
-  "run",
-  "call",
-  "try",
-  "node",
-  "wait",
-  "drain",
-  "let",
-  "advance",
-  "skip",
-  "abort",
-  "cancel",
-  "fail",
-  "log",
-  "logf",
-  "if",
-  "for",
-  "repeat",
-  "until",
-  "while",
-  "else",
-  "parallel",
-  "unordered",
-  "of",
-  "by",
-  "desc",
-  "into",
-  "tee",
-  "via",
-  "timeout",
-  "after",
-  "with",
-  "id",
-  "forward",
-  "headers",
-  "interleave",
-  "status",
-  "zip",
-];
-
-/** The built-in port type names. */
-export const FLOW_TYPES: readonly string[] = [
-  "string",
-  "text",
-  "number",
-  "integer",
-  "int",
-  "bool",
-  "boolean",
-  "duration",
-  "time",
-  "object",
-  "json",
-  "list",
-  "array",
-  "bytes",
-  "any",
-];
-
-/** Every pipeline stage. */
-export const FLOW_STAGES: readonly string[] = [
-  "first",
-  "last",
-  "drop",
-  "truncate",
-  "batch",
-  "window",
-  "flatten",
-  "group",
-  "sort",
-  "where",
-  "map",
-  "scan",
-  "match",
-  "distinct",
-  "then",
-  "log",
-  "logf",
-  "mime",
-  "strformat",
-  "chunk",
-  "collect",
-  "count",
-  "sum",
-  "min",
-  "max",
-  "avg",
-  "fold",
-  "join",
-  "text",
-  "json",
-  "packb",
-  "timeout",
-  "pace",
-];
-
-/** The language's fixed function set. No user code, ever: a flow stays data. */
-export const FLOW_BUILTINS: readonly string[] = [
-  "len",
-  "lower",
-  "upper",
-  "trim",
-  "text",
-  "number",
-  "bool",
-  "keys",
-  "values",
-  "get",
-  "join",
-  "split",
-  "merge",
-  "contains",
-  "starts-with",
-  "ends-with",
-  "replace",
-  "match",
-  "slice",
-  "default",
-  "to_chunk",
-  "from_chunk",
-  "strformat",
-  "b64encode",
-  "b64decode",
-  "b64urlencode",
-  "b64urldecode",
-  "now",
-  "duration",
-  "utf8encode",
-  "utf8decode",
-  "time",
-  "seconds",
-];
-
-/** The severities `log` and `logf` name. */
-export const FLOW_LOG_LEVELS: readonly string[] = [
-  "debug",
-  "info",
-  "warning",
-  "error",
-  "critical",
-];
-
-/** Literals that are words, and the operators that are. */
-export const FLOW_CONSTANTS: readonly string[] = ["true", "false", "null", "_"];
-/** Word-form boolean, membership, and negation operators. */
-export const FLOW_OPERATOR_WORDS: readonly string[] = [
-  "and",
-  "or",
-  "not",
-  "in",
-];
-
 const KEYWORDS = new Set(FLOW_KEYWORDS);
 const TYPES = new Set(FLOW_TYPES);
 const STAGES = new Set(FLOW_STAGES);
+const PHRASE_STAGES = FLOW_STAGES.filter((word) => word.includes(" ")).map(
+  (word) => new RegExp(
+    word.split(" ").map((part) => `(?:${part}|${part.toUpperCase()})`).join("[ \t]+")
+      + "(?![A-Za-z0-9_.-])", "y",
+  ),
+);
+
 const BUILTINS = new Set(FLOW_BUILTINS);
 const LEVELS = new Set(FLOW_LOG_LEVELS);
 const CONSTANTS = new Set(FLOW_CONSTANTS);
@@ -330,6 +164,17 @@ export function tokenizeFlow(source: string): FlowToken[] {
         at += found[0].length;
         continue;
       }
+    }
+
+    const phrase = PHRASE_STAGES.find((pattern) => {
+      pattern.lastIndex = at;
+      return pattern.test(source);
+    });
+    if (phrase) {
+      const end = phrase.lastIndex;
+      push("stage", at, end);
+      at = end;
+      continue;
     }
 
     if (/[A-Za-z_]/.test(character)) {

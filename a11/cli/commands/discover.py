@@ -32,6 +32,7 @@ from typing import Any
 
 from a11.cli import durations
 from a11.cli.app import Command
+from a11.cli.commands import _command_help
 
 _DESCRIPTION = """\
 Ask an A11 peer which actions it serves, and print their schemas.
@@ -62,7 +63,7 @@ def _configure(parser: argparse.ArgumentParser) -> None:
         default=[],
         metavar="PATTERN",
         dest="names",
-        help=("Only actions whose name fully matches this regex. Repeatable."),
+        help="Only actions whose name fully matches this regex. Repeatable.",
     )
     parser.add_argument(
         "--all-ports",
@@ -238,7 +239,7 @@ async def _run(args: argparse.Namespace) -> int:
 
 DISCOVER_COMMAND = Command(
     name="discover",
-    help="Ask an A11 peer which actions it serves.",
+    help=_command_help("discover"),
     description=_DESCRIPTION,
     configure=_configure,
     run=_run,

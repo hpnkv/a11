@@ -60,13 +60,18 @@ checks with no change here at all — and what it reports is word for word what
 `a11 flow check` and CI report, because it is the same code.
 
 The binary comes from `bin/<os>-<arch>/a11-flow` in the extension, or from the
-`a11.flow.toolPath` setting, or from the `PATH`. Build one with:
+`a11.flow.toolPath` setting, or from the `PATH`. Extension builds refresh the host
+binary from the configured CMake tree. Configure it before building:
 
 ```sh
-cmake --build --preset debug --target a11_flow_tool
-mkdir -p vscode-plugin/bin/macos-aarch64
-cp build/debug/cpp/a11-flow vscode-plugin/bin/macos-aarch64/
+cmake --preset debug
+cd vscode-plugin
+npm run build
 ```
+
+Set `A11_FLOW_BUILD_DIR` to select another configured CMake tree, or
+`A11_FLOW_TOOL_BINARY` to supply a prebuilt service. Copies supplied under
+`bin/<os>-<arch>/` for other platforms are preserved.
 
 **With no binary for the platform**, the editor degrades on purpose rather than
 breaking: a `.flow` is still coloured by the TextMate grammar, which knows the

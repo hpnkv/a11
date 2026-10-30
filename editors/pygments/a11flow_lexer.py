@@ -110,7 +110,8 @@ BINDING_VERBS = _keywords("run", "call", "try", "node", "wait", "drain")
 #: Words that open a statement.
 STATEMENTS = _keywords(
     "let", "advance", "skip", "wait", "drain", "abort", "cancel", "fail",
-    "log", "logf", "if", "for", "repeat", "until", "while", "else"
+    "log", "logf", "if", "for", "repeat", "after", "until", "while",
+    "else"
 )
 
 #: Words that stand inside a statement without opening one.
@@ -123,11 +124,11 @@ MODIFIERS = _keywords(
 
 #: Every pipeline stage.
 STAGES = _keywords(
-    "first", "last", "drop", "truncate", "batch", "window", "flatten",
-    "group", "sort", "where", "map", "scan", "match", "distinct", "then",
-    "log", "logf", "mime", "strformat", "chunk", "collect", "count",
-    "sum", "min", "max", "avg", "fold", "join", "text", "json", "packb",
-    "timeout", "pace"
+    "take while", "take until", "first", "last", "drop", "truncate",
+    "batch", "window", "flatten", "group", "sort", "where", "map", "scan",
+    "match", "distinct", "then", "log", "logf", "mime", "strformat",
+    "chunk", "collect", "consume", "count", "sum", "min", "max", "avg",
+    "fold", "join", "text", "json", "packb", "timeout", "pace"
 )
 
 #: The stages that may be written without their leading ``|``.

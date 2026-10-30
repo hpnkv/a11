@@ -12,10 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""``a11 flow``: the command every external toolchain drives the language through.
+"""``a11 flow``: the command external toolchains use to drive the language.
 
-Exit codes and output shapes are the contract here -- a pre-commit hook reads the
-exit code, a CI annotator reads the SARIF, an editor reads the JSON envelope -- so
+Exit codes and output shapes are the contract here: pre-commit reads the exit
+code, CI reads SARIF, and editors read the JSON envelope. These are checked
 they are checked directly rather than through whichever engine happens to be
 behind them.
 """
@@ -27,7 +27,11 @@ import contextlib
 import io
 import json
 import pathlib
+import os
+import selectors
+import subprocess
 import sys
+import tempfile
 
 import pytest
 
@@ -141,7 +145,9 @@ def test_the_json_envelope_is_the_documented_one(flow_file, capsys):
 
 
 def test_sarif_is_a_log_a_scanner_can_read(flow_file, capsys):
-    assert run("flow", "check", "--format", "sarif", str(flow_file(BROKEN))) == 1
+    assert (
+        run("flow", "check", "--format", "sarif", str(flow_file(BROKEN))) == 1
+    )
     log = json.loads(capsys.readouterr().out)
     assert log["version"] == "2.1.0"
     run_entry = log["runs"][0]
@@ -182,7 +188,16 @@ def test_describe_prints_the_ports_and_steps_it_resolved(capsys):
 
 
 def test_describe_as_json_is_the_plan_envelope(capsys):
-    assert run("flow", "describe", "--format", "json", str(EXAMPLES / "research.flow")) == 0
+    assert (
+        run(
+            "flow",
+            "describe",
+            "--format",
+            "json",
+            str(EXAMPLES / "research.flow"),
+        )
+        == 0
+    )
     envelope = json.loads(capsys.readouterr().out)
     assert envelope["format"] == diag.PLAN_FORMAT
     assert envelope["flows"][0]["flow"] == "research"
@@ -193,7 +208,9 @@ def test_describe_of_a_broken_flow_reports_it_and_exits_one(flow_file, capsys):
     assert "error:" in capsys.readouterr().err
 
 
-def test_check_reports_what_a_flow_does_that_it_did_not_mean_to(flow_file, capsys):
+def test_check_reports_what_a_flow_does_that_it_did_not_mean_to(
+    flow_file, capsys
+):
     """The half of `check` that is not the compiler.
 
     Every one of these compiles and runs, so the exit code stays 0: they are the
@@ -254,7 +271,7 @@ def test_parse_prints_the_tree_it_read(capsys):
 def test_parse_of_a_broken_flow_still_gives_a_tree(flow_file, capsys):
     """The difference the recovering parser exists for.
 
-    A file with a mistake in it exits 1 and *still* prints what was read -- which
+    A file with a mistake exits 1 and *still* prints what was read, which
     is what an editor needs, and what the Python reference could never give.
     """
     assert run("flow", "parse", "--format", "json", str(flow_file(BROKEN))) == 1
@@ -268,7 +285,10 @@ def test_parse_of_a_broken_flow_still_gives_a_tree(flow_file, capsys):
     assert [one["kind"] for one in flow["body"]] == ["pipe"]
 
 
-UNFORMATTED = "flow shout{\nin words:string stream\nout loudest:string\nwords|first 1->loudest\n}\n"
+UNFORMATTED = (
+    "flow shout{\nin words:string stream\nout loudest:string\nwords|first"
+    " 1->loudest\n}\n"
+)
 
 FORMATTED = (
     "flow shout {\n"
@@ -308,7 +328,9 @@ def test_fmt_leaves_a_file_it_cannot_parse_alone(flow_file, capsys):
 
 
 def test_fmt_as_json_is_the_format_envelope(flow_file, capsys):
-    assert run("flow", "fmt", "--format", "json", str(flow_file(UNFORMATTED))) == 1
+    assert (
+        run("flow", "fmt", "--format", "json", str(flow_file(UNFORMATTED))) == 1
+    )
     envelope = json.loads(capsys.readouterr().out)
     assert envelope["format"] == "flow.format/v1"
     assert envelope["formatted"] == FORMATTED
@@ -348,7 +370,7 @@ def test_a_bare_flow_command_prints_help(capsys):
 
 
 def test_highlight_labels_every_token_with_what_it_means(capsys):
-    """The one classifier, through the CLI: an editor reads this, not its own."""
+    """The native classifier reaches an editor through the CLI."""
     assert run("flow", "highlight", str(EXAMPLES / "research.flow")) == 0
     printed = capsys.readouterr().out
     assert "declaration-keyword  flow" in printed
@@ -359,11 +381,20 @@ def test_highlight_labels_every_token_with_what_it_means(capsys):
 
 
 def test_highlight_as_json_is_the_tokens_envelope(capsys):
-    assert run("flow", "highlight", "--format", "json", str(EXAMPLES / "research.flow")) == 0
+    assert (
+        run(
+            "flow",
+            "highlight",
+            "--format",
+            "json",
+            str(EXAMPLES / "research.flow"),
+        )
+        == 0
+    )
     envelope = json.loads(capsys.readouterr().out)
     assert envelope["format"] == diag.TOKENS_FORMAT
     source = (EXAMPLES / "research.flow").read_text(encoding="utf-8")
-    # Offsets tile the source, which is what lets a client colour from this alone.
+    # Offsets tile the source so a client can colour every character.
     for token in envelope["tokens"]:
         assert token["start"] < token["end"] <= len(source)
 
@@ -380,37 +411,54 @@ def test_syntax_says_the_generated_definitions_are_current(capsys):
 
 
 def test_syntax_reports_a_definition_that_has_fallen_behind(tmp_path, capsys):
-    """One that is not what the language would write fails, and says what to run."""
+    """A stale definition fails and reports its regeneration command."""
     stale = tmp_path / "editors" / "sublime-text"
     stale.mkdir(parents=True)
     (stale / "A11 Flow.sublime-syntax").write_text(
         "match: first|last\n", encoding="utf-8"
     )
-    assert run("flow", "syntax", "--target", "sublime", "--root", str(tmp_path)) == 1
+    assert (
+        run("flow", "syntax", "--target", "sublime", "--root", str(tmp_path))
+        == 1
+    )
     reported = capsys.readouterr().err
     assert "out of date" in reported
     assert "--generate" in reported
 
 
 def test_syntax_generate_writes_what_the_language_says(tmp_path, capsys):
-    assert run(
-        "flow", "syntax", "--target", "sublime", "--generate", "--root", str(tmp_path)
-    ) == 0
-    written = (tmp_path / "editors" / "sublime-text" / "A11 Flow.sublime-syntax")
+    assert (
+        run(
+            "flow",
+            "syntax",
+            "--target",
+            "sublime",
+            "--generate",
+            "--root",
+            str(tmp_path),
+        )
+        == 0
+    )
+    written = tmp_path / "editors" / "sublime-text" / "A11 Flow.sublime-syntax"
     assert written.is_file()
     # Every stage, in both spellings, and the marker that says not to edit it.
     text = written.read_text(encoding="utf-8")
     assert "GENERATED FILE" in text
     assert "truncate" in text and "TRUNCATE" in text
     # And running the check against what was just written passes.
-    assert run("flow", "syntax", "--target", "sublime", "--root", str(tmp_path)) == 0
+    assert (
+        run("flow", "syntax", "--target", "sublime", "--root", str(tmp_path))
+        == 0
+    )
 
 
 def test_complete_offers_what_the_language_allows_there(capsys):
     """The one completion, through the command line."""
     source = "flow t {\n  in q: string\n  q | "
-    assert run("flow", "complete", "-", "--offset", str(len(source)),
-               stdin=source) == 0
+    assert (
+        run("flow", "complete", "-", "--offset", str(len(source)), stdin=source)
+        == 0
+    )
     printed = capsys.readouterr().out
     assert "stage" in printed
     assert "truncate" in printed
@@ -420,8 +468,19 @@ def test_complete_offers_what_the_language_allows_there(capsys):
 
 def test_complete_as_json_is_the_completions_envelope(capsys):
     source = "flow t {\n  in q: string\n  q | trun"
-    assert run("flow", "complete", "-", "--format", "json",
-               "--offset", str(len(source)), stdin=source) == 0
+    assert (
+        run(
+            "flow",
+            "complete",
+            "-",
+            "--format",
+            "json",
+            "--offset",
+            str(len(source)),
+            stdin=source,
+        )
+        == 0
+    )
     envelope = json.loads(capsys.readouterr().out)
     assert envelope["format"] == "flow.completions/v1"
     assert envelope["prefix"] == "trun"
@@ -435,7 +494,9 @@ def test_serve_answers_one_request_per_line(capsys):
         '{"id": 2, "method": "nonsense"}\n'
     )
     assert run("flow", "serve", stdin=requests) == 0
-    answers = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    answers = [
+        json.loads(line) for line in capsys.readouterr().out.splitlines()
+    ]
     assert answers[0]["id"] == 1
     assert answers[0]["ok"] is True
     assert answers[0]["result"]["format"] == diag.DIAGNOSTICS_FORMAT
@@ -449,12 +510,87 @@ def test_run_runs_a_flow_and_prints_its_ports(capsys):
         "flow shout {\n"
         "  in  words: string stream required\n"
         "  out loud:  string\n"
-        "  words | collect | map upper(join(it, \", \")) -> loud\n"
+        '  words | collect | map upper(join(it, ", ")) -> loud\n'
         "}\n"
     )
-    assert run("flow", "run", "-", "--input", 'words=["hi","there"]',
-               stdin=source) == 0
+    assert (
+        run("flow", "run", "-", "--input", 'words=["hi","there"]', stdin=source)
+        == 0
+    )
     assert "loud: HI, THERE" in capsys.readouterr().out
+
+
+def test_run_resolves_file_imports_and_skips_interface_only_defaults(
+    tmp_path, capsys, monkeypatch
+):
+    modules = tmp_path / "modules"
+    modules.mkdir()
+    (modules / "nested.flow").write_text(
+        "flow test exported { in input: string\n out output: string\n input ->"
+        " output }"
+    )
+    (modules / "root.flow").write_text("""
+declare flow test { in input: string
+ out output: string }
+flow main {
+ in input: string
+ out result: string
+ from "./nested.flow" import test
+ (run test(input: input)).output -> result
+}
+""")
+    monkeypatch.chdir(tmp_path)
+    for selection in [(), ("--flow", "main")]:
+        assert (
+            run(
+                "flow",
+                "run",
+                "modules/root.flow",
+                *selection,
+                "--input",
+                "input=hello",
+            )
+            == 0
+        )
+        assert "result: hello" in capsys.readouterr().out
+
+
+def test_run_reports_imported_schema_conflicts_before_execution(
+    tmp_path, capsys
+):
+    (tmp_path / "nested.flow").write_text(
+        "flow test exported { out output: integer }"
+    )
+    root = tmp_path / "root.flow"
+    root.write_text("""
+declare flow test { out output: string }
+flow main {
+ from "./nested.flow" import test
+ run test()
+}
+""")
+    assert run("flow", "run", str(root), "--flow", "main") == 1
+    error = capsys.readouterr().err
+    assert "payload contracts conflict" in error
+    assert "flow.form.declaration-conflict" in error
+    assert "not supplied" not in error
+
+
+def test_run_entry_program_resolves_sibling_modules(tmp_path, capfd):
+    (tmp_path / "nested.flow").write_text(
+        'flow greeting exported { out text: string\n "hello" -> text }'
+    )
+    root = tmp_path / "root.flow"
+    root.write_text("""
+from "./nested.flow" import greeting
+flow {
+ nodes scratch
+ text = run greeting() via scratch
+ run write_stdout(content: text.text) via scratch
+}
+""")
+    assert run("flow", "run", str(root)) == 0
+    assert capfd.readouterr().out == "hello"
 
 
 # --- running a program ------------------------------------------------------
@@ -588,11 +724,19 @@ flow {
     )
     # The same program and the same root: only the path differs, so a pass on
     # the second would mean the root was never consulted.
-    assert run("flow", "run", path, "--root", str(inside.parent), "--",
-               str(inside)) == 0
+    assert (
+        run(
+            "flow", "run", path, "--root", str(inside.parent), "--", str(inside)
+        )
+        == 0
+    )
     assert capfd.readouterr().out == "yours"
-    assert run("flow", "run", path, "--root", str(inside.parent), "--",
-               str(secret)) == 1
+    assert (
+        run(
+            "flow", "run", path, "--root", str(inside.parent), "--", str(secret)
+        )
+        == 1
+    )
     assert "outside" in capfd.readouterr().err.lower()
 
 
@@ -610,8 +754,9 @@ flow {{
     assert run("flow", "run", path, "--root", str(tmp_path)) == 1
     assert not made.exists()
     capfd.readouterr()
-    assert run("flow", "run", path, "--root", str(tmp_path),
-               "--allow-write") == 0
+    assert (
+        run("flow", "run", path, "--root", str(tmp_path), "--allow-write") == 0
+    )
     assert made.read_text() == "hi"
     capfd.readouterr()
 
@@ -664,6 +809,108 @@ def test_run_of_a_flow_that_is_not_there_mentions_the_program(tmp_path, capsys):
 
 
 def test_run_of_a_flow_that_is_not_there_exits_two(capsys):
-    assert run("flow", "run", "-", "--flow", "missing",
-               stdin="flow t { }\n") == 2
+    assert (
+        run("flow", "run", "-", "--flow", "missing", stdin="flow t { }\n") == 2
+    )
     assert "no flow named" in capsys.readouterr().err
+
+
+def test_live_stdin_does_not_block_stdout_on_one_worker(tmp_path):
+    (tmp_path / "nested.flow").write_text("""
+flow test exported {
+ in input: string stream
+ out output: string stream
+ run write_stdout(content: input | map strformat("%s\\n", it))
+ input -> output
+}
+""")
+    root = tmp_path / "root.flow"
+    root.write_text("""
+flow {
+ stdin = run read_stdin()
+ from "./nested.flow" import test
+ t1 = run test()
+ done = for line in stdin.lines {
+   line -> t1.input
+ }
+ drain t1.input after done
+}
+""")
+    with tempfile.TemporaryFile(mode="w+") as errors:
+        process = subprocess.Popen(
+            [sys.executable, "-m", "a11_cli", "flow", "run", str(root)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=errors,
+            env={
+                **os.environ,
+                "A11_POOL_THREADS": "1",
+                "A11_FIBER_WATCHDOG": "1",
+            },
+        )
+        try:
+            process.stdin.write(b"hello\n")
+            process.stdin.flush()
+            with selectors.DefaultSelector() as ready:
+                ready.register(process.stdout, selectors.EVENT_READ)
+                readable = bool(ready.select(3))
+        finally:
+            process.stdin.close()
+            process.stdin = None
+            output, _ = process.communicate(timeout=5)
+        errors.seek(0)
+        report = errors.read()
+    assert readable, "stdout waited for stdin EOF\n" + report
+    assert process.returncode == 0, report
+    assert output == b"hello\n"
+
+
+def test_take_until_and_after_cleanup_exit_without_stdin_eof(tmp_path):
+    root = tmp_path / "root.flow"
+    root.write_text("""flow {
+ stdin = run read_stdin()
+ echo = run write_stdout()
+ forwarded = stdin.lines | take until lower(it) == "/exit"
+   | map strformat("%s\\n", it) -> echo.content
+ after forwarded {
+   {"command": "stop"} -> stdin.control_events
+   run write_stderr(content: "cleanup\\n")
+ }
+}
+""")
+    with tempfile.TemporaryFile(mode="w+") as errors:
+        process = subprocess.Popen(
+            [sys.executable, "-m", "a11_cli", "flow", "run", str(root)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=errors,
+            env={
+                **os.environ,
+                "A11_POOL_THREADS": "1",
+                "A11_FIBER_WATCHDOG": "1",
+            },
+        )
+        try:
+            process.stdin.write(b"hello\n")
+            process.stdin.flush()
+            with selectors.DefaultSelector() as ready:
+                ready.register(process.stdout, selectors.EVENT_READ)
+                readable = bool(ready.select(3))
+            process.stdin.write(b"/EXIT\nignored\n")
+            process.stdin.flush()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                errors.seek(0)
+                pytest.fail("cleanup waited for stdin EOF\n" + errors.read())
+            output = process.stdout.read()
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.communicate(timeout=5)
+        errors.seek(0)
+        report = errors.read()
+    assert readable, "stdout waited for stdin EOF\n" + report
+    assert process.returncode == 0, report
+    assert output == b"hello\n"
+    assert "cleanup" in report

@@ -95,6 +95,11 @@ struct ActionInfo {
   /// Where the declaration is, when it was found by reading source.
   std::optional<Origin> origin;
 
+  /// All interfaces contributing to the effective schema.
+  std::vector<Origin> schema_origins;
+  /// Source discovery may omit computed members; live schemas are complete.
+  bool schema_complete = true;
+
   [[nodiscard]] const PortInfo* absl_nullable Port(
       std::string_view port_name, syntax::PortDirection direction) const;
   [[nodiscard]] std::vector<std::string> PortNames(
@@ -139,10 +144,13 @@ class Catalogue {
 
   /// This catalogue with `other` laid over it.
   ///
-  /// A name in `other` replaces the corresponding entry; other existing names
-  /// remain. Whole-entry replacement avoids combining fields from two distinct
-  /// descriptions.
+  /// Complete entries replace matching names. Partial source discoveries add
+  /// locations and descriptions while retaining an existing complete schema.
+  /// Other existing names remain.
   [[nodiscard]] Catalogue MergedWith(const Catalogue& other) const;
+
+  /// Interfaces and shapes used as analysis evidence by the native resolver.
+  [[nodiscard]] Program SchemaProgram() const;
 
   [[nodiscard]] const ActionInfo* absl_nullable Action(
       std::string_view name) const;

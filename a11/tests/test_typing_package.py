@@ -87,12 +87,18 @@ def test_the_flow_stub_names_what_it_hands_back() -> None:
     assert "-> dict:" not in source
     assert "-> list:" not in source
     for signature in (
-        'def check(source: str, source_name: str = "-")'
-        " -> dict[str, typing.Any]:",
+        (
+            'def check( source: str, source_name: str = "-",'
+            " modules: collections.abc.Mapping[str, str] = {},"
+            " resolve_files: bool = False, )"
+            " -> dict[str, typing.Any]:"
+        ),
         "def codes() -> list[dict[str, typing.Any]]:",
         "def stages() -> dict[str, str]:",
-        "def make_handler( self, dispatch_stream: WireStream | None = None )"
-        " -> ActionHandler | NativeActionHandler | None:",
+        (
+            "def make_handler( self, dispatch_stream: WireStream | None = None"
+            " ) -> ActionHandler | NativeActionHandler | None:"
+        ),
         "def schema(self) -> ActionSchema:",
         "def inputs(self) -> collections.abc.Mapping[str, ActionPortSchema]:",
         "def main(self) -> FlowPlan:",
@@ -125,7 +131,8 @@ def test_a_reader_resolves_its_result_from_obj_type() -> None:
         assert (
             f"async def {reader}( self, obj_type: type[T] | None = None,"
             " timeout: Duration | None = None, mimetype_patterns:"
-            ' str | typing.Sequence[str] = "", ) -> T | None:' in source
+            ' str | typing.Sequence[str] = "", ) -> T | None:'
+            in source
         ), reader
 
 
@@ -145,8 +152,9 @@ def test_allow_none_decides_whether_a_reader_can_return_none() -> None:
             in source
         ), reader
         assert (
-            f"allow_none: typing.Literal[True] = True, )"
-            f" -> {complete} | None: ..." in source
+            "allow_none: typing.Literal[True] = True, )"
+            f" -> {complete} | None: ..."
+            in source
         ), reader
         # A computed flag still type-checks, at the cost of the union. The
         # trailing comma depends on whether black wrapped the signature.
@@ -162,11 +170,13 @@ def test_decode_decides_whether_a_header_reads_as_str_or_bytes() -> None:
 
     assert (
         "self, name: str, decode: typing.Literal[False] = False )"
-        " -> bytes | None:" in source
+        " -> bytes | None:"
+        in source
     )
     assert (
         "self, name: str, decode: typing.Literal[True] = True )"
-        " -> str | None: ..." in source
+        " -> str | None: ..."
+        in source
     )
 
 
@@ -211,3 +221,32 @@ async def test_allow_none_still_decides_the_runtime_result() -> None:
     whole = a11.AsyncNode.create("whole-node")
     await whole.finalize("only", wait=True)
     assert await whole.consume(obj_type=str) == "only"
+
+
+def test_native_http_exception_annotations_have_imports():
+    tree = ast.parse(STUB.read_text())
+    imported = {
+        alias.asname or alias.name.split(".")[0]
+        for node in tree.body
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    }
+    status = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "Status"
+    )
+    method = next(
+        node
+        for node in status.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "from_http_exception"
+    )
+    for argument in method.args.args:
+        for node in ast.walk(argument.annotation):
+            if isinstance(node, ast.Attribute):
+                root = node.value
+                while isinstance(root, ast.Attribute):
+                    root = root.value
+                if isinstance(root, ast.Name):
+                    assert root.id in imported, root.id

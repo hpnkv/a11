@@ -19,6 +19,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -440,6 +441,8 @@ struct CoerceContext {
 /// reference replaced each resolved name with a `RefValue` node, which a tree
 /// handed across a language boundary cannot do.
 struct EvalContext {
+  std::function<absl::StatusOr<std::optional<Value>>(const syntax::Node&)>
+      lookup;
   const absl::flat_hash_map<const syntax::Node*, Value>* absl_nullable bound =
       nullptr;
   /// The value a `where`/`map`/`group` stage is looking at.

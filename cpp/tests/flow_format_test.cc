@@ -138,6 +138,56 @@ std::string ReadFile(const std::filesystem::path& path) {
   return buffer.str();
 }
 
+TEST(FlowFormat, PlainPipelineBindingsPreserveTheirCompletionGroup) {
+  const std::string source = R"(flow main{in values:integer stream
+out kept:integer stream
+forwarded=values
+|take until it==3
+->kept,_
+after forwarded{log "done"}
+})";
+  const auto result = Formatted(source);
+  EXPECT_EQ(Tree(result), Tree(source));
+  EXPECT_EQ(Stream(result), Stream(source));
+  EXPECT_EQ(Formatted(result), result);
+  EXPECT_NE(result.find("forwarded = values"), std::string::npos);
+}
+
+TEST(FlowFormat, PredicatePrefixesAndAfterBlocksPreserveTheirSyntax) {
+  const std::string source =
+      R"(flow main{done={ [1,2,3]|flatten|take until it==3->_ }
+cleanup=after done{log "done"
+ after done{log "nested"}}
+})";
+  const auto result = Formatted(source);
+  EXPECT_EQ(Stream(result), Stream(source));
+  EXPECT_FALSE(Parse(result).HasErrors()) << result;
+  EXPECT_EQ(Formatted(result), result);
+  EXPECT_NE(result.find("take until"), std::string::npos);
+  EXPECT_NE(result.find("after done {"), std::string::npos);
+}
+
+TEST(FlowFormat, AfterBlocksAreDistinctFromContinuedCallModifiers) {
+  const std::string source = R"(flow main {
+ first=run work()
+ second=run work()
+ after first,
+
+ second
+ {
+  log "finished"
+ }
+ third=run work()
+   after first
+ after third { log "last" }
+})";
+  const auto result = Formatted(source);
+  EXPECT_FALSE(Parse(result).HasErrors()) << result;
+  EXPECT_EQ(Tree(result), Tree(source));
+  EXPECT_EQ(Stream(result), Stream(source));
+  EXPECT_EQ(Formatted(result), result);
+}
+
 TEST(FlowFormat, IndentsBlocksAndSpacesTokensTheOneWay) {
   const std::string source =
       "flow t{\n"
@@ -449,5 +499,24 @@ TEST(FlowFormat, EndsTheFileWithOneNewlineAndNoTrailingSpace) {
             "flow t {\n  in  a: string\n}\n");
 }
 
+TEST(FlowFormat, OperationsDeclarationsAndModulesPreserveTokensAndGrouping) {
+  const std::string source = R"(import "library" as lib
+declare flow render exported { in data: object
+out text: string stream }
+flow f exported {
+  out result: string stream
+  let outcome=wait try run check()
+  let finished=drain node("existing")
+  (run lib.render(data:{"ok":outcome.ok}) via scratch).text|consume->result
+}
+)";
+  const auto formatted = Format(source);
+  ASSERT_EQ(FirstError(formatted.diagnostics), nullptr);
+  EXPECT_EQ(Stream(source), Stream(formatted.formatted));
+  EXPECT_EQ(Tree(source), Tree(formatted.formatted));
+  EXPECT_FALSE(Format(formatted.formatted).changed);
+  EXPECT_NE(formatted.formatted.find("wait try run check()"),
+            std::string::npos);
+}
 }  // namespace
 }  // namespace a11::flow

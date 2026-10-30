@@ -883,4 +883,15 @@ a11::Future<RedisChunkStoreMetadata> RedisChunkStore::GetMetadata() {
   });
 }
 
+a11::Future<std::optional<absl::Status>> RedisChunkStore::GetWriteStatus() {
+  return a11::Then(GetMetadata(),
+                   [](const absl::StatusOr<RedisChunkStoreMetadata>& metadata)
+                       -> absl::StatusOr<std::optional<absl::Status>> {
+                     if (!metadata.ok()) {
+                       return metadata.status();
+                     }
+                     return metadata->status;
+                   });
+}
+
 }  // namespace a11::stores

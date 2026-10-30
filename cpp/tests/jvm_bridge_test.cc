@@ -63,8 +63,9 @@ TEST(JvmBridgeTest, ObserversAreBoundedWithoutBlockingTheProducer) {
     operation->SubscribeResult(token);
   }
   EXPECT_EQ(Subscribe(1025).code(), absl::StatusCode::kResourceExhausted);
-  for (int token = 1; token <= 1024; ++token)
+  for (int token = 1; token <= 1024; ++token) {
     Unsubscribe(token);
+  }
   ASSERT_TRUE(Subscribe(1025).ok());
   operation->SubscribeResult(1025);
   const auto events = TakeEvents();

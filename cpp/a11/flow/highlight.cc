@@ -21,6 +21,7 @@
 #include <vector>
 
 #include <absl/container/flat_hash_set.h>
+#include <absl/strings/str_cat.h>
 #include <absl/types/span.h>
 
 #include "a11/flow/parser.h"
@@ -209,11 +210,15 @@ class Classifier {
     while (at < index_ && !At(at).IsWord()) {
       ++at;
     }
+    if (At(at + 1).kind == TokenKind::kEqual) {
+      at += 2;
+    }
     if (!At(at).IsWord()) {
       return false;
     }
     static const auto* const kOpeners = new absl::flat_hash_set<std::string>{
-        "flow", "struct", "nodes", "if", "else", "for", "repeat", "try"};
+        "flow", "struct", "nodes", "if",   "else",
+        "for",  "repeat", "try",   "after"};
     return kOpeners->contains(vocabulary::Canonical(At(at).text));
   }
 
@@ -310,8 +315,24 @@ class Classifier {
         break;
     }
 
-    if (after_pipe_ && vocabulary::StageTakes(word).has_value()) {
-      return SemanticKind::kStage;
+    if (!stage_head_.empty()) {
+      const std::string phrase = absl::StrCat(stage_head_, " ", word);
+      stage_head_.clear();
+      if (vocabulary::StageTakes(phrase).has_value()) {
+        return SemanticKind::kStage;
+      }
+    }
+    if (after_pipe_) {
+      if (vocabulary::StageTakes(word).has_value()) {
+        return SemanticKind::kStage;
+      }
+      if (Next().IsWord() &&
+          vocabulary::StageTakes(
+              absl::StrCat(word, " ", vocabulary::Canonical(Next().text)))
+              .has_value()) {
+        stage_head_ = word;
+        return SemanticKind::kStage;
+      }
     }
     // `a11.sdk.Interaction{...}`: a tag naming a type where no list could know
     // it, so position decides.
@@ -341,6 +362,10 @@ class Classifier {
     }
     if (vocabulary::DeclarationWords().contains(word)) {
       return SemanticKind::kDeclarationKeyword;
+    }
+    if (word == "after" && !LineOpensBlock()) {
+      return AssignmentFollows() ? SemanticKind::kIdentifier
+                                 : SemanticKind::kModifierKeyword;
     }
     if (vocabulary::StatementWords().contains(word) ||
         vocabulary::SourceWords().contains(word) ||
@@ -378,12 +403,17 @@ class Classifier {
       after_dot_ = was_after_dot;
       return;
     }
+    if (token.kind != TokenKind::kWord && token.kind != TokenKind::kNewline) {
+      stage_head_.clear();
+    }
     if (token.kind == TokenKind::kPipe) {
       after_pipe_ = true;
       after_log_ = false;
       return;
     }
-    if (token.kind != TokenKind::kNewline) {
+    if (token.kind != TokenKind::kNewline &&
+        !(after_pipe_ && token.IsWord() &&
+          vocabulary::Canonical(token.text) == "try")) {
       after_pipe_ = false;
     }
     if (token.kind != TokenKind::kNewline) {
@@ -522,6 +552,7 @@ class Classifier {
   State state_ = State::kDefault;
   bool after_dot_ = false;
   bool after_pipe_ = false;
+  std::string stage_head_;
   /// Whether the word just seen was a `log`/`logf` keyword, which is the one
   /// position a level word means a level. See [WordKind].
   bool after_log_ = false;

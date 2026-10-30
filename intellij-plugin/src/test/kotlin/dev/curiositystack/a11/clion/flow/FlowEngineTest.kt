@@ -17,10 +17,13 @@
 package dev.curiositystack.a11.clion.flow
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
+import java.io.File
+import java.security.MessageDigest
 
 /**
  * The one thing this plugin still has to get right about the language: talking to
@@ -35,6 +38,46 @@ import org.junit.Test
  * with no binary would be a test that says nothing.
  */
 class FlowEngineTest {
+
+    @Test
+    fun `packaged service matches the current native build`() {
+        val resource = System.getProperty("a11.flow.bundled.resource")
+        assertNotNull("the build must identify its packaged language service", resource)
+        val bytes = javaClass.classLoader.getResourceAsStream(resource!!)?.use { it.readBytes() }
+        assertNotNull("the language service must be present in plugin resources", bytes)
+        val expected = File(System.getProperty("a11.flow.built.tool")).readBytes()
+        val hash = MessageDigest.getInstance("SHA-256")
+        assertArrayEquals(hash.digest(expected), hash.digest(bytes!!))
+    }
+
+    @Test
+    fun `bundled service analyses and highlights current Flow syntax`() {
+        val source = """
+            struct Report exported { title: string }
+            declare flow fetch exported { out text: string stream }
+            flow render exported {
+              out report: Report
+              let text = (run fetch()).text | consume
+              Report{title: text} -> report
+            }
+        """.trimIndent()
+        val checked = engine().check(source)
+        assertNotNull(checked)
+        val errors = (checked!!["diagnostics"] as List<*>).filter {
+            (it as Map<*, *>)["severity"] == "error"
+        }
+        assertTrue(errors.toString(), errors.isEmpty())
+        val payload = engine().tokens(source)
+        assertNotNull(payload)
+        val tokens = payload!!["tokens"] as List<*>
+        for (word in listOf("declare", "exported", "consume")) {
+            val start = source.indexOf(word)
+            val token = tokens.map { it as Map<*, *> }.first {
+                (it["start"] as Number).toInt() == start
+            }
+            assertTrue(token.toString(), token["kind"] != "identifier")
+        }
+    }
 
     private fun engine(): FlowEngine {
         val engine = FlowEngine.instance()

@@ -174,13 +174,15 @@ class Completer {
     LexResult lexed = Lex(source_, LexOptions{.keep_comments = true});
     tokens_ = std::move(lexed.tokens);
     parsed_ = ParseTokens(source_, tokens_, std::move(lexed.diagnostics));
-    resolved_ = Resolve(source_, parsed_);
+    const auto evidence = known_.SchemaProgram();
+    resolved_ = Resolve(source_, parsed_, false, &evidence);
     Locate();
   }
 
   /// Whether this text is a flow body rather than a file of flows.
   [[nodiscard]] bool IsFragment() const {
-    if (!parsed_.flows.empty() || !parsed_.dtos.empty()) {
+    if (!parsed_.flows.empty() || !parsed_.dtos.empty() ||
+        !parsed_.imports.empty()) {
       return false;
     }
     for (const Token& token : tokens_) {
@@ -197,7 +199,8 @@ class Completer {
         return true;
       }
       const std::string word = vocabulary::Canonical(token.text);
-      return word != "flow" && word != "struct";
+      return word != "flow" && word != "struct" && word != "declare" &&
+             word != "import" && word != "from";
     }
     return false;
   }
@@ -568,6 +571,9 @@ class Completer {
     const size_t statement =
         line_.empty() ? offset_ : tokens_[line_.front()].start;
     for (const Symbol& symbol : flow_->symbols) {
+      if (!symbol.name.empty() && symbol.name.front() == '\x1f') {
+        continue;
+      }
       if (symbol.location.start > offset_) {
         continue;
       }
@@ -594,6 +600,9 @@ class Completer {
       return;
     }
     for (const Symbol& symbol : flow_->symbols) {
+      if (!symbol.name.empty() && symbol.name.front() == '\x1f') {
+        continue;
+      }
       if (symbol.kind != SymbolKind::kCall) {
         continue;
       }
@@ -617,11 +626,33 @@ class Completer {
   // -- the rules --------------------------------------------------------------
 
   void Propose() {
-    // Outside a flow or a shape there are exactly two things a file may say
-    // next.
+    if (LineHasWord("from") && LineHasWord("import")) {
+      for (const auto& action : known_.actions()) {
+        Add(action.name, ProposalKind::kFlow, "(...)");
+      }
+      for (const auto& type : known_.types()) {
+        Add(type.tag, ProposalKind::kType);
+      }
+      return;
+    }
+    if (PreviousWord() == "take") {
+      for (const auto stage : vocabulary::Stages()) {
+        if (stage.starts_with("take ")) {
+          Add(std::string(stage.substr(5)), ProposalKind::kStage, " condition");
+          proposals_.back().documentation =
+              WordMarkdown(stage, vocabulary::WordRole::kStage);
+        }
+      }
+      return;
+    }
+    // Module declarations are available outside a flow or shape.
     if (open_braces_.empty()) {
       Add("flow", ProposalKind::kDeclaration, " name { }");
       Add("struct", ProposalKind::kDeclaration, " Name { }");
+      Add("declare", ProposalKind::kDeclaration, " flow name { }");
+      Add("import", ProposalKind::kDeclaration,
+          " \"module.flow\" as namespace");
+      Add("from", ProposalKind::kDeclaration, " \"module.flow\" import symbol");
       return;
     }
 
@@ -708,7 +739,13 @@ class Completer {
     if (open_braces_.size() != 1) {
       return false;
     }
-    const size_t brace = open_braces_.front();
+    size_t brace = open_braces_.front();
+    if (brace >= 3 && tokens_[brace - 1].IsWord() &&
+        vocabulary::Canonical(tokens_[brace - 1].text) == "exported" &&
+        tokens_[brace - 3].IsWord() &&
+        vocabulary::Canonical(tokens_[brace - 3].text) == "struct") {
+      --brace;
+    }
     return brace >= 2 && tokens_[brace - 1].IsWord() &&
            tokens_[brace - 2].IsWord() &&
            vocabulary::Canonical(tokens_[brace - 2].text) == "struct";
@@ -716,6 +753,10 @@ class Completer {
 
   /// A field being written: its type, then what may bound it.
   void ProposeField() {
+    if (PreviousIs(TokenKind::kDot)) {
+      ProposeNamespaceAtCaret(true);
+      return;
+    }
     if (line_.empty()) {
       Add("describe", ProposalKind::kDeclaration, " \"...\"");
       return;
@@ -827,8 +868,135 @@ class Completer {
     return true;
   }
 
+  bool ProposeExpressionMembers() {
+    if (flow_ == nullptr || flow_->declaration == nullptr ||
+        Previous() == nullptr) {
+      return false;
+    }
+    const size_t dot = Previous()->start;
+    const syntax::Node* base = nullptr;
+    syntax::VisitSubtree(*flow_->declaration, [&](const syntax::Node& node) {
+      if (const auto* attr = syntax::As<syntax::Attr>(&node);
+          attr != nullptr && attr->location.start == dot) {
+        base = attr->base.get();
+      }
+    });
+    if (base == nullptr) {
+      return false;
+    }
+    const auto found = flow_->expressions.find(base);
+    if (found != flow_->expressions.end()) {
+      const ExpressionInfo& info = found->second;
+      if (info.category == ExpressionCategory::kCall) {
+        if (info.callable != nullptr) {
+          for (const auto direction : {syntax::PortDirection::kOutput,
+                                       syntax::PortDirection::kInput}) {
+            for (const auto& port : info.callable->ports) {
+              if (port.direction == direction) {
+                Add(port.name, ProposalKind::kPort,
+                    port.required ? " (required)" : "", port.declared);
+              }
+            }
+          }
+        } else if (const auto* action = known_.Action(info.action);
+                   action != nullptr) {
+          for (const auto& port : action->outputs) {
+            Add(port.name, ProposalKind::kPort, "", port.type);
+          }
+        }
+        if (info.callable == nullptr) {
+          if (const auto* action = known_.Action(info.action);
+              action != nullptr) {
+            for (const auto& port : action->inputs) {
+              Add(port.name, ProposalKind::kPort,
+                  port.required ? " (required)" : "", port.type);
+            }
+          }
+        }
+        Add("status", ProposalKind::kField);
+        return true;
+      }
+      const DtoPlan* shape = info.shape;
+      if (shape == nullptr && !info.action.empty()) {
+        if (const auto* action = known_.Action(info.action);
+            action != nullptr) {
+          if (const auto* port =
+                  action->Port(info.port, syntax::PortDirection::kOutput);
+              port != nullptr) {
+            if (const auto* type = known_.Type(port->type); type != nullptr) {
+              shape = &type->shape;
+            }
+          }
+        }
+      }
+      if (shape != nullptr) {
+        for (const auto& field : shape->fields) {
+          Add(field.name, ProposalKind::kField,
+              field.required ? " (required)" : "", field.declared);
+        }
+        return true;
+      }
+      if (!info.fields.empty()) {
+        for (const auto& field : info.fields) {
+          Add(field, ProposalKind::kField);
+        }
+        return true;
+      }
+    }
+    if (const auto* name = syntax::As<syntax::Name>(base); name != nullptr) {
+      return ProposeNamespaceMembers(name->name);
+    }
+    return false;
+  }
+
+  bool ProposeNamespaceMembers(std::string_view name, bool types_only = false) {
+    const std::string prefix = absl::StrCat(name, ".");
+    bool any = false;
+    for (const auto& action : known_.actions()) {
+      if (!types_only && action.name.starts_with(prefix)) {
+        Add(action.name.substr(prefix.size()), ProposalKind::kFlow, "", "");
+        any = true;
+      }
+    }
+    for (const auto& type : known_.types()) {
+      if (type.tag.starts_with(prefix)) {
+        Add(type.tag.substr(prefix.size()), ProposalKind::kType, "", "");
+        any = true;
+      }
+    }
+    return any;
+  }
+
+  void ProposeNamespaceAtCaret(bool types_only = false) {
+    const Token* base = Previous(1);
+    if (base == nullptr || !base->IsWord()) {
+      return;
+    }
+    const size_t last = static_cast<size_t>(base - tokens_.data());
+    size_t start = last;
+    while (start >= 2 && tokens_[start - 1].kind == TokenKind::kDot &&
+           tokens_[start - 2].IsWord()) {
+      start -= 2;
+    }
+    std::string name;
+    for (size_t at = start; at <= last; ++at) {
+      absl::StrAppend(&name, tokens_[at].text);
+    }
+    ProposeNamespaceMembers(name, types_only);
+  }
+
   /// What follows a `.`: only what the thing before it actually has.
   void ProposeMembers() {
+    if (line_.size() >= 3 && tokens_[line_[0]].IsWord() &&
+        (vocabulary::Canonical(tokens_[line_[0]].text) == "in" ||
+         vocabulary::Canonical(tokens_[line_[0]].text) == "out") &&
+        tokens_[line_[2]].kind == TokenKind::kColon) {
+      ProposeNamespaceAtCaret(true);
+      return;
+    }
+    if (ProposeExpressionMembers()) {
+      return;
+    }
     const Token* base = Previous(1);
     if (base == nullptr || !base->IsWord() || flow_ == nullptr) {
       return;
@@ -846,6 +1014,7 @@ class Completer {
       }
     }
     if (symbol == nullptr) {
+      ProposeNamespaceAtCaret();
       return;
     }
     switch (symbol->kind) {
@@ -1312,7 +1481,11 @@ class Completer {
     bool in_stage = false;
     const std::string word = PreviousWord();
     if (!word.empty()) {
-      const auto stage = vocabulary::StageTakes(word);
+      auto stage = vocabulary::StageTakes(word);
+      if (!stage.has_value() && (word == "while" || word == "until") &&
+          LineHasWord("take")) {
+        stage = vocabulary::StageTakes(absl::StrCat("take ", word));
+      }
       if (stage.has_value() &&
           (*stage == vocabulary::StageArgument::kExpression ||
            *stage == vocabulary::StageArgument::kOptionalExpression ||
@@ -1400,6 +1573,10 @@ class Completer {
 
   /// The head of a statement: everything a flow may say, and every name it has.
   void ProposeStatement() {
+    Add("declare", ProposalKind::kDeclaration, " flow name { }");
+    Add("struct", ProposalKind::kDeclaration, " Name { }");
+    Add("from", ProposalKind::kDeclaration, " \"module.flow\" import symbol");
+    Add("import", ProposalKind::kDeclaration, " \"module.flow\" as namespace");
     const bool in_repeat = InsideBlockOf("repeat");
     for (const std::string_view statement : vocabulary::OrderedStatements()) {
       // A loop tail belongs to a `repeat`, and saying so anywhere else would be

@@ -196,7 +196,7 @@ TEST(FlowResolve, SaysWhatIsWrongInTheWordsThePythonCompilerUses) {
       {"flow f { in a: string\n in a: string }", "flow.form.duplicate-port",
        "declared twice"},
       {"flow one { in a: string }\nflow one { in a: string }",
-       "flow.form.duplicate-flow", "Flow 'one' is declared twice."},
+       "flow.sequence.redundant-declaration", "Compatible callable contracts"},
       {"flow f { out a: bool\n True -> a }", "flow.name.unknown",
        "Unknown name 'True'"},
       {"flow f { out a: string\n fail wat \"x\" }",
@@ -240,6 +240,62 @@ TEST(FlowResolve, SaysWhatIsWrongInTheWordsThePythonCompilerUses) {
     }
     EXPECT_TRUE(found) << one.source << " gave " << Messages(result);
   }
+}
+
+TEST(FlowResolve, PlainPipelineBindingsCoverLiteralAndOperationSources) {
+  for (const auto* source :
+       {"values", "[1, 2] | flatten", "(values | first 1)", "{\"key\": 1}",
+        "{}", "(node()).id", "(run unknown()).output",
+        "status (try run unknown())"}) {
+    const std::string text =
+        absl::StrCat("flow main { in values: integer stream\n done = ", source,
+                     " -> _\n after done { log \"done\" }\n}");
+    for (const bool graph : {false, true}) {
+      const auto result = Resolve(text, Parse(text), graph);
+      EXPECT_FALSE(result.HasErrors()) << text << "\n" << Messages(result);
+    }
+  }
+  EXPECT_TRUE(Check("flow main { done = [1] | flatten\n}").HasErrors());
+  EXPECT_TRUE(Check("flow main { done = [1] -> missing\n}").HasErrors());
+}
+
+TEST(FlowResolve, AfterBlocksGateEffectsAndKeepTheirBindingsLocal) {
+  for (const bool graph : {false, true}) {
+    const std::string source = R"(flow main {
+ done = {}
+ after done {
+   log "done"
+   local = run unknown()
+   cancel local
+   after local { log "nested" }
+ }
+})";
+    const auto result = Resolve(source, Parse(source), graph);
+    EXPECT_FALSE(result.HasErrors()) << Messages(result);
+  }
+  EXPECT_TRUE(Check("flow main { done = {}\n after done { let hidden = 1 }\n "
+                    "log hidden }")
+                  .HasErrors());
+  for (const auto* source :
+       {"flow main { after missing { log \"done\" } }",
+        "flow main { let value = 1\n after value { log \"done\" } }",
+        "flow main { after {} }",
+        "flow main { done = {}\n after done, { log \"done\" } }"}) {
+    EXPECT_TRUE(Check(source).HasErrors()) << source;
+  }
+}
+
+TEST(FlowResolve, PredicatePrefixesRequirePredicatesAndOrderedEvaluation) {
+  for (const auto* tail :
+       {"take", "take 3", "take while", "take until",
+        "take while it parallel 2", "take until it unordered"}) {
+    const auto parsed =
+        Parse(absl::StrCat("flow main { [1] | flatten | ", tail, " -> _ }"));
+    EXPECT_TRUE(parsed.HasErrors()) << tail;
+  }
+  EXPECT_TRUE(
+      Codes(Check("flow main { [1] | flatten | TAKE until it == 1 -> _ }"))
+          .empty());
 }
 
 TEST(FlowResolve, EveryCodeItProducesIsPublished) {
@@ -311,6 +367,63 @@ TEST(FlowResolve, AFailOrCancelAtTheTopOfABodyIsRefused) {
                                       "flow.form.unconditional-cancel"}));
 }
 
+TEST(FlowResolve, EffectsMayWaitForTheirDataArguments) {
+  const std::string_view statements[] = {
+      "log input",
+      "let identity = input | consume\n log (node(identity)).id",
+      "identified = node(input)\n log identified.id",
+      "logf \"value: %s\" (input | consume)",
+      "let value = input | consume\n logf \"value: %s\" value",
+      "let first = input | consume\n let value = first\n log value",
+      "log {\"value\": input}",
+      "fail internal input",
+      "fail input",
+      "abort target unavailable input",
+      "log (run produce()).output",
+      "log status run produce()",
+      "log (wait try run produce()).ok",
+  };
+  for (const auto statement : statements) {
+    const std::string source =
+        absl::StrCat("flow produce { out output: string\n \"ok\" -> output }\n",
+                     "flow main { in input: string stream\n target = node()\n ",
+                     statement, "\n}");
+    for (const bool graph : {false, true}) {
+      const auto result = Resolve(source, Parse(source), graph);
+      EXPECT_FALSE(result.HasErrors()) << statement << "\n" << Messages(result);
+    }
+  }
+}
+
+TEST(FlowResolve, ConstantArgumentsAndHandlesDoNotGateEffects) {
+  for (const auto* statement : {
+           "log \"constant\"",
+           "logf \"value: %s\" 42",
+           "let value = \"constant\"\n log value",
+           "let first = \"constant\"\n let value = first\n log value",
+           "log ([1] | consume)",
+           "log (true or input)",
+           "log (false and input)",
+           "log target.id",
+           "fail internal \"constant\"",
+           "abort target unavailable \"constant\"",
+           "cancel work",
+       }) {
+    const std::string source =
+        absl::StrCat("flow main { in input: string stream\n target = node()\n",
+                     "work = run unknown()\n ", statement, "\n}");
+    for (const bool graph : {false, true}) {
+      const auto result = Resolve(source, Parse(source), graph);
+      bool unconditional = false;
+      for (const auto& diagnostic : result.diagnostics) {
+        unconditional |=
+            diagnostic.code.starts_with("flow.form.unconditional-");
+      }
+      EXPECT_TRUE(unconditional) << statement << "\n" << Messages(result);
+    }
+  }
+}
+
 TEST(FlowResolve, ALogAtTheTopOfABodyIsRefused) {
   // Same rule as `fail` and `cancel`, and for a reason of its own: a log says
   // what just happened, so one that runs before anything else describes
@@ -319,7 +432,7 @@ TEST(FlowResolve, ALogAtTheTopOfABodyIsRefused) {
                         "  log \"starting\"\n  a -> b\n}\n")),
             (std::vector<std::string>{"flow.form.unconditional-log"}));
   EXPECT_EQ(Codes(Check("flow f {\n  in a: string\n  out b: string\n"
-                        "  logf \"starting %s\" a\n  a -> b\n}\n")),
+                        "  logf \"starting %s\" \"a\"\n  a -> b\n}\n")),
             (std::vector<std::string>{"flow.form.unconditional-logf"}));
 
   // An `if`, a loop body and an `after` each say when it happens.

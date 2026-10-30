@@ -227,6 +227,10 @@ class AsyncNode : public std::enable_shared_from_this<AsyncNode> {
    */
   [[nodiscard]] absl::Status GetWriterStatus() const;
 
+  /// Observe logical completion without consuming data or closing the node.
+  /// Cancelling this task releases the observation without cancelling writers.
+  a11::Task ObserveCompletion();
+
   /**
    * @brief Return the status the writer was aborted with.
    * @return The abort status, or nullopt if the writer has not been

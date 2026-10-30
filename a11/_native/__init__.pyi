@@ -21,7 +21,7 @@ import a11.flow.plan
 import a11.status
 import a11.stores.local_chunk_store
 import asyncio
-import fastapi
+import starlette.exceptions
 import httpx
 import collections.abc
 import msgpack._cmsgpack
@@ -1866,6 +1866,11 @@ class AsyncNode:
         Read and deserialize the next value, or ``None`` at end of stream.
         """
 
+    def observe_completion(self) -> asyncio.Future[None]:
+        """
+        Observe stream completion without consuming data or closing the node.
+        """
+
     async def put(
         self,
         value: typing.Any,
@@ -2921,6 +2926,11 @@ class ChunkStore:
     ) -> asyncio.Future[int]:
         """
         Await the sequence number that corresponds to a given arrival order.
+        """
+
+    def get_write_status(self) -> asyncio.Future[None | None]:
+        """
+        Read write-closure status without consuming fragments; None while open.
         """
 
     def next(
@@ -7365,11 +7375,11 @@ class Status:
     @staticmethod
     def from_http_exception(
         http_exception: (
-            fastapi.exceptions.HTTPException | httpx.HTTPStatusError
+            starlette.exceptions.HTTPException | httpx.HTTPStatusError
         ),
     ) -> Status:
         """
-        Convert a FastAPI/httpx HTTP exception to an A11 status.
+        Convert a Starlette, FastAPI, or httpx HTTP exception to a status.
         """
 
     @staticmethod
@@ -7430,6 +7440,11 @@ class Status:
     ) -> None:
         """
         Creates a status from a canonical code, message, and details list.
+        """
+
+    def __iter__(self) -> collections.abc.Iterator[tuple[str, typing.Any]]:
+        """
+        Iterate the JSON fields for ``dict(status)`` and HTTP encoders.
         """
 
     def __repr__(self) -> str:

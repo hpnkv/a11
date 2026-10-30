@@ -13,7 +13,6 @@
 // limitations under the License.
 
 #include "a11/actions/action.h"
-#include "a11/actions/authorization.h"
 
 #include <atomic>
 #include <memory>
@@ -27,6 +26,7 @@
 #include <absl/time/time.h>
 #include <gtest/gtest.h>
 
+#include "a11/actions/authorization.h"
 #include "a11/actions/registry.h"
 #include "a11/actions/schema.h"
 #include "a11/concurrency/executor.h"
@@ -298,9 +298,8 @@ TEST(ActionTest, HandlerFailureAbortsUnfinishedOutput) {
 }
 
 TEST(ActionTest, AuthorizationEnvelopeAndActionHelpersAreNative) {
-  const AuthorizationEnvelope envelope{
-      .version = kAuthorizationVersion,
-      .chain = {"header.payload.signature"}};
+  const AuthorizationEnvelope envelope{.version = kAuthorizationVersion,
+                                       .chain = {"header.payload.signature"}};
   const auto encoded = EncodeAuthorization(envelope);
   ASSERT_TRUE(encoded.ok()) << encoded.status();
   const auto decoded = DecodeAuthorization(*encoded);
@@ -339,8 +338,8 @@ TEST(ActionTest, AuthorizationEnvelopeAndActionHelpersAreNative) {
   ASSERT_TRUE(installed.ok()) << installed.status();
   EXPECT_TRUE(installed->is_default);
 
-  auto next = *Action::Create(EchoSchema(), "next", {}, nullptr, pair.first,
-                              session);
+  auto next =
+      *Action::Create(EchoSchema(), "next", {}, nullptr, pair.first, session);
   const auto resolved = contexts.Resolve(next);
   ASSERT_TRUE(resolved.ok()) << resolved.status();
   EXPECT_EQ((*resolved)->subject, "user-1");
@@ -349,15 +348,16 @@ TEST(ActionTest, AuthorizationEnvelopeAndActionHelpersAreNative) {
 
   auto registry = std::make_shared<ActionRegistry>();
   const auto installed_authorizer = InstallAuthorizer(
-      registry, [verified](std::string_view raw)
-                    -> absl::StatusOr<VerifiedAuthorization> {
+      registry,
+      [verified](
+          std::string_view raw) -> absl::StatusOr<VerifiedAuthorization> {
         ABSL_RETURN_IF_ERROR(DecodeAuthorization(raw).status());
         return *verified;
       });
   ASSERT_TRUE(installed_authorizer.ok()) << installed_authorizer.status();
-  auto authorizing = *registry->MakeAction(
-      kAuthorizeAction, "authorize", session->GetNodeMap(), pair.first,
-      session);
+  auto authorizing =
+      *registry->MakeAction(kAuthorizeAction, "authorize",
+                            session->GetNodeMap(), pair.first, session);
   ASSERT_TRUE(SetAuthorization(authorizing, envelope).ok());
   ASSERT_TRUE(authorizing->Run().ok());
   ASSERT_TRUE(authorizing->Wait(absl::Seconds(5)).Await().ok());
@@ -371,8 +371,7 @@ TEST(ActionTest, AuthorizationEnvelopeAndActionHelpersAreNative) {
                       pair.first, session);
   const auto protected_authorization =
       (*installed_authorizer)->Resolve(protected_action);
-  ASSERT_TRUE(protected_authorization.ok())
-      << protected_authorization.status();
+  ASSERT_TRUE(protected_authorization.ok()) << protected_authorization.status();
   EXPECT_EQ((*protected_authorization)->subject, "user-1");
 }
 
@@ -411,5 +410,18 @@ TEST(ActionTest, RemoteCallHasSymmetricInputOutputAndStatus) {
   EXPECT_EQ(received->value().data, "over-wire");
 }
 
+TEST(Action, CancellingAnUnstartedChildReleasesItsParentRegistration) {
+  auto parent = Action::Create(EchoSchema());
+  ASSERT_TRUE(parent.ok()) << parent.status();
+  std::weak_ptr<Action> weak;
+  {
+    auto child = (*parent)->MakeNested(EchoSchema());
+    ASSERT_TRUE(child.ok()) << child.status();
+    weak = *child;
+    ASSERT_TRUE((*child)->Cancel().ok());
+    EXPECT_EQ((*child)->GetStatus().code(), absl::StatusCode::kCancelled);
+  }
+  EXPECT_TRUE(weak.expired());
+}
 }  // namespace
 }  // namespace a11::actions

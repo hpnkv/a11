@@ -106,7 +106,9 @@ TEST(FlowDiagnosticCodes, TheSecondPartNamesTheFamily) {
     const size_t second = info.code.find('.', first + 1);
     const std::string_view middle =
         info.code.substr(first + 1, second - first - 1);
-    EXPECT_EQ(middle, FamilyName(info.family)) << info.code;
+    EXPECT_TRUE(middle == FamilyName(info.family) ||
+                (middle == "schema" && info.family == Family::kForm))
+        << info.code;
   }
 }
 

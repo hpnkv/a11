@@ -112,13 +112,30 @@ with no change here at all — and what it reports is word for word what
 `a11 flow check` and CI report, because it is the same code.
 
 The binary comes from `bin/<os>-<arch>/a11-flow` in the plugin's resources, or from
-`-Da11.flow.tool=...`/`A11_FLOW_TOOL`, or from the path. Build one with
+`-Da11.flow.tool=...`/`A11_FLOW_TOOL`, or from the path. Plugin builds refresh the
+host platform's service through CMake and package that binary. Configure the
+native tree before building the plugin:
 
 ```sh
-cmake --build --preset debug --target a11_flow_tool
-mkdir -p intellij-plugin/bin/macos-aarch64
-cp build/debug/cpp/a11-flow intellij-plugin/bin/macos-aarch64/
+cmake --preset debug
+cd intellij-plugin
+./gradlew buildPlugin
 ```
+
+The build uses `cmake-build-debug`, `cmake-build-release`, `build/debug`, or
+`build/release`, selecting the first configured directory. Set
+`-PflowToolBuildDir=/path/to/build` to select another CMake tree, or
+`-PflowToolBinary=/path/to/a11-flow` to package an explicitly supplied binary.
+Release builds can supply additional platforms under `bin/<os>-<arch>/`; an old
+host binary there cannot override the refreshed copy. Tests exercise the
+packaged service and verify its digest against the selected native binary.
+
+Relative imports use the current file's folder by default. Injected Flow uses
+its host file's folder. The plugin supplies that path and unsaved `.flow`
+documents to the native loader for analysis, completion, hover, and navigation.
+An explicit `FlowSourceContext` attached by a host takes precedence over the
+file-based default. Dependency checks read current imported sources even when
+the importing document's own text has not changed.
 
 **With no binary for the platform**, the editor degrades on purpose rather than
 breaking: comments, strings, numbers and punctuation are still coloured (the one

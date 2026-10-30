@@ -31,11 +31,13 @@ from a11.status import Status, StatusCode, StatusException
 
 
 def _schema(name: str, inputs: dict, outputs: dict) -> ActionSchema:
-    return ActionSchema.model_validate({
-        "name": name,
-        "inputs": inputs,
-        "outputs": outputs,
-    })
+    return ActionSchema.model_validate(
+        {
+            "name": name,
+            "inputs": inputs,
+            "outputs": outputs,
+        }
+    )
 
 
 # --- Toy actions the flows below compose -------------------------------------
@@ -131,11 +133,13 @@ async def registry() -> ActionRegistry:
         state = await action.get_input("state").consume(dict)
         turns = int(state.get("turns", 0)) + 1
         await (
-            await action.get_output("next").put({
-                "turns": turns,
-                "done": turns >= 3,
-                "trace": state.get("trace", "") + ".",
-            })
+            await action.get_output("next").put(
+                {
+                    "turns": turns,
+                    "done": turns >= 3,
+                    "trace": state.get("trace", "") + ".",
+                }
+            )
         )
 
     async def show_mimetypes(action: Action) -> None:
@@ -1512,7 +1516,7 @@ async def test_a_nodes_block_keeps_a_steps_nodes_out_of_the_session(registry):
 
 
 @pytest.mark.asyncio
-async def test_without_a_nodes_block_a_steps_nodes_are_in_the_session(registry):
+async def test_completed_steps_release_their_nodes_from_the_session(registry):
     outputs, node_map, _ = await _run_with_runtime(
         """
         flow shared {
@@ -1526,7 +1530,9 @@ async def test_without_a_nodes_block_a_steps_nodes_are_in_the_session(registry):
         words=["a", "b"],
     )
     assert outputs["summary"] == "A,B"
-    assert [name for name in _node_names(node_map) if "#upper" in name]
+    names = _node_names(node_map)
+    assert any(name.endswith("#summary") for name in names)
+    assert not any("#upper" in name for name in names)
 
 
 def _node_names(node_map: NodeMap) -> list[str]:

@@ -97,6 +97,14 @@ struct Edit {
 struct Fix {
   std::string label;
   std::vector<Edit> edits;
+  bool automatic = true;
+};
+
+/// Another source range explaining a diagnostic.
+struct RelatedDiagnostic {
+  std::string source;
+  Range range;
+  std::string message;
 };
 
 /// One problem found in a flow.
@@ -106,6 +114,7 @@ struct Fix {
 /// Alt+Enter. Nothing downstream composes messages of its own, which is what
 /// keeps the wording of a language problem in one place.
 struct Diagnostic {
+  std::string source;
   /// A stable dotted identifier, e.g. `flow.stage.unknown`. Part of the
   /// contract: a toolchain may match on it, and it does not change with the
   /// wording of the message. See [KnownCodes].
@@ -118,6 +127,7 @@ struct Diagnostic {
   /// The flow the problem is in, where the text got far enough to say.
   std::string flow;
   std::vector<Fix> fixes;
+  std::vector<RelatedDiagnostic> related;
 };
 
 /// The spelling of a severity in the output formats.
@@ -167,6 +177,9 @@ const CodeInfo* absl_nullable FindCode(std::string_view code);
 class LineIndex {
  public:
   explicit LineIndex(std::string_view source);
+
+  /// The borrowed document used to compute positions.
+  std::string_view source() const { return source_; }
 
   /// The position at a byte offset, clamped to the end of the source.
   [[nodiscard]] Position At(size_t offset) const;

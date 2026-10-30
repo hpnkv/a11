@@ -64,8 +64,30 @@ const Proposal* Find(std::string_view marked, std::string_view name) {
   return nullptr;
 }
 
-TEST(FlowComplete, OutsideAFlowThereAreTwoThingsToWrite) {
-  const std::vector<std::string> declarations = {"flow", "struct"};
+TEST(FlowComplete, PlainPipelineNamesOfferCompletionSubjects) {
+  EXPECT_TRUE(Offers(
+      Names("flow f { in values: integer stream\n done = |CARET|"), "values"));
+  EXPECT_TRUE(Offers(Names("flow f { in values: integer stream\n done = values "
+                           "-> _\n after |CARET|"),
+                     "done"));
+  EXPECT_TRUE(Offers(
+      Names("flow f { in values: integer stream\n done = values | |CARET|"),
+      "take until"));
+}
+
+TEST(FlowComplete, PredicatePrefixCompletionOffersWordsAndValues) {
+  EXPECT_TRUE(Offers(Names("flow main { [1] | |CARET|"), "take while"));
+  EXPECT_TRUE(Offers(Names("flow main { [1] | take |CARET|"), "while"));
+  EXPECT_TRUE(Offers(Names("flow main { [1] | take |CARET|"), "until"));
+  EXPECT_TRUE(Offers(Names("flow main { [1] | take while |CARET|"), "it"));
+  EXPECT_TRUE(Offers(Names("flow main { done = {}\n after |CARET|"), "done"));
+  EXPECT_TRUE(
+      Offers(Names("flow main { a = {}\n b = {}\n after a, |CARET|"), "b"));
+}
+
+TEST(FlowComplete, OutsideAFlowOffersModuleDeclarations) {
+  const std::vector<std::string> declarations = {"flow", "struct", "declare",
+                                                 "import", "from"};
   EXPECT_EQ(Names("|CARET|"), declarations);
   EXPECT_EQ(Names("flow a { }\n|CARET|"), declarations);
 }

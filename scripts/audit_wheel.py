@@ -165,7 +165,11 @@ def _audit_installed_behavior() -> None:
 
     entry_points = importlib.metadata.entry_points(group="console_scripts")
     entry = next((item for item in entry_points if item.name == "a11"), None)
-    if entry is None or entry.value != "a11.cli.__main__:_entry":
+    if (
+        entry is None
+        or entry.value != "a11_cli:_entry"
+        or not callable(entry.load())
+    ):
         raise RuntimeError(
             "a11 console script bypasses its process entry point"
         )

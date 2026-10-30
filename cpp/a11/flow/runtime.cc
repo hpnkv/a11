@@ -18,6 +18,7 @@
 #include <atomic>
 #include <deque>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -41,6 +42,7 @@
 #include <absl/time/clock.h>
 #include <absl/time/time.h>
 #include <absl/types/span.h>
+#include <nlohmann/json.hpp>
 
 #include "a11/actions/registry.h"
 #include "a11/concurrency/executor.h"
@@ -48,6 +50,8 @@
 #include "a11/concurrency/parallel.h"
 #include "a11/data/serialization.h"
 #include "a11/data/types.h"
+#include "a11/flow/contract.h"
+#include "a11/flow/schema.h"
 #include "a11/flow/vocabulary.h"
 #include "a11/nodes/async_node.h"
 #include "a11/nodes/node_map.h"
@@ -56,6 +60,13 @@
 #include "thread/boost_primitives.h"
 
 namespace a11::flow {
+struct ExecutionSnapshot {
+  absl::flat_hash_map<std::string,
+                      std::pair<actions::ActionSchema, actions::ActionHandler>>
+      external;
+  bool sealed = false;
+};
+
 namespace {
 
 using graph::BodyId;
@@ -265,6 +276,17 @@ class Monitor {
  public:
   thread::Mutex& mu() ABSL_LOCK_RETURNED(mu_) { return mu_; }
 
+  absl::Status status() const ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
+    return stop_;
+  }
+
+  uint64_t CompletionOrder() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
+    if (completion_order_ != std::numeric_limits<uint64_t>::max()) {
+      ++completion_order_;
+    }
+    return completion_order_;
+  }
+
   // Wake every parked waiter after shared state changes. Waiters increment the
   // count under the monitor lock before testing their predicate.
   /// Wake every parked waiter after shared state changes.
@@ -326,6 +348,9 @@ class Monitor {
       if (!stop_.ok()) {
         return stop_;
       }
+      if (thread::Cancelled()) {
+        return absl::CancelledError("Flow task cancelled");
+      }
       condition.cv_.Wait(&mu_);
     }
     return absl::OkStatus();
@@ -340,6 +365,9 @@ class Monitor {
     while (!ready()) {
       if (!stop_.ok()) {
         return stop_;
+      }
+      if (thread::Cancelled()) {
+        return absl::CancelledError("Flow task cancelled");
       }
       if (condition.cv_.WaitWithDeadline(&mu_, deadline) && !ready()) {
         return absl::DeadlineExceededError("The wait timed out");
@@ -358,6 +386,9 @@ class Monitor {
       if (!stop_.ok()) {
         return stop_;
       }
+      if (thread::Cancelled()) {
+        return absl::CancelledError("Flow task cancelled");
+      }
       cv_.Wait(&mu_);
     }
     return absl::OkStatus();
@@ -370,6 +401,9 @@ class Monitor {
     while (!ready()) {
       if (!stop_.ok()) {
         return stop_;
+      }
+      if (thread::Cancelled()) {
+        return absl::CancelledError("Flow task cancelled");
       }
       if (cv_.WaitWithDeadline(&mu_, deadline) && !ready()) {
         return absl::DeadlineExceededError("The wait timed out");
@@ -386,20 +420,31 @@ class Monitor {
     if (why.ok()) {
       why = absl::CancelledError("The flow stopped");
     }
-    std::vector<Condition*> conditions;
-    {
-      thread::MutexLock lock(&mu_);
-      if (!stop_.ok()) {
-        return;
-      }
-      stop_ = std::move(why);
-      conditions = conditions_;
+    thread::MutexLock lock(&mu_);
+    if (!stop_.ok()) {
+      return;
     }
-    // Unconditionally, unlike [Wake], and every per-object condition with it:
-    // this is the path that must not miss.
+    stop_ = std::move(why);
     cv_.SignalAll();
-    for (Condition* condition : conditions) {
+    for (Condition* condition : conditions_) {
       condition->cv_.SignalAll();
+    }
+  }
+
+  void WakeAll() {
+    thread::MutexLock lock(&mu_);
+    cv_.SignalAll();
+    for (Condition* condition : conditions_) {
+      condition->cv_.SignalAll();
+    }
+  }
+
+  void WaitComplete(Condition& condition, absl::FunctionRef<bool()> ready)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
+    condition.waiters_.fetch_add(1, std::memory_order_relaxed);
+    const Counted counted(&condition.waiters_);
+    while (!ready()) {
+      condition.cv_.Wait(&mu_);
     }
   }
 
@@ -436,6 +481,7 @@ class Monitor {
   };
 
   thread::Mutex mu_;
+  uint64_t completion_order_ ABSL_GUARDED_BY(mu_) = 0;
   thread::CondVar cv_;
   absl::Status stop_ ABSL_GUARDED_BY(mu_);
   /// Read without the lock by [Wake]; see the note there.
@@ -451,7 +497,8 @@ class Monitor {
 /// things that are not coming.
 class Group {
  public:
-  explicit Group(Monitor& monitor) : monitor_(&monitor) {}
+  explicit Group(Monitor& monitor, Group* absl_nullable parent = nullptr)
+      : monitor_(&monitor), cv_(monitor), parent_(parent) {}
 
   Group(const Group&) = delete;
   Group& operator=(const Group&) = delete;
@@ -467,18 +514,60 @@ class Group {
   }
 
   void Spawn(absl::AnyInvocable<absl::Status() &&> work) {
+    size_t id;
     {
       thread::MutexLock lock(&monitor_->mu());
-      ++spawned_;
+      if (stopping_) {
+        return;
+      }
+      id = spawned_++;
     }
     a11::Task task = a11::SubmitTask(std::move(work), StackOptions());
     // Counted through the future rather than inside the work: a fiber cancelled
     // before it started never runs its body, and a group that counted there
     // would wait for a fiber that had already finished.
-    task.OnReady([this](const absl::StatusOr<a11::Unit>& result) {
-      Finish(result.status());
+    {
+      thread::MutexLock lock(&monitor_->mu());
+      tasks_.emplace(id, task);
+    }
+    task.OnReady([this, id](const absl::StatusOr<a11::Unit>& result) {
+      Finish(id, result.status());
     });
-    tasks_.push_back(std::move(task));
+    bool stopping;
+    {
+      thread::MutexLock lock(&monitor_->mu());
+      stopping = stopping_;
+    }
+    if (stopping) {
+      task.Cancel().IgnoreError();
+      monitor_->WakeAll();
+    }
+  }
+
+  absl::Status CheckActive() {
+    thread::MutexLock lock(&monitor_->mu());
+    const auto cause = Cause();
+    if (!cause.ok()) {
+      return cause;
+    }
+    if (stopping_ || thread::Cancelled()) {
+      return absl::CancelledError("Flow scope stopped");
+    }
+    return absl::OkStatus();
+  }
+
+  void OwnAction(const std::shared_ptr<actions::Action>& action) {
+    bool stopped;
+    {
+      thread::MutexLock lock(&monitor_->mu());
+      stopped = stopping_ || !Cause().ok();
+      if (!stopped) {
+        actions_.insert_or_assign(action.get(), action);
+      }
+    }
+    if (stopped) {
+      action->Cancel().IgnoreError();
+    }
   }
 
   /// Wait for every fiber, giving up on the run as soon as one fails.
@@ -487,64 +576,101 @@ class Group {
       return first_;
     }
     joined_ = true;
-    bool failed = false;
+    bool failed;
     {
       thread::MutexLock lock(&monitor_->mu());
-      while (done_ < spawned_ && first_.ok()) {
-        cv_.Wait(&monitor_->mu());
+      const auto waiting = monitor_->Wait(
+          cv_, [this] { return done_ == spawned_ || !first_.ok(); });
+      if (!waiting.ok() && first_.ok()) {
+        const auto cause = Cause();
+        first_ = cause.ok() ? waiting : cause;
       }
       failed = done_ < spawned_;
     }
     if (failed) {
       Give();
       thread::MutexLock lock(&monitor_->mu());
-      while (done_ < spawned_) {
-        cv_.Wait(&monitor_->mu());
-      }
+      monitor_->WaitComplete(cv_, [this] { return done_ == spawned_; });
     }
     return first_;
   }
 
  private:
-  /// Stop waiting for anything: the run is over, one way or another.
-  ///
-  /// Both halves are needed. Stopping the monitor wakes everything parked on a
-  /// condition -- a pump with no reader, a barrier on a node nobody will close
-  /// -- and cancelling the fibers wakes everything parked on a [a11::Future],
-  /// which is every node read and every wait for an action.
-  void Give() {
-    absl::Status why;
-    {
-      thread::MutexLock lock(&monitor_->mu());
-      why = first_;
+  absl::Status Cause() const ABSL_EXCLUSIVE_LOCKS_REQUIRED(monitor_->mu()) {
+    absl::Status cancellation;
+    for (const Group* group = this; group != nullptr; group = group->parent_) {
+      if (!group->first_.ok() && !absl::IsCancelled(group->first_)) {
+        return group->first_;
+      }
+      if (!group->first_.ok()) {
+        cancellation = group->first_;
+      }
     }
-    monitor_->Stop(why.ok() ? absl::CancelledError("The flow stopped") : why);
-    for (const a11::Task& task : tasks_) {
-      task.Cancel().IgnoreError();
-    }
+    return monitor_->status().ok() ? cancellation : monitor_->status();
   }
 
-  void Finish(const absl::Status& status) {
+  /// Stop waiting for anything: the run is over, one way or another.
+  ///
+  /// Cancel owned actions before interrupting their Flow tasks. The shared
+  /// monitor wakes conditions while the cause remains local to this subtree.
+  void Give() {
+    std::vector<a11::Task> tasks;
+    std::vector<std::shared_ptr<actions::Action>> actions;
+    {
+      thread::MutexLock lock(&monitor_->mu());
+      stopping_ = true;
+      for (const auto& [identity, weak] : actions_) {
+        if (auto action = weak.lock(); action != nullptr) {
+          actions.push_back(std::move(action));
+        }
+      }
+      for (const auto& [id, task] : tasks_) {
+        tasks.push_back(task);
+      }
+    }
+    for (const auto& action : actions) {
+      action->Cancel().IgnoreError();
+    }
+    for (const a11::Task& task : tasks) {
+      task.Cancel().IgnoreError();
+    }
+    monitor_->WakeAll();
+  }
+
+  void Finish(size_t id, const absl::Status& status) {
     // Signal under the lock so Join cannot destroy the condition first.
     thread::MutexLock lock(&monitor_->mu());
     ++done_;
+    tasks_.erase(id);
     // A cancellation is not a reason. Everything else in the group is cancelled
     // when one fiber fails, so the real failure has to win however the two race
     // -- otherwise a flow that timed out reports that it was cancelled.
-    if (!status.ok() && (first_.ok() || (absl::IsCancelled(first_) &&
-                                         !absl::IsCancelled(status)))) {
-      first_ = status;
+    absl::Status outcome = status;
+    if (absl::IsCancelled(outcome)) {
+      const auto cause = Cause();
+      if (!cause.ok()) {
+        outcome = cause;
+      }
     }
-    cv_.SignalAll();
+    if (!outcome.ok() &&
+        (first_.ok() || (!stopping_ && absl::IsCancelled(first_) &&
+                         !absl::IsCancelled(outcome)))) {
+      first_ = outcome;
+    }
+    cv_.Wake();
   }
 
   Monitor* absl_nonnull monitor_;
-  thread::CondVar cv_;
-  std::vector<a11::Task> tasks_;
+  Monitor::Condition cv_;
+  Group* absl_nullable parent_;
+  absl::flat_hash_map<size_t, a11::Task> tasks_ ABSL_GUARDED_BY(monitor_->mu());
   size_t spawned_ = 0;
   size_t done_ = 0;
   absl::Status first_;
   bool joined_ = false;
+  bool stopping_ ABSL_GUARDED_BY(monitor_->mu()) = false;
+  absl::flat_hash_map<actions::Action*, std::weak_ptr<actions::Action>> actions_
+      ABSL_GUARDED_BY(monitor_->mu());
 };
 
 // --- Readers -----------------------------------------------------------------
@@ -699,6 +825,19 @@ class Bus {
   /// Read the stream once and fan it out until it ends.
   absl::Status Pump();
 
+  bool Skip() {
+    thread::MutexLock lock(&monitor_->mu());
+    if (handed_out_ < slots_.size()) {
+      slots_[handed_out_++]->dropped = true;
+    }
+    bool all = true;
+    for (const auto& slot : slots_) {
+      all = all && slot->dropped;
+    }
+    moved_.Wake();
+    return all && !wanted_;
+  }
+
   void Wanted() {
     bool woken = false;
     {
@@ -734,6 +873,8 @@ class Bus {
 class BusReader : public Reader {
  public:
   BusReader(Bus& bus, Slot& slot) : bus_(&bus), slot_(&slot) {}
+
+  ~BusReader() override { Stop(); }
 
   absl::StatusOr<ItemPtr> Next() override {
     bus_->Wanted();
@@ -831,7 +972,20 @@ absl::Status Bus::Pump() {
   // Start production on the first read so effects respect `after` ordering.
   {
     thread::MutexLock lock(&monitor_->mu());
-    ABSL_RETURN_IF_ERROR(monitor_->Wait(moved_, [this] { return wanted_; }));
+    ABSL_RETURN_IF_ERROR(monitor_->Wait(moved_, [this] {
+      if (wanted_) {
+        return true;
+      }
+      for (const auto& slot : slots_) {
+        if (!slot->dropped) {
+          return false;
+        }
+      }
+      return true;
+    }));
+    if (!wanted_) {
+      return absl::OkStatus();
+    }
   }
   absl::Status error;
   // Batches may exceed the queue depth once admitted; the next batch waits
@@ -1049,6 +1203,8 @@ class ValueCursor {
         reader_(std::move(reader)),
         unary_(unary),
         label_(std::move(label)) {}
+
+  void Stop() { reader_->Stop(); }
 
   // Return the next value, or the cached value for a unary stream. Readers
   // reserve a turn under the monitor lock and perform the blocking read after
@@ -1404,6 +1560,11 @@ class CallHandle {
  public:
   explicit CallHandle(Monitor& monitor) : monitor_(&monitor) {}
 
+  void Adopt(std::shared_ptr<actions::Action> action) {
+    thread::MutexLock lock(&monitor_->mu());
+    action_ = std::move(action);
+  }
+
   void Started(std::shared_ptr<actions::Action> action) {
     {
       thread::MutexLock lock(&monitor_->mu());
@@ -1424,6 +1585,9 @@ class CallHandle {
       if (error_.ok()) {
         error_ = std::move(why);
       }
+      if (!done_) {
+        completion_order_ = monitor_->CompletionOrder();
+      }
       done_ = true;
     }
     monitor_->Wake();
@@ -1432,6 +1596,9 @@ class CallHandle {
   void Done() {
     {
       thread::MutexLock lock(&monitor_->mu());
+      if (!done_) {
+        completion_order_ = monitor_->CompletionOrder();
+      }
       done_ = true;
     }
     monitor_->Wake();
@@ -1443,6 +1610,10 @@ class CallHandle {
   /// the thread-safety analysis cannot express through their pointers.
   [[nodiscard]] bool finished() const ABSL_NO_THREAD_SAFETY_ANALYSIS {
     return done_;
+  }
+
+  uint64_t completion_order() const ABSL_NO_THREAD_SAFETY_ANALYSIS {
+    return completion_order_;
   }
 
   void SetError(absl::Status error) {
@@ -1510,6 +1681,7 @@ class CallHandle {
   std::shared_ptr<actions::Action> action_;
   bool started_ = false;
   bool done_ = false;
+  uint64_t completion_order_ = 0;
   absl::Status start_error_;
   absl::Status error_;
 };
@@ -1528,6 +1700,7 @@ class Scope {
         parent_(parent),
         presets_(std::move(presets)) {}
 
+  ~Scope();
   absl::Status Run();
 
   /// What the pass captured, by slot: a `repeat`'s carry and its condition.
@@ -1540,6 +1713,8 @@ class Scope {
   friend class Runner;
 
   absl::Status Prepare();
+  absl::Status EnsureStep(StepId step);
+  void SkipRef(RefId ref);
   absl::Status RunStep(StepId step);
   absl::Status Execute(StepId step);
   absl::Status StepDone(StepId step);
@@ -1594,7 +1769,8 @@ class Scope {
 
   absl::StatusOr<Value> ValueOf(RefId ref);
   absl::StatusOr<Value> Evaluate(ExprId expr);
-  absl::StatusOr<Value> EvaluateWith(ExprId expr, const Value& it);
+  absl::StatusOr<Value> EvaluateWith(ExprId expr, const Value& it,
+                                     bool join = true);
   /// What an aggregating stage compares or adds: the value itself, or what its
   /// expression makes of it. `| sum` and `| sum it.price` differ by this and
   /// nothing else, and so do `| min` and `| sort by`.
@@ -1627,6 +1803,7 @@ class Scope {
   absl::flat_hash_map<RefId, std::unique_ptr<Destination>> destinations_;
   absl::flat_hash_map<StepId, std::unique_ptr<CallHandle>> calls_;
   absl::flat_hash_map<StepId, bool> done_;
+  absl::flat_hash_map<StepId, uint64_t> completion_order_;
   /// How a `[try] { ... }` step went, for the name bound to it to read.
   absl::flat_hash_map<StepId, absl::Status> outcomes_;
   absl::flat_hash_map<std::string, Value> captures_;
@@ -1653,6 +1830,21 @@ class Scope {
   absl::flat_hash_map<RefId, absl::StatusOr<NodePtr>> nodes_;
   absl::flat_hash_set<RefId> opening_;
   std::vector<RefId> unwritten_;
+
+  struct OwnedNode {
+    std::shared_ptr<nodes::NodeMap> map;
+    NodePtr node;
+    std::string id;
+  };
+
+  std::vector<OwnedNode> owned_nodes_;
+  Scope* absl_nullable resource_owner_ = nullptr;
+  Group* absl_nullable work_ = nullptr;
+  absl::flat_hash_set<StepId> started_;
+  std::shared_ptr<a11::Promise<Value>> expression_result_;
+  Value expression_it_;
+  absl::flat_hash_map<ExprId, std::shared_ptr<a11::Promise<a11::Unit>>>
+      expression_cleanups_;
 };
 
 /// One execution of one flow, against the action it is running as.
@@ -1661,23 +1853,38 @@ class Runner {
   Runner(std::shared_ptr<const CompiledProgram> program,
          const ResolvedFlow& flow, std::shared_ptr<actions::Action> action,
          std::shared_ptr<HostBridge> bridge,
-         std::shared_ptr<net::WireStream> dispatch_stream)
+         std::shared_ptr<net::WireStream> dispatch_stream,
+         std::shared_ptr<ExecutionSnapshot> snapshot)
       : program_(std::move(program)),
         flow_(&flow),
         action_(std::move(action)),
         bridge_(std::move(bridge)),
-        dispatch_stream_(std::move(dispatch_stream)) {}
+        dispatch_stream_(std::move(dispatch_stream)),
+        snapshot_(snapshot == nullptr ? std::make_shared<ExecutionSnapshot>()
+                                      : std::move(snapshot)) {}
 
   absl::Status Run() {
+    const auto shared = monitor_;
+    ABSL_RETURN_IF_ERROR(action_->SetOnCancelled(
+        [shared](const std::shared_ptr<actions::Action>&) {
+          shared->Stop(absl::CancelledError("Flow action cancelled"));
+          return absl::OkStatus();
+        }));
+    ABSL_RETURN_IF_ERROR(Preflight());
+    if (!snapshot_->sealed) {
+      snapshot_->sealed = true;
+    }
     Scope root(*this, flow_->graph.root, nullptr, {});
     const absl::Status status = root.Run();
     if (!status.ok()) {
-      monitor_.Stop(status);
+      monitor_->Stop(status);
     }
     return status;
   }
 
-  Monitor& monitor() { return monitor_; }
+  Monitor& monitor() { return *monitor_; }
+
+  std::shared_ptr<Monitor> shared_monitor() { return monitor_; }
 
   HostBridge& bridge() { return *bridge_; }
 
@@ -1700,7 +1907,7 @@ class Runner {
   /// fragments.
   absl::StatusOr<std::shared_ptr<nodes::NodeMap>> NodeMapNamed(
       const std::string& name) {
-    thread::MutexLock lock(&monitor_.mu());
+    thread::MutexLock lock(&monitor_->mu());
     const auto found = node_maps_.find(name);
     if (found != node_maps_.end()) {
       return found->second;
@@ -1719,7 +1926,7 @@ class Runner {
   /// compute the same immutable result before one cache entry wins.
   const graph::Analysis& AnalysisOf(BodyId body) {
     {
-      thread::MutexLock lock(&monitor_.mu());
+      thread::MutexLock lock(&monitor_->mu());
       const auto found = analyses_.find(body);
       if (found != analyses_.end()) {
         return *found->second;
@@ -1727,7 +1934,7 @@ class Runner {
     }
     auto made =
         std::make_unique<graph::Analysis>(graph::Analyse(graph(), body));
-    thread::MutexLock lock(&monitor_.mu());
+    thread::MutexLock lock(&monitor_->mu());
     const auto [at, added] = analyses_.emplace(body, std::move(made));
     return *at->second;
   }
@@ -1737,10 +1944,15 @@ class Runner {
   /// Named after the flow's own action and the name the flow gave it, so a node
   /// a peer does see is recognisable rather than a bare identifier.
   absl::StatusOr<std::string> FreshNodeId(const std::string& name) {
-    int count = 0;
+    uint64_t count = 0;
     {
-      thread::MutexLock lock(&monitor_.mu());
-      count = ++node_counts_[name];
+      thread::MutexLock lock(&monitor_->mu());
+      auto& next = node_counts_[name];
+      if (next == std::numeric_limits<uint64_t>::max()) {
+        return absl::ResourceExhaustedError(
+            "Flow node identity space exhausted.");
+      }
+      count = ++next;
     }
     const std::string suffix =
         count == 1 ? name : absl::StrCat(name, "-", count);
@@ -1757,6 +1969,7 @@ class Runner {
   /// session.
   absl::Status Resolve(const std::string& name, actions::ActionSchema* schema,
                        actions::ActionHandler* handler);
+  absl::Status Preflight();
 
   /// The schema of an action this flow calls, resolved once per run.
   ///
@@ -1768,7 +1981,7 @@ class Runner {
   absl::StatusOr<const actions::ActionSchema*> SchemaOf(
       const std::string& action) {
     {
-      thread::MutexLock lock(&monitor_.mu());
+      thread::MutexLock lock(&monitor_->mu());
       const auto found = schemas_.find(action);
       if (found != schemas_.end()) {
         return found->second.get();
@@ -1777,7 +1990,7 @@ class Runner {
     auto schema = std::make_unique<actions::ActionSchema>();
     actions::ActionHandler handler;
     ABSL_RETURN_IF_ERROR(Resolve(action, schema.get(), &handler));
-    thread::MutexLock lock(&monitor_.mu());
+    thread::MutexLock lock(&monitor_->mu());
     const auto [at, added] = schemas_.emplace(action, std::move(schema));
     return at->second.get();
   }
@@ -1791,7 +2004,7 @@ class Runner {
   /// changes while a flow runs, so a loop body is checked on its first pass and
   /// not on its thousandth.
   bool PortsChecked(BodyId body) {
-    thread::MutexLock lock(&monitor_.mu());
+    thread::MutexLock lock(&monitor_->mu());
     return !checked_bodies_.insert(body).second;
   }
 
@@ -1829,9 +2042,10 @@ class Runner {
   std::shared_ptr<actions::Action> action_;
   std::shared_ptr<HostBridge> bridge_;
   std::shared_ptr<net::WireStream> dispatch_stream_;
-  Monitor monitor_;
+  std::shared_ptr<ExecutionSnapshot> snapshot_;
+  std::shared_ptr<Monitor> monitor_ = std::make_shared<Monitor>();
   absl::flat_hash_map<std::string, std::shared_ptr<nodes::NodeMap>> node_maps_;
-  absl::flat_hash_map<std::string, int> node_counts_;
+  absl::flat_hash_map<std::string, uint64_t> node_counts_;
   /// One analysis per body, however many passes read it. Held by pointer so a
   /// Scope can point at it while the table grows around it.
   absl::flat_hash_map<BodyId, std::unique_ptr<graph::Analysis>> analyses_;
@@ -1839,7 +2053,72 @@ class Runner {
       schemas_;
   /// Bodies whose call ports have been checked; see [PortsChecked].
   absl::flat_hash_set<BodyId> checked_bodies_;
+  absl::flat_hash_map<std::string,
+                      std::pair<actions::ActionSchema, actions::ActionHandler>>
+      bindings_;
 };
+
+Scope::~Scope() {
+  for (const auto& [step, handle] : calls_) {
+    const auto action = handle->action_now();
+    if (action == nullptr || action->IsDone()) {
+      continue;
+    }
+    action->Cancel().IgnoreError();
+
+    struct Completion {
+      explicit Completion(std::shared_ptr<Monitor> shared)
+          : monitor(std::move(shared)), changed(*monitor) {}
+
+      std::shared_ptr<Monitor> monitor;
+      Monitor::Condition changed;
+      bool ready = false;
+    };
+
+    const auto state = std::make_shared<Completion>(runner_->shared_monitor());
+    action->Wait().OnReady([state](const auto&) {
+      thread::MutexLock lock(&state->monitor->mu());
+      state->ready = true;
+      state->changed.Wake();
+    });
+    thread::MutexLock lock(&state->monitor->mu());
+    state->monitor->WaitComplete(state->changed, [&] { return state->ready; });
+  }
+  for (const auto& owned : owned_nodes_) {
+    owned.map->Discard(owned.id, owned.node).status().IgnoreError();
+  }
+  for (const auto& [step, handle] : calls_) {
+    const auto action = handle->action_now();
+    if (action == nullptr || graph().steps[step].action_id != kNone) {
+      continue;
+    }
+    const auto map = action->GetNodeMap();
+    if (map == nullptr) {
+      continue;
+    }
+    const auto discard = [&](std::string_view name) {
+      const auto id = actions::Action::MakeNodeId(action->GetId(), name);
+      if (!id.ok()) {
+        return;
+      }
+      const auto node = map->GetIfExists(*id);
+      if (node.ok() && *node != nullptr) {
+        map->Discard(*id, *node).status().IgnoreError();
+      }
+    };
+    const auto schema = action->GetSchema();
+    for (const auto* ports : {&schema.inputs, &schema.outputs}) {
+      for (const auto& [name, port] : *ports) {
+        discard(name);
+      }
+    }
+    for (const auto name :
+         {actions::kActionStatusOutput, actions::kActionDispatchStatusOutput,
+          actions::kActionLogOutput}) {
+      discard(name);
+    }
+  }
+}
 
 const FlowGraph& Scope::graph() const {
   return runner_->graph();
@@ -1993,6 +2272,7 @@ absl::StatusOr<CallHandle*> Scope::Call(StepId step) {
   for (Scope* at = this; at != nullptr; at = at->parent_) {
     const auto found = at->calls_.find(step);
     if (found != at->calls_.end()) {
+      ABSL_RETURN_IF_ERROR(at->EnsureStep(step));
       return found->second.get();
     }
   }
@@ -2072,6 +2352,9 @@ absl::StatusOr<NodePtr> Scope::LocalNode(RefId ref) {
 }
 
 absl::StatusOr<NodePtr> Scope::MakeLocalNode(RefId ref) {
+  if (work_ != nullptr) {
+    ABSL_RETURN_IF_ERROR(work_->CheckActive());
+  }
   const graph::Ref& one = graph().refs[ref];
   std::shared_ptr<nodes::NodeMap> map;
   if (one.node_map.empty()) {
@@ -2096,7 +2379,13 @@ absl::StatusOr<NodePtr> Scope::MakeLocalNode(RefId ref) {
   } else {
     ABSL_ASSIGN_OR_RETURN(node_id, runner_->FreshNodeId(one.name));
   }
-  return map->Get(std::move(node_id));
+  ABSL_ASSIGN_OR_RETURN(auto node, map->Get(node_id));
+  if (one.id_expr == kNone) {
+    thread::MutexLock lock(&monitor().mu());
+    Scope* owner = resource_owner_ == nullptr ? this : resource_owner_;
+    owner->owned_nodes_.push_back({map, node, std::move(node_id)});
+  }
+  return node;
 }
 
 absl::StatusOr<NodePtr> Scope::DestinationNode(RefId ref) {
@@ -2191,7 +2480,8 @@ absl::Status Scope::Produce(RefId ref, const Sink& sink) {
   long long taken = 0;
   const long long skip = one.skip;
   const auto pass = [&](ItemPtr item) -> absl::Status {
-    if (skip > 0 && taken++ < skip) {
+    if (taken < skip) {
+      ++taken;
       return absl::OkStatus();
     }
     return sink.One(std::move(item));
@@ -2213,10 +2503,7 @@ absl::Status Scope::Produce(RefId ref, const Sink& sink) {
       ABSL_ASSIGN_OR_RETURN(const std::optional<data::Bytes> raw,
                             runner_->action()->GetHeader(one.header));
       if (!raw.has_value()) {
-        if (!one.has_fallback) {
-          return absl::OkStatus();
-        }
-        return onward.One(Item::Of(Value::Of(one.fallback)));
+        return absl::OkStatus();
       }
       return onward.One(Item::Of(Value::String(*raw)));
     }
@@ -2231,9 +2518,12 @@ absl::Status Scope::Produce(RefId ref, const Sink& sink) {
     }
     case RefKind::kCallPort: {
       ABSL_ASSIGN_OR_RETURN(CallHandle * handle, Call(one.call));
-      ABSL_ASSIGN_OR_RETURN(const NodePtr node,
-                            handle->Node(one.name, one.direction));
-      return ReadNode(node, graph().steps[one.call].tolerant, onward);
+      const auto node = handle->Node(one.name, one.direction);
+      if (!node.ok()) {
+        return graph().steps[one.call].tolerant ? absl::OkStatus()
+                                                : node.status();
+      }
+      return ReadNode(*node, graph().steps[one.call].tolerant, onward);
     }
     case RefKind::kFlowPort: {
       ABSL_ASSIGN_OR_RETURN(const NodePtr node,
@@ -2334,7 +2624,7 @@ absl::Status Scope::ProduceMerge(RefId ref, const Sink& sink) {
     ABSL_ASSIGN_OR_RETURN(ReaderPtr reader, Subscribe(source));
     readers.push_back(std::move(reader));
   }
-  Group group(monitor());
+  Group group(monitor(), work_);
   const auto drain = [&sink](Reader* absl_nonnull reader) -> absl::Status {
     std::vector<ItemPtr> batch;
     batch.reserve(kQueueDepth);
@@ -2369,6 +2659,21 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
   ABSL_ASSIGN_OR_RETURN(ReaderPtr source, Subscribe(one.source));
   HostBridge& host = bridge();
   const std::string& name = stage.name;
+
+  if (name == "consume") {
+    ABSL_ASSIGN_OR_RETURN(ItemPtr item, source->Next());
+    if (item == nullptr) {
+      return absl::FailedPreconditionError(
+          "'consume' requires exactly one item; the stream is empty.");
+    }
+    ABSL_ASSIGN_OR_RETURN(ItemPtr extra, source->Next());
+    if (extra != nullptr) {
+      source->Stop();
+      return absl::FailedPreconditionError(
+          "'consume' requires exactly one item; a second item arrived.");
+    }
+    return sink.One(std::move(item));
+  }
 
   // For a stage that gathers: one value at a time, and whatever it publishes it
   // publishes itself. Reading is batched even here, since the source hands back
@@ -2491,6 +2796,30 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
           out.push_back(Item::Of(std::move(mapped)));
           return absl::OkStatus();
         });
+  }
+  if (name == "take while" || name == "take until") {
+    while (true) {
+      ABSL_ASSIGN_OR_RETURN(ItemPtr item, source->Next());
+      if (item == nullptr) {
+        return absl::OkStatus();
+      }
+      const auto condition = [&]() -> absl::StatusOr<Value> {
+        ABSL_ASSIGN_OR_RETURN(const Value value, item->Read(&host));
+        return EvaluateWith(stage.expr, value);
+      }();
+      if (!condition.ok()) {
+        if (!stage.tolerant) {
+          return condition.status();
+        }
+        ABSL_RETURN_IF_ERROR(tolerate(item, condition.status()));
+        continue;
+      }
+      if (Truthy(*condition) == (name == "take until")) {
+        source->Stop();
+        return absl::OkStatus();
+      }
+      ABSL_RETURN_IF_ERROR(sink.One(std::move(item)));
+    }
   }
   if (name == "where") {
     return per_value([&](const ItemPtr& item,
@@ -3088,39 +3417,164 @@ absl::StatusOr<Value> Scope::ValueOf(RefId ref) {
 }
 
 absl::StatusOr<Value> Scope::Evaluate(ExprId expr) {
-  return EvaluateWith(expr, Value::Null());
+  return EvaluateWith(expr, expression_it_, false);
 }
 
-absl::StatusOr<Value> Scope::EvaluateWith(ExprId expr, const Value& it) {
+absl::StatusOr<Value> Scope::EvaluateWith(ExprId expr, const Value& it,
+                                          bool join) {
   if (expr == kNone) {
     return Value::Null();
+  }
+  if (work_ != nullptr) {
+    ABSL_RETURN_IF_ERROR(work_->CheckActive());
   }
   const graph::Expr& one = graph().exprs[expr];
   if (one.node == nullptr) {
     return Value::Null();
   }
-  absl::flat_hash_map<const syntax::Node*, Value> bound;
-  // One value per *ref* per evaluation, not per mention of it: `strformat("%s
-  // %s", x, x)` names one value twice and must not take two off the stream.
-  // Separate statements perform separate reads.
-  absl::flat_hash_map<RefId, Value> taken;
-  for (const auto& [node, ref] : one.bound) {
-    const auto held = taken.find(ref);
-    if (held != taken.end()) {
-      bound[node] = held->second;
-      continue;
+  if (one.activation != kNone) {
+    if (work_ == nullptr) {
+      return Fail("Expression has no owning execution scope.");
     }
-    ABSL_ASSIGN_OR_RETURN(Value value, ValueOf(ref));
-    taken.emplace(ref, value);
-    bound[node] = std::move(value);
+    auto child = std::make_shared<Scope>(
+        *runner_, one.activation, this,
+        absl::flat_hash_map<RefId, std::vector<ItemPtr>>{});
+    child->resource_owner_ =
+        join ? child.get()
+             : (resource_owner_ == nullptr ? this : resource_owner_);
+    child->expression_result_ = std::make_shared<a11::Promise<Value>>();
+    child->expression_it_ = it;
+    auto result = child->expression_result_->future();
+    auto done = std::make_shared<a11::Promise<a11::Unit>>();
+    auto completed = done->future();
+    if (!join && one.pipeline_owned) {
+      thread::MutexLock lock(&monitor().mu());
+      expression_cleanups_.insert_or_assign(expr, done);
+    }
+    const bool pipeline_owned = one.pipeline_owned;
+    work_->Spawn([child, done, join, pipeline_owned]() -> absl::Status {
+      const absl::Status status = child->Run();
+      if (!status.ok()) {
+        child->expression_result_->SetStatus(status).IgnoreError();
+      } else {
+        child->expression_result_->SetValue(Value::Null()).IgnoreError();
+      }
+      done->SetResult(status.ok() ? absl::StatusOr<a11::Unit>(a11::Unit{})
+                                  : absl::StatusOr<a11::Unit>(status))
+          .IgnoreError();
+      return join || pipeline_owned ? absl::OkStatus() : status;
+    });
+    auto value = result.Await();
+    if (join) {
+      const auto cleanup = completed.Await();
+      if (!cleanup.ok()) {
+        return cleanup.status();
+      }
+    }
+    return value;
   }
+  absl::flat_hash_map<RefId, Value> taken;
   EvalContext context;
-  context.bound = &bound;
+  context.lookup =
+      [&](const syntax::Node& node) -> absl::StatusOr<std::optional<Value>> {
+    for (const auto& [bound, ref] : one.bound) {
+      if (bound != &node) {
+        continue;
+      }
+      if (const auto cached = taken.find(ref); cached != taken.end()) {
+        return std::optional<Value>(cached->second);
+      }
+      ABSL_ASSIGN_OR_RETURN(Value value, ValueOf(ref));
+      taken.emplace(ref, value);
+      return std::optional<Value>(std::move(value));
+    }
+    return std::optional<Value>();
+  };
   context.it = it;
   context.has_it = true;
   context.bridge = &bridge();
   context.shapes = &shapes();
-  return flow::Evaluate(*one.node, context);
+  auto value = flow::Evaluate(*one.node, context);
+  for (const RefId ref : one.refs) {
+    if (taken.find(ref) == taken.end()) {
+      SkipRef(ref);
+    } else if (expression_result_ != nullptr &&
+               graph().refs[ref].owner == body_) {
+      const auto cursor = cursors_.find(ref);
+      if (cursor != cursors_.end()) {
+        cursor->second->Stop();
+      }
+    }
+  }
+  return value;
+}
+
+void Scope::SkipRef(RefId initial) {
+  std::vector<RefId> pending{initial};
+  while (!pending.empty()) {
+    const RefId ref = pending.back();
+    pending.pop_back();
+    Scope* owner = FindOwner(ref);
+    if (owner == nullptr ||
+        owner->buffers_.find(ref) != owner->buffers_.end()) {
+      continue;
+    }
+    const auto bus = owner->buses_.find(ref);
+    if (bus == owner->buses_.end() || !bus->second->Skip()) {
+      continue;
+    }
+    for (const RefId upstream : graph().Upstreams(ref)) {
+      pending.push_back(upstream);
+    }
+    for (const RefId upstream : graph().ValueRefs(ref)) {
+      pending.push_back(upstream);
+    }
+    const graph::Ref& node = graph().refs[ref];
+    if (node.kind == RefKind::kCallPort && node.call != kNone &&
+        graph().steps[node.call].deferred) {
+      bool inactive;
+      {
+        thread::MutexLock lock(&monitor().mu());
+        inactive = owner->started_.find(node.call) == owner->started_.end();
+      }
+      if (inactive) {
+        for (const StepId step : graph().bodies[owner->body_].steps) {
+          if (graph().steps[step].activation == node.call) {
+            for (const RefId input : graph().Sources(step)) {
+              pending.push_back(input);
+            }
+          }
+        }
+        for (const RefId input : graph().ValueSources(node.call)) {
+          pending.push_back(input);
+        }
+      }
+    }
+  }
+}
+
+absl::Status Scope::EnsureStep(StepId step) {
+  if (work_ != nullptr) {
+    ABSL_RETURN_IF_ERROR(work_->CheckActive());
+  }
+  if (work_ == nullptr) {
+    return Fail("A step has no owning execution scope.");
+  }
+  {
+    thread::MutexLock lock(&monitor().mu());
+    if (!started_.insert(step).second) {
+      return absl::OkStatus();
+    }
+  }
+  work_->Spawn([this, step]() -> absl::Status { return RunStep(step); });
+  if (graph().steps[step].kind == StepKind::kCall) {
+    for (const StepId feed : graph().bodies[body_].steps) {
+      if (graph().steps[feed].activation == step) {
+        ABSL_RETURN_IF_ERROR(EnsureStep(feed));
+      }
+    }
+  }
+  return absl::OkStatus();
 }
 
 absl::Status Scope::InParallel(
@@ -3227,7 +3681,7 @@ absl::Status Scope::InParallel(
     }
   };
 
-  Group group(monitor);
+  Group group(monitor, work_);
   for (int index = 1; index < stage.parallel; ++index) {
     group.Spawn([&worker]() -> absl::Status { return worker(); });
   }
@@ -3284,7 +3738,8 @@ absl::StatusOr<Value> Scope::EvaluateFold(const graph::Stage& stage,
 
 absl::Status Scope::Run() {
   ABSL_RETURN_IF_ERROR(Prepare());
-  Group group(monitor());
+  Group group(monitor(), parent_ == nullptr ? nullptr : parent_->work_);
+  work_ = &group;
   // A node of the flow's own that nothing writes is ended here, and without a
   // fiber each: `Finalize` hands the write and the close to the node's own
   // writer pump, so the awaitables are collected and waited on together.
@@ -3306,15 +3761,31 @@ absl::Status Scope::Run() {
     group.Spawn([one]() -> absl::Status { return one->Fill(); });
   }
   for (const StepId step : graph().bodies[body_].steps) {
-    group.Spawn([this, step]() -> absl::Status { return RunStep(step); });
+    if (!graph().steps[step].deferred) {
+      ABSL_RETURN_IF_ERROR(EnsureStep(step));
+    }
   }
-  return group.Join();
+  const absl::Status result = group.Join();
+  if (!result.ok()) {
+    for (const auto& owned : owned_nodes_) {
+      owned.node->AbortWithStatus(result).Await().IgnoreError();
+    }
+    for (const auto& [step, handle] : calls_) {
+      const auto action = handle->action_now();
+      if (action != nullptr) {
+        action->Cancel().IgnoreError();
+      }
+    }
+  }
+  work_ = nullptr;
+  return result;
 }
 
 void Scope::MarkDone(StepId step) {
   {
     thread::MutexLock lock(&monitor().mu());
     done_[step] = true;
+    completion_order_[step] = monitor().CompletionOrder();
   }
   monitor().Wake();
 }
@@ -3325,6 +3796,7 @@ absl::Status Scope::StepDone(StepId step) {
     if (found == at->done_.end()) {
       continue;
     }
+    ABSL_RETURN_IF_ERROR(at->EnsureStep(step));
     thread::MutexLock lock(&monitor().mu());
     return monitor().Wait([at, step] { return at->done_.find(step)->second; });
   }
@@ -3343,6 +3815,12 @@ absl::Status Scope::RunStep(StepId step) {
   if (status.ok()) {
     status = Execute(step);
   }
+  if (absl::IsCancelled(status)) {
+    const auto cause = work_->CheckActive();
+    if (!cause.ok()) {
+      status = cause;
+    }
+  }
   const auto held = analysis_->held.find(step);
   if (held != analysis_->held.end()) {
     for (const RefId ref : held->second) {
@@ -3351,6 +3829,10 @@ absl::Status Scope::RunStep(StepId step) {
         (*destination)->Release().IgnoreError();
       }
     }
+  }
+  if (graph::RecordsOutcome(graph().steps[step].kind)) {
+    thread::MutexLock lock(&monitor().mu());
+    outcomes_.try_emplace(step, status);
   }
   MarkDone(step);
   return status;
@@ -3362,58 +3844,79 @@ absl::Status Scope::Execute(StepId step) {
     case StepKind::kCall:
       return runner_->RunCall(*this, step);
     case StepKind::kPipe: {
-      if (one.discard) {
-        // `-> _`.
+      const auto transfer = [&]() -> absl::Status {
+        if (one.discard) {
+          // `-> _`.
+          ABSL_ASSIGN_OR_RETURN(ReaderPtr reader, Subscribe(one.source));
+          std::vector<ItemPtr> dropped;
+          dropped.reserve(kQueueDepth);
+          while (true) {
+            dropped.clear();
+            if (absl::Status read = reader->NextMany(dropped, kQueueDepth);
+                !read.ok()) {
+              // The same reading of `try` the writing path takes: a source that
+              // gave way is this statement's outcome rather than the flow's.
+              if (!one.tolerant) {
+                return read;
+              }
+              Record(step, read);
+              return absl::OkStatus();
+            }
+            if (dropped.empty()) {
+              return absl::OkStatus();
+            }
+          }
+        }
+        ABSL_ASSIGN_OR_RETURN(Destination * destination,
+                              DestinationOf(one.destination));
         ABSL_ASSIGN_OR_RETURN(ReaderPtr reader, Subscribe(one.source));
-        std::vector<ItemPtr> dropped;
-        dropped.reserve(kQueueDepth);
+        std::vector<ItemPtr> batch;
+        batch.reserve(kQueueDepth);
         while (true) {
-          dropped.clear();
-          if (absl::Status read = reader->NextMany(dropped, kQueueDepth);
+          batch.clear();
+          // Both halves under the same `try`, because the author cannot tell
+          // which gave way: a source that aborted and a destination that refused
+          // the write are one event from here -- "this pipe did not finish".
+          if (absl::Status read = reader->NextMany(batch, kQueueDepth);
               !read.ok()) {
-            // The same reading of `try` the writing path takes: a source that
-            // gave way is this statement's outcome rather than the flow's.
             if (!one.tolerant) {
               return read;
             }
             Record(step, read);
             return absl::OkStatus();
           }
-          if (dropped.empty()) {
+          if (batch.empty()) {
+            return absl::OkStatus();
+          }
+          if (absl::Status wrote = destination->WriteMany(batch, &bridge());
+              !wrote.ok()) {
+            if (!one.tolerant) {
+              return wrote;
+            }
+            Record(step, wrote);
             return absl::OkStatus();
           }
         }
-      }
-      ABSL_ASSIGN_OR_RETURN(Destination * destination,
-                            DestinationOf(one.destination));
-      ABSL_ASSIGN_OR_RETURN(ReaderPtr reader, Subscribe(one.source));
-      std::vector<ItemPtr> batch;
-      batch.reserve(kQueueDepth);
-      while (true) {
-        batch.clear();
-        // Both halves under the same `try`, because the author cannot tell
-        // which gave way: a source that aborted and a destination that refused
-        // the write are one event from here -- "this pipe did not finish".
-        if (absl::Status read = reader->NextMany(batch, kQueueDepth);
-            !read.ok()) {
-          if (!one.tolerant) {
-            return read;
+      };
+      absl::Status result = transfer();
+      for (const ExprId expr : one.expression_cleanups) {
+        std::shared_ptr<a11::Promise<a11::Unit>> cleanup;
+        {
+          thread::MutexLock lock(&monitor().mu());
+          const auto found = expression_cleanups_.find(expr);
+          if (found != expression_cleanups_.end()) {
+            cleanup = found->second;
           }
-          Record(step, read);
-          return absl::OkStatus();
         }
-        if (batch.empty()) {
-          return absl::OkStatus();
+        if (cleanup == nullptr) {
+          continue;
         }
-        if (absl::Status wrote = destination->WriteMany(batch, &bridge());
-            !wrote.ok()) {
-          if (!one.tolerant) {
-            return wrote;
-          }
-          Record(step, wrote);
-          return absl::OkStatus();
+        const auto status = cleanup->future().Await().status();
+        if (!status.ok()) {
+          Record(step, status);
         }
       }
+      return result;
     }
     case StepKind::kSkip: {
       // Values are removed where the stream is produced.
@@ -3427,6 +3930,9 @@ absl::Status Scope::Execute(StepId step) {
         ABSL_ASSIGN_OR_RETURN(value, item->Read(&bridge()));
       }
       reader->Stop();
+      if (one.slot == "$result" && expression_result_ != nullptr) {
+        expression_result_->SetValue(value).IgnoreError();
+      }
       thread::MutexLock lock(&monitor().mu());
       captures_.insert_or_assign(one.slot, value);
       return absl::OkStatus();
@@ -3485,115 +3991,190 @@ absl::Status Scope::Execute(StepId step) {
       absl::StrCat("Cannot run a ", graph::StepKindName(one.kind), "."));
 }
 
-// `wait first of a, b` and `wait all of a, b`: several outcomes, one barrier.
-// What a race actually needs is one wait on a condition its candidates already
-// wake, which is what a call handle's `finished` is for.
-/// `wait first of a, b` and `wait all of a, b`: several outcomes, one barrier.
-///
-/// Every outcome is read on its own fiber, because reading one blocks on
-/// whatever its subject is doing: reading them in turn would make `first` mean
-/// "the first one written down", which is not what it says. A `first` returns
-/// as soon as one of them is in, and the others are left running -- they are
-/// not cancelled, because a flow that wanted them stopped has `cancel` to say
-/// so.
-///
-/// A failure propagates unless every subject was a `try`, matching the
-/// single-subject form. `first` checks only the winner; `all` returns the first
-/// failure.
-/// `wait first of a, b` and `wait all of a, b`: several subjects, one barrier.
-///
-/// **No fiber per subject, and that is not a shortcut.** A `first` has to stop
-/// waiting for the losers, and the only thing that wakes a fiber parked on this
-/// runtime's conditions is giving up on the whole run -- so a fiber per
-/// candidate would either be left parked with a pointer into a scope that is
-/// being torn down, or would end the flow it was supposed to let carry on. What
-/// a race actually needs is one wait on a condition its candidates already
-/// wake, which is what a call handle's `finished` is for.
-///
-/// `all` reads its subjects one after another: every one of them has to be in,
-/// so the order they are asked in does not change when the last arrives.
 absl::Status Scope::RunWaitMany(StepId step) {
   const graph::Step& one = graph().steps[step];
-  Monitor& monitor = this->monitor();
+  if (!one.race) {
+    absl::Status first;
+    for (size_t i = 0; i < one.subjects.size(); ++i) {
+      ABSL_ASSIGN_OR_RETURN(ReaderPtr reader, Subscribe(one.subjects[i]));
+      ABSL_ASSIGN_OR_RETURN(ItemPtr item, reader->Next());
+      if (item == nullptr) {
+        continue;
+      }
+      ABSL_ASSIGN_OR_RETURN(Value record, item->Read(&bridge()));
+      const absl::Status status = StatusOfRecord(record);
+      if (first.ok()) {
+        first = status;
+      }
+      if (!status.ok() &&
+          (i >= one.subject_tolerant.size() || !one.subject_tolerant[i])) {
+        return status;
+      }
+    }
+    Record(step, first);
+    return absl::OkStatus();
+  }
 
-  std::vector<RefId> reading;
-  if (one.race) {
-    // Whichever is finished first, asked of the handles rather than read from
-    // the streams: a status read blocks until its subject is done, and blocking
-    // on one is exactly what a race must not do.
-    std::vector<CallHandle*> handles;
-    std::vector<RefId> outcomes;
-    for (const RefId outcome : one.subjects) {
-      const StepId call = graph().refs[outcome].subject_step;
-      if (call == kNone) {
-        return Fail(absl::StrCat(
-            graph().refs[outcome].label,
-            " is not a call, and 'wait first of' races calls: a node or a port "
-            "is finished when whoever writes it says so, which is what 'wait' "
-            "and 'drain' are for."));
-      }
-      ABSL_ASSIGN_OR_RETURN(CallHandle * handle, Call(call));
-      handles.push_back(handle);
-      outcomes.push_back(outcome);
-    }
-    if (handles.empty()) {
-      return absl::OkStatus();
-    }
-    size_t won = 0;
-    {
-      thread::MutexLock lock(&monitor.mu());
-      const auto ready = [&handles, &won] {
-        for (size_t index = 0; index < handles.size(); ++index) {
-          if (handles[index]->finished()) {
-            won = index;
-            return true;
-          }
-        }
-        return false;
-      };
-      if (one.timeout.has_value() && *one.timeout < absl::InfiniteDuration()) {
-        const absl::Status waited =
-            monitor.WaitUntil(absl::Now() + *one.timeout, ready);
-        if (absl::IsDeadlineExceeded(waited)) {
-          return Fail(
-              absl::StrCat("Waiting for ", SubjectOf(one), " timed out after ",
-                           absl::FormatDuration(*one.timeout), "."),
-              absl::StatusCode::kDeadlineExceeded);
-        }
-        ABSL_RETURN_IF_ERROR(waited);
-      } else {
-        ABSL_RETURN_IF_ERROR(monitor.Wait(ready));
+  struct Candidate {
+    CallHandle* call = nullptr;
+    Scope* scope = nullptr;
+    StepId step = kNone;
+    RefId node = kNone;
+  };
+
+  struct Observed {
+    std::shared_ptr<Monitor> monitor;
+    std::vector<std::optional<absl::Status>> status;
+    std::vector<uint64_t> order;
+  };
+
+  struct Subscriptions {
+    std::vector<a11::Task> tasks;
+
+    ~Subscriptions() {
+      for (const auto& task : tasks) {
+        task.Cancel().IgnoreError();
       }
     }
-    // Which one it was, for whoever reads the barrier as a value.
-    {
-      thread::MutexLock lock(&monitor.mu());
-      winners_.insert_or_assign(step, static_cast<std::int64_t>(won));
+  } subscriptions;
+
+  auto observed = std::make_shared<Observed>();
+  observed->monitor = runner_->shared_monitor();
+  observed->status.resize(one.subjects.size());
+  observed->order.resize(one.subjects.size());
+  std::vector<Candidate> candidates;
+  for (const RefId subject : one.subjects) {
+    const graph::Ref& status = graph().refs[subject];
+    Candidate candidate;
+    candidate.step = status.subject_step;
+    candidate.node = status.subject;
+    if (candidate.step != kNone) {
+      for (Scope* scope = this; scope != nullptr; scope = scope->parent_) {
+        if (scope->body_ != graph().steps[candidate.step].body) {
+          continue;
+        }
+        candidate.scope = scope;
+        ABSL_RETURN_IF_ERROR(scope->EnsureStep(candidate.step));
+        if (graph().steps[candidate.step].kind == StepKind::kCall) {
+          ABSL_ASSIGN_OR_RETURN(candidate.call, scope->Call(candidate.step));
+        }
+        break;
+      }
+      if (candidate.scope == nullptr) {
+        return Fail("Completion subject is outside its execution scope.");
+      }
+    } else if (candidate.node != kNone) {
+      const graph::Ref& node = graph().refs[candidate.node];
+      if (node.kind == RefKind::kCallPort) {
+        ABSL_ASSIGN_OR_RETURN(CallHandle * handle, Call(node.call));
+        (void)handle;
+      }
+    } else {
+      return Fail("Race subject has no completion identity.");
     }
-    // Only the winner's outcome is read: the losers are still running, which is
-    // what `first` says, and reading one would wait for it.
-    reading.push_back(outcomes[won]);
+    candidates.push_back(candidate);
+  }
+  if (candidates.empty()) {
+    return Fail("A race needs at least one subject.");
+  }
+  absl::flat_hash_map<nodes::AsyncNode*,
+                      std::pair<NodePtr, std::vector<size_t>>>
+      node_subjects;
+  for (size_t i = 0; i < candidates.size(); ++i) {
+    if (candidates[i].node == kNone) {
+      continue;
+    }
+    ABSL_ASSIGN_OR_RETURN(NodePtr node, ReadableNode(candidates[i].node));
+    if (node == nullptr) {
+      ABSL_ASSIGN_OR_RETURN(node, DestinationNode(candidates[i].node));
+    }
+    if (node == nullptr) {
+      return Fail("Race subject is not a node-backed stream.");
+    }
+    auto& entry = node_subjects[node.get()];
+    entry.first = node;
+    entry.second.push_back(i);
+  }
+  for (const auto& [identity, entry] : node_subjects) {
+    auto completion = entry.first->ObserveCompletion();
+    subscriptions.tasks.push_back(completion);
+    completion.OnReady([observed, indices = entry.second](
+                           const absl::StatusOr<a11::Unit>& result) {
+      {
+        thread::MutexLock lock(&observed->monitor->mu());
+        const auto order = observed->monitor->CompletionOrder();
+        for (const auto i : indices) {
+          observed->status[i] = result.status();
+          observed->order[i] = order;
+        }
+      }
+      observed->monitor->Wake();
+    });
+  }
+  size_t winner = 0;
+  {
+    thread::MutexLock lock(&monitor().mu());
+    bool initial = true;
+    const auto ready = [&] {
+      uint64_t earliest = std::numeric_limits<uint64_t>::max();
+      bool found = false;
+      for (size_t i = 0; i < candidates.size(); ++i) {
+        const Candidate& candidate = candidates[i];
+        const bool terminal = candidate.call != nullptr
+                                  ? candidate.call->finished()
+                              : candidate.scope != nullptr
+                                  ? candidate.scope->done_.at(candidate.step)
+                                  : observed->status[i].has_value();
+        if (!terminal) {
+          continue;
+        }
+        const uint64_t order =
+            candidate.call != nullptr ? candidate.call->completion_order()
+            : candidate.scope != nullptr
+                ? candidate.scope->completion_order_.at(candidate.step)
+                : observed->order[i];
+        if (!found || (!initial && order < earliest)) {
+          winner = i;
+          earliest = order;
+          found = true;
+        }
+        if (initial) {
+          break;
+        }
+      }
+      initial = false;
+      return found;
+    };
+    if (one.timeout.has_value()) {
+      ABSL_RETURN_IF_ERROR(
+          monitor().WaitUntil(absl::Now() + *one.timeout, ready));
+    } else {
+      ABSL_RETURN_IF_ERROR(monitor().Wait(ready));
+    }
+  }
+  absl::Status status;
+  const Candidate& chosen = candidates[winner];
+  if (chosen.call != nullptr) {
+    ABSL_RETURN_IF_ERROR(chosen.call->Outcome(&status));
   } else {
-    reading = one.subjects;
+    thread::MutexLock lock(&monitor().mu());
+    if (chosen.scope != nullptr) {
+      const auto found = chosen.scope->outcomes_.find(chosen.step);
+      if (found != chosen.scope->outcomes_.end()) {
+        status = found->second;
+      }
+    } else {
+      status = *observed->status[winner];
+    }
   }
-
-  for (const RefId outcome : reading) {
-    ABSL_ASSIGN_OR_RETURN(ReaderPtr reader, Subscribe(outcome));
-    ABSL_ASSIGN_OR_RETURN(const ItemPtr item, reader->Next());
-    if (item == nullptr) {
-      continue;
-    }
-    ABSL_ASSIGN_OR_RETURN(const Value record, item->Read(&bridge()));
-    if (one.tolerant || record.kind() != Value::Kind::kObject) {
-      continue;
-    }
-    const Value* ok = record.Get("ok");
-    if (ok != nullptr && Truthy(*ok)) {
-      continue;
-    }
-    return StatusOfRecord(record);
+  {
+    thread::MutexLock lock(&monitor().mu());
+    winners_.insert_or_assign(step, static_cast<int64_t>(winner));
+    outcomes_.insert_or_assign(step, status);
   }
-  return absl::OkStatus();
+  const bool tolerated =
+      winner < one.subject_tolerant.size() && one.subject_tolerant[winner];
+  return tolerated ? absl::OkStatus() : status;
 }
 
 /// Read the subject's status, and let a bad one through when it is ours.
@@ -3673,6 +4254,9 @@ absl::Status Scope::RunWait(StepId step) {
     if (item != nullptr) {
       ABSL_ASSIGN_OR_RETURN(record, item->Read(&bridge()));
     }
+  }
+  if (record.kind() == Value::Kind::kObject) {
+    Record(step, StatusOfRecord(record));
   }
   if (one.tolerant || record.kind() != Value::Kind::kObject) {
     return absl::OkStatus();
@@ -3885,7 +4469,7 @@ absl::Status Scope::RunForEach(StepId step) {
   const graph::Step& one = graph().steps[step];
   const BodyId body = one.bodies.front();
   ABSL_ASSIGN_OR_RETURN(ReaderPtr reader, Subscribe(one.source));
-  Group group(monitor());
+  Group group(monitor(), work_);
   const int parallel = std::max(one.parallel, 1);
   std::int64_t index = 0;
   Monitor& monitor = this->monitor();
@@ -3901,6 +4485,9 @@ absl::Status Scope::RunForEach(StepId step) {
     }
     if (one.index != kNone) {
       presets[one.index] = {Item::Of(Value::Integer(index))};
+    }
+    if (index == std::numeric_limits<int64_t>::max()) {
+      return absl::ResourceExhaustedError("Flow loop index exhausted.");
     }
     ++index;
     if (parallel == 1) {
@@ -3950,7 +4537,7 @@ absl::Status Scope::RunRepeat(StepId step) {
   // Bounded by the author's `max` where there is one, and otherwise only by the
   // condition: a loop that says `until` means it, however many passes that
   // takes.
-  for (int index = 0;
+  for (int64_t index = 0;
        !one.max_iterations.has_value() || index < *one.max_iterations;
        ++index) {
     absl::flat_hash_map<RefId, std::vector<ItemPtr>> presets;
@@ -3972,6 +4559,9 @@ absl::Status Scope::RunRepeat(StepId step) {
       const auto found = pass.captures().find("carry");
       carried = found == pass.captures().end() ? Value::Null() : found->second;
     }
+    if (index == std::numeric_limits<int64_t>::max()) {
+      return absl::ResourceExhaustedError("Flow repeat index exhausted.");
+    }
   }
   return absl::OkStatus();
 }
@@ -3981,19 +4571,48 @@ absl::Status Scope::RunRepeat(StepId step) {
 absl::Status Runner::Resolve(const std::string& name,
                              actions::ActionSchema* schema,
                              actions::ActionHandler* handler) {
-  if (const ResolvedFlow* sibling = program_->Flow(name); sibling != nullptr) {
-    ABSL_ASSIGN_OR_RETURN(*schema, FlowSchema(sibling->plan));
+  if (const auto found = bindings_.find(name); found != bindings_.end()) {
+    *schema = found->second.first;
+    *handler = found->second.second;
+    return absl::OkStatus();
+  }
+  if (const ResolvedFlow* sibling = program_->Flow(name);
+      sibling != nullptr && !sibling->plan.interface_only) {
+    if (sibling->ambiguous) {
+      return absl::FailedPreconditionError(
+          absl::StrCat("Ambiguous implementation of '", name, "'."));
+    }
+    ABSL_ASSIGN_OR_RETURN(
+        *schema, FlowSchema(sibling->implementation.value_or(sibling->plan),
+                            &program_->program()));
     // A flow of this program that this flow runs is still the same client's, so
     // its own `call` steps belong on the same stream.
     ABSL_ASSIGN_OR_RETURN(
         *handler, MakeHandler(program_, name,
-                              RunOptions{.bridge = bridge_,
+                              RunOptions{.snapshot = snapshot_,
+                                         .bridge = bridge_,
                                          .dispatch_stream = dispatch_stream_}));
+    bindings_.emplace(name, std::make_pair(*schema, *handler));
     return absl::OkStatus();
+  }
+  const auto* declaration = program_->Flow(name);
+  const std::string wire_name =
+      declaration != nullptr && !declaration->plan.binding_name.empty()
+          ? declaration->plan.binding_name
+          : name;
+  if (const auto found = snapshot_->external.find(wire_name);
+      found != snapshot_->external.end()) {
+    *schema = found->second.first;
+    *handler = found->second.second;
+    return absl::OkStatus();
+  }
+  if (snapshot_->sealed) {
+    return absl::FailedPreconditionError(
+        "Binding is absent from the execution snapshot.");
   }
   const std::shared_ptr<actions::ActionRegistry> registry =
       action_->GetRegistry();
-  if (registry == nullptr || !registry->IsRegistered(name)) {
+  if (registry == nullptr || !registry->IsRegistered(wire_name)) {
     std::vector<std::string> known = registry == nullptr
                                          ? std::vector<std::string>{}
                                          : registry->ListRegisteredActions();
@@ -4003,14 +4622,208 @@ absl::Status Runner::Resolve(const std::string& name,
                      "', which is not a flow in this program and is not "
                      "registered here (registered: ",
                      known.empty() ? "none" : absl::StrJoin(known, ", "), ")."),
-        absl::StatusCode::kNotFound);
+        program_->Flow(name) != nullptr ? absl::StatusCode::kFailedPrecondition
+                                        : absl::StatusCode::kNotFound);
   }
-  ABSL_ASSIGN_OR_RETURN(*schema, registry->GetSchema(name));
+  ABSL_ASSIGN_OR_RETURN(*schema, registry->GetSchema(wire_name));
   // Registered without one: the registry reports that as an error rather than
   // as an empty handler, so asking is how it is found out.
-  if (absl::StatusOr<actions::ActionHandler> found = registry->GetHandler(name);
+  if (absl::StatusOr<actions::ActionHandler> found =
+          registry->GetHandler(wire_name);
       found.ok()) {
     *handler = *std::move(found);
+  }
+  snapshot_->external.emplace(wire_name, std::make_pair(*schema, *handler));
+  return absl::OkStatus();
+}
+
+absl::Status Runner::Preflight() {
+  std::vector<const ResolvedFlow*> pending{flow_};
+  absl::flat_hash_set<std::string> visited;
+  while (!pending.empty()) {
+    const ResolvedFlow* current = pending.back();
+    pending.pop_back();
+    if (!visited.insert(current->plan.name).second) {
+      continue;
+    }
+    if (current->ambiguous || current->plan.interface_only) {
+      return absl::FailedPreconditionError(absl::StrCat(
+          "No unambiguous implementation for '", current->plan.name, "'."));
+    }
+    for (const graph::Step& step : current->graph.steps) {
+      if (step.kind != StepKind::kCall) {
+        continue;
+      }
+      actions::ActionSchema schema;
+      actions::ActionHandler handler;
+      ABSL_RETURN_IF_ERROR(Resolve(step.action, &schema, &handler));
+      if (step.mode == "call" && dispatch_stream_ == nullptr &&
+          action_->GetStream() == nullptr && action_->GetSession() == nullptr) {
+        return absl::FailedPreconditionError(
+            absl::StrCat(current->plan.name, " could not call '", step.action,
+                         "': calling requires an attached WireStream or "
+                         "Session before execution."));
+      }
+      if (step.mode == "run" && !handler) {
+        return absl::FailedPreconditionError(absl::StrCat(
+            current->plan.name, " says 'run ", step.action, "', but ",
+            step.action,
+            " is registered here for its schema alone and has no handler to "
+            "run. Say 'call' to dispatch it on the flow's stream."));
+      }
+      FlowPlan actual;
+      Program evidence = program_->program();
+      actual.name = step.action;
+      for (const auto direction :
+           {syntax::PortDirection::kInput, syntax::PortDirection::kOutput}) {
+        const auto& ports = direction == syntax::PortDirection::kInput
+                                ? schema.inputs
+                                : schema.outputs;
+        for (const auto& [name, p] : ports) {
+          PortPlan port;
+          port.name = name;
+          port.type = p.type;
+          port.declared = p.type;
+          port.direction = direction;
+          port.unary = p.unary;
+          port.required = p.required;
+          if (!p.json_schema.empty()) {
+            const auto metadata =
+                nlohmann::json::parse(p.json_schema, nullptr, false);
+            if (metadata.is_object() && metadata.contains("type") &&
+                metadata["type"].is_string() && metadata["type"] == "object") {
+              auto imported = JsonSchemaToDtos(
+                  metadata, absl::StrCat("schema_", evidence.dtos.size()));
+              if (imported.diagnostics.empty() && !imported.dtos.empty()) {
+                port.declared = imported.dtos.front().name;
+                for (auto& shape : imported.dtos) {
+                  evidence.dtos.push_back(std::move(shape));
+                }
+              }
+            }
+          }
+          actual.ports.push_back(std::move(port));
+          if (direction != syntax::PortDirection::kInput) {
+            continue;
+          }
+          bool supplied = false;
+          const StepId call_id =
+              static_cast<StepId>(&step - current->graph.steps.data());
+          for (const auto& feed : current->graph.steps) {
+            if (feed.kind != StepKind::kPipe || feed.destination == kNone) {
+              continue;
+            }
+            const auto& target = current->graph.refs[feed.destination];
+            if (target.kind != RefKind::kCallPort || target.call != call_id ||
+                target.direction != syntax::PortDirection::kInput ||
+                target.name != name) {
+              continue;
+            }
+            supplied = true;
+            if (feed.source == kNone) {
+              continue;
+            }
+            const auto& source = current->graph.refs[feed.source];
+            if (source.kind != RefKind::kExpr || source.expr == kNone) {
+              continue;
+            }
+            const auto& expression = current->graph.exprs[source.expr];
+            if (expression.node == nullptr) {
+              continue;
+            }
+            const auto constant = syntax::ConstantValue(expression.node);
+            if (!constant.has_value() ||
+                constant->kind == syntax::Constant::Kind::kNull) {
+              continue;
+            }
+            std::string type;
+            switch (constant->kind) {
+              case syntax::Constant::Kind::kNull:
+                type = "null";
+                break;
+              case syntax::Constant::Kind::kBool:
+                type = "boolean";
+                break;
+              case syntax::Constant::Kind::kInteger:
+                type = "integer";
+                break;
+              case syntax::Constant::Kind::kDouble:
+                type = "number";
+                break;
+              case syntax::Constant::Kind::kString:
+                type = "string";
+                break;
+              case syntax::Constant::Kind::kDuration:
+                type = "duration";
+                break;
+              case syntax::Constant::Kind::kList:
+                type = "list";
+                break;
+              case syntax::Constant::Kind::kObject:
+                type = "object";
+                break;
+            }
+            if (RefinesType(type, p.type, evidence) == Refinement::kNo) {
+              return absl::FailedPreconditionError(
+                  absl::StrCat("Call '", step.action, "', input '", name,
+                               "' has an incompatible literal payload."));
+            }
+          }
+          if (direction == syntax::PortDirection::kInput && p.required &&
+              p.autofills.empty() && !supplied) {
+            return absl::FailedPreconditionError(
+                absl::StrCat("Call '", step.action,
+                             "' is missing required input '", name, "'."));
+          }
+        }
+      }
+      for (const auto& [name, h] : schema.headers) {
+        HeaderPlan header;
+        header.name = name;
+        header.has_default = h.default_value.has_value();
+        if (header.has_default) {
+          header.default_value = syntax::Constant::String(*h.default_value);
+        }
+        actual.headers.push_back(std::move(header));
+      }
+      auto imported_interface = DeclareAction(schema);
+      if (imported_interface.diagnostics.empty()) {
+        actual = std::move(imported_interface.interface);
+        for (auto& shape : imported_interface.types) {
+          evidence.dtos.push_back(std::move(shape));
+        }
+      }
+      if (const auto* nested = program_->Flow(step.action);
+          nested != nullptr && nested->implementation.has_value()) {
+        actual = *nested->implementation;
+      }
+      if (const auto* declaration = program_->Flow(step.action);
+          declaration != nullptr) {
+        for (const auto& expected : declaration->contracts) {
+          const auto checked = CheckImplementation(actual, expected, evidence);
+          if (!checked.ok()) {
+            return absl::FailedPreconditionError(
+                std::string(checked.message()));
+          }
+        }
+      }
+      for (const auto& [key, ref] : step.ports) {
+        const graph::Ref& p = current->graph.refs[ref];
+        const auto& ports = p.direction == syntax::PortDirection::kInput
+                                ? schema.inputs
+                                : schema.outputs;
+        if (ports.find(p.name) == ports.end()) {
+          return absl::NotFoundError(absl::StrCat(
+              step.action, " has no ",
+              p.direction == syntax::PortDirection::kInput ? "input" : "output",
+              " port '", p.name, "'."));
+        }
+      }
+      if (const ResolvedFlow* nested = program_->Flow(step.action);
+          nested != nullptr && !nested->plan.interface_only) {
+        pending.push_back(nested);
+      }
+    }
   }
   return absl::OkStatus();
 }
@@ -4023,13 +4836,20 @@ absl::Status Runner::RunCall(Scope& scope, StepId step) {
     // to this call waits for it, and an unanswered wait is a deadlock rather
     // than a failure anybody can see.
     handle->NeverStarted(started);
-    return started;
+    if (const auto action = handle->action_now(); action != nullptr) {
+      action->Cancel().IgnoreError();
+    }
+    return graph().steps[step].tolerant ? absl::OkStatus() : started;
   }
   return PumpCall(step, *handle);
 }
 
 absl::Status Runner::StartCall(Scope& scope, StepId step, CallHandle& handle) {
+  ABSL_RETURN_IF_ERROR(scope.work_->CheckActive());
   const graph::Step& one = graph().steps[step];
+  if (thread::Cancelled() || action_->Cancelled()) {
+    return absl::CancelledError("Flow stopped before action activation");
+  }
   actions::ActionSchema schema;
   actions::ActionHandler handler;
   ABSL_RETURN_IF_ERROR(Resolve(one.action, &schema, &handler));
@@ -4046,6 +4866,8 @@ absl::Status Runner::StartCall(Scope& scope, StepId step, CallHandle& handle) {
 
   ABSL_ASSIGN_OR_RETURN(const std::shared_ptr<actions::Action> nested,
                         action_->MakeNested(schema));
+  handle.Adopt(nested);
+  scope.work_->OwnAction(nested);
   if (!one.node_map.empty()) {
     ABSL_ASSIGN_OR_RETURN(const std::shared_ptr<nodes::NodeMap> map,
                           NodeMapNamed(one.node_map));
@@ -4122,6 +4944,10 @@ absl::Status Runner::StartCall(Scope& scope, StepId step, CallHandle& handle) {
   handle.unclosed = std::move(unclosed);
   handle.undrained = std::move(undrained);
   handle.Started(nested);
+  if (thread::Cancelled() || action_->Cancelled()) {
+    nested->Cancel().IgnoreError();
+    return absl::CancelledError("Flow stopped during action activation");
+  }
   return absl::OkStatus();
 }
 
@@ -4139,10 +4965,11 @@ absl::Status Runner::PumpCall(StepId step, CallHandle& handle) {
   }
   if (!start.ok()) {
     handle.NeverStarted(start);
-    return start;
+    nested->Cancel().IgnoreError();
+    return one.tolerant ? absl::OkStatus() : start;
   }
   {
-    Group group(monitor_);
+    Group group(*monitor_);
     for (const NodePtr& node : handle.unclosed) {
       group.Spawn([node]() -> absl::Status { return CloseNode(node); });
     }
@@ -4205,20 +5032,28 @@ absl::Status Runner::AwaitCall(const graph::Step& step, CallHandle& handle) {
 // --- The public face ---------------------------------------------------------
 
 absl::StatusOr<std::shared_ptr<CompiledProgram>> CompiledProgram::Compile(
-    std::string source, std::string source_name) {
+    std::string source, std::string source_name, const ModuleSources& modules,
+    ModuleResolver resolver) {
   auto compiled = std::shared_ptr<CompiledProgram>(new CompiledProgram());
   compiled->source_ = std::move(source);
   compiled->source_name_ = std::move(source_name);
-  compiled->parsed_ = Parse(compiled->source_);
-  compiled->resolved_ =
-      Resolve(compiled->source_, compiled->parsed_, /*build_graph=*/true);
+  LinkedModule linked = LinkModules(compiled->source_, compiled->source_name_,
+                                    modules, std::move(resolver));
+  compiled->linked_source_ = linked.source;
+  compiled->members_ = linked.members;
+  compiled->parsed_ = std::move(linked.parsed);
+  compiled->resolved_ = Resolve(compiled->linked_source_, compiled->parsed_,
+                                /*build_graph=*/true);
+  linked.Locate(compiled->resolved_.diagnostics);
   compiled->resolved_.program.source_name = compiled->source_name_;
   if (const Diagnostic* first = compiled->resolved_.FirstError();
       first != nullptr) {
-    return Fail(absl::StrCat(
-        compiled->source_name_.empty() ? "<flow>" : compiled->source_name_, ":",
-        first->range.start.line, ":", first->range.start.column, ": ",
-        first->message));
+    return Fail(absl::StrCat(!first->source.empty() ? first->source
+                             : compiled->source_name_.empty()
+                                 ? "<flow>"
+                                 : compiled->source_name_,
+                             ":", first->range.start.line, ":",
+                             first->range.start.column, ": ", first->message));
   }
   return compiled;
 }
@@ -4230,8 +5065,16 @@ const ResolvedFlow* absl_nullable CompiledProgram::Flow(
   if (name.empty()) {
     return nullptr;
   }
+  std::string target(name);
+  for (const auto& member : members_) {
+    if (!member.selection && !member.scoped && !member.type &&
+        member.name == name) {
+      target = member.target;
+      break;
+    }
+  }
   for (const ResolvedFlow& flow : resolved_.flows) {
-    if (!flow.plan.entry && flow.plan.name == name) {
+    if (!flow.plan.entry && flow.plan.name == target) {
       return &flow;
     }
   }
@@ -4279,9 +5122,10 @@ std::string SchemaType(std::string_view declared) {
 
 }  // namespace
 
-absl::StatusOr<actions::ActionSchema> FlowSchema(const FlowPlan& plan) {
+absl::StatusOr<actions::ActionSchema> FlowSchema(const FlowPlan& plan,
+                                                 const Program* shapes) {
   actions::ActionSchema schema;
-  schema.name = plan.name;
+  schema.name = plan.binding_name.empty() ? plan.name : plan.binding_name;
   schema.description = plan.description;
   for (const PortPlan& port : plan.ports) {
     actions::ActionPortSchema entry;
@@ -4290,6 +5134,11 @@ absl::StatusOr<actions::ActionSchema> FlowSchema(const FlowPlan& plan) {
     entry.description = port.description;
     entry.required = port.required;
     entry.unary = port.unary;
+    if (shapes != nullptr) {
+      if (const auto* shape = shapes->Dto(port.type); shape != nullptr) {
+        entry.json_schema = DtoToJsonSchema(*shape, *shapes).dump();
+      }
+    }
     if (port.direction == syntax::PortDirection::kInput) {
       schema.inputs.emplace(port.name, std::move(entry));
     } else {
@@ -4300,10 +5149,345 @@ absl::StatusOr<actions::ActionSchema> FlowSchema(const FlowPlan& plan) {
     actions::ActionHeaderSchema entry;
     entry.name = header.name;
     entry.description = header.description;
+    if (header.has_default) {
+      entry.default_value = HeaderBytes(header.default_value);
+    }
     schema.headers.emplace(header.name, std::move(entry));
   }
   ABSL_RETURN_IF_ERROR(schema.Validate());
   return schema;
+}
+
+ActionDeclaration DeclareAction(const actions::ActionSchema& schema) {
+  ActionDeclaration result;
+  result.interface.name = schema.name;
+  result.interface.description = schema.description;
+  result.interface.interface_only = true;
+  const auto reject = [&](std::string message) {
+    Diagnostic diagnostic;
+    diagnostic.code = "flow.schema.unsupported-keyword";
+    diagnostic.family = Family::kForm;
+    diagnostic.severity = Severity::kError;
+    diagnostic.message = std::move(message);
+    result.diagnostics.push_back(std::move(diagnostic));
+  };
+  if (const auto status = schema.Validate(); !status.ok()) {
+    reject(std::string(status.message()));
+    return result;
+  }
+  if (!utf8::IsValid(schema.name) || !utf8::IsValid(schema.description)) {
+    reject(
+        "An action declaration requires valid UTF-8 names and descriptions.");
+    return result;
+  }
+  for (const auto* ports : {&schema.inputs, &schema.outputs}) {
+    for (const auto& [name, port] : *ports) {
+      if (!utf8::IsValid(name) || !utf8::IsValid(port.type) ||
+          !utf8::IsValid(port.description)) {
+        reject("Action port metadata requires valid UTF-8 text.");
+        return result;
+      }
+    }
+  }
+  for (const auto& [name, header] : schema.headers) {
+    if (!utf8::IsValid(name) || !utf8::IsValid(header.description) ||
+        (header.default_value.has_value() &&
+         !utf8::IsValid(*header.default_value))) {
+      reject("A header has no lossless UTF-8 Flow spelling.");
+      return result;
+    }
+  }
+  const auto encode = [](std::string_view value) {
+    constexpr char hex[] = "0123456789abcdef";
+    std::string name;
+    for (const char character : value) {
+      const auto byte = static_cast<unsigned char>(character);
+      name += hex[byte >> 4];
+      name += hex[byte & 15];
+    }
+    return name;
+  };
+
+  for (const auto direction :
+       {syntax::PortDirection::kInput, syntax::PortDirection::kOutput}) {
+    const auto& ports = direction == syntax::PortDirection::kInput
+                            ? schema.inputs
+                            : schema.outputs;
+    std::vector<std::string> names;
+    for (const auto& [name, port] : ports) {
+      names.push_back(name);
+    }
+    std::sort(names.begin(), names.end());
+    for (const auto& name : names) {
+      const auto& port = ports.at(name);
+      PortPlan entry;
+      entry.name = name;
+      entry.direction = direction;
+      entry.unary = port.unary;
+      entry.required = port.required;
+      entry.description = port.description;
+      entry.type = port.type;
+      entry.declared = port.type;
+      if (port.type == "str") {
+        entry.declared = "string";
+      } else if (port.type == "dict") {
+        entry.declared = "object";
+      } else if (port.type == "float") {
+        entry.declared = "number";
+      } else if (port.type == "a11.Time") {
+        entry.declared = "time";
+      } else if (port.type == "a11.Duration") {
+        entry.declared = "duration";
+      } else if (port.type.find('/') != std::string::npos) {
+        entry.declared = nlohmann::json(port.type).dump();
+      }
+      if (!port.json_schema.empty()) {
+        const auto metadata =
+            nlohmann::json::parse(port.json_schema, nullptr, false);
+        if (metadata.is_object() && metadata.contains("type") &&
+            metadata["type"].is_string() && metadata["type"] == "object" &&
+            metadata.contains("properties")) {
+          const auto representable = [&](const auto& self,
+                                         const nlohmann::json& value,
+                                         bool record, int depth) -> bool {
+            if (depth > 128 || !value.is_object()) {
+              return false;
+            }
+            for (const auto& item : value.items()) {
+              const auto& key = item.key();
+              if (key == "title" || key == "description" || key == "$schema" ||
+                  key == "x-a11-type" || key == "x-a11-order") {
+                continue;
+              }
+              if (key == "type") {
+                if (!item.value().is_string()) {
+                  return false;
+                }
+              } else if (record && key == "properties") {
+                if (!item.value().is_object()) {
+                  return false;
+                }
+                for (const auto& field : item.value()) {
+                  if (!self(self, field, false, depth + 1)) {
+                    return false;
+                  }
+                }
+              } else if (record && key == "$defs") {
+                if (!item.value().is_object()) {
+                  return false;
+                }
+                for (const auto& definition : item.value()) {
+                  if (!self(self, definition, true, depth + 1)) {
+                    return false;
+                  }
+                }
+              } else if (record && key == "required") {
+                if (!item.value().is_array()) {
+                  return false;
+                }
+                for (const auto& name : item.value()) {
+                  if (!name.is_string() || !value.contains("properties") ||
+                      !value["properties"].contains(name.get<std::string>())) {
+                    return false;
+                  }
+                }
+              } else if (key == "additionalProperties") {
+                if (!item.value().is_boolean()) {
+                  return false;
+                }
+              } else if (!record && key == "items") {
+                if (!item.value().is_object()) {
+                  return false;
+                }
+                for (const auto& item_key : item.value().items()) {
+                  if (item_key.key() != "type" && item_key.key() != "$ref" &&
+                      item_key.key() != "description" &&
+                      item_key.key() != "title") {
+                    return false;
+                  }
+                }
+                const auto type = item.value().find("type");
+                if (type != item.value().end() &&
+                    (!type->is_string() || *type == "array")) {
+                  return false;
+                }
+              } else if (!record && (key == "enum" || key == "const")) {
+                if (item.value().is_null()) {
+                  return false;
+                }
+                if (key == "enum") {
+                  if (!item.value().is_array() || item.value().empty()) {
+                    return false;
+                  }
+                  for (const auto& choice : item.value()) {
+                    if (choice.is_null()) {
+                      return false;
+                    }
+                  }
+                }
+              } else if (!record &&
+                         (key == "$ref" || key == "default" ||
+                          key == "minimum" || key == "maximum" ||
+                          key == "minLength" || key == "maxLength" ||
+                          key == "minItems" || key == "maxItems" ||
+                          key == "uniqueItems" || key == "pattern")) {
+                continue;
+              } else if (!record && key == "format") {
+                if (item.value() != "date-time" && item.value() != "duration") {
+                  return false;
+                }
+              } else if (!record && key == "contentEncoding") {
+                if (item.value() != "base64") {
+                  return false;
+                }
+              } else {
+                return false;
+              }
+            }
+            return true;
+          };
+          if (!representable(representable, metadata, true, 0)) {
+            reject(
+                "Object metadata contains a constraint without a lossless "
+                "Flow declaration.");
+            continue;
+          }
+          const auto prefix = absl::StrCat(
+              "Action_", encode(schema.name), "_",
+              direction == syntax::PortDirection::kInput ? "in_" : "out_",
+              encode(name), "_");
+          auto imported = JsonSchemaToDtos(metadata, "Payload");
+          absl::flat_hash_map<std::string, std::string> renamed;
+          for (const auto& dto : imported.dtos) {
+            renamed.emplace(dto.name, prefix + encode(dto.name));
+          }
+          const auto rename_type = [&](std::string value) {
+            const size_t bracket = value.find('[');
+            if (bracket != std::string::npos && value.back() == ']') {
+              const auto element =
+                  value.substr(bracket + 1, value.size() - bracket - 2);
+              if (const auto found = renamed.find(element);
+                  found != renamed.end()) {
+                value.replace(bracket + 1, element.size(), found->second);
+              }
+            } else if (const auto found = renamed.find(value);
+                       found != renamed.end()) {
+              value = found->second;
+            }
+            return value;
+          };
+          for (auto& dto : imported.dtos) {
+            dto.name = renamed.at(dto.name);
+            for (auto& field : dto.fields) {
+              field.declared = rename_type(field.declared);
+              field.type = rename_type(field.type);
+              field.dto_name = rename_type(field.dto_name);
+              field.element = rename_type(field.element);
+              field.element_dto_name = rename_type(field.element_dto_name);
+              field.syntax_type.reset();
+            }
+          }
+          for (auto& diagnostic : imported.diagnostics) {
+            diagnostic.severity = Severity::kError;
+            result.diagnostics.push_back(std::move(diagnostic));
+          }
+          if (imported.diagnostics.empty() && !imported.dtos.empty()) {
+            entry.declared = imported.dtos.front().name;
+            for (auto& dto : imported.dtos) {
+              result.types.push_back(std::move(dto));
+            }
+          }
+        } else if (metadata.is_object() && metadata.contains("type") &&
+                   metadata["type"] == "array") {
+          const auto array_type =
+              [&](const auto& self, const nlohmann::json& value,
+                  int depth) -> absl::StatusOr<std::string> {
+            if (depth > 128 || !value.is_object() || !value.contains("type") ||
+                !value["type"].is_string()) {
+              return absl::InvalidArgumentError(
+                  "An array item has no representable Flow type.");
+            }
+            for (const auto& item : value.items()) {
+              if (item.key() != "type" && item.key() != "items" &&
+                  item.key() != "description" && item.key() != "title" &&
+                  item.key() != "$schema") {
+                return absl::InvalidArgumentError(
+                    "Array metadata contains a constraint without a Flow port "
+                    "spelling.");
+              }
+            }
+            const auto type = value["type"].get<std::string>();
+            if (type == "array") {
+              if (!value.contains("items")) {
+                return std::string("list");
+              }
+              ABSL_ASSIGN_OR_RETURN(auto element,
+                                    self(self, value["items"], depth + 1));
+              return absl::StrCat("list[", element, "]");
+            }
+            if (!vocabulary::TypeNames().contains(type)) {
+              return absl::InvalidArgumentError(
+                  "An array item type has no Flow spelling.");
+            }
+            return type;
+          };
+          const auto type = array_type(array_type, metadata, 0);
+          if (type.ok()) {
+            entry.declared = *type;
+          } else {
+            reject(std::string(type.status().message()));
+          }
+        } else {
+          bool representable = metadata.is_object();
+          if (representable) {
+            for (const auto& item : metadata.items()) {
+              if (item.key() != "$schema" && item.key() != "title" &&
+                  item.key() != "description" && item.key() != "type") {
+                representable = false;
+              }
+            }
+            const auto declared_type = metadata.find("type");
+            if (declared_type != metadata.end()) {
+              Program evidence;
+              if (!declared_type->is_string() ||
+                  RefinesType(port.type, declared_type->get<std::string>(),
+                              evidence) != Refinement::kYes ||
+                  RefinesType(declared_type->get<std::string>(), port.type,
+                              evidence) != Refinement::kYes) {
+                representable = false;
+              }
+            }
+          }
+          if (!representable) {
+            Diagnostic diagnostic;
+            diagnostic.code = "flow.schema.unsupported-keyword";
+            diagnostic.message =
+                "This action port's metadata has no lossless Flow declaration.";
+            result.diagnostics.push_back(std::move(diagnostic));
+          }
+        }
+      }
+      result.interface.ports.push_back(std::move(entry));
+    }
+  }
+  std::vector<std::string> names;
+  for (const auto& [name, header] : schema.headers) {
+    names.push_back(name);
+  }
+  std::sort(names.begin(), names.end());
+  for (const auto& name : names) {
+    const auto& header = schema.headers.at(name);
+    HeaderPlan entry;
+    entry.name = name;
+    entry.alias = absl::StrCat("header", result.interface.headers.size());
+    entry.description = header.description;
+    entry.has_default = header.default_value.has_value();
+    if (entry.has_default) {
+      entry.default_value = syntax::Constant::String(*header.default_value);
+    }
+    result.interface.headers.push_back(std::move(entry));
+  }
+  return result;
 }
 
 absl::StatusOr<actions::ActionHandler> MakeHandler(
@@ -4333,14 +5517,16 @@ absl::StatusOr<actions::ActionHandler> MakeHandler(
   }
   return actions::MakeAsyncActionHandler(
       [program = std::move(program), name = std::string(flow),
-       bridge = std::move(bridge), stream = std::move(options.dispatch_stream)](
+       bridge = std::move(bridge), stream = std::move(options.dispatch_stream),
+       snapshot = std::move(options.snapshot)](
           std::shared_ptr<actions::Action> action) -> absl::Status {
         const ResolvedFlow* one = program->Flow(name);
         if (one == nullptr) {
           return Fail(absl::StrCat("No flow named '", name, "' any more."),
                       absl::StatusCode::kNotFound);
         }
-        Runner runner(program, *one, std::move(action), bridge, stream);
+        Runner runner(program, *one, std::move(action), bridge, stream,
+                      snapshot);
         return runner.Run();
       });
 }
@@ -4366,7 +5552,8 @@ absl::StatusOr<actions::ActionHandler> MakeEntryHandler(
   }
   return actions::MakeAsyncActionHandler(
       [program = std::move(program), bridge = std::move(bridge),
-       stream = std::move(options.dispatch_stream)](
+       stream = std::move(options.dispatch_stream),
+       snapshot = std::move(options.snapshot)](
           std::shared_ptr<actions::Action> action) -> absl::Status {
         // Looked up again rather than captured: the handler outlives this call
         // and the program is what owns the flow.
@@ -4375,7 +5562,8 @@ absl::StatusOr<actions::ActionHandler> MakeEntryHandler(
           return Fail("This program has no entry flow any more.",
                       absl::StatusCode::kNotFound);
         }
-        Runner runner(program, *one, std::move(action), bridge, stream);
+        Runner runner(program, *one, std::move(action), bridge, stream,
+                      snapshot);
         return runner.Run();
       });
 }

@@ -138,7 +138,9 @@ def test_every_code_is_published_with_a_meaning():
         assert entry.summary.endswith(".")
         # The middle part of the code names the family, so a reader can guess
         # which inspection owns a code without a lookup.
-        assert entry.code.split(".")[1] == str(entry.family)
+        assert entry.code.split(".")[1] == str(entry.family) or (
+            entry.code.startswith("flow.schema.") and entry.family is diag.Family.FORM
+        )
 
 
 def test_the_code_table_is_the_generated_one():

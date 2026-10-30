@@ -132,7 +132,7 @@ class FlowDocumentationProvider : AbstractDocumentationProvider() {
         val proposal = obj as? FlowProposal ?: return null
         if (proposal.documentation.isEmpty()) return null
         val context = element ?: return null
-        return FlowLookupDocumentation(context, proposal.documentation)
+        return FlowLookupDocumentation(context, proposal.name, proposal.documentation)
     }
 
     /**
@@ -150,7 +150,7 @@ class FlowDocumentationProvider : AbstractDocumentationProvider() {
         val at = original ?: element
         val file = at.containingFile as? FlowPsiFile ?: return null
         val about = FlowEngine.instance()
-            .describe(file.text, at.textRange.startOffset) ?: return null
+            .describe(file.text, at.textRange.startOffset, FlowSourceContext.fromFile(file)) ?: return null
         return about.takeIf { it["found"] == true }
     }
 }
@@ -164,8 +164,11 @@ class FlowDocumentationProvider : AbstractDocumentationProvider() {
  */
 private class FlowLookupDocumentation(
     private val context: PsiElement,
+    private val lookupName: String,
     val markdown: String,
 ) : FakePsiElement() {
+
+    override fun getName(): String = lookupName
 
     override fun getParent(): PsiElement = context
 
@@ -292,7 +295,7 @@ class FlowDeclarationHandler :
         editor: Editor?,
     ): Array<PsiElement>? {
         val file = source?.containingFile as? FlowPsiFile ?: return null
-        val answer = FlowEngine.instance().definition(file.text, offset) ?: return null
+        val answer = FlowEngine.instance().definition(file.text, offset, FlowSourceContext.fromFile(file)) ?: return null
         if (answer["found"] != true) {
             // Project action declarations may live outside the Flow document.
             // The language response supplies their source location directly.

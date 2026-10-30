@@ -64,7 +64,6 @@ class FlowInjector : MultiHostInjector {
         // Cheap rejections first: this runs for every string literal in every
         // file of every language, so it has to cost nothing to say no.
         if (context.textLength !in MINIMUM_LENGTH..MAXIMUM_LENGTH) return
-        if (!context.textContains('{')) return
 
         val range = ElementManipulators.getValueTextRange(context)
         if (range.isEmpty) return
@@ -91,7 +90,7 @@ class FlowInjector : MultiHostInjector {
          * it is what keeps `flowing {` from reading as an unnamed flow.
          */
         private val DECLARATION = Regex(
-            """(?:flow|FLOW)(?:\s+(?:[A-Za-z_$][A-Za-z0-9_$]*(?:-[A-Za-z0-9_$]+)*|"[^"\n]{1,200}"))?\s*\{""",
+            """(?:(?:(?:declare|DECLARE)\s+)?(?:flow|FLOW)(?:\s+(?:[A-Za-z_$][A-Za-z0-9_$-]*(?:\.[A-Za-z_$][A-Za-z0-9_$-]*)*|"(?:\\.|[^"\\\n]){1,200}"))?(?:\s+(?:exported|EXPORTED))?\s*\{|(?:struct|STRUCT)\s+[A-Za-z_$][A-Za-z0-9_$-]*(?:\s+(?:exported|EXPORTED))?\s*\{|(?:import|IMPORT)\s+"[^"\n]+"\s+(?:as|AS)\s+[A-Za-z_$][A-Za-z0-9_$-]*|(?:from|FROM)\s+"[^"\n]+"\s+(?:import|IMPORT)\s+[A-Za-z_$][A-Za-z0-9_$-]*)""",
         )
 
         /**

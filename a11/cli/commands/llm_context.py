@@ -24,6 +24,7 @@ import shutil
 import sys
 
 from a11.cli.app import Command
+from a11.cli.commands import _command_help
 from a11.sdk.llm_context.config import LlmContextServices, decode_config
 from a11.sdk.llm_context.content import (
     compress_content,
@@ -186,7 +187,7 @@ async def _run(args: argparse.Namespace) -> int:
 
 LLM_CONTEXT_COMMAND = Command(
     name="llm-context",
-    help="Compress, compact, measure, or intercept LLM context.",
+    help=_command_help("llm-context"),
     configure=_configure,
     run=_run,
 )

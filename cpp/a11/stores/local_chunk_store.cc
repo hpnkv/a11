@@ -611,6 +611,11 @@ a11::Future<absl::Status> LocalChunkStore::CloseWritesWithStatus(
       });
 }
 
+a11::Future<std::optional<absl::Status>> LocalChunkStore::GetWriteStatus() {
+  thread::MutexLock lock(&state_->mu);
+  return a11::CompletedFuture<std::optional<absl::Status>>(state_->status);
+}
+
 a11::Future<size_t> LocalChunkStore::Size() {
   std::shared_ptr<State> state = state_;
   return CompleteInline<size_t>(

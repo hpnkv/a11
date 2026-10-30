@@ -1,0 +1,12 @@
+flow {
+  stdin = run read_stdin()
+
+  from "./nested.flow" import test
+
+  forwarded = stdin.lines
+    | take until lower(it) == "/exit"
+    | log info it
+    -> (run test()).input
+
+  {"command": "stop"} -> stdin.control_events after forwarded
+}

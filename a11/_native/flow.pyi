@@ -17,6 +17,7 @@ The Flow language: one lexer, one grammar, one set of checks, shared by the Pyth
 """
 
 from __future__ import annotations
+import a11._native
 import collections.abc
 import typing
 from a11._native import (
@@ -31,8 +32,19 @@ from a11._native import (
 )
 
 __all__: list[str] = [
+    "CallOptions",
+    "DocumentChange",
+    "DocumentSymbolHandle",
+    "Expression",
+    "FlowBuilder",
     "FlowPlan",
+    "ModuleDocument",
+    "ModuleGraphChange",
     "Program",
+    "SourceEdit",
+    "Statement",
+    "StructBuilder",
+    "Type",
     "check",
     "check_program",
     "codes",
@@ -47,12 +59,284 @@ __all__: list[str] = [
     "run_program",
     "scan",
     "stages",
+    "standard_action_schemas",
     "strformat",
     "syntax",
     "syntax_targets",
     "tokenize",
     "vocabulary",
 ]
+
+class CallOptions:
+    """
+    Typed modifiers for an invocation expression.
+    """
+
+    id: Expression | None
+    node_map: str
+    remote: bool
+    tee: bool
+    tolerant: bool
+    def __init__(self) -> None:
+        """
+        Create default local invocation options.
+        """
+
+    @property
+    def after(self) -> list[Expression]: ...
+    @after.setter
+    def after(self, arg0: collections.abc.Sequence[Expression]) -> None: ...
+
+    @property
+    def forward(self) -> list[str]: ...
+    @forward.setter
+    def forward(self, arg0: collections.abc.Sequence[str]) -> None: ...
+
+    @property
+    def headers(self) -> dict[str, Expression]:
+        """
+        Explicit header expressions in evaluation order.
+        """
+    @headers.setter
+    def headers(self, arg1: dict[str, Expression]) -> None: ...
+
+    @property
+    def timeout(self) -> typing.Any:
+        """
+        An optional A11 duration or duration string.
+        """
+    @timeout.setter
+    def timeout(self, arg1: typing.Any) -> None: ...
+
+class DocumentChange:
+    """
+    The edits and diagnostics returned by an atomic document transaction.
+    """
+
+    @property
+    def diagnostics(self) -> typing.Any:
+        """
+        Diagnostics after the transaction.
+        """
+
+    @property
+    def edits(self) -> list[SourceEdit]: ...
+    @property
+    def revision(self) -> int: ...
+
+class DocumentSymbolHandle:
+    """
+    A symbol in one document revision; edits reject stale handles.
+    """
+
+    @property
+    def document(self) -> str: ...
+    @property
+    def kind(self) -> str: ...
+    @property
+    def name(self) -> str: ...
+    @property
+    def occurrence(self) -> int: ...
+    @property
+    def revision(self) -> int: ...
+
+class Expression:
+    """
+    A native Flow expression with grammar-aware source emission.
+    """
+
+    @staticmethod
+    def array(items: collections.abc.Sequence[Expression]) -> Expression:
+        """
+        Construct an array of expressions.
+        """
+
+    @staticmethod
+    def builtin(
+        name: str, arguments: collections.abc.Sequence[Expression]
+    ) -> Expression:
+        """
+        Apply a language builtin.
+        """
+
+    @staticmethod
+    def completion(operation: str, subject: Expression) -> Expression:
+        """
+        Read status, wait for, or drain a subject.
+        """
+
+    @staticmethod
+    def invoke(
+        action: str,
+        arguments: collections.abc.Mapping[str, Expression] = {},
+        remote: bool = False,
+        tolerant: bool = False,
+        node_map: str = "",
+    ) -> Expression:
+        """
+        Construct an action invocation, grouped for result access.
+        """
+
+    @staticmethod
+    def invoke_with(
+        action: str,
+        arguments: collections.abc.Mapping[str, Expression],
+        options: CallOptions,
+    ) -> Expression:
+        """
+        Construct an invocation with typed modifiers.
+        """
+
+    @staticmethod
+    def literal(value: typing.Any) -> Expression:
+        """
+        Construct a Flow literal from a JSON value.
+        """
+
+    @staticmethod
+    def node(id: Expression | None = None, node_map: str = "") -> Expression:
+        """
+        Allocate or attach a node.
+        """
+
+    @staticmethod
+    def object(fields: dict[str, Expression]) -> Expression:
+        """
+        Construct an object, retaining field evaluation order.
+        """
+
+    @staticmethod
+    def reference(name: str) -> Expression:
+        """
+        Refer to a name or a qualified field.
+        """
+
+    def cast(self, type: Type) -> Expression:
+        """
+        Coerce an expression to a type.
+        """
+
+    def field(self, name: str) -> Expression:
+        """
+        Select a port or field.
+        """
+
+    def index(self, index: Expression) -> Expression:
+        """
+        Select an indexed item.
+        """
+
+    def pipeline(
+        self, stage: str, argument: Expression | None = None
+    ) -> Expression:
+        """
+        Apply a pipeline stage with required grouping.
+        """
+
+    @property
+    def source(self) -> str:
+        """
+        The emitted Flow expression.
+        """
+
+class FlowBuilder:
+    """
+    Construct an implemented flow or an interface declaration.
+    """
+
+    def __init__(self, name: str, interface_only: bool = False) -> None:
+        """
+        Create a flow builder.
+        """
+
+    def add(self, statement: Statement) -> None:
+        """
+        Append a typed executable statement.
+        """
+
+    def add_declaration(self, interface: FlowBuilder) -> None:
+        """
+        Add a flow-local callable declaration.
+        """
+
+    def add_import(self, reference: str, alias: str, symbol: str = "") -> None:
+        """
+        Import a namespace or one named symbol into this flow.
+        """
+
+    def add_struct(self, shape: StructBuilder) -> None:
+        """
+        Add a flow-local struct.
+        """
+
+    def bind(self, name: str, value: Expression) -> None:
+        """
+        Bind an expression value.
+        """
+
+    def emit(self) -> str:
+        """
+        Emit and validate Flow source.
+        """
+
+    def header(
+        self,
+        name: str,
+        alias: str,
+        default_value: str | None = None,
+        description: str = "",
+    ) -> None:
+        """
+        Append a documented header with an optional byte-text default.
+        """
+
+    def pipe(self, value: Expression, destination: Expression) -> None:
+        """
+        Write an expression to a destination.
+        """
+
+    @typing.overload
+    def port(
+        self,
+        name: str,
+        type: str,
+        output: bool = False,
+        unary: bool = True,
+        required: bool = False,
+        description: str = "",
+    ) -> None:
+        """
+        Append an input or output port.
+        """
+    @typing.overload
+    def port(
+        self,
+        name: str,
+        type: Type,
+        output: bool = False,
+        unary: bool = True,
+        required: bool = False,
+        description: str = "",
+    ) -> None:
+        """
+        Append a port with a typed grammar descriptor.
+        """
+
+    @property
+    def description(self) -> str:
+        """
+        The action description.
+        """
+    @description.setter
+    def description(self, arg1: str) -> None: ...
+
+    @property
+    def exported(self) -> bool:
+        """
+        Whether this flow belongs to the module's public API.
+        """
+    @exported.setter
+    def exported(self, arg1: bool) -> None: ...
 
 class FlowPlan:
     """
@@ -67,6 +351,11 @@ class FlowPlan:
     def action(self, **kwargs: typing.Any) -> Action:
         """
         Build a standalone [Action][a11.actions.action.Action] for it.
+        """
+
+    def action_schema(self) -> ActionSchema:
+        """
+        The selected native implementation's action schema, including header defaults.
         """
 
     def describe(self) -> dict[str, typing.Any]:
@@ -114,6 +403,12 @@ class FlowPlan:
     @property
     def description(self) -> str: ...
     @property
+    def exported(self) -> bool:
+        """
+        Whether the flow is part of its module's public API.
+        """
+
+    @property
     def handler(self) -> ActionHandler | NativeActionHandler | None:
         """
         The action handler that runs this flow.
@@ -126,9 +421,21 @@ class FlowPlan:
         """
 
     @property
+    def imported(self) -> bool:
+        """
+        Whether the implementation belongs to an imported module.
+        """
+
+    @property
     def inputs(self) -> collections.abc.Mapping[str, ActionPortSchema]:
         """
         The declared input ports, by name, as the action schema has them.
+        """
+
+    @property
+    def interface_only(self) -> bool:
+        """
+        Whether this is an interface declaration.
         """
 
     @property
@@ -150,14 +457,184 @@ class FlowPlan:
         can dispatch an action can dispatch a composition without being told it
         is one.
 
-        Built through the Python validator rather than taken from the native
-        schema, because a port's ``typeinfo`` -- the Python type its JSON schema
-        comes from, and so what a model is shown -- is something only this side
-        can supply.
+        The native schema supplies ports and header defaults. Python attaches
+        the corresponding builtin ``typeinfo`` handles.
         """
 
     @property
     def source_name(self) -> str: ...
+
+class ModuleDocument:
+    """
+    An owning editable Flow module, with revisioned native source transactions.
+    """
+
+    def __init__(self, identity: str = "<memory>", source: str = "") -> None:
+        """
+        Create a module or open source for editing.
+        """
+
+    def apply(
+        self,
+        revision: typing.SupportsInt,
+        edits: collections.abc.Sequence[SourceEdit],
+    ) -> DocumentChange:
+        """
+        Commit nonoverlapping edits against an expected revision.
+        """
+
+    def check(
+        self, modules: collections.abc.Mapping[str, str] = {}
+    ) -> typing.Any:
+        """
+        Analyze this module and its supplied import graph.
+        """
+
+    def compile(
+        self, modules: collections.abc.Mapping[str, str] = {}
+    ) -> Program:
+        """
+        Build an immutable execution snapshot from supplied modules.
+        """
+
+    def effective_schema(
+        self, name: str, modules: collections.abc.Mapping[str, str] = {}
+    ) -> typing.Any:
+        """
+        Query the effective conjunction of compatible callable contributions.
+        """
+
+    def insert(self, flow: FlowBuilder) -> DocumentChange:
+        """
+        Insert one flow contribution.
+        """
+
+    def insert_struct(self, shape: StructBuilder) -> DocumentChange:
+        """
+        Insert a struct contribution.
+        """
+
+    def remove(self, symbol: DocumentSymbolHandle) -> DocumentChange:
+        """
+        Remove one contributing symbol.
+        """
+
+    def remove_import(
+        self, alias: str, scope: DocumentSymbolHandle | None = None
+    ) -> DocumentChange:
+        """
+        Remove an import from its lexical scope.
+        """
+
+    def rename(self, symbol: DocumentSymbolHandle, name: str) -> DocumentChange:
+        """
+        Rename a local symbol and its references.
+        """
+
+    def rename_import(
+        self, alias: str, name: str, scope: DocumentSymbolHandle | None = None
+    ) -> DocumentChange:
+        """
+        Rename a namespace and its lexically bound action/type references.
+        """
+
+    def rename_in_graph(
+        self,
+        symbol: DocumentSymbolHandle,
+        name: str,
+        modules: collections.abc.Mapping[str, str] = {},
+    ) -> ModuleGraphChange:
+        """
+        Prepare validated reference edits across supplied modules without mutating this document.
+        """
+
+    def set_exported(
+        self, symbol: DocumentSymbolHandle, value: bool
+    ) -> DocumentChange:
+        """
+        Set visibility with a local source edit.
+        """
+
+    def symbols(self) -> list[DocumentSymbolHandle]:
+        """
+        Find the contributing declarations and definitions.
+        """
+
+    def update(
+        self, symbol: DocumentSymbolHandle, flow: FlowBuilder
+    ) -> DocumentChange:
+        """
+        Replace one owned contribution, retaining visibility and declaration kind.
+        """
+
+    def update_struct(
+        self, symbol: DocumentSymbolHandle, shape: StructBuilder
+    ) -> DocumentChange:
+        """
+        Update one struct contribution, retaining visibility and unrelated source text.
+        """
+
+    def upsert_declaration(
+        self,
+        schema: ActionSchema,
+        symbol: DocumentSymbolHandle | None = None,
+        exported: bool = False,
+    ) -> DocumentChange:
+        """
+        Synchronize one owned interface from a native action schema without weakening unrepresentable metadata.
+        """
+
+    def upsert_import(
+        self,
+        reference: str,
+        alias: str,
+        scope: DocumentSymbolHandle | None = None,
+        symbol: str = "",
+    ) -> DocumentChange:
+        """
+        Insert or update an import in the module or an implemented flow.
+        """
+
+    @property
+    def identity(self) -> str:
+        """
+        The module's canonical host identity.
+        """
+
+    @property
+    def revision(self) -> int:
+        """
+        The current document revision.
+        """
+
+    @property
+    def source(self) -> str:
+        """
+        The current source text.
+        """
+
+class ModuleGraphChange:
+    """
+    A validated source rename across an in-memory module graph.
+    """
+
+    @property
+    def diagnostics(self) -> typing.Any:
+        """
+        Public API and graph boundary information.
+        """
+
+    @property
+    def edits(self) -> dict[str, list[SourceEdit]]:
+        """
+        Byte edits grouped by source identity.
+        """
+
+    @property
+    def sources(self) -> dict[str, str]:
+        """
+        The updated source snapshots.
+        """
 
 class Program:
     """
@@ -181,7 +658,7 @@ class Program:
 
     def register_all(self, registry: ActionRegistry) -> Program:
         """
-        Register every flow in ``registry``.
+        Register the root module's named implementations in ``registry``.
         """
 
     @property
@@ -215,7 +692,179 @@ class Program:
     @property
     def source_name(self) -> str: ...
 
-def check(source: str, source_name: str = "-") -> dict[str, typing.Any]:
+class SourceEdit:
+    """
+    A byte-range replacement in a source document.
+    """
+
+    text: str
+    def __init__(
+        self, start: typing.SupportsInt, end: typing.SupportsInt, text: str
+    ) -> None:
+        """
+        Construct a source replacement.
+        """
+
+    @property
+    def end(self) -> int: ...
+    @end.setter
+    def end(self, arg0: typing.SupportsInt) -> None: ...
+
+    @property
+    def start(self) -> int: ...
+    @start.setter
+    def start(self, arg0: typing.SupportsInt) -> None: ...
+
+class Statement:
+    """
+    A typed statement in an executable Flow body.
+    """
+
+    @staticmethod
+    def after(
+        subjects: collections.abc.Sequence[Expression],
+        body: collections.abc.Sequence[Statement],
+        tolerant: bool = False,
+    ) -> Statement:
+        """
+        Gate a concurrent block on completion subjects.
+        """
+
+    @staticmethod
+    def bind(name: str, value: Expression) -> Statement:
+        """
+        Bind a scalar expression.
+        """
+
+    @staticmethod
+    def block(
+        body: collections.abc.Sequence[Statement], tolerant: bool = False
+    ) -> Statement:
+        """
+        Group concurrent statements with one outcome.
+        """
+
+    @staticmethod
+    def cancel(subject: Expression) -> Statement:
+        """
+        Cancel an owned action.
+        """
+
+    @staticmethod
+    def fail(code: Expression, message: Expression | None = None) -> Statement:
+        """
+        Fail with a status and optional message.
+        """
+
+    @staticmethod
+    def for_(
+        variable: str,
+        source: Expression,
+        body: collections.abc.Sequence[Statement],
+        parallel: typing.SupportsInt = 1,
+    ) -> Statement:
+        """
+        Construct a loop over a stream.
+        """
+
+    @staticmethod
+    def if_(
+        condition: Expression,
+        then_body: collections.abc.Sequence[Statement],
+        else_body: collections.abc.Sequence[Statement] = [],
+    ) -> Statement:
+        """
+        Construct conditional statement bodies.
+        """
+
+    @staticmethod
+    def pipe(value: Expression, destination: Expression) -> Statement:
+        """
+        Write a stream to a destination.
+        """
+
+    @staticmethod
+    def wait(subject: Expression, drain: bool = False) -> Statement:
+        """
+        Wait for or drain a subject.
+        """
+
+    @property
+    def source(self) -> str:
+        """
+        The emitted statement.
+        """
+
+class StructBuilder:
+    """
+    Construct a native Flow struct.
+    """
+
+    def __init__(self, name: str) -> None:
+        """
+        Create a struct builder.
+        """
+
+    def emit(self) -> str:
+        """
+        Emit validated struct source.
+        """
+
+    def field(
+        self,
+        name: str,
+        type: Type,
+        required: bool = False,
+        default_value: Expression | None = None,
+        description: str = "",
+    ) -> None:
+        """
+        Append a typed field with an optional literal default.
+        """
+
+    @property
+    def description(self) -> str:
+        """
+        The struct description.
+        """
+    @description.setter
+    def description(self, arg1: str) -> None: ...
+
+    @property
+    def exported(self) -> bool:
+        """
+        The module visibility.
+        """
+    @exported.setter
+    def exported(self, arg1: bool) -> None: ...
+
+class Type:
+    """
+    A native Flow type expression.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        parameters: collections.abc.Sequence[Type] = [],
+        quoted: bool = False,
+    ) -> None:
+        """
+        Construct a type, optionally with generic arguments or a quoted media type.
+        """
+
+    @property
+    def source(self) -> str:
+        """
+        The grammar-aware type spelling.
+        """
+
+def check(
+    source: str,
+    source_name: str = "-",
+    modules: collections.abc.Mapping[str, str] = {},
+    resolve_files: bool = False,
+) -> dict[str, typing.Any]:
     """
     Everything wrong with one flow file.
 
@@ -242,7 +891,12 @@ def codes() -> list[dict[str, typing.Any]]:
     read either and get the same answer.
     """
 
-def compile(source: str, source_name: str = "") -> Program:
+def compile(
+    source: str,
+    source_name: str = "",
+    modules: collections.abc.Mapping[str, str] = {},
+    resolve_files: bool = False,
+) -> Program:
     """
     Compile Flow source into a runnable program.
 
@@ -311,7 +965,7 @@ def plan(source: str, source_name: str = "-") -> dict[str, typing.Any]:
     """
 
 def register_standard_actions(
-    registry: ActionRegistry | None,
+    registry: ActionRegistry,
     roots: collections.abc.Sequence[str],
     allow_write: bool = False,
     allow_run: bool = False,
@@ -333,7 +987,9 @@ def register_standard_actions(
     write and process permissions, environment filtering, and limits still apply.
     """
 
-def request(request: dict[str, typing.Any]) -> dict[str, typing.Any]:
+def request(
+    request: dict[str, typing.Any], resolve_files: bool = False
+) -> dict[str, typing.Any]:
     """
     One request to the language service, answered.
 
@@ -411,6 +1067,11 @@ def stages() -> dict[str, str]:
     ``"none"``, ``"number"``, ``"expr"``, ``"string"``, ``"string?"`` or ``"stream"``
     -- the same table the parser reads, so an editor offering completions after a
     ``|`` needs no list of its own.
+    """
+
+def standard_action_schemas() -> list[ActionSchema]:
+    """
+    Return native standard-library schemas without running any actions.
     """
 
 def strformat(

@@ -28,6 +28,9 @@
  */
 import * as esbuild from 'esbuild';
 import {copyFileSync, mkdirSync} from 'node:fs';
+import {stageFlowTool} from './nativeTool.mjs';
+
+stageFlowTool();
 
 const dev = process.argv.includes('--dev');
 

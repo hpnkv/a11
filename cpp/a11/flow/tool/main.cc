@@ -35,6 +35,7 @@
 #include "a11/flow/diagnostic.h"
 #include "a11/flow/discover.h"
 #include "a11/flow/emit_json.h"
+#include "a11/flow/file_modules.h"
 #include "a11/flow/format.h"
 #include "a11/flow/generate.h"
 #include "a11/flow/highlight.h"
@@ -178,9 +179,13 @@ void Emit(const nlohmann::json& payload) {
 }
 
 /// Everything wrong with one document, both passes, in source order.
-std::vector<Diagnostic> Problems(std::string_view source) {
-  const nlohmann::json answer = Handle(
-      nlohmann::json{{"method", "check"}, {"source", std::string(source)}});
+std::vector<Diagnostic> Problems(std::string_view source,
+                                 std::string_view path) {
+  const nlohmann::json answer =
+      Handle(nlohmann::json{{"method", "check"},
+                            {"source", std::string(source)},
+                            {"path", FileModuleIdentity(path)}},
+             FileModuleResolver());
   std::vector<Diagnostic> found;
   for (const nlohmann::json& entry : answer.at("result").at("diagnostics")) {
     found.push_back(DiagnosticFromJsonValue(entry));
@@ -210,7 +215,7 @@ int Check(const Options& options) {
       exit_code = 2;
       continue;
     }
-    const std::vector<Diagnostic> found = Problems(source);
+    const std::vector<Diagnostic> found = Problems(source, path);
     if (CountErrors(found) > 0) {
       exit_code = std::max(exit_code, 1);
     }
@@ -431,8 +436,10 @@ int Describe(const Options& options) {
     std::cerr << path << ": cannot read: " << reason << "\n";
     return 2;
   }
-  const ParseResult parsed = flow::Parse(source);
-  const ResolveResult resolved = Resolve(source, parsed);
+  auto linked =
+      LinkModules(source, FileModuleIdentity(path), {}, FileModuleResolver());
+  auto resolved = Resolve(linked.source, linked.parsed);
+  linked.Locate(resolved.diagnostics);
   if (options.format != Output::kText) {
     Emit(PlanToJsonValue(path, resolved.program));
     return resolved.HasErrors() ? 1 : 0;
@@ -519,8 +526,10 @@ int Schema(const Options& options) {
     std::cerr << path << ": cannot read: " << reason << "\n";
     return 2;
   }
-  const ParseResult parsed = flow::Parse(source);
-  const ResolveResult resolved = Resolve(source, parsed);
+  auto linked =
+      LinkModules(source, FileModuleIdentity(path), {}, FileModuleResolver());
+  auto resolved = Resolve(linked.source, linked.parsed);
+  linked.Locate(resolved.diagnostics);
   if (resolved.HasErrors()) {
     for (const Diagnostic& diagnostic : resolved.diagnostics) {
       if (diagnostic.severity == Severity::kError) {
@@ -576,7 +585,11 @@ int Complete(const Options& options) {
     std::cerr << "complete takes --offset N, or --line L and --column C\n";
     return 2;
   }
-  const CompleteResult completed = CompleteAt(source, offset);
+  const auto linked =
+      LinkModules(source, FileModuleIdentity(path), {}, FileModuleResolver());
+  const CompleteResult completed = CompleteAt(
+      source, offset,
+      catalogue::Catalogue::Builtin().MergedWith(linked.CatalogueAt(offset)));
   if (options.format != Output::kText) {
     Emit(CompletionsToJsonValue(completed));
     return 0;
@@ -746,7 +759,7 @@ int Serve(const Options& options) {
       std::cout.flush();
       continue;
     }
-    std::cout << Handle(request).dump() << "\n";
+    std::cout << Handle(request, FileModuleResolver()).dump() << "\n";
     std::cout.flush();
   }
   return 0;

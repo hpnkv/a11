@@ -258,6 +258,31 @@ TEST(AsyncNodeTest, CloseEndsAStreamWithNoFinality) {
   EXPECT_FALSE(node->NextObject<nlohmann::json>().Await()->has_value());
 }
 
+TEST(AsyncNodeTest, CompletionObservationPreservesUnreadData) {
+  auto node = *(*NodeMap::Create())->Get("observed");
+  auto completion = node->ObserveCompletion();
+  ASSERT_TRUE(node->Put(nlohmann::json(42)).Await().ok());
+  EXPECT_FALSE(completion.IsReady());
+  ASSERT_TRUE(node->Finalize({.wait = true, .close = false}).Await().ok());
+  ASSERT_TRUE(completion.Await(absl::Now() + absl::Seconds(2)).ok());
+  EXPECT_TRUE((*node->writer())->IsWritable());
+  auto next = node->NextObject<nlohmann::json>().Await();
+  ASSERT_TRUE(next.ok());
+  ASSERT_TRUE(next->has_value());
+  EXPECT_EQ(**next, 42);
+}
+
+TEST(AsyncNodeTest, CancelledObservationLeavesWriterOpen) {
+  auto node = *(*NodeMap::Create())->Get("observed");
+  auto completion = node->ObserveCompletion();
+  ASSERT_TRUE(completion.Cancel().ok());
+  EXPECT_EQ(completion.Await().status().code(), absl::StatusCode::kCancelled);
+  EXPECT_TRUE(*node->IsWritable().Await());
+  ASSERT_TRUE(
+      node->Finalize(nlohmann::json("later"), {.wait = true}).Await().ok());
+  EXPECT_TRUE(node->ObserveCompletion().Await().ok());
+}
+
 TEST(AsyncNodeTest, NodeMapCachesAndDiscardsIdentity) {
   auto map = *NodeMap::Create();
   auto first = *map->Get("node");

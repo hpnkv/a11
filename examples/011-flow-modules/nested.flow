@@ -1,0 +1,6 @@
+flow test exported {
+  in  input:  string stream "Input"
+
+  stdout = run write_stdout()
+  input | map strformat("%s\n", it) -> stdout.content
+}

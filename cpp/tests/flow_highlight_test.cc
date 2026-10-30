@@ -48,6 +48,16 @@ std::vector<std::string> Coloured(std::string_view source,
   return out;
 }
 
+TEST(FlowHighlight, PredicateStagesColourBothWords) {
+  const auto tokens = Coloured(
+      "flow f { in words: string stream\n words | try take until it == "
+      "\"exit\" -> _\n}");
+  EXPECT_NE(std::find(tokens.begin(), tokens.end(), "stage:take"),
+            tokens.end());
+  EXPECT_NE(std::find(tokens.begin(), tokens.end(), "stage:until"),
+            tokens.end());
+}
+
 TEST(FlowHighlight, ALevelIsALevelOnlyWhereALogTakesOne) {
   EXPECT_EQ(Coloured("log warning \"hm\""),
             (std::vector<std::string>{"statement-keyword:log",

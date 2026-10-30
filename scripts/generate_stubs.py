@@ -575,14 +575,11 @@ def _normalise_annotations(stub: str, submodule: str | None = None) -> str:
     if marker not in stub:
         raise RuntimeError("stubgen output did not import typing")
     stub = stub.replace(marker, marker + definitions, 1)
-    if "fastapi." in stub:
-        stub = stub.replace(
-            "import asyncio\n", "import asyncio\nimport fastapi\n"
-        )
-    if "httpx." in stub:
-        stub = stub.replace(
-            "import fastapi\n", "import fastapi\nimport httpx\n"
-        )
+    for module in ("fastapi", "httpx", "starlette.exceptions"):
+        if f"{module}." in stub:
+            stub = stub.replace(
+                "import asyncio\n", f"import asyncio\nimport {module}\n"
+            )
     if "os.PathLike" in stub:
         stub = stub.replace("import typing\n", "import typing\nimport os\n", 1)
     if "typing_extensions." in stub or "typing_extensions." in definitions:

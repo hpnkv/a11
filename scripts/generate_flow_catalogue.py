@@ -219,10 +219,15 @@ def _registered_actions() -> list[dict[str, object]]:
         except Exception as error:  # pragma: no cover - platform-dependent
             print(f"  skipped {module_name}: {error}", file=sys.stderr)
 
-    described = [
+    from a11._native.flow import standard_action_schemas
+
+    described = [_action(schema) for schema in standard_action_schemas()]
+    native_names = {one["name"] for one in described}
+    described.extend(
         _action(registry.get_schema(name))
         for name in registry.list_registered_actions()
-    ]
+        if name not in native_names
+    )
     named = {one["name"] for one in described}
     for module_name, constant in _NAMED_SCHEMAS:
         try:
@@ -259,13 +264,15 @@ def _registered_types() -> list[dict[str, object]]:
     from a11.data import serial_tags
 
     registry = get_global_serialization_registry()
-    tags = sorted({
-        value
-        for name, value in vars(serial_tags).items()
-        if not name.startswith("_")
-        and isinstance(value, str)
-        and value.startswith("a11.")
-    })
+    tags = sorted(
+        {
+            value
+            for name, value in vars(serial_tags).items()
+            if not name.startswith("_")
+            and isinstance(value, str)
+            and value.startswith("a11.")
+        }
+    )
     described: list[dict[str, object]] = []
     for tag in tags:
         model = registry.resolve_type(tag)
@@ -297,7 +304,7 @@ def header_for(text: str) -> str:
     return (
         "// Copyright 2026 The A11 Authors\n"
         "//\n"
-        "// Licensed under the Apache License, Version 2.0 (the \"License\");\n"
+        '// Licensed under the Apache License, Version 2.0 (the "License");\n'
         "// you may not use this file except in compliance with the License.\n"
         "// You may obtain a copy of the License at\n"
         "//\n"
@@ -305,7 +312,7 @@ def header_for(text: str) -> str:
         "//\n"
         "// Unless required by applicable law or agreed to in writing, "
         "software\n"
-        "// distributed under the License is distributed on an \"AS IS\" "
+        '// distributed under the License is distributed on an "AS IS" '
         "BASIS,\n"
         "// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express "
         "or implied.\n"

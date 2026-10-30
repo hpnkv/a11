@@ -263,7 +263,7 @@ result = await program["interact-on-full-sentence"].invoke(
 )
 ```
 
-[`register`][a11.flow.register] compiles and publishes every flow in the source as
+[`register`][a11.flow.register] compiles and publishes every named root implementation in the source as
 an action, after which a [`Session`][a11.service.session.Session] dispatches them
 like anything else. [`invoke`][a11.flow.plan.FlowPlan.invoke] is the convenience
 path for scripts and tests. A flow that will not compile raises
@@ -319,7 +319,7 @@ each value on arrival. A slow source does not block a fast one:
 interleave(llm.text_output, tool.progress) -> shown
 ```
 
-**Whichever call answers first.** `wait first of` holds until one of several
+**Whichever subject completes first.** `wait first of` holds until one of several
 calls finishes and lets the rest carry on. It is a value as well as a barrier:
 the number of the one that won, counted from zero, so the flow can act on *which*
 answer it got.
@@ -371,3 +371,272 @@ For writing flows: editor support is in
 highlights `.flow` files and Flow source inside string literals. [Checking flows
 from a toolchain](flow-tooling.md) documents machine-readable responses for CI
 and editor integrations.
+
+## Use operation results inside expressions
+
+Select an output directly when a call is used once:
+
+```a11flow
+flow shrink {
+  in request: object
+  out result: object
+  nodes scratch
+  (run llm_context_compress(request: request) via scratch).result -> result
+}
+```
+
+`run`, `call`, `node`, `status`, `wait`, and `drain` produce expressions.
+They can appear in arguments, object and array values, indices, and stage
+expressions. Whole prefix chains need no wrapper:
+`let outcome = wait try run check()` and `let finished = drain existing_node`.
+A multi-part operation needs parentheses before selecting its result:
+`(run fetch(url: url)).metadata.title`. The spelling
+`run fetch(url: url).metadata.title` is an invalid action target, with a suggested
+grouping repair. `run` remains explicit; `call` still dispatches on the wire.
+
+A scalar object field reads a value from the selected output. If the output is a
+stream, Flow gives an informational suggestion to make cardinality explicit:
+
+```a11flow
+let report = {"text": ((run render(data: data)).text | consume), "source": url}
+```
+
+`consume` waits for the stream to end and emits its sole logical item. Zero or
+multiple items fail with `FAILED_PRECONDITION`; an upstream error retains its
+status. `collect` instead produces an array. Selecting a stream directly as a
+pipeline source preserves streaming.
+
+An operation activates when its containing expression is demanded. `and` and
+`or` short-circuit, and skipped branches do not start their operations.
+Independent statements and argument feeds remain concurrent. Bind a call when
+several consumers need its identity or several outputs.
+
+## Own work through scopes
+
+Each activated anonymous operation belongs to the executing flow, block, loop
+pass, or stage invocation. Releasing its last reader drains remaining outputs.
+The scope joins its activated children before completing and releases its
+local node allocations. Attachments to existing nodes retain their external
+owner. Completed task registrations are removed while the scope runs.
+
+`wait first of` accepts calls, node-backed ports, nodes, and named block, loop,
+or wait completions in one list. It returns the winning zero-based index.
+Node observation leaves the read cursor and writer state untouched; it does
+not read the first item or close the node. Duplicate candidates share an
+observation. Already completed candidates use list order; later completions
+use the order observed under the execution monitor.
+
+```a11flow
+let winner = wait first of try run primary(), try run backup()
+```
+
+The loser continues. The winner can feed another step immediately, while the
+owning scope still joins the loser. A tolerated failure remains that operation's
+outcome. Scope failure or cancellation cancels pending and running owned work;
+Flow keeps the initiating status, message, and details. Child actions use the
+existing cancellation request without a new reason parameter.
+
+These ownership bounds limit retained bookkeeping at fixed concurrency. They
+do not impose a deadline on an external action or a stream that never ends.
+Use the existing timeout and cancellation facilities where a deadline is needed.
+
+## Declare action interfaces and import modules
+
+A declaration supplies the same inputs, outputs, descriptions, and headers as
+a flow definition, with no executable statements:
+
+```a11flow
+declare flow render {
+  describe "Render a report"
+  header "x-tenant" as tenant default "public"
+  in data: object required
+  out text: string stream
+}
+```
+
+Declarations participate in port checking, completion, and schema analysis.
+Compatible contributions combine into the strictest known interface. A concrete
+implementation can narrow a declared type and add members. It cannot broaden
+a declared payload, change stream cardinality, weaken requiredness, omit a
+declared member, or change a header default's bytes. Added required inputs need
+feeds or autofill. Relations unsupported by available metadata remain unproven
+offline and must be proved when binding an executable closure.
+
+Before execution, Flow resolves and pins every transitive dependency, including
+calls inside untaken branches. A used unresolved declaration, ambiguous body,
+or incompatible implementation fails before headers, nodes, feeds, or handlers
+activate. Unrelated unused declarations do not need implementations. A registry
+schema alone supplies no local `run` handler; `call` also requires a dispatch
+route. Preflight cannot prove a remote peer's future availability.
+
+The root module is the source passed to `loads`, `load`, or the native compiler.
+Its named flows can be registered and its local types used without `exported`.
+Imported modules are private by default. Put `exported` after a flow, declaration,
+or struct name to expose it to importers. Imports create namespaces at module
+scope or directly inside an implemented flow. They are hoisted within that
+lexical scope; nested imports in branches or loops are invalid.
+
+```a11flow
+import "report.flow" as report
+
+flow publish {
+  in data: object
+  out text: string stream
+  (run report.render(data: data)).text -> text
+}
+```
+
+Imported implementations capture their defining module's private dependencies.
+Imports do not re-export a dependency. Interfaces exposed to importers use public
+types. Root interfaces can use their own structs without export attributes.
+Cycles and diamond imports share canonical module snapshots. Compatible repeated
+interfaces are allowed; distinct executable bodies remain ambiguous. Identical
+struct contributions of the same identity are accepted; different module-local
+struct identities remain distinct.
+
+`flow.load(path)` resolves local file imports relative to the defining file.
+For generated or embedded source, supply an explicit in-memory map:
+
+```python
+program = flow.loads(
+    'import "library" as lib\nflow main { (run lib.work()).result -> _ }',
+    "root",
+    modules={"library": 'flow work exported { out result: integer\n 42 -> result }'},
+)
+```
+
+`register_all` publishes every named root implementation, including flows without
+`exported`. Imported implementations remain in the linked closure and are not
+automatically registered. Interface-only declarations are not registered either.
+The same document needs explicit exports when imported by another module,
+including an import back to the root through a dependency cycle.
+
+## Maintain generated modules
+
+The editable document API uses the same native parser, linker, and schema
+analysis as execution. Handles carry a document identity and revision; stale or
+overlapping edits fail atomically. Compiled programs retain immutable snapshots.
+
+```python
+from a11.flow import Expression as E, FlowBuilder, ModuleDocument, StructBuilder, Type
+
+module = ModuleDocument("reports")
+row = StructBuilder("Row")
+row.exported = True
+row.field("title", Type("string"), required=True)
+module.insert_struct(row)
+
+render = FlowBuilder("render")
+render.exported = True
+render.port("text", Type("string"), output=True)
+render.pipe(E.literal("ready"), E.reference("text"))
+module.insert(render)
+program = module.compile()
+```
+
+`module.upsert_declaration(action_schema, symbol=owned_handle)` synchronizes one
+owned declaration. Unrepresentable metadata returns diagnostics. Unchanged
+source tokens, comments, and whitespace survive synchronization, and repeated
+synchronization produces no edits. `effective_schema(name, modules=...)` queries
+the merged interface. `rename_import` updates lexically bound namespace uses;
+`rename_in_graph` prepares validated edits and updated sources for the supplied
+module graph, reporting the boundary for external users of an exported API.
+
+The equivalent C++ surface lives in `a11/flow/document.h`:
+
+```cpp
+a11::flow::ModuleDocument module("reports");
+a11::flow::FlowBuilder render("render");
+render.interface().exported = true;
+a11::flow::syntax::TypeExpression text;
+text.name = "string";
+ABSL_RETURN_IF_ERROR(render.AddPort(
+    "text", text, a11::flow::syntax::PortDirection::kOutput));
+ABSL_ASSIGN_OR_RETURN(auto literal, a11::flow::Expression::Literal("ready"));
+ABSL_ASSIGN_OR_RETURN(auto output, a11::flow::Expression::Reference("text"));
+ABSL_RETURN_IF_ERROR(render.AddPipe(literal, output));
+ABSL_ASSIGN_OR_RETURN(auto change, module.Insert(render));
+```
+
+`DeclareAction` in `a11/flow/runtime.h` converts a native action schema into
+interface and struct descriptors for `UpsertDeclaration`. File access and
+registry bindings stay in the host adapters.
+
+
+Direct symbol imports use `from "library.flow" import render, Report as LocalReport`.
+They bind public source members at module scope or directly inside an implemented
+flow. A same-name callable declaration constrains the imported implementation;
+compatible contracts share their strictest interface. Conflicts report the
+local requirement and link the contributing sources. Distinct executable bodies
+under one binding are ambiguous when used; aliases keep them independently
+addressable.
+
+An implemented flow may contain `declare flow` and `struct` declarations. These
+names are hoisted within the flow and remain private to it. A local callable
+contract can resolve a module implementation, a directly imported symbol, or a
+registry action; unresolved used contracts fail preflight. Each local struct has
+a scoped type identity. Executable flow definitions belong at module scope, and
+an exported imported-module interface cannot expose a local struct. Completion,
+navigation, document symbols and formatting account for local declarations and
+direct imports.
+
+
+`log`, `logf`, `fail`, and `abort` evaluate their value arguments before acting.
+Reading an input stream, an action output, a completion status, or a lazy value
+derived from those supplies a data dependency. For example,
+`logf "result: %s" (work.output | consume)` waits for the consumed output without
+an `after`. Constant-only arguments, including lazy bindings of constants, need
+an `if`, a loop body, or an explicit `after`. Reading a node's `id` supplies no
+stream dependency. `cancel` still requires a condition, loop body, or `after`;
+naming its target does not wait for that action.
+
+
+## Forward a stream prefix and clean up
+
+`take while CONDITION` forwards values while the condition is true.
+`take until CONDITION` forwards values until the condition becomes true.
+Both exclude the first value that ends the prefix. Predicates use `it` and
+run one at a time in input order. The stages release their reader at the
+boundary; the producer continues under its ordinary scope ownership.
+
+```a11flow
+flow {
+  stdin = run read_stdin()
+  echo = run write_stdout()
+
+  forwarded = stdin.lines | take until lower(it) == "/exit"
+    | map strformat("%s\n", it) -> echo.content
+
+  after forwarded {
+    {"command": "stop"} -> stdin.control_events
+    run write_stderr(content: "Input finished.\n")
+  }
+}
+```
+
+The echo receives each line as it arrives. `/exit` ends forwarding and closes
+its destination when the last writer finishes. The `after` block then requests
+that stdin stop, so the flow can finish without waiting for terminal EOF.
+
+`after a, b { ... }` waits for both completion subjects before activating its
+body, including argument evaluation and anonymous calls. Its statements run
+concurrently; use data dependencies or another `after` inside the block when
+cleanup operations need ordering. Local bindings stay inside the block.
+`cleanup = after done { ... }` names the group's completion, including its
+children. `cleanup = try after done { ... }` tolerates a body failure and keeps
+its status available through `status cleanup`.
+
+These groups follow ordinary scope failure and cancellation. Cleanup that must
+run during parent failure belongs to the host action's lifetime management.
+A `try take while` or `try take until` stage drops an item whose predicate fails
+and continues with the next item. Source failures propagate. Neither stage
+accepts `parallel` or `unordered`, because evaluating later predicates could
+activate work beyond the stopping boundary.
+
+
+`forwarded = SOURCE | STAGE -> DEST` names a pipeline's completion. It is
+shorthand for `forwarded = { SOURCE | STAGE -> DEST }`: completion includes
+all destinations and anonymous children, with normal failure propagation.
+The source may span lines and may be a literal, a stream, or an operation's
+output. Suffix `after` gates the enclosed pipeline as usual. Use `let name =
+SOURCE | STAGE` when the name should expose a lazy value rather than completion.

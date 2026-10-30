@@ -26,6 +26,7 @@
 #include <utility>
 #include <vector>
 
+#include <absl/status/statusor.h>
 #include <absl/time/time.h>
 
 #include "a11/flow/token.h"
@@ -62,9 +63,12 @@ Location LocationOf(const Token& token);
 /// step's `after`, a `via`, a loop variable. The Python reference keeps these
 /// as plain strings and so cannot point at one; a resolver reporting "nothing
 /// binds this" has to, so the position travels with the word.
+struct Node;
+
 struct Word {
   std::string text;
   Location location;
+  std::shared_ptr<Node> expression = {};
 
   [[nodiscard]] bool Empty() const { return text.empty(); }
 };
@@ -137,6 +141,9 @@ struct TypeExpression {
 
   /// The type as it would be written, which is what a message quotes.
   [[nodiscard]] std::string ToString() const;
+
+  /// Emit a bounded type expression, preserving quoted representations.
+  absl::StatusOr<std::string> ToSource() const;
 };
 
 /// What a node is. One per construct, mirroring `a11/flow/syntax.py`.
@@ -206,6 +213,9 @@ struct Node {
 
   NodeKind kind = NodeKind::kError;
   Location location;
+  /// Full source extent and transparent grouping, for native edits.
+  Location extent;
+  std::vector<Location> groups;
 };
 
 using NodePtr = std::unique_ptr<Node>;
@@ -387,6 +397,7 @@ struct Stage : NodeOf<NodeKind::kStage> {
   vocabulary::StageArgument takes = vocabulary::StageArgument::kNone;
   /// `kNumber`: the count, and whether it was written as a whole number.
   double number = 0.0;
+  long long integer = 0;
   bool is_integer = false;
   /// `kString`/`kOptionalString`: the text, with escapes resolved.
   std::string text;
@@ -473,12 +484,22 @@ struct CallExpression : NodeOf<NodeKind::kCallExpression> {
   };
 
   std::string action;
+  Location action_location = {};
   /// The verb written: `"run"` for the handler registered here, `"call"` for
   /// the stream this flow is attached to.
   std::string mode;
   std::vector<Argument> args;
   CallModifiersPtr modifiers;
   bool tolerant = false;
+
+  struct TargetSuffix {
+    Location location = {};
+    std::string member;
+    NodePtr index;
+  };
+
+  bool invalid_target = false;
+  std::vector<TargetSuffix> target_suffixes;
 };
 
 using CallExpressionPtr = std::unique_ptr<CallExpression>;
@@ -533,6 +554,7 @@ struct Let : NodeOf<NodeKind::kLet> {
 /// handles a block failure; otherwise the failure ends the flow.
 struct Block : NodeOf<NodeKind::kBlock> {
   bool tolerant = false;
+  std::vector<Word> after;
   std::vector<NodePtr> body;
 };
 
@@ -754,9 +776,30 @@ struct HeaderDeclaration : NodeOf<NodeKind::kHeaderDeclaration> {
 
 using HeaderDeclarationPtr = std::unique_ptr<HeaderDeclaration>;
 
+struct ImportedSymbol {
+  Word name;
+  Word alias;
+  bool explicit_alias = false;
+};
+
+/// A source module bound to a namespace or selected local symbols.
+struct Import {
+  std::string source;
+  bool selective = false;
+  size_t selection_start = 0;
+  std::vector<ImportedSymbol> symbols;
+  Word alias;
+  Location location;
+  Location extent;
+};
+
+struct DtoDeclaration;
+
 /// One `flow name { ... }` declaration, or the one `flow { ... }` entry point.
 struct FlowDeclaration : NodeOf<NodeKind::kFlowDeclaration> {
   Word name;
+  std::string binding_name;
+  std::string module;
   /**
    * Whether this is the file's entry point: `flow { ... }`, with no name.
    *
@@ -772,9 +815,15 @@ struct FlowDeclaration : NodeOf<NodeKind::kFlowDeclaration> {
    * every time.
    */
   bool entry = false;
+  bool interface_only = false;
+  bool imported = false;
+  bool exported = false;
   std::string description;
   std::vector<PortDeclarationPtr> ports;
   std::vector<HeaderDeclarationPtr> headers;
+  std::vector<Import> imports;
+  std::vector<std::unique_ptr<FlowDeclaration>> declarations;
+  std::vector<std::unique_ptr<DtoDeclaration>> structs;
   std::vector<NodePtr> body;
 };
 
@@ -823,11 +872,11 @@ using FieldDeclarationPtr = std::unique_ptr<FieldDeclaration>;
 // One `struct name { ...
 /// One `struct name { ... }` declaration: a shape a port may be typed with.
 ///
-/// A sibling of [FlowDeclaration] rather than something inside one, because a
-/// shape is not a flow's private business: two flows in a file describe the
-/// same records, and a caller reading the file wants the type once.
+/// A module-level shape or a shape local to an implemented flow.
 struct DtoDeclaration : NodeOf<NodeKind::kDtoDeclaration> {
   Word name;
+  std::string module;
+  bool exported = false;
   std::string description;
   std::vector<FieldDeclarationPtr> fields;
 };
@@ -871,6 +920,9 @@ void VisitChildren(const Node& node,
 /// directly if a pass needs source order.
 void VisitSubtree(const Node& node,
                   const std::function<void(const Node&)>& visit);
+
+/// Walk an exclusively owned syntax tree for native linking/editing.
+void VisitMutableSubtree(Node& node, const std::function<void(Node&)>& visit);
 
 /// `a11.sdk.AudioBuffer` for a chain of plain names, or `nullopt`.
 ///

@@ -121,7 +121,24 @@ test('a string nobody closed is still a fragment, to the end of the file', () =>
 });
 
 test('a flow-shaped string that is not a declaration is not a fragment', () => {
-  // `flow` with no name, and a name with no brace: neither opens a flow.
-  assert.deepEqual(fragmentSpans('x = """\nflow {\n}\n"""\n'), []);
+  // An anonymous entry flow is valid; a named flow still needs its brace.
+  assert.match(only('x = """\nflow {\n}\n"""\n'), /flow \{/);
   assert.deepEqual(fragmentSpans('x = """\nflow named\n"""\n'), []);
+});
+
+
+test('declaration, struct, and import first modules are fragments', () => {
+  for (const source of [
+    'declare flow render exported { out text: string }',
+    'declare flow package.render exported { out text: string }',
+    'DECLARE FLOW render EXPORTED { OUT text: string }',
+    'struct Row exported { title: string }',
+    'import "library.flow" as lib\nflow entry { run lib.work() }',
+    '# π\ndeclare flow render { out text: string }\nflow main { }',
+  ]) assert.equal(only('x = `\n' + source + '\n`;').trim(), source);
+});
+
+test('finds a fragment beginning with a direct symbol import', () => {
+  const source = 'x = `from "lib.flow" import render\nflow main { run render() }`;';
+  assert.match(only(source), /^from "lib.flow" import render/);
 });

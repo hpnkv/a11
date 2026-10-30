@@ -82,11 +82,11 @@ std::string Repeat(size_t length, char character = 'x') {
 
 TEST(MsgpackDecodeTest, StringsMatchAcrossEverySizeClass) {
   // fixstr up to 31, str8 to 255, str16 to 65535, str32 beyond.
-  for (const size_t length : {size_t{0}, size_t{1}, size_t{31}, size_t{32},
-                              size_t{255}, size_t{256}, size_t{65535},
-                              size_t{65536}, size_t{65536 + 1}}) {
+  for (const size_t length :
+       {size_t{0}, size_t{1}, size_t{31}, size_t{32}, size_t{255}, size_t{256},
+        size_t{65535}, size_t{65536}, size_t{65536 + 1}}) {
     ExpectEncodedMatch(Json(Repeat(length)),
-                         "string of " + std::to_string(length));
+                       "string of " + std::to_string(length));
   }
 }
 
@@ -103,7 +103,7 @@ TEST(MsgpackDecodeTest, BinaryMatchesAcrossEverySizeClass) {
 TEST(MsgpackDecodeTest, A64KiBStringAndBinaryDecodeToTheSameValue) {
   // The payload size `data/chunk_codec` measures.
   ExpectEncodedMatch(Json{{"id", "bench"}, {"body", Repeat(65536 - 24)}},
-                       "the benchmark's 64 KiB object");
+                     "the benchmark's 64 KiB object");
   const std::string payload = Repeat(65536, '\x01');
   ExpectEncodedMatch(
       Json::binary(std::vector<std::uint8_t>(payload.begin(), payload.end())),
@@ -147,8 +147,8 @@ TEST(MsgpackDecodeTest, SignedIntegersMatchAcrossEverySizeClass) {
 }
 
 TEST(MsgpackDecodeTest, FloatsMatchBothWidths) {
-  for (const double value : {0.0, -0.0, 1.5, -1.5, 3.141592653589793,
-                             1e-300, 1e300}) {
+  for (const double value :
+       {0.0, -0.0, 1.5, -1.5, 3.141592653589793, 1e-300, 1e300}) {
     ExpectEncodedMatch(Json(value), "double " + std::to_string(value));
   }
   // nlohmann encodes doubles as float64. This manual value covers float32.
@@ -172,8 +172,8 @@ TEST(MsgpackDecodeTest, ArraysAndMapsMatchAcrossEverySizeClass) {
     }
     ExpectEncodedMatch(array, "array of " + std::to_string(count));
   }
-  for (const size_t count : {size_t{0}, size_t{1}, size_t{15}, size_t{16},
-                             size_t{1000}}) {
+  for (const size_t count :
+       {size_t{0}, size_t{1}, size_t{15}, size_t{16}, size_t{1000}}) {
     Json object = Json::object();
     for (size_t index = 0; index < count; ++index) {
       object["k" + std::to_string(index)] = index;
@@ -196,14 +196,15 @@ TEST(MsgpackDecodeTest, ExtensionsCarryTheirSubtype) {
     std::uint8_t marker;
     size_t payload_length;
   };
+
   const std::vector<Case> fixed = {
       {0xd4, 1}, {0xd5, 2}, {0xd6, 4}, {0xd7, 8}, {0xd8, 16}};
   for (const Case& one : fixed) {
     const std::string bytes = std::string(1, static_cast<char>(one.marker)) +
                               std::string(1, '\x2a') +  // subtype 42
                               Repeat(one.payload_length, '\x07');
-    ExpectSameAsNlohmann(bytes, "fixext of " +
-                                    std::to_string(one.payload_length));
+    ExpectSameAsNlohmann(bytes,
+                         "fixext of " + std::to_string(one.payload_length));
   }
 
   const std::string ext8 = std::string("\xc7", 1) + std::string(1, '\x03') +
@@ -227,9 +228,9 @@ TEST(MsgpackDecodeTest, ForcedSizeClassesDecodeTheSameWay) {
   // A value encoded in a wider class than it needs is legal MessagePack, and a
   // peer in another language may pick one. str16 for one character, array32 for
   // one element, map16 for one entry, uint64 for zero.
-  ExpectSameAsNlohmann(std::string("\xda", 1) + std::string("\x00\x01", 2) +
-                           "z",
-                       "str16 holding one byte");
+  ExpectSameAsNlohmann(
+      std::string("\xda", 1) + std::string("\x00\x01", 2) + "z",
+      "str16 holding one byte");
   ExpectSameAsNlohmann(std::string("\xdd", 1) +
                            std::string("\x00\x00\x00\x01", 4) +
                            std::string(1, '\x05'),
@@ -247,16 +248,17 @@ TEST(MsgpackDecodeTest, ForcedSizeClassesDecodeTheSameWay) {
 }
 
 TEST(MsgpackDecodeTest, ARepeatedKeyKeepsTheLastValue) {
-  const std::string bytes = std::string("\x82", 1) +      // fixmap of 2
-                            std::string("\xa1", 1) + "k" + std::string(1, '\x01') +
-                            std::string("\xa1", 1) + "k" + std::string(1, '\x02');
+  const std::string bytes = std::string("\x82", 1) +  // fixmap of 2
+                            std::string("\xa1", 1) + "k" +
+                            std::string(1, '\x01') + std::string("\xa1", 1) +
+                            "k" + std::string(1, '\x02');
   ExpectSameAsNlohmann(bytes, "a map with a repeated key");
 }
 
 TEST(MsgpackDecodeTest, TruncatedInputIsRejected) {
   const std::string complete = ToMsgpack(Json{{"body", Repeat(300)}});
-  for (const size_t length : {size_t{0}, size_t{1}, size_t{2}, size_t{5},
-                              complete.size() - 1}) {
+  for (const size_t length :
+       {size_t{0}, size_t{1}, size_t{2}, size_t{5}, complete.size() - 1}) {
     const absl::StatusOr<Json> decoded =
         UnpackMsgpack(std::string_view(complete).substr(0, length), "a value");
     EXPECT_FALSE(decoded.ok()) << "truncated to " << length;
@@ -274,9 +276,8 @@ TEST(MsgpackDecodeTest, UnsupportedAndMistypedMarkersAreRejected) {
   // 0xc1 is never a valid marker.
   EXPECT_FALSE(UnpackMsgpack(std::string("\xc1", 1), "a value").ok());
   // A map key has to be a MessagePack string, which nlohmann also requires.
-  const std::string integer_key = std::string("\x81", 1) +
-                                  std::string(1, '\x01') +
-                                  std::string(1, '\x02');
+  const std::string integer_key =
+      std::string("\x81", 1) + std::string(1, '\x01') + std::string(1, '\x02');
   EXPECT_TRUE(FromNlohmann(integer_key).is_discarded());
   EXPECT_FALSE(UnpackMsgpack(integer_key, "a value").ok());
 }

@@ -18,6 +18,7 @@
 #define A11_FLOW_PLAN_H_
 
 #include <cstddef>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -30,12 +31,15 @@
 
 namespace a11::flow {
 
+struct DtoPlan;
+
 /// One declared port of a flow, resolved.
 struct PortPlan {
   std::string name;
   syntax::PortDirection direction = syntax::PortDirection::kInput;
   /// The type as the flow wrote it, parameters and all: `list[string]`.
   std::string declared;
+  std::optional<syntax::TypeExpression> syntax_type;
   /// What the type *is*, for the schema a caller sees: a built-in's mimetype or
   /// Python type name, a registry tag, or a quoted mimetype, exactly as
   /// `a11.flow.plan.TYPE_NAMES` resolves it.
@@ -43,6 +47,8 @@ struct PortPlan {
   bool unary = true;
   bool required = false;
   std::string description;
+  std::vector<std::string> constraints;
+  std::shared_ptr<const DtoPlan> analysis_shape;
   syntax::Location location;
 };
 
@@ -56,6 +62,7 @@ struct PortPlan {
 struct FieldPlan {
   std::string name;
   std::string declared;
+  std::optional<syntax::TypeExpression> syntax_type;
   std::string type;
   /// The element type of a `list[T]`, resolved, or empty where it is not a
   /// list.
@@ -79,6 +86,7 @@ struct FieldPlan {
 /// One compiled `struct`: a shape a port may be typed with.
 struct DtoPlan {
   std::string name;
+  bool exported = false;
   std::string description;
   std::vector<FieldPlan> fields;
   // Whether the shape holds bytes anywhere in it, directly or through another
@@ -158,6 +166,12 @@ struct FlowPlan {
    * recursing into itself. Reach it with Program::Entry(), not by name.
    */
   bool entry = false;
+  bool interface_only = false;
+  bool ambiguous = false;
+  bool imported = false;
+  std::string module;
+  bool exported = false;
+  std::string binding_name;
   std::string description;
   std::vector<PortPlan> ports;
   std::vector<HeaderPlan> headers;
@@ -192,6 +206,9 @@ struct Program {
   /// describe the same records. A name here **outranks** a serialisation
   /// registry tag of the same name, so the local declaration defines the shape.
   std::vector<DtoPlan> dtos;
+  /// Host metadata used during analysis, separate from source declarations.
+  std::vector<FlowPlan> context_flows;
+  std::vector<DtoPlan> context_dtos;
 
   /// The flow of this name, or `nullptr`. Never returns the entry flow: an
   /// empty name matches nothing, so a `run`/`call` cannot reach it.

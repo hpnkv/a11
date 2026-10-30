@@ -48,7 +48,7 @@ const OPENERS = ['"""', "'''", '`'] as const;
  *
  * Either casing of the keyword, as the language allows every keyword to be shouted.
  */
-const STARTS_A_FLOW = /^\s*(?:#[^\n]*\n\s*)*(?:flow|FLOW)\s+[A-Za-z_][A-Za-z0-9_-]*\s*\{/;
+const STARTS_A_FLOW = /^\s*(?:#[^\n]*\n\s*)*(?:(?:(?:declare|DECLARE)\s+)?(?:flow|FLOW)(?:\s+(?:[A-Za-z_$][A-Za-z0-9_$-]*(?:\.[A-Za-z_$][A-Za-z0-9_$-]*)*|"(?:\\.|[^"\\\n])+"))?(?:\s+(?:exported|EXPORTED))?\s*\{|(?:struct|STRUCT)\s+[A-Za-z_$][A-Za-z0-9_$-]*(?:\s+(?:exported|EXPORTED))?\s*\{|(?:import|IMPORT)\s+"[^"\n]+"\s+(?:as|AS)\s+[A-Za-z_$][A-Za-z0-9_$-]*|(?:from|FROM)\s+"[^"\n]+"\s+(?:import|IMPORT)\s+[A-Za-z_$][A-Za-z0-9_$-]*)/;
 
 /** Every flow written in `text`, as offsets into it. */
 export function fragmentSpans(text: string): Span[] {

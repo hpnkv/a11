@@ -623,7 +623,7 @@ TEST(FlowParser, SaysWhatIsMissingInTheWordsThePythonCompilerUses) {
       {"flow wrong { in w: string stream\n skip 1.5 w }",
        "flow.form.count-not-positive", "counts whole values"},
       {"flow f { in a: string\n x = 5 }", "flow.syntax.unexpected",
-       "Expected 'run' or 'call', found '5'."},
+       "A bound pipeline requires '->' and a destination."},
       {"flow f { in a: string\n a | first -> b }", "flow.form.stage-argument",
        "Expected a count for 'first'"},
       // The tail a stage may carry, and what each part of it needs.

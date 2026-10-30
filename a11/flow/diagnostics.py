@@ -150,11 +150,31 @@ class Fix:
 
     label: str
     edits: tuple[Edit, ...] = ()
+    automatic: bool = True
+
+    def as_json(self) -> dict[str, Any]:
+        value = {
+            "label": self.label,
+            "edits": [edit.as_json() for edit in self.edits],
+        }
+        if not self.automatic:
+            value["automatic"] = False
+        return value
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class RelatedDiagnostic:
+    """Another source range contributing to the same diagnostic."""
+
+    source: str
+    range: Range
+    message: str
 
     def as_json(self) -> dict[str, Any]:
         return {
-            "label": self.label,
-            "edits": [edit.as_json() for edit in self.edits],
+            "source": self.source,
+            "range": self.range.as_json(),
+            "message": self.message,
         }
 
 
@@ -170,6 +190,8 @@ class Diagnostic:
     #: The flow it is in, where the text got far enough to say.
     flow: str = ""
     fixes: tuple[Fix, ...] = ()
+    source: str = ""
+    related: tuple[RelatedDiagnostic, ...] = ()
 
     def as_json(self) -> dict[str, Any]:
         value: dict[str, Any] = {
@@ -184,10 +206,17 @@ class Diagnostic:
         # would identify a flow whose name is empty.
         if self.flow:
             value["flow"] = self.flow
+        if self.source:
+            value["source"] = self.source
+        if self.related:
+            value["related"] = [item.as_json() for item in self.related]
         return value
 
     def as_text(self, source: str = "") -> str:
         """The line editors and compilers have printed for decades."""
+        source = self.source or source
+        if source == "-":
+            source = ""
         where = f"{source}:" if source else ""
         return (
             f"{where}{self.range.start.line}:{self.range.start.column}: "
@@ -220,9 +249,22 @@ class Diagnostic:
             severity=Severity(value.get("severity", "error")),
             family=Family(value.get("family", "syntax")),
             flow=value.get("flow", ""),
+            source=value.get("source", ""),
+            related=tuple(
+                RelatedDiagnostic(
+                    source=item.get("source", ""),
+                    range=Range(
+                        position(item.get("range", {}).get("start")),
+                        position(item.get("range", {}).get("end")),
+                    ),
+                    message=item.get("message", ""),
+                )
+                for item in value.get("related", ())
+            ),
             fixes=tuple(
                 Fix(
                     label=fix.get("label", ""),
+                    automatic=fix.get("automatic", True),
                     edits=tuple(
                         Edit(
                             start=edit.get("start", 0),

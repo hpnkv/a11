@@ -105,6 +105,58 @@ const catalogue::Catalogue& Scanned() {
   return *found;
 }
 
+TEST(FlowDiscover, PartialDiscoveryRetainsCompleteRuntimeSchemas) {
+  const auto live = catalogue::Catalogue::FromJson(nlohmann::json::parse(R"({
+    "actions": [{"name": "read_stdin", "inputs": [
+      {"name": "control_events", "type": "application/json", "unary": false}
+    ], "outputs": [{"name": "lines", "type": "text/plain", "unary": false}]}]
+  })"));
+  const auto partial = catalogue::Catalogue::FromJson(nlohmann::json::parse(R"({
+    "actions": [{"name": "read_stdin", "schema_complete": false,
+      "origin": {"file": "native.cc", "line": 10, "column": 1},
+      "inputs": [{"name": "wrong_guess", "type": "string"}]}]
+  })"));
+  const auto scanned = catalogue::Catalogue::FromJson(partial.ToJson());
+  ASSERT_NE(scanned.Action("read_stdin"), nullptr);
+  EXPECT_FALSE(scanned.Action("read_stdin")->schema_complete);
+  for (const bool reverse : {false, true}) {
+    const auto merged =
+        reverse ? scanned.MergedWith(live) : live.MergedWith(scanned);
+    const auto* action = merged.Action("read_stdin");
+    ASSERT_NE(action, nullptr);
+    ASSERT_EQ(action->inputs.size(), 1u);
+    EXPECT_EQ(action->inputs[0].name, "control_events");
+    EXPECT_FALSE(action->inputs[0].unary);
+    EXPECT_TRUE(action->schema_complete);
+    if (!reverse) {
+      ASSERT_TRUE(action->origin.has_value());
+      EXPECT_EQ(action->origin->file, "native.cc");
+    }
+  }
+}
+
+TEST(FlowDiscover, NativeStandardStreamsHaveCompleteEmbeddedSchemas) {
+  const auto& known = catalogue::Catalogue::Builtin();
+  for (const auto* name : {"write_stdout", "write_stderr"}) {
+    const auto* action = known.Action(name);
+    ASSERT_NE(action, nullptr) << name;
+    const auto* content =
+        action->Port("content", syntax::PortDirection::kInput);
+    ASSERT_NE(content, nullptr);
+    EXPECT_FALSE(content->unary);
+    EXPECT_NE(action->Port("bytes_written", syntax::PortDirection::kOutput),
+              nullptr);
+  }
+  const auto* action = known.Action("read_stdin");
+  ASSERT_NE(action, nullptr);
+  const auto* control =
+      action->Port("control_events", syntax::PortDirection::kInput);
+  ASSERT_NE(control, nullptr);
+  EXPECT_FALSE(control->unary);
+  EXPECT_NE(action->Port("lines", syntax::PortDirection::kOutput), nullptr);
+  EXPECT_EQ(action->Port("lines", syntax::PortDirection::kInput), nullptr);
+}
+
 TEST(FlowDiscover, ReadsTheExtensionsItKnowsAndNoOthers) {
   EXPECT_EQ(discover::LanguageOf("a/b.py"), Language::kPython);
   EXPECT_EQ(discover::LanguageOf("a/b.cc"), Language::kCpp);

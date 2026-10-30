@@ -98,6 +98,7 @@ TYPE_NAMES: dict[str, type | str] = {
 }
 
 _native_describe = FlowPlan.describe
+_native_schema = FlowPlan.action_schema
 
 #: The Python type each Flow field type gives a generated model's field.
 #:
@@ -215,31 +216,6 @@ def _model_for_dto(described_json: str) -> Any:
     return _model_from_plans(described["struct"], shapes)
 
 
-def _port_type(declared: str) -> type | str:
-    """What a declared type gives a port, on this side of the boundary.
-
-    A built-in name gives the Python type behind it, whatever parameters it was
-    written with -- ``list[string]`` is a list. A mimetype and a serialisation
-    tag are carried through as they were written: the tag is the name the
-    registries know the type by, and the module defining it may not even be
-    imported at the time the flow is compiled.
-    """
-    name = declared.split("[", 1)[0].strip().strip('"')
-    return TYPE_NAMES.get(name.lower() if name.isupper() else name, name)
-
-
-def _port_spec(name: str, described: Mapping[str, Any]) -> dict[str, Any]:
-    spec: dict[str, Any] = {
-        "name": name,
-        "type": _port_type(described["type"]),
-        "unary": described["unary"],
-        "required": described["required"],
-    }
-    if described.get("description"):
-        spec["description"] = described["description"]
-    return spec
-
-
 class _FlowPlanProtocol:
     """What the native ``FlowPlan`` looks like from Python."""
 
@@ -251,27 +227,25 @@ class _FlowPlanProtocol:
         can dispatch an action can dispatch a composition without being told it
         is one.
 
-        Built through the Python validator rather than taken from the native
-        schema, because a port's ``typeinfo`` -- the Python type its JSON schema
-        comes from, and so what a model is shown -- is something only this side
-        can supply.
+        The native schema supplies ports and header defaults. Python attaches
+        the corresponding builtin ``typeinfo`` handles.
         """
-        from a11.actions.action import ActionSchema
-
-        described = _native_describe(self)
-        return ActionSchema.model_validate({
-            "name": described["flow"],
-            "description": described["description"],
-            "inputs": {
-                name: _port_spec(name, port)
-                for name, port in described["inputs"].items()
-            },
-            "outputs": {
-                name: _port_spec(name, port)
-                for name, port in described["outputs"].items()
-            },
-            "headers": {name: {"name": name} for name in described["headers"]},
-        })
+        schema = _native_schema(self)
+        host_types = {
+            "str": str,
+            "int": int,
+            "float": float,
+            "bool": bool,
+            "dict": dict,
+            "list": list,
+            "bytes": bytes,
+        }
+        for ports in (schema.inputs, schema.outputs):
+            for name in ports:
+                port = ports[name]
+                if port.typeinfo is None and port.type in host_types:
+                    port.typeinfo = host_types[port.type]
+        return schema
 
     @property
     def inputs(self) -> Mapping[str, ActionPortSchema]:
@@ -353,12 +327,18 @@ class _ProgramProtocol:
     @property
     def main(self) -> FlowPlan:
         """The first flow declared, which is the one a file is usually about."""
-        return self[self.names[0]]
+        for name in self.names:
+            candidate = self[name]
+            if not candidate.interface_only and not candidate.imported:
+                return candidate
+        raise KeyError("This program has no implemented named flow.")
 
     def register_all(self: Program, registry: ActionRegistry) -> Program:
-        """Register every flow in ``registry``."""
+        """Register the root module's named implementations in ``registry``."""
         for name in self.names:
-            self[name].register(registry)
+            selected = self[name]
+            if not selected.interface_only and not selected.imported:
+                selected.register(registry)
         return self
 
 
@@ -368,7 +348,13 @@ FlowPlan.__module__ = __name__
 Program.__module__ = __name__
 
 
-def compile_source(source: str, source_name: str = "") -> Program:
+def compile_source(
+    source: str,
+    source_name: str = "",
+    *,
+    modules: dict[str, str] | None = None,
+    resolve_files: bool = False,
+) -> Program:
     """Compile Flow source into a [Program][a11.flow.plan.Program].
 
     Raises:
@@ -376,13 +362,24 @@ def compile_source(source: str, source_name: str = "") -> Program:
             line and column it was found at.
     """
     try:
-        return _flow.compile(source, source_name)
+        return _flow.compile(source, source_name, modules or {}, resolve_files)
     except Exception as error:  # noqa: BLE001 - re-raised with its position
-        raise _syntax_error(source, source_name, error) from None
+        raise _syntax_error(
+            source,
+            source_name,
+            error,
+            modules=modules,
+            resolve_files=resolve_files,
+        ) from None
 
 
 def _syntax_error(
-    source: str, source_name: str, raised: BaseException
+    source: str,
+    source_name: str,
+    raised: BaseException,
+    *,
+    modules: dict[str, str] | None = None,
+    resolve_files: bool = False,
 ) -> FlowSyntaxError:
     """The first error in ``source``, as the exception a compiler raises.
 
@@ -391,7 +388,9 @@ def _syntax_error(
     """
     errors = [
         found
-        for found in _flow.check(source, source_name)["diagnostics"]
+        for found in _flow.check(
+            source, source_name, modules or {}, resolve_files
+        )["diagnostics"]
         if found["severity"] == "error"
     ]
     if not errors:
@@ -402,7 +401,10 @@ def _syntax_error(
     )
     start = chosen["range"]["start"]
     return FlowSyntaxError(
-        chosen["message"], start["line"], start["column"], source_name
+        chosen["message"],
+        start["line"],
+        start["column"],
+        chosen.get("source", source_name),
     )
 
 

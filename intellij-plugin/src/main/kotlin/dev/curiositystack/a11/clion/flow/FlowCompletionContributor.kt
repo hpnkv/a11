@@ -73,7 +73,7 @@ class FlowCompletionContributor : CompletionContributor() {
         val text = file.text
         val offset = parameters.offset.coerceIn(0, text.length)
 
-        val payload = FlowEngine.instance().complete(text, offset) ?: return
+        val payload = FlowEngine.instance().complete(text, offset, FlowSourceContext.fromFile(file)) ?: return
         val proposals = proposalsOf(payload)
         if (proposals.isEmpty()) return
 

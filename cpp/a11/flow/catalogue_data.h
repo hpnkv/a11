@@ -173,6 +173,79 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
       ]
     },
     {
+      "description": "Copy a file or, with options.recursive, a tree. For a copy whose progress a composition wants to watch, read_file into write_file gives the same result one chunk at a time.",
+      "headers": [
+        {
+          "description": "Absolute execution deadline: a base-10 count of milliseconds since the Unix epoch, or nanoseconds with an 'ns' suffix. The call fails once it is reached.",
+          "name": "x-a11-deadline",
+          "type": "string"
+        }
+      ],
+      "inputs": [
+        {
+          "description": "Optional: recursive (false), overwrite (false).",
+          "name": "options",
+          "type": "application/json"
+        },
+        {
+          "description": "Path to copy; relative paths use the current directory.",
+          "name": "path",
+          "required": true,
+          "type": "text/plain"
+        },
+        {
+          "description": "Destination; relative paths use the current directory.",
+          "name": "to",
+          "required": true,
+          "type": "text/plain"
+        }
+      ],
+      "name": "copy_path",
+      "outputs": [
+        {
+          "description": "The absolute destination.",
+          "name": "resolved",
+          "type": "text/plain"
+        }
+      ]
+    },
+    {
+      "description": "Read named environment variables, and only the ones this host allows. The action requires explicit names so access can be audited and cannot include unrelated credentials.",
+      "headers": [
+        {
+          "description": "Absolute execution deadline: a base-10 count of milliseconds since the Unix epoch, or nanoseconds with an 'ns' suffix. The call fails once it is reached.",
+          "name": "x-a11-deadline",
+          "type": "string"
+        }
+      ],
+      "inputs": [
+        {
+          "description": "The variable names to read, as a string or a list of strings.",
+          "name": "names",
+          "required": true,
+          "type": "application/json"
+        },
+        {
+          "description": "Optional: omit -- output port names to close immediately rather than write; and encoding -- \"json\" (the default) or \"msgpack\", which is both cheaper downstream of a `| packb` and the only one of the two that can carry a path or a line that is not valid UTF-8.",
+          "name": "options",
+          "type": "application/json"
+        }
+      ],
+      "name": "env_get",
+      "outputs": [
+        {
+          "description": "The names that were not set at all -- which is a different thing from being set to an empty string.",
+          "name": "missing",
+          "type": "application/json"
+        },
+        {
+          "description": "An object of the names that were set to their values.",
+          "name": "values",
+          "type": "application/json"
+        }
+      ]
+    },
+    {
       "description": "List the actions a flow may call, with the name, arity and description of every input and output port each one has. Call this before writing a flow: piping one action into another needs the names of the ports on both sides, and an action's output ports are not part of the tool definition you were given. The list is the actions you are allowed to call, minus the flow tools themselves.",
       "name": "flow_actions",
       "outputs": [
@@ -263,6 +336,26 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
           "type": "string"
         },
         {
+          "description": "Optional JSON LLM context compression/compaction policy.",
+          "name": "x-a11-llm-context-config",
+          "type": "string"
+        },
+        {
+          "description": "Optional LLM usage attribution for a nested summarization action.",
+          "name": "x-a11-llm-context-operation",
+          "type": "string"
+        },
+        {
+          "description": "Optional JSON owner, conversation, branch and expected view revision.",
+          "name": "x-a11-llm-context-scope",
+          "type": "string"
+        },
+        {
+          "description": "SDK projection ownership for the current action identity.",
+          "name": "x-a11-llm-context-stage",
+          "type": "string"
+        },
+        {
           "description": "The backend model.",
           "name": "x-a11-llm-model",
           "type": "string"
@@ -350,6 +443,84 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
       ]
     },
     {
+      "description": "List a directory, one entry at a time as the walk finds them. A tree with a million files in it costs a composition one entry of memory, and its first entry arrives before the walk has finished. `truncated` says whether a limit cut the listing short, because a partial listing that looks complete is worse than no listing. In Flow, apply `where`, `first`, or `map` to `entries` before routing the bounded result out.",
+      "headers": [
+        {
+          "description": "Absolute execution deadline: a base-10 count of milliseconds since the Unix epoch, or nanoseconds with an 'ns' suffix. The listing fails once it is reached.",
+          "name": "x-a11-deadline",
+          "type": "string"
+        }
+      ],
+      "inputs": [
+        {
+          "description": "All optional: recursive (false), max_depth, hidden (false -- whether to report dot files), match (one or more `*`/`?` patterns matched against the name), kinds (file, directory, symlink, ...), max_entries, and omit -- output port names to close immediately rather than write; and encoding -- \"json\" (the default) or \"msgpack\", which is both cheaper downstream of a `| packb` and the only one of the two that can carry a path or a line that is not valid UTF-8.",
+          "name": "options",
+          "type": "application/json"
+        },
+        {
+          "description": "Directory to list; relative paths use the current directory.",
+          "name": "path",
+          "required": true,
+          "type": "text/plain"
+        }
+      ],
+      "name": "list_directory",
+      "outputs": [
+        {
+          "description": "How many entries were reported.",
+          "name": "count",
+          "type": "integer"
+        },
+        {
+          "description": "One {path, name, kind, exists, size, modified, mode, depth} per entry, as the walk reaches it.",
+          "name": "entries",
+          "type": "application/json",
+          "unary": false
+        },
+        {
+          "description": "Whether a limit stopped the listing before the walk finished.",
+          "name": "truncated",
+          "type": "bool"
+        }
+      ]
+    },
+    {
+      "description": "Create a directory, and by default its parents. Finding it already there is a success with `created` false, because a composition that wants a directory to exist has got what it wanted.",
+      "headers": [
+        {
+          "description": "Absolute execution deadline: a base-10 count of milliseconds since the Unix epoch, or nanoseconds with an 'ns' suffix. The call fails once it is reached.",
+          "name": "x-a11-deadline",
+          "type": "string"
+        }
+      ],
+      "inputs": [
+        {
+          "description": "Optional: parents (true).",
+          "name": "options",
+          "type": "application/json"
+        },
+        {
+          "description": "Directory to create; relative paths use the current directory.",
+          "name": "path",
+          "required": true,
+          "type": "text/plain"
+        }
+      ],
+      "name": "make_directory",
+      "outputs": [
+        {
+          "description": "Whether this call made it, as opposed to finding it there.",
+          "name": "created",
+          "type": "bool"
+        },
+        {
+          "description": "The absolute path.",
+          "name": "resolved",
+          "type": "text/plain"
+        }
+      ]
+    },
+    {
       "description": "Make one HTTP request, with every part of the response on a port of its own: the status and headers as soon as they arrive, the body as it streams, the trailer section after it, the redirects that were followed, and any responses the server pushed. A 4xx or 5xx is a response and is delivered like any other -- the action fails only when there is no response at all. Action headers that do not begin with x-a11- are sent as HTTP request headers.",
       "headers": [
         {
@@ -427,6 +598,247 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
           "description": "The trailer section that followed the body, as an object; empty when the peer sent none. Written only once `body` has ended.",
           "name": "trailers",
           "type": "application/json"
+        }
+      ]
+    },
+    {
+      "description": "Make a scratch path nothing else is using, and hand back its name. What keeps a composition from inventing names in /tmp and colliding with another run of itself. Where the host restricted the filesystem to a set of roots, the scratch space is inside the first of them rather than in the system temporary directory.",
+      "headers": [
+        {
+          "description": "Absolute execution deadline: a base-10 count of milliseconds since the Unix epoch, or nanoseconds with an 'ns' suffix. The call fails once it is reached.",
+          "name": "x-a11-deadline",
+          "type": "string"
+        }
+      ],
+      "inputs": [
+        {
+          "description": "Optional: directory (true -- a directory rather than a file), prefix (\"a11-\"), suffix, in (directory, relative to the current directory).",
+          "name": "options",
+          "type": "application/json"
+        }
+      ],
+      "name": "make_temp",
+      "outputs": [
+        {
+          "description": "The path that was made.",
+          "name": "path",
+          "type": "text/plain"
+        }
+      ]
+    },
+    {
+      "description": "Rename a path. Atomic within one filesystem and refused across two, where a move requires copying and deleting. Use copy_path followed by remove_path for that operation.",
+      "headers": [
+        {
+          "description": "Absolute execution deadline: a base-10 count of milliseconds since the Unix epoch, or nanoseconds with an 'ns' suffix. The call fails once it is reached.",
+          "name": "x-a11-deadline",
+          "type": "string"
+        }
+      ],
+      "inputs": [
+        {
+          "description": "Optional: overwrite (false).",
+          "name": "options",
+          "type": "application/json"
+        },
+        {
+          "description": "Path to move; relative paths use the current directory.",
+          "name": "path",
+          "required": true,
+          "type": "text/plain"
+        },
+        {
+          "description": "Destination; relative paths use the current directory.",
+          "name": "to",
+          "required": true,
+          "type": "text/plain"
+        }
+      ],
+      "name": "move_path",
+      "outputs": [
+        {
+          "description": "The absolute destination.",
+          "name": "resolved",
+          "type": "text/plain"
+        }
+      ]
+    },
+    {
+      "description": "Make identifiers -- A11's ordinary kind, which are unique but not unguessable. Use random_bytes where the value has to be a secret.",
+      "headers": [
+        {
+          "description": "Absolute execution deadline: a base-10 count of milliseconds since the Unix epoch, or nanoseconds with an 'ns' suffix. The call fails once it is reached.",
+          "name": "x-a11-deadline",
+          "type": "string"
+        }
+      ],
+      "inputs": [
+        {
+          "description": "Optional: count (1).",
+          "name": "options",
+          "type": "application/json"
+        }
+      ],
+      "name": "new_uuid",
+      "outputs": [
+        {
+          "description": "The identifiers, one per value.",
+          "name": "ids",
+          "type": "text/plain",
+          "unary": false
+        }
+      ]
+    },
+    {
+      "description": "Draw bytes from the system's random source. Flow has no random number generator and should not have one -- a composition whose output depends only on its input is one whose failures reproduce -- so nondeterminism lives here, where it is visible in the source and refusable by not registering it. These bytes are fit for a token or a nonce, which the ones new_uuid uses are not.",
+      "headers": [
+        {
+          "description": "Absolute execution deadline: a base-10 count of milliseconds since the Unix epoch, or nanoseconds with an 'ns' suffix. The call fails once it is reached.",
+          "name": "x-a11-deadline",
+          "type": "string"
+        }
+      ],
+      "inputs": [
+        {
+          "description": "Optional: count (32 bytes) and format (hex, base64, base64url or raw -- raw writes only `bytes`). Named `format` because `encoding` already means json-or-msgpack on every action here.",
+          "name": "options",
+          "type": "application/json"
+        }
+      ],
+      "name": "random_bytes",
+      "outputs": [
+        {
+          "description": "The bytes themselves.",
+          "name": "bytes",
+          "type": "application/octet-stream",
+          "unary": false
+        },
+        {
+          "description": "The bytes in the requested format, or nothing when raw.",
+          "name": "text",
+          "type": "text/plain"
+        }
+      ]
+    },
+    {
+      "description": "Read a file, with each way of wanting it on a port of its own: the bytes as they arrive, the whole thing as text, one value per line, and the metadata -- which is written before any content, so a composition can act on the size while the reading is still going on. Reading streams, so a file larger than memory costs a chunk at a time. In Flow, pipe `bytes` straight into a streaming consumer, or filter and bound `lines` before routing only the useful selection to a flow output.",
+      "headers": [
+        {
+          "description": "Absolute execution deadline: a base-10 count of milliseconds since the Unix epoch, or nanoseconds with an 'ns' suffix. The read fails with deadline_exceeded once it is reached, because a partial file is not a shorter file.",
+          "name": "x-a11-deadline",
+          "type": "string"
+        }
+      ],
+      "inputs": [
+        {
+          "description": "All optional: chunk_bytes (65536), offset, length, max_bytes, and omit -- output port names to close immediately rather than write; and encoding -- \"json\" (the default) or \"msgpack\", which is both cheaper downstream of a `| packb` and the only one of the two that can carry a path or a line that is not valid UTF-8.",
+          "name": "options",
+          "type": "application/json"
+        },
+        {
+          "description": "File to read; relative paths use the current directory.",
+          "name": "path",
+          "required": true,
+          "type": "text/plain"
+        }
+      ],
+      "name": "read_file",
+      "outputs": [
+        {
+          "description": "The contents, in order, as they are read.",
+          "name": "bytes",
+          "type": "application/octet-stream",
+          "unary": false
+        },
+        {
+          "description": "{path, name, kind, exists, size, modified, mode}, written before any content.",
+          "name": "info",
+          "type": "application/json"
+        },
+        {
+          "description": "One value per line, without its line ending. A trailing line with no newline after it is still a line.",
+          "name": "lines",
+          "type": "text/plain",
+          "unary": false
+        },
+        {
+          "description": "The whole file as one text value. Held in memory, so `bytes` or `lines` is what a large file wants.",
+          "name": "text",
+          "type": "text/plain"
+        }
+      ]
+    },
+    {
+      "description": "Read this process's standard input, as bytes and as lines. What makes a composition a filter something else can pipe into: the reads are paced by whoever is reading the output, so a slow consumer is felt upstream rather than buffered. `is_tty` is written first, before any waiting, so a composition can tell an interactive run from a piped one.",
+      "headers": [
+        {
+          "description": "Absolute execution deadline: a base-10 count of milliseconds since the Unix epoch, or nanoseconds with an 'ns' suffix. Reading ends gracefully once it is reached.",
+          "name": "x-a11-deadline",
+          "type": "string"
+        }
+      ],
+      "inputs": [
+        {
+          "description": "Control commands; a {\"command\": \"stop\"} stops reading.",
+          "name": "control_events",
+          "type": "application/json",
+          "unary": false
+        },
+        {
+          "description": "Optional: chunk_bytes (65536), and omit -- output port names to close immediately rather than write; and encoding -- \"json\" (the default) or \"msgpack\", which is both cheaper downstream of a `| packb` and the only one of the two that can carry a path or a line that is not valid UTF-8.",
+          "name": "options",
+          "type": "application/json"
+        }
+      ],
+      "name": "read_stdin",
+      "outputs": [
+        {
+          "description": "Standard input, as it arrives.",
+          "name": "bytes",
+          "type": "application/octet-stream",
+          "unary": false
+        },
+        {
+          "description": "Whether standard input is a terminal, written before any reading.",
+          "name": "is_tty",
+          "type": "bool"
+        },
+        {
+          "description": "Standard input, one value per line, without its line ending.",
+          "name": "lines",
+          "type": "text/plain",
+          "unary": false
+        }
+      ]
+    },
+    {
+      "description": "Remove a path. A directory is refused unless options.recursive says otherwise -- a recursive delete nobody asked for is the most expensive way for this library to be convenient. A path that is not there is a success by default, since the composition wanted it gone.",
+      "headers": [
+        {
+          "description": "Absolute execution deadline: a base-10 count of milliseconds since the Unix epoch, or nanoseconds with an 'ns' suffix. The call fails once it is reached.",
+          "name": "x-a11-deadline",
+          "type": "string"
+        }
+      ],
+      "inputs": [
+        {
+          "description": "Optional: recursive (false), missing_ok (true).",
+          "name": "options",
+          "type": "application/json"
+        },
+        {
+          "description": "Path to remove; relative paths use the current directory.",
+          "name": "path",
+          "required": true,
+          "type": "text/plain"
+        }
+      ],
+      "name": "remove_path",
+      "outputs": [
+        {
+          "description": "How many entries were removed.",
+          "name": "removed",
+          "type": "integer"
         }
       ]
     },
@@ -523,6 +935,213 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
           "name": "shell_id",
           "required": true,
           "type": "text/plain"
+        }
+      ]
+    },
+    {
+      "description": "Wait, then report having waited. What `after` needs to order one statement behind a delay: a retry's backoff, a settling period before a check, a beat between two calls. A stop command or a cancellation cuts the wait short and says so on `woke`.",
+      "headers": [
+        {
+          "description": "Absolute execution deadline: a base-10 count of milliseconds since the Unix epoch, or nanoseconds with an 'ns' suffix. The wait ends gracefully once it is reached.",
+          "name": "x-a11-deadline",
+          "type": "string"
+        }
+      ],
+      "inputs": [
+        {
+          "description": "Control commands; a {\"command\": \"stop\"} ends the wait early.",
+          "name": "control_events",
+          "type": "application/json",
+          "unary": false
+        },
+        {
+          "description": "How long to wait, written as Flow writes a duration (30s, 250ms, 1m30s) or as a number of seconds.",
+          "name": "duration",
+          "required": true,
+          "type": "text/plain"
+        }
+      ],
+      "name": "sleep_for",
+      "outputs": [
+        {
+          "description": "{at, elapsed_ms, interrupted} -- where `interrupted` says the wait was cut short rather than ran its course.",
+          "name": "woke",
+          "type": "application/json"
+        }
+      ]
+    },
+    {
+      "description": "Run a program, with its standard output and standard error on separate ports -- as bytes and as lines, whichever is wanted -- and its pid written before any of them, so a composition can order something behind the process having started. A non-zero exit is reported on `exit_code` rather than failing the action: the program ran, and this is what it said. Cancelling the action sends SIGTERM, waits options.grace, and then sends SIGKILL. In Flow, pipe `stdin` from an upstream byte stream and filter or bound `stdout_lines` and `stderr_lines`; leave unneeded outputs unrouted so they do not reach the caller.",
+      "headers": [
+        {
+          "description": "Absolute execution deadline: a base-10 count of milliseconds since the Unix epoch, or nanoseconds with an 'ns' suffix. The process is sent SIGTERM once it is reached, then SIGKILL after options.grace, and the action fails with deadline_exceeded.",
+          "name": "x-a11-deadline",
+          "type": "string"
+        }
+      ],
+      "inputs": [
+        {
+          "description": "The arguments, one per element. A single string is one argument and is not split on spaces -- splitting is how a path with a space in it becomes two arguments.",
+          "name": "arguments",
+          "type": "application/json"
+        },
+        {
+          "description": "Control commands: {\"command\": \"stop\"} to wind the process down, or {\"command\": \"signal\", \"signal\": \"HUP\"} to send one of TERM, KILL, INT, HUP, QUIT, USR1, USR2 or CONT to the process group.",
+          "name": "control_events",
+          "type": "application/json",
+          "unary": false
+        },
+        {
+          "description": "All optional: cwd (checked against the same filesystem policy as any other path), environment (an object of names to values), clear_environment, grace (how long SIGTERM is given before SIGKILL, default 5s), max_output_bytes, max_output_lines (stop after this many combined stdout/stderr lines), and omit -- output port names to close immediately rather than write.",
+          "name": "options",
+          "type": "application/json"
+        },
+        {
+          "description": "The program to run.",
+          "name": "program",
+          "required": true,
+          "type": "text/plain"
+        },
+        {
+          "description": "What to write to the program's standard input, in order. Closed when the stream ends, which is what a program reading to EOF waits for. A program that stops reading early is not an error. In Flow, connect an upstream byte output directly to `process.stdin`.",
+          "name": "stdin",
+          "type": "application/octet-stream",
+          "unary": false
+        }
+      ],
+      "name": "spawn_process",
+      "outputs": [
+        {
+          "description": "The exit code, or 128 plus the signal number when it was killed.",
+          "name": "exit_code",
+          "type": "integer"
+        },
+        {
+          "description": "Whether max_output_lines stopped the process at its line bound.",
+          "name": "output_truncated",
+          "type": "boolean"
+        },
+        {
+          "description": "The process id, written as soon as there is one.",
+          "name": "pid",
+          "type": "integer"
+        },
+        {
+          "description": "What confinement was applied to the child: a Landlock ruleset on Linux, a Seatbelt profile on macOS, or why neither was.",
+          "name": "sandbox",
+          "type": "text/plain"
+        },
+        {
+          "description": "The name of the signal that ended it, or nothing when it exited of its own accord.",
+          "name": "signal",
+          "type": "text/plain"
+        },
+        {
+          "description": "Standard error, as it arrives, and never mixed into standard output.",
+          "name": "stderr",
+          "type": "application/octet-stream",
+          "unary": false
+        },
+        {
+          "description": "Standard error, one value per line, without its line ending.",
+          "name": "stderr_lines",
+          "type": "text/plain",
+          "unary": false
+        },
+        {
+          "description": "Standard output, as it arrives.",
+          "name": "stdout",
+          "type": "application/octet-stream",
+          "unary": false
+        },
+        {
+          "description": "Standard output, one value per line, without its line ending.",
+          "name": "stdout_lines",
+          "type": "text/plain",
+          "unary": false
+        },
+        {
+          "description": "{user_ms, system_ms, max_rss_bytes, output_bytes} once it has finished.",
+          "name": "usage",
+          "type": "application/json"
+        }
+      ]
+    },
+    {
+      "description": "Read one path's metadata. A path that is not there is an answer -- `exists` is false -- rather than a failure, so a composition can ask without wrapping the question in a `try`.",
+      "headers": [
+        {
+          "description": "Absolute execution deadline: a base-10 count of milliseconds since the Unix epoch, or nanoseconds with an 'ns' suffix. The lookup fails once it is reached.",
+          "name": "x-a11-deadline",
+          "type": "string"
+        }
+      ],
+      "inputs": [
+        {
+          "description": "Optional: omit -- output port names to close immediately rather than write; and encoding -- \"json\" (the default) or \"msgpack\", which is both cheaper downstream of a `| packb` and the only one of the two that can carry a path or a line that is not valid UTF-8.",
+          "name": "options",
+          "type": "application/json"
+        },
+        {
+          "description": "Path to inspect; relative paths use the current directory.",
+          "name": "path",
+          "required": true,
+          "type": "text/plain"
+        }
+      ],
+      "name": "stat_path",
+      "outputs": [
+        {
+          "description": "Whether anything is there.",
+          "name": "exists",
+          "type": "bool"
+        },
+        {
+          "description": "{path, name, kind, exists, size, modified, mode}.",
+          "name": "info",
+          "type": "application/json"
+        }
+      ]
+    },
+    {
+      "description": "Produce a value every interval, so that a composition can act because time passed rather than because something arrived. Bounded by count, by a total duration, by the deadline header, or by a stop command; unbounded otherwise, and the stream simply ends when it is asked to. Ticks are scheduled from the start rather than from the last one, so a slow reader does not make the interval drift -- it makes ticks skip, counted on `skipped`.",
+      "headers": [
+        {
+          "description": "Absolute execution deadline: a base-10 count of milliseconds since the Unix epoch, or nanoseconds with an 'ns' suffix. The stream ends gracefully once it is reached.",
+          "name": "x-a11-deadline",
+          "type": "string"
+        }
+      ],
+      "inputs": [
+        {
+          "description": "Control commands; a {\"command\": \"stop\"} ends the stream gracefully, which is how a flow stops a clock it started.",
+          "name": "control_events",
+          "type": "application/json",
+          "unary": false
+        },
+        {
+          "description": "All optional: every (interval, default 1s, minimum 1ms), count (how many ticks, default unbounded), for (how long to keep going), immediate (tick once at the start rather than after the first interval), catch_up (deliver ticks a slow reader missed instead of skipping them), and omit -- output port names to close immediately rather than write.",
+          "name": "options",
+          "type": "application/json"
+        }
+      ],
+      "name": "ticker",
+      "outputs": [
+        {
+          "description": "How many ticks were delivered.",
+          "name": "count",
+          "type": "integer"
+        },
+        {
+          "description": "How many ticks were not delivered because a reader was more than an interval behind. Zero unless there was a reason.",
+          "name": "skipped",
+          "type": "integer"
+        },
+        {
+          "description": "One {number, at, scheduled, late_ms} per tick, as it fires.",
+          "name": "ticks",
+          "type": "application/json",
+          "unary": false
         }
       ]
     },
@@ -697,6 +1316,105 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
           "description": "Visible page text extracted by the browser DOM.",
           "name": "text",
           "type": "text/plain"
+        }
+      ]
+    },
+    {
+      "description": "Write a file from a stream, so that what is written need never be held in one piece. Atomic by default: the content goes to a temporary beside the destination and is renamed into place at the end, so a reader sees either the old contents or the new ones and a cancelled write leaves neither a partial file nor a temporary. In Flow, connect a producer directly, for example `file.bytes -> write.content`, to avoid exposing or buffering intermediate bytes. Appending cannot be atomic and says so.",
+      "headers": [
+        {
+          "description": "Absolute execution deadline: a base-10 count of milliseconds since the Unix epoch, or nanoseconds with an 'ns' suffix. The write fails once it is reached, and leaves the destination as it was.",
+          "name": "x-a11-deadline",
+          "type": "string"
+        }
+      ],
+      "inputs": [
+        {
+          "description": "The contents, in order. Read to its end; the write is the backpressure point, so a producer is held behind the disk rather than buffered ahead of it. A Flow can pipe a byte stream here with `file.bytes -> write.content`.",
+          "name": "content",
+          "type": "application/octet-stream",
+          "unary": false
+        },
+        {
+          "description": "All optional: append (false), atomic (true unless appending), create_parents (false), sync (false), mode (0644), max_bytes, and omit -- output port names to close immediately rather than write; and encoding -- \"json\" (the default) or \"msgpack\", which is both cheaper downstream of a `| packb` and the only one of the two that can carry a path or a line that is not valid UTF-8.",
+          "name": "options",
+          "type": "application/json"
+        },
+        {
+          "description": "File to write; relative paths use the current directory.",
+          "name": "path",
+          "required": true,
+          "type": "text/plain"
+        }
+      ],
+      "name": "write_file",
+      "outputs": [
+        {
+          "description": "How many bytes were written.",
+          "name": "bytes_written",
+          "type": "integer"
+        },
+        {
+          "description": "The metadata of the finished file.",
+          "name": "info",
+          "type": "application/json"
+        },
+        {
+          "description": "The absolute path that was written. Named `resolved` rather than `path` because a port name is one node whichever way it faces.",
+          "name": "resolved",
+          "type": "text/plain"
+        }
+      ]
+    },
+    {
+      "description": "Write a stream to this process's standard error. Kept separate from standard output for the reason the operating system keeps them separate: what a composition says about its work should not land in the middle of the work's own output. The write is the backpressure point, so whoever is producing the content is held behind the terminal or the pipe rather than buffered ahead of it.",
+      "headers": [
+        {
+          "description": "Absolute execution deadline: a base-10 count of milliseconds since the Unix epoch, or nanoseconds with an 'ns' suffix. The write fails once it is reached.",
+          "name": "x-a11-deadline",
+          "type": "string"
+        }
+      ],
+      "inputs": [
+        {
+          "description": "What to write, in order.",
+          "name": "content",
+          "type": "application/octet-stream",
+          "unary": false
+        }
+      ],
+      "name": "write_stderr",
+      "outputs": [
+        {
+          "description": "How many bytes were written.",
+          "name": "bytes_written",
+          "type": "integer"
+        }
+      ]
+    },
+    {
+      "description": "Write a stream to this process's standard output. The other half of what makes a composition a filter. The write is the backpressure point, so whoever is producing the content is held behind the terminal or the pipe rather than buffered ahead of it.",
+      "headers": [
+        {
+          "description": "Absolute execution deadline: a base-10 count of milliseconds since the Unix epoch, or nanoseconds with an 'ns' suffix. The write fails once it is reached.",
+          "name": "x-a11-deadline",
+          "type": "string"
+        }
+      ],
+      "inputs": [
+        {
+          "description": "What to write, in order.",
+          "name": "content",
+          "type": "application/octet-stream",
+          "unary": false
+        }
+      ],
+      "name": "write_stdout",
+      "outputs": [
+        {
+          "description": "How many bytes were written.",
+          "name": "bytes_written",
+          "type": "integer"
         }
       ]
     }

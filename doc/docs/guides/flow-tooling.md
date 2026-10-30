@@ -426,8 +426,9 @@ Over LSP, send it once per session with `a11flow/setContext`.
 
 #### Actions a project declares in its own source
 
-The snapshot covers SDK actions. Use `scan` to add project-defined actions so
-hover, completion, and navigation include them.
+The snapshot covers SDK actions and the native interpreter standard library.
+Use `scan` to add project-defined actions so hover, completion, and navigation
+include them.
 
 `scan` reads source for `ActionSchema` declarations and answers a catalogue in
 which every entry carries an **origin**:
@@ -645,3 +646,67 @@ There are four targets, and `a11 flow syntax` with no `--target` checks them all
 All four files are generated from the language tables. The check exits `1` when
 any generated file is stale. It reads the target list from C++, so new targets
 are included automatically.
+
+## Analyze linked modules and operation results
+
+`check`, `plan`, `complete`, `describe`, and `definition` accept a `modules`
+object mapping canonical source identities to Flow source. File-based CLI and
+LSP hosts resolve relative file imports explicitly; in-memory requests use the
+supplied map. The LSP host overlays open, unsaved documents and refreshes
+importers when a document changes or closes. The linker bounds module count,
+source bytes, import depth, and identity size before parsing dependencies.
+
+Diagnostics carry an optional `source` and `related` source ranges. Each range
+uses its original document; UTF-16 responses convert positions against that
+document. Conflicting declarations point to their other contributions.
+Compatible declarations remain valid and inform the effective interface.
+Opaque refinements receive `flow.sequence.schema-refinement-unproven` until
+binding supplies sufficient evidence. Distinct implementations produce a
+warning at their definitions and an error at an ambiguous use.
+
+`flow.form.invalid-action-target` diagnoses a suffix such as `run f().out` and
+offers parentheses as a likely repair. `flow.sequence.scalar-rvalue-read` is an
+informational tip for a scalar read of an anonymous stream; its explicit
+`| consume` edit has `automatic: false`. Hosts retain such suggestions as
+manual actions. `flow.sequence.redundant-parentheses` offers deletions only
+after reparsing the combined edits and checking unchanged native syntax and
+resolution. The formatter continues to preserve tokens, including grouping.
+
+Completion and navigation use native expression result descriptors for call
+ports, node IDs, statuses, and known record fields. Declaration-first,
+import-first, and struct-first inline fragments are recognized by the IDE
+adapters, including `exported` attributes. Static highlighters are regenerated
+from the native vocabulary.
+
+The editable native API in `a11/flow/document.h`, exposed through `a11.flow`,
+returns byte-range edits, revisioned handles, and diagnostics. It supports typed
+construction, owned interface synchronization, visibility, imports, effective
+schema queries, and reference edits over a supplied module graph. File writes
+and application of cross-document transactions remain host operations.
+
+
+Direct symbol imports use `from "library.flow" import render, Report as LocalReport`.
+They bind public source members at module scope or directly inside an implemented
+flow. A same-name callable declaration constrains the imported implementation;
+compatible contracts share their strictest interface. Conflicts report the
+local requirement and link the contributing sources. Distinct executable bodies
+under one binding are ambiguous when used; aliases keep them independently
+addressable.
+
+An implemented flow may contain `declare flow` and `struct` declarations. These
+names are hoisted within the flow and remain private to it. A local callable
+contract can resolve a module implementation, a directly imported symbol, or a
+registry action; unresolved used contracts fail preflight. Each local struct has
+a scoped type identity. Executable flow definitions belong at module scope, and
+an exported imported-module interface cannot expose a local struct. Completion,
+navigation, document symbols and formatting account for local declarations and
+direct imports.
+
+
+Source-scanned actions carry `"schema_complete": false`, because computed
+members and helper calls may be omitted. When merged with an existing complete
+schema, these entries supply source locations and descriptions; ports, headers,
+and cardinality retain the complete runtime schema. Live registry entries are
+complete by default and replace matching schemas. The catalogue generator reads
+native interpreter schemas through `a11._native.flow.standard_action_schemas()`;
+it registers handlers for inspection and runs no actions.

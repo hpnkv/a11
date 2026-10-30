@@ -30,6 +30,7 @@ namespace a11::flow {
 
 /// The flows a file declares, and everything wrong with it.
 struct ParseResult {
+  std::vector<syntax::Import> imports;
   std::vector<syntax::FlowDeclarationPtr> flows;
   /// The shapes the file declares, in declaration order.
   ///

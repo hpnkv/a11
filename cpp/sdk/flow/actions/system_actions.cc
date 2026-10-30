@@ -31,6 +31,7 @@
 #include <absl/status/statusor.h>
 #include <absl/strings/escaping.h>
 #include <absl/strings/str_cat.h>
+#include <absl/time/time.h>
 #include <fcntl.h>
 #include <nlohmann/json.hpp>
 #include <poll.h>
@@ -48,6 +49,7 @@
 #include "sdk/flow/actions/policy.h"
 #include "sdk/flow/actions/ports.h"
 #include "sdk/flow/actions/stop.h"
+#include "thread/concurrency.h"
 
 namespace a11::sdk::flow {
 namespace {
@@ -105,6 +107,8 @@ absl::Status RunReadStdin(const std::shared_ptr<Action>& action) {
   absl::Status trouble = absl::OkStatus();
 
   while (trouble.ok()) {
+    // Poll blocks this OS worker; let its sibling fibers run between polls.
+    thread::SleepFor(absl::ZeroDuration());
     if (stop->stopped()) {
       break;  // a source asked to finish has finished
     }

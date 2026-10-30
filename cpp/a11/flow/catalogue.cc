@@ -311,10 +311,20 @@ Catalogue Catalogue::FromJson(const nlohmann::json& value) {
         continue;
       }
       action.description = Text(one, "description");
+      action.schema_complete = Flag(one, "schema_complete", true);
       action.inputs = PortsFromJson(one, "inputs");
       action.outputs = PortsFromJson(one, "outputs");
       action.headers = PortsFromJson(one, "headers");
       action.origin = OriginFromJson(one);
+      if (const auto origins = one.find("schema_origins");
+          origins != one.end() && origins->is_array()) {
+        for (const auto& item : *origins) {
+          if (auto origin = OriginFromJson({{"origin", item}});
+              origin.has_value()) {
+            action.schema_origins.push_back(std::move(*origin));
+          }
+        }
+      }
       built.actions_.push_back(std::move(action));
     }
   }
@@ -344,6 +354,9 @@ nlohmann::json Catalogue::ToJson() const {
     if (!action.description.empty()) {
       one["description"] = action.description;
     }
+    if (!action.schema_complete) {
+      one["schema_complete"] = false;
+    }
     if (!action.inputs.empty()) {
       one["inputs"] = PortsToJson(action.inputs);
     }
@@ -355,6 +368,12 @@ nlohmann::json Catalogue::ToJson() const {
     }
     if (action.origin.has_value()) {
       one["origin"] = OriginToJson(*action.origin);
+    }
+    if (!action.schema_origins.empty()) {
+      one["schema_origins"] = nlohmann::json::array();
+      for (const auto& origin : action.schema_origins) {
+        one["schema_origins"].push_back(OriginToJson(origin));
+      }
     }
     actions.push_back(std::move(one));
   }
@@ -372,6 +391,44 @@ nlohmann::json Catalogue::ToJson() const {
                         {"types", std::move(types)}};
 }
 
+Program Catalogue::SchemaProgram() const {
+  Program program;
+  for (const auto& type : types_) {
+    program.dtos.push_back(type.shape);
+  }
+  for (const auto& action : actions_) {
+    FlowPlan flow;
+    flow.name = action.name;
+    flow.description = action.description;
+    flow.interface_only = true;
+    for (const auto direction :
+         {syntax::PortDirection::kInput, syntax::PortDirection::kOutput}) {
+      const auto& ports = direction == syntax::PortDirection::kInput
+                              ? action.inputs
+                              : action.outputs;
+      for (const auto& info : ports) {
+        PortPlan port;
+        port.name = info.name;
+        port.declared = info.type;
+        port.type = info.type;
+        port.description = info.description;
+        port.unary = info.unary;
+        port.required = info.required;
+        port.direction = direction;
+        flow.ports.push_back(std::move(port));
+      }
+    }
+    for (const auto& info : action.headers) {
+      HeaderPlan header;
+      header.name = info.name;
+      header.description = info.description;
+      flow.headers.push_back(std::move(header));
+    }
+    program.flows.push_back(std::move(flow));
+  }
+  return program;
+}
+
 Catalogue Catalogue::MergedWith(const Catalogue& other) const {
   Catalogue merged = *this;
   for (const ActionInfo& action : other.actions_) {
@@ -380,7 +437,16 @@ Catalogue Catalogue::MergedWith(const Catalogue& other) const {
       if (mine.name != action.name) {
         continue;
       }
-      mine = action;
+      if (!action.schema_complete && mine.schema_complete) {
+        if (action.origin.has_value()) {
+          mine.origin = action.origin;
+        }
+        if (!action.description.empty()) {
+          mine.description = action.description;
+        }
+      } else {
+        mine = action;
+      }
       replaced = true;
     }
     if (!replaced) {

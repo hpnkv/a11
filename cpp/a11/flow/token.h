@@ -99,6 +99,7 @@ struct Token {
   /// A `kNumber`'s value. `is_integer` says whether it was written without a
   /// fractional part, which is what the counted forms of the grammar require.
   double number = 0.0;
+  long long integer = 0;
   bool is_integer = false;
   /// A `kDuration`'s value.
   absl::Duration duration;

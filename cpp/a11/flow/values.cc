@@ -2074,6 +2074,12 @@ absl::StatusOr<Value> Add(const Value& left, const Value& right) {
 // NOLINTBEGIN(cppcoreguidelines-pro-type-static-cast-downcast)
 absl::StatusOr<Value> Evaluate(const syntax::Node& node,
                                const EvalContext& context) {
+  if (context.lookup) {
+    ABSL_ASSIGN_OR_RETURN(std::optional<Value> found, context.lookup(node));
+    if (found.has_value()) {
+      return *std::move(found);
+    }
+  }
   // A name the resolver bound to a stream reads as that stream's first value,
   // whatever shape the expression around it has.
   if (const Value* found = Bound(node, context); found != nullptr) {

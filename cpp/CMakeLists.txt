@@ -20,6 +20,8 @@ endif ()
 
 file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/../VERSION" A11_VERSION_STRING
         LIMIT_COUNT 1)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_LIST_DIR}/../VERSION")
 if (NOT A11_VERSION_STRING MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
     message(FATAL_ERROR "VERSION must contain one semantic version")
 endif ()
@@ -1162,6 +1164,7 @@ target_include_directories(
 target_link_libraries(
         a11_flow_lang
         PUBLIC $<BUILD_INTERFACE:absl::status> $<INSTALL_INTERFACE:absl::status>
+        $<BUILD_INTERFACE:absl::status_macros> $<INSTALL_INTERFACE:absl::status_macros>
         $<BUILD_INTERFACE:absl::statusor> $<INSTALL_INTERFACE:absl::statusor>
         $<BUILD_INTERFACE:absl::span> $<INSTALL_INTERFACE:absl::span>
         $<BUILD_INTERFACE:absl::flat_hash_map> $<INSTALL_INTERFACE:absl::flat_hash_map>

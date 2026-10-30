@@ -85,6 +85,22 @@ void CheckContained(const std::vector<DocumentSymbol>& symbols,
   }
 }
 
+TEST(FlowNavigate, PredicateStagesAndAfterBlocksDescribeTheirSyntax) {
+  const std::string source =
+      "flow f { done = {}\n after done { [1] | flatten | take until it == 1 -> "
+      "_ }\n}";
+  for (const auto* word : {"take", "until"}) {
+    const auto about = Describe(source, source.find(word));
+    EXPECT_TRUE(about.found);
+    EXPECT_NE(about.markdown.find("take until"), std::string::npos)
+        << about.markdown;
+  }
+  const auto after = Describe(source, source.find("after"));
+  EXPECT_TRUE(after.found);
+  EXPECT_NE(after.markdown.find("concurrent block"), std::string::npos)
+      << after.markdown;
+}
+
 TEST(FlowNavigate, EverySymbolsSelectionIsInsideItsRange) {
   // The one invariant a document symbol has to satisfy, and the reason it is
   // worth a test of its own: LSP refuses the *whole* answer when one entry

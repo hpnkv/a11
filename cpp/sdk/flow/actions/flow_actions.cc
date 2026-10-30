@@ -49,16 +49,19 @@ constexpr std::uint64_t kDefaultMaxEntries = 1000000;
 std::vector<std::string> DefaultProcessWriteRoots() {
   std::vector<std::string> roots;
   const auto add = [&roots](const char* raw) {
-    if (raw == nullptr || *raw == '\0')
+    if (raw == nullptr || *raw == '\0') {
       return;
+    }
     std::error_code error;
     const fs::path absolute = fs::absolute(raw, error).lexically_normal();
-    if (error || !fs::is_directory(absolute, error) || error)
+    if (error || !fs::is_directory(absolute, error) || error) {
       return;
+    }
     roots.push_back(absolute.string());
     const fs::path canonical = fs::canonical(absolute, error);
-    if (!error)
+    if (!error) {
       roots.push_back(canonical.string());
+    }
   };
   std::error_code error;
   const fs::path temporary = fs::temp_directory_path(error);

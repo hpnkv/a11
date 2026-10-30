@@ -150,30 +150,72 @@ val buildWebview by tasks.registering(Exec::class) {
     )
 }
 
+val flowToolPlatform = run {
+    val os = System.getProperty("os.name").lowercase().let {
+        when {
+            it.startsWith("mac") -> "macos"
+            it.startsWith("windows") -> "windows"
+            else -> "linux"
+        }
+    }
+    val arch = when (System.getProperty("os.arch").lowercase()) {
+        "aarch64", "arm64" -> "aarch64"
+        else -> "x86_64"
+    }
+    "$os-$arch"
+}
+val flowToolName = if (flowToolPlatform.startsWith("windows")) "a11-flow.exe" else "a11-flow"
+val flowToolBuildDirectory = providers.gradleProperty("flowToolBuildDir").map { file(it) }
+    .orElse(providers.provider {
+        listOf("../cmake-build-debug", "../cmake-build-release", "../build/debug", "../build/release")
+            .map { file(it) }
+            .firstOrNull { it.resolve("CMakeCache.txt").isFile }
+            ?: file("../cmake-build-debug")
+    })
+val suppliedFlowTool = providers.gradleProperty("flowToolBinary").map { file(it) }
+val builtFlowTool = providers.provider {
+    flowToolBuildDirectory.get().resolve("cpp/$flowToolName")
+}
+val buildFlowTool = tasks.register<Exec>("buildFlowTool") {
+    group = "build"
+    description = "Build the current native Flow language service for this platform."
+    onlyIf { !suppliedFlowTool.isPresent }
+    workingDir(layout.projectDirectory.dir(".."))
+    doFirst {
+        check(flowToolBuildDirectory.get().resolve("CMakeCache.txt").isFile) {
+            "Configure the native tree with cmake --preset debug first, or supply " +
+                "-PflowToolBuildDir=<configured CMake directory> or -PflowToolBinary=<a11-flow>."
+        }
+    }
+    commandLine("cmake", "--build", flowToolBuildDirectory.get().absolutePath,
+        "--target", "a11_flow_tool", "--parallel", "8")
+}
+val prepareFlowTool = tasks.register<Sync>("prepareFlowTool") {
+    dependsOn(buildFlowTool)
+    val tool = suppliedFlowTool.orElse(builtFlowTool)
+    from(tool)
+    into(layout.buildDirectory.dir("generated/flow-tool/bin/$flowToolPlatform"))
+    doFirst {
+        check(tool.get().isFile) { "The Flow language-service binary is missing: ${tool.get()}" }
+    }
+    rename { flowToolName }
+}
+
 tasks {
     processResources {
-        dependsOn(buildWebview)
+        dependsOn(buildWebview, prepareFlowTool)
 
         // The flows the plugin can run live in `src/main/resources/flows`, so
         // they land on the classpath with everything else and
         // `A11WebView.readFlow` can read them back by name.
 
-        // Bundle the native language service per platform. The plugin contains
-        // no Flow lexer, parser, resolver, inspector, or word list.
-        //
-        // Bundle each `bin/<os>-<arch>/a11-flow` present at build time. Without
-        // a binary for the current platform, highlighting remains available but
-        // semantic checks are disabled with one notification. Build one with
-        //
-        // cmake --preset debug && cmake --build --preset debug --target
-        // a11_flow_tool mkdir -p intellij-plugin/bin/macos-aarch64 cp
-        // build/debug/cpp/a11-flow intellij-plugin/bin/macos-aarch64/
-        //
-        // Release CI supplies other platforms. Native binaries are not checked
-        // into the repository.
+        // Refresh the host service from CMake. Release builds supply additional
+        // platforms in bin/; an old host copy there cannot override this build.
         from(layout.projectDirectory.dir("bin")) {
+            exclude("$flowToolPlatform/**")
             into("bin")
         }
+        from(layout.buildDirectory.dir("generated/flow-tool"))
     }
 
     // Disable coroutine stack-trace recovery in platform tests. Kotlin 2.2
@@ -184,22 +226,10 @@ tasks {
     withType<Test>().configureEach {
         systemProperty("kotlinx.coroutines.stacktrace.recovery", "false")
 
-        // The language, if this checkout has built it. The tests that assert
-        // what a *word means* need it and skip without it (see FlowLexerTest);
-        // the ones that assert the platform's own contract run either way.
-        for (candidate in listOf(
-            "../cmake-build-debug/cpp/a11-flow",
-            "../build/ctests/cpp/a11-flow",
-            "../build/debug/cpp/a11-flow",
-            "../build/release/cpp/a11-flow",
-            "bin/macos-aarch64/a11-flow",
-        )) {
-            val tool = layout.projectDirectory.file(candidate).asFile
-            if (tool.canExecute()) {
-                systemProperty("a11.flow.tool", tool.absolutePath)
-                break
-            }
-        }
+        // Exercise the bundled resource through FlowEngine's normal extraction
+        // path, so tests and the installed plugin use the same language service.
+        systemProperty("a11.flow.bundled.resource", "bin/$flowToolPlatform/$flowToolName")
+        systemProperty("a11.flow.built.tool", suppliedFlowTool.orElse(builtFlowTool).get().absolutePath)
     }
 
     // Fast dev loop: `./gradlew runIde` launches a sandbox CLion with the

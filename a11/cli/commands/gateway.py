@@ -41,6 +41,7 @@ from absl import logging
 from a11 import net, timing
 from a11.cli import console as console_module
 from a11.cli.app import Command
+from a11.cli.commands import _command_help
 from a11.cli.signals import stop_on_signals
 from a11.gateway import config, conversations, daemon
 from a11.status import Status, StatusCode
@@ -418,7 +419,7 @@ async def _run(args: argparse.Namespace) -> int:
 
 GATEWAY_COMMAND = Command(
     name="gateway",
-    help="Run or manage the A11 gateway.",
+    help=_command_help("gateway"),
     description=(
         "Start the API for a unified access point to shell tools and other"
         " features, or manage one running in the background."

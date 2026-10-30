@@ -78,6 +78,7 @@ add_executable(a11_flow_test
   flow_highlight_test.cc
   flow_inspect_test.cc
   flow_format_test.cc
+  flow_module_test.cc
   flow_lexer_test.cc
   flow_navigate_test.cc
   flow_offsets_test.cc

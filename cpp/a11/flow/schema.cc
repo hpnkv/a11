@@ -15,6 +15,7 @@
 #include "a11/flow/schema.h"
 
 #include <algorithm>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -498,15 +499,23 @@ FieldPlan ReadField(const nlohmann::json& property, std::string_view name,
       }
       field.declared = absl::StrCat(field.element, "[]");
     }
-    if (property.value("uniqueItems", false)) {
+    if (property.contains("uniqueItems") &&
+        property["uniqueItems"].is_boolean() &&
+        property["uniqueItems"].get<bool>()) {
       field.unique = true;
     }
-    if (property.contains("minItems")) {
+    if (property.contains("minItems") &&
+        property["minItems"].is_number_integer() &&
+        property["minItems"].get<double>() >= 0 &&
+        property["minItems"].get<double>() < 9223372036854775808.0) {
       field.range.has_minimum = true;
       field.range.minimum =
           Constant::Integer(property["minItems"].get<long long>());
     }
-    if (property.contains("maxItems")) {
+    if (property.contains("maxItems") &&
+        property["maxItems"].is_number_integer() &&
+        property["maxItems"].get<double>() >= 0 &&
+        property["maxItems"].get<double>() < 9223372036854775808.0) {
       field.range.has_maximum = true;
       field.range.maximum =
           Constant::Integer(property["maxItems"].get<long long>());
@@ -733,6 +742,42 @@ SchemaImport JsonSchemaToDtos(const nlohmann::json& schema,
            "A JSON Schema describing a shape is an object.");
     return into;
   }
+  std::vector<std::pair<const nlohmann::json*, size_t>> pending{{&schema, 0}};
+  size_t visited = 0;
+  while (!pending.empty()) {
+    const auto [value, depth] = pending.back();
+    pending.pop_back();
+    if (++visited > 100000 || depth > 128 ||
+        (value->is_number_unsigned() &&
+         value->get<uint64_t>() >
+             static_cast<uint64_t>(std::numeric_limits<long long>::max()))) {
+      Report(into, "flow.schema.unsupported-keyword",
+             "Schema nesting, size, or integer values exceed the native "
+             "representation.");
+      return into;
+    }
+    if (value->is_object()) {
+      for (const auto& item : value->items()) {
+        if ((item.key() == "minItems" || item.key() == "maxItems") &&
+            (!item.value().is_number_integer() ||
+             item.value().get<double>() < 0)) {
+          Report(into, "flow.schema.unsupported-keyword",
+                 "Array bounds must be nonnegative integers.");
+          return into;
+        }
+        if (item.key() == "uniqueItems" && !item.value().is_boolean()) {
+          Report(into, "flow.schema.unsupported-keyword",
+                 "uniqueItems must be a boolean.");
+          return into;
+        }
+        pending.emplace_back(&item.value(), depth + 1);
+      }
+    } else if (value->is_array()) {
+      for (const auto& item : *value) {
+        pending.emplace_back(&item, depth + 1);
+      }
+    }
+  }
   std::string chosen(name);
   if (const auto title = schema.find("title");
       chosen.empty() && title != schema.end() && title->is_string()) {
@@ -755,6 +800,10 @@ std::string DtoToFlow(const DtoPlan& dto) {
   for (const FieldPlan& field : dto.fields) {
     name_width = std::max(name_width, field.name.size() + 1);
     std::string written = field.declared.empty() ? field.type : field.declared;
+    if (field.syntax_type.has_value()) {
+      auto source = field.syntax_type->ToSource();
+      written = source.ok() ? *source : "<invalid-type>";
+    }
     if (field.required) {
       absl::StrAppend(&written, " required");
     }
@@ -789,7 +838,8 @@ std::string DtoToFlow(const DtoPlan& dto) {
     types.push_back(std::move(written));
   }
 
-  std::string out = absl::StrCat("struct ", dto.name, " {\n");
+  std::string out = absl::StrCat("struct ", dto.name,
+                                 dto.exported ? " exported" : "", " {\n");
   if (!dto.description.empty()) {
     absl::StrAppend(&out, "  describe ", nlohmann::json(dto.description).dump(),
                     "\n\n");

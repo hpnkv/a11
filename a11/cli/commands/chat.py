@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 
 from a11.cli.app import Command
+from a11.cli.commands import _command_help
 from a11.cli.backends import (
     DEFAULT_PROVIDER,
     PROVIDER_CHOICES,
@@ -106,9 +107,7 @@ def _configure(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--no-shell-tools",
         action="store_true",
-        help=(
-            "Deprecated compatibility option; omit persistent shell actions."
-        ),
+        help="Deprecated compatibility option; omit persistent shell actions.",
     )
     parser.add_argument("--task", help="Run an initial coding task.")
     parser.add_argument(
@@ -245,9 +244,9 @@ async def _run(args: argparse.Namespace) -> int:
         cwd=args.cwd,
         add_dirs=tuple(args.add_dir),
         approval="suggest" if args.plan else args.approval,
-        sandbox="read-only"
-        if args.plan or args.no_shell_tools
-        else args.sandbox,
+        sandbox=(
+            "read-only" if args.plan or args.no_shell_tools else args.sandbox
+        ),
         task=task,
         resume=args.resume,
         max_turns=args.max_turns,
@@ -262,7 +261,7 @@ async def _run(args: argparse.Namespace) -> int:
 
 CHAT_COMMAND = Command(
     name="chat",
-    help="Chat interactively with an LLM backend.",
+    help=_command_help("chat"),
     description=(
         "Start an interactive chat with an LLM backend. Switch backends "
         "mid-session with /model, and see /help for the full command list."

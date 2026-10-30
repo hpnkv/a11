@@ -26,15 +26,16 @@ import asyncio
 import contextlib
 import copy
 import json
+from collections.abc import Iterator
 from enum import IntEnum
 from typing import Any, Callable
 
-import fastapi
 import httpx
 import msgpack
 import pydantic
 from pydantic_core import core_schema
 from pydantic import BaseModel, Field, ValidationError
+from starlette.exceptions import HTTPException
 
 from a11 import _native
 
@@ -192,10 +193,10 @@ class _StatusConvenience(BaseModel):
 
     @staticmethod
     def from_http_exception(
-        http_exception: fastapi.HTTPException | httpx.HTTPStatusError,
+        http_exception: HTTPException | httpx.HTTPStatusError,
     ) -> "Status":
-        """Convert a FastAPI/httpx HTTP exception to an A11 status."""
-        if isinstance(http_exception, fastapi.HTTPException):
+        """Convert a Starlette, FastAPI, or httpx HTTP exception to a status."""
+        if isinstance(http_exception, HTTPException):
             return _make_status_from_fastapi_exception(http_exception)
         if isinstance(http_exception, httpx.HTTPStatusError):
             return _make_status_from_httpx_exception(http_exception)
@@ -222,8 +223,8 @@ class _StatusConvenience(BaseModel):
                 "model": Status,
                 "content": {
                     "application/json": {
-                        "example": _STATUS_EXAMPLES[code].model_dump(
-                            mode="json"
+                        "example": (
+                            _STATUS_EXAMPLES[code].model_dump(mode="json")
                         ),
                     }
                 },
@@ -632,7 +633,7 @@ def _cast_httpx_exceptions(exc: Exception) -> Status:
     )
 
 
-def _make_status_from_fastapi_exception(exc: fastapi.HTTPException) -> Status:
+def _make_status_from_fastapi_exception(exc: HTTPException) -> Status:
     code = StatusCode.from_http_code(exc.status_code)
     detail = exc.detail
     message = "An error occurred."
@@ -753,14 +754,13 @@ _STATUS_EXAMPLES = {
 }
 
 
-# A `Status` is not a pydantic `BaseModel` -- it is the native class with a
-# pydantic core schema attached -- so `fastapi.encoders.jsonable_encoder` fell
-# through every branch it knows and ended at `vars(obj)`, which for a pybind11
-# object is empty. Any FastAPI service that answered errors as statuses was
-# therefore sending `{}` as the body, silently. Registering the exact type is
-# the documented extension point, and the exact-type lookup (unlike the
-# by-class-tuple one) is consulted at call time, so a registration made here
-# takes effect for every caller.
-fastapi.encoders.ENCODERS_BY_TYPE[Status] = lambda status: status.model_dump(
-    mode="json"
-)
+from a11._native_protocol import attach_protocol
+
+
+class _StatusMappingProtocol:
+    def __iter__(self) -> Iterator[tuple[str, Any]]:
+        """Iterate the JSON fields for ``dict(status)`` and HTTP encoders."""
+        return iter(self.model_dump(mode="json").items())
+
+
+attach_protocol(Status, _StatusMappingProtocol)

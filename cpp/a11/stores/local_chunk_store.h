@@ -99,6 +99,7 @@ class LocalChunkStore final : public ChunkStore {
   a11::Future<std::uint32_t> GetSeqForArrivalOrder(
       std::uint64_t arrival_order) override;
   a11::Future<std::optional<std::uint32_t>> GetFinalSeq() override;
+  a11::Future<std::optional<absl::Status>> GetWriteStatus() override;
   a11::Future<absl::Status> CloseWritesWithStatus(
       absl::Status status, bool return_status_if_already_closed) override;
   a11::Future<size_t> Size() override;

@@ -15,6 +15,7 @@
 // What the native runtime is *for*: running flows.
 
 #include <algorithm>
+#include <atomic>
 #include <map>
 #include <memory>
 #include <optional>
@@ -28,6 +29,7 @@
 #include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
 #include <absl/strings/ascii.h>
+#include <absl/strings/cord.h>
 #include <absl/strings/match.h>
 #include <absl/strings/str_cat.h>
 #include <absl/time/clock.h>
@@ -45,6 +47,8 @@
 #include "a11/nodes/async_node.h"
 #include "a11/nodes/node_map.h"
 #include "thread/boost_primitives.h"
+#include "thread/fiber.h"
+#include "thread/selectables.h"
 
 namespace a11::flow {
 namespace {
@@ -155,10 +159,11 @@ Values Collect(const std::shared_ptr<nodes::AsyncNode>& node) {
 Outcome RunFlow(std::string_view source, std::string_view name,
                 const PortValues& inputs = {},
                 const std::map<std::string, std::string>& headers = {},
-                bool close_inputs = true) {
+                bool close_inputs = true, const ModuleSources& modules = {},
+                std::shared_ptr<actions::ActionRegistry> registry = nullptr) {
   Outcome outcome;
   absl::StatusOr<std::shared_ptr<CompiledProgram>> program =
-      CompiledProgram::Compile(std::string(source), "test.flow");
+      CompiledProgram::Compile(std::string(source), "test.flow", modules);
   if (!program.ok()) {
     outcome.status = program.status();
     return outcome;
@@ -186,7 +191,7 @@ Outcome RunFlow(std::string_view source, std::string_view name,
   }
   absl::StatusOr<std::shared_ptr<actions::Action>> action =
       actions::Action::Create(*schema, "flow", *handler, *map, nullptr, nullptr,
-                              TestRegistry());
+                              registry == nullptr ? TestRegistry() : registry);
   if (!action.ok()) {
     outcome.status = action.status();
     return outcome;
@@ -855,8 +860,6 @@ flow counting {
 }
 
 TEST(FlowRuntimeTest, ATryPipeTurnsAFailingStreamIntoAValue) {
-  // The gap: a pipe whose source failed mid-stream ended the *flow*, and the
-  // only survivable case was a source that happened to be a `try` call's port.
   const Outcome outcome = RunFlow(R"(
 flow resilient {
   in  words: string stream
@@ -864,8 +867,10 @@ flow resilient {
   out why:   string
   findings = node()
   for word in words {
-    word -> findings
-    if word == "bad" { abort findings unavailable "the source went away" }
+    sent = { word -> findings }
+    if word == "bad" {
+      abort findings unavailable "the source went away" after sent
+    }
   }
   moved = try findings -> seen
   status moved | map it.message -> why
@@ -906,8 +911,10 @@ flow cut-short {
   out seen:  string stream
   findings = node()
   for word in words {
-    word -> findings
-    if word == "bad" { abort findings unavailable "the source went away" }
+    sent = { word -> findings }
+    if word == "bad" {
+      abort findings unavailable "the source went away" after sent
+    }
   }
   findings -> seen
 }
@@ -1515,6 +1522,37 @@ flow narrated {
   EXPECT_EQ(warned->level, "warning");
 }
 
+TEST(FlowRuntimeTest, ALogWaitsForConsumedArgumentsWithoutAfter) {
+  LogCapture logs;
+  const Outcome outcome = RunFlow(R"(
+flow produce { out output: integer stream
+  42 -> output
+}
+flow main {
+  made = run produce()
+  logf "result: %s" (made.output | consume)
+}
+)",
+                                  "main", {});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(logs.sorted_texts(), Values({"result: 42"}));
+}
+
+TEST(FlowRuntimeTest, FailureReadsItsReasonBeforeActing) {
+  const Outcome outcome =
+      RunFlow(R"(
+flow main {
+  in reason: string stream
+  fail unavailable reason
+}
+)",
+              "main", {{"reason", {"\"upstream failed\""}}});
+  EXPECT_EQ(outcome.status.code(), absl::StatusCode::kUnavailable)
+      << outcome.status;
+  EXPECT_NE(outcome.status.message().find("upstream failed"), std::string::npos)
+      << outcome.status;
+}
+
 TEST(FlowRuntimeTest, ALogStatementMayPrintAValueItRead) {
   // A log's arguments live in its own tail rather than in the `message` every
   // other statement uses, and they were left out of the analysis -- so a log
@@ -1978,6 +2016,121 @@ flow watched {
   EXPECT_EQ(outcome.outputs.at("out"), Values({"\"a\"", "\"b\""}));
 }
 
+TEST(FlowRuntimeTest, AnonymousRacePublishesWinnerAndJoinsTheUncancelledLoser) {
+  auto registry = std::make_shared<actions::ActionRegistry>();
+  auto release = std::make_shared<thread::PermanentEvent>();
+  std::atomic<bool> finished = false;
+  std::atomic<int> cancelled = 0;
+  actions::ActionSchema fast;
+  fast.name = "fast";
+  actions::ActionSchema slow;
+  slow.name = "slow";
+  actions::ActionSchema publish;
+  publish.name = "publish";
+  publish.inputs.emplace("winner",
+                         actions::ActionPortSchema{
+                             .name = "winner", .type = "int", .unary = true});
+  ASSERT_TRUE(registry
+                  ->Register("fast", fast,
+                             actions::MakeAsyncActionHandler(
+                                 [](const auto&) { return absl::OkStatus(); }))
+                  .ok());
+  ASSERT_TRUE(
+      registry
+          ->Register(
+              "slow", slow,
+              actions::MakeAsyncActionHandler(
+                  [release, &finished,
+                   &cancelled](const auto& action) -> absl::Status {
+                    ABSL_RETURN_IF_ERROR(
+                        action->SetOnCancelled([&cancelled](const auto&) {
+                          ++cancelled;
+                          return absl::OkStatus();
+                        }));
+                    thread::Select({thread::OnCancel(), release->OnEvent()});
+                    if (thread::Cancelled()) {
+                      return absl::CancelledError("slow cancelled");
+                    }
+                    finished = true;
+                    return absl::OkStatus();
+                  }))
+          .ok());
+  ASSERT_TRUE(registry
+                  ->Register("publish", publish,
+                             actions::MakeAsyncActionHandler(
+                                 [release](const auto& action) -> absl::Status {
+                                   ABSL_ASSIGN_OR_RETURN(
+                                       auto input, action->GetInput("winner"));
+                                   ABSL_ASSIGN_OR_RETURN(
+                                       auto value, input->NextChunk().Await());
+                                   if (!value.has_value()) {
+                                     return absl::DataLossError(
+                                         "No race winner");
+                                   }
+                                   release->Notify();
+                                   return absl::OkStatus();
+                                 }))
+                  .ok());
+  const auto outcome = RunFlow(R"(
+flow raced {
+  let winner = wait first of try run fast(), try run slow()
+  run publish(winner: winner)
+}
+)",
+                               "raced", {}, {}, true, {}, registry);
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_TRUE(finished.load());
+  EXPECT_EQ(cancelled.load(), 0);
+}
+
+TEST(FlowRuntimeTest, MixedRaceObservesNodeWithoutConsumingItsValues) {
+  const Outcome outcome = RunFlow(R"(
+flow raced {
+  out out: string stream
+  out winner: integer
+  n = node()
+  "kept" -> n
+  job = run twice(text: "x")
+  let selected = wait first of n, job
+  selected -> winner
+  n -> out
+}
+)",
+                                  "raced");
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("out"), Values({"\"kept\""}));
+  ASSERT_EQ(outcome.outputs.at("winner").size(), 1u);
+}
+
+TEST(FlowRuntimeTest, AnonymousAfterSubjectsAndPrefixChainsCompose) {
+  const Outcome outcome = RunFlow(R"(
+flow composed {
+  out out: string
+  "done" -> out after (run twice(text: "x"))
+}
+)",
+                                  "composed");
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("out"), Values({"\"done\""}));
+}
+
+TEST(FlowRuntimeTest, ToleratedAnonymousFailureDoesNotStopSiblingExpressions) {
+  const Outcome outcome = RunFlow(R"(
+flow failed {
+  out out: string
+  [1, 2] | flatten | try map (run broken()).out -> _
+  "survived" -> out
+}
+flow broken {
+  out out: string
+  if true { fail invalid_argument "item failed" }
+}
+)",
+                                  "failed");
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("out"), Values({"\"survived\""}));
+}
+
 TEST(FlowRuntimeTest, WaitFirstOfReturnsWhenTheFirstCallFinishes) {
   const Outcome outcome = RunFlow(R"(
 flow raced {
@@ -2169,6 +2322,549 @@ flow quiet {
   EXPECT_EQ(schema->outputs.size(), 1u);
   EXPECT_TRUE(schema->outputs.contains("said"));
   EXPECT_FALSE(schema->outputs.contains(actions::kActionLogOutput));
+}
+
+TEST(FlowRuntimeTest, PlainPipelineBindingsJoinAllDestinationsAndChildren) {
+  for (const bool explicit_block : {false, true}) {
+    const auto result =
+        RunFlow(absl::StrCat(R"(
+flow emit { out words: string stream
+ ["a", "b", "stop", "c"] | flatten -> words
+}
+flow main { out left: string stream
+ out right: string stream
+ out cleaned: boolean
+ forwarded = )",
+                             explicit_block ? "{ " : "", R"((run emit()).words
+   | take until it == "stop"
+   | map upper(it)
+   -> left, right
+)",
+                             explicit_block ? " }" : "", R"(
+ after forwarded { true -> cleaned }
+}
+)"),
+                "main");
+    ASSERT_TRUE(result.status.ok()) << result.status;
+    EXPECT_EQ(result.outputs.at("left"), Values({"\"A\"", "\"B\""}));
+    EXPECT_EQ(result.outputs.at("right"), Values({"\"A\"", "\"B\""}));
+    EXPECT_EQ(result.outputs.at("cleaned"), Values({"true"}));
+  }
+}
+
+TEST(FlowRuntimeTest, PlainPipelineBindingOwnsLateAnonymousFailures) {
+  const auto result = RunFlow(R"(
+flow main {
+ forwarded = (run boom()).out -> _
+ after forwarded { log "must not start" }
+}
+)",
+                              "main");
+  EXPECT_EQ(result.status.code(), absl::StatusCode::kNotFound);
+}
+
+TEST(FlowRuntimeTest, PlainPipelineBindingsReadTheirCompletionStatus) {
+  const auto result = RunFlow(R"(
+flow main { out ok: boolean
+ done = {"text": "ready"} | map it.text -> _
+ status done | map it.ok -> ok
+ empty = {} -> _
+ after empty { log "empty record forwarded" }
+}
+)",
+                              "main");
+  ASSERT_TRUE(result.status.ok()) << result.status;
+  EXPECT_EQ(result.outputs.at("ok"), Values({"true"}));
+}
+
+TEST(FlowRuntimeTest, PredicatePrefixesExcludeTheirBoundaryAndKeepOrder) {
+  for (const auto* stage : {"take while it < 3", "take until it >= 3"}) {
+    const auto result =
+        RunFlow(absl::StrCat("flow main { in values: integer stream\n out "
+                             "kept: integer stream\n values | ",
+                             stage, " -> kept\n}"),
+                "main", {{"values", {"1", "2", "3", "1"}}});
+    ASSERT_TRUE(result.status.ok()) << result.status;
+    EXPECT_EQ(result.outputs.at("kept"), Values({"1", "2"}));
+  }
+  for (const auto* stage : {"take while false", "take until true"}) {
+    const auto result = RunFlow(
+        absl::StrCat(
+            "flow main { out kept: integer stream\n [1, 2] | flatten | ", stage,
+            " -> kept\n}"),
+        "main");
+    ASSERT_TRUE(result.status.ok()) << result.status;
+    EXPECT_TRUE(result.outputs.at("kept").empty());
+  }
+  for (const auto* stage : {"take while true", "take until false"}) {
+    const auto result = RunFlow(
+        absl::StrCat(
+            "flow main { out kept: integer stream\n [1, 2] | flatten | ", stage,
+            " -> kept\n}"),
+        "main");
+    ASSERT_TRUE(result.status.ok()) << result.status;
+    EXPECT_EQ(result.outputs.at("kept"), Values({"1", "2"}));
+  }
+}
+
+TEST(FlowRuntimeTest, PredicateFailuresFollowStageTolerance) {
+  for (const auto* stage : {"take while text(b64decode(it)) == \"yes\"",
+                            "take until text(b64decode(it)) == \"no\""}) {
+    const auto strict =
+        RunFlow(absl::StrCat("flow main { out kept: string stream\n [\"!\", "
+                             "\"eWVz\"] | flatten | ",
+                             stage, " -> kept\n}"),
+                "main");
+    EXPECT_FALSE(strict.status.ok());
+    const auto tolerant =
+        RunFlow(absl::StrCat("flow main { out kept: string stream\n [\"!\", "
+                             "\"eWVz\", \"bm8=\", \"eWVz\"] | flatten | try ",
+                             stage, " -> kept\n}"),
+                "main");
+    ASSERT_TRUE(tolerant.status.ok()) << tolerant.status;
+    EXPECT_EQ(tolerant.outputs.at("kept"), Values({"\"eWVz\""}));
+    const auto empty = RunFlow(
+        absl::StrCat("flow main { out kept: string stream\n [] | flatten | ",
+                     stage, " -> kept\n}"),
+        "main");
+    ASSERT_TRUE(empty.status.ok()) << empty.status;
+    EXPECT_TRUE(empty.outputs.at("kept").empty());
+  }
+}
+
+TEST(FlowRuntimeTest, PrefixPredicatesDoNotActivateBeyondTheBoundary) {
+  LogCapture logs;
+  const auto result = RunFlow(R"(
+flow predicate { in value: integer
+ out keep: boolean
+ logf "checked %s" value
+ (value < 3) -> keep
+}
+flow main { out kept: integer stream
+ [1, 2, 3, 4] | flatten | take while (run predicate(value: it)).keep -> kept
+}
+)",
+                              "main");
+  ASSERT_TRUE(result.status.ok()) << result.status;
+  EXPECT_EQ(result.outputs.at("kept"), Values({"1", "2"}));
+  EXPECT_EQ(logs.sorted_texts(),
+            Values({"checked 1", "checked 2", "checked 3"}));
+}
+
+TEST(FlowRuntimeTest, PredicatePrefixesKeepTheirProducerOwnedAndRunning) {
+  LogCapture logs;
+  const auto result = RunFlow(R"(
+flow source { out values: integer stream
+ [1, 2, 3, 4] | flatten -> values
+ log "producer finished" after values
+}
+flow main { out kept: integer stream
+ (run source()).values | take until it == 2 -> kept
+}
+)",
+                              "main");
+  ASSERT_TRUE(result.status.ok()) << result.status;
+  EXPECT_EQ(result.outputs.at("kept"), Values({"1"}));
+  EXPECT_EQ(logs.sorted_texts(), Values({"producer finished"}));
+}
+
+TEST(FlowRuntimeTest,
+     AfterBlocksObserveToleratedFailureAndRespectParentFailure) {
+  const auto tolerated = RunFlow(R"(
+flow main { out cleaned: string
+ done = try run boom()
+ after done { "done" -> cleaned }
+}
+)",
+                                 "main");
+  ASSERT_TRUE(tolerated.status.ok()) << tolerated.status;
+  EXPECT_EQ(tolerated.outputs.at("cleaned"), Values({"\"done\""}));
+  LogCapture logs;
+  const auto failed = RunFlow(R"(
+flow main {
+ done = run boom()
+ after done { log "must not start" }
+}
+)",
+                              "main");
+  EXPECT_EQ(failed.status.code(), absl::StatusCode::kNotFound);
+  EXPECT_TRUE(logs.sorted_texts().empty());
+}
+
+TEST(FlowRuntimeTest, AfterBlocksGateConcurrentBodiesAndExposeOutcomes) {
+  const auto result = RunFlow(R"(
+flow main { out value: integer stream
+ out ok: boolean
+ first = { }
+ second = { }
+ cleanup = after first, second {
+   local = node()
+   local -> value
+   42 -> local
+   log "cleaning up"
+ }
+ status cleanup | map it.ok -> ok
+}
+)",
+                              "main");
+  ASSERT_TRUE(result.status.ok()) << result.status;
+  EXPECT_EQ(result.outputs.at("value"), Values({"42"}));
+  EXPECT_EQ(result.outputs.at("ok"), Values({"true"}));
+}
+
+TEST(FlowRuntimeTest, ToleratedAfterBlocksRetainFailureStatus) {
+  const auto result = RunFlow(R"(
+flow main { out code: string
+ done = {}
+ cleanup = try after done { fail unavailable "cleanup failed" }
+ status cleanup | map it.code -> code
+}
+)",
+                              "main");
+  ASSERT_TRUE(result.status.ok()) << result.status;
+  EXPECT_EQ(result.outputs.at("code"), Values({"\"UNAVAILABLE\""}));
+}
+
+TEST(FlowRuntimeTest, AnonymousCallStreamsWithoutABinding) {
+  const Outcome result = RunFlow(R"(
+flow t {
+  in text: string
+  out out: string stream
+  (run twice(text: text)).out -> out
+}
+)",
+                                 "t", {{"text", {"\"hi\""}}});
+  ASSERT_TRUE(result.status.ok()) << result.status;
+  EXPECT_EQ(result.outputs.at("out"), Values({"\"HI\"", "\"HI\""}));
+}
+
+TEST(FlowRuntimeTest, AnonymousCallInScalarObjectReadsOneAndDrainsTheRest) {
+  const Outcome result = RunFlow(R"(
+flow t {
+  in text: string
+  out out: object
+  let report = {"text": (run twice(text: text)).out, "source": "test"}
+  report -> out
+}
+)",
+                                 "t", {{"text", {"\"hi\""}}});
+  ASSERT_TRUE(result.status.ok()) << result.status;
+  ASSERT_EQ(result.outputs.at("out").size(), 1);
+  EXPECT_NE(result.outputs.at("out")[0].find("HI"), std::string::npos);
+}
+
+TEST(FlowRuntimeTest, AnonymousCallsInMapsActivateForEachItem) {
+  const Outcome result = RunFlow(R"(
+flow t {
+  in text: string stream
+  out out: string stream
+  text | map (run twice(text: it)).out -> out
+}
+)",
+                                 "t", {{"text", {"\"a\"", "\"b\""}}});
+  ASSERT_TRUE(result.status.ok()) << result.status;
+  EXPECT_EQ(result.outputs.at("out"), Values({"\"A\"", "\"B\""}));
+}
+
+TEST(FlowRuntimeTest, ConsumeRequiresExactlyOneItem) {
+  for (const auto& values : {Values{}, Values{"1"}, Values{"1", "2"}}) {
+    const Outcome result = RunFlow(R"(
+flow t {
+  in text: integer stream
+  out out: integer
+  text | consume -> out
+}
+)",
+                                   "t", {{"text", values}});
+    if (values.size() == 1) {
+      ASSERT_TRUE(result.status.ok()) << result.status;
+      EXPECT_EQ(result.outputs.at("out"), values);
+    } else {
+      EXPECT_EQ(result.status.code(), absl::StatusCode::kFailedPrecondition)
+          << result.status;
+    }
+  }
+}
+
+TEST(FlowRuntimeTest, ShortCircuitDoesNotActivateAnonymousCall) {
+  const Outcome result = RunFlow(R"(
+flow t {
+  out out: boolean
+  let value = false and (run boom()).out
+  value -> out
+}
+)",
+                                 "t", {});
+  ASSERT_TRUE(result.status.ok()) << result.status;
+  EXPECT_EQ(result.outputs.at("out"), Values({"false"}));
+}
+
+TEST(FlowRuntimeTest, ImportedImplementationsCapturePrivateDependencies) {
+  const Outcome result =
+      RunFlow(R"(
+import "library.flow" as lib
+flow t {
+  in text: string
+  out out: string
+  (run lib.public_flow(text: text)).out -> out
+}
+)",
+              "t", {{"text", {"\"hello\""}}}, {}, true, {{"library.flow", R"(
+flow helper {
+  in text: string
+  out out: string
+  text -> out
+}
+flow public_flow exported {
+  in text: string
+  out out: string
+  (run helper(text: text)).out -> out
+}
+)"}});
+  ASSERT_TRUE(result.status.ok()) << result.status;
+  EXPECT_EQ(result.outputs.at("out"), Values({"\"hello\""}));
+}
+
+TEST(FlowRuntimeTest, UnresolvedDeclarationFailsBeforeIndependentEffects) {
+  const Outcome result = RunFlow(R"(
+declare flow missing { out value: string }
+flow t {
+  out out: string
+  "must not be written" -> out
+  run missing()
+}
+)",
+                                 "t");
+  EXPECT_EQ(result.status.code(), absl::StatusCode::kFailedPrecondition)
+      << result.status;
+  if (const auto found = result.outputs.find("out");
+      found != result.outputs.end()) {
+    EXPECT_TRUE(found->second.empty());
+  }
+}
+
+TEST(FlowRuntimeTest, ScalarWaitAcceptsAnAnonymousSubject) {
+  const Outcome result = RunFlow(R"(
+flow t {
+  out out: boolean
+  let outcome = wait try run boom()
+  outcome.ok -> out
+}
+)",
+                                 "t");
+  ASSERT_TRUE(result.status.ok()) << result.status;
+  EXPECT_EQ(result.outputs.at("out"), Values({"false"}));
+}
+
+TEST(FlowRuntimeTest, ATryPipeOwnsLateFailuresOfScalarRvalues) {
+  auto registry = std::make_shared<actions::ActionRegistry>();
+  auto released = std::make_shared<thread::PermanentEvent>();
+  actions::ActionSchema source;
+  source.name = "late";
+  source.outputs.emplace(
+      "out",
+      actions::ActionPortSchema{.name = "out", .type = "str", .unary = false});
+  ASSERT_TRUE(
+      registry
+          ->Register(
+              "late", source,
+              actions::MakeAsyncActionHandler(
+                  [released](const auto& action) -> absl::Status {
+                    ABSL_ASSIGN_OR_RETURN(auto output,
+                                          action->GetOutput("out"));
+                    ABSL_RETURN_IF_ERROR(
+                        output->PutChunk(JsonChunk("ready")).Await().status());
+                    thread::Select({thread::OnCancel(), released->OnEvent()});
+                    return absl::NotFoundError("late scalar failure");
+                  }))
+          .ok());
+  actions::ActionSchema notify;
+  notify.name = "notify";
+  notify.inputs.emplace("value",
+                        actions::ActionPortSchema{
+                            .name = "value", .type = "dict", .unary = false});
+  ASSERT_TRUE(
+      registry
+          ->Register(
+              "notify", notify,
+              actions::MakeAsyncActionHandler([released](const auto& action)
+                                                  -> absl::Status {
+                ABSL_ASSIGN_OR_RETURN(auto input, action->GetInput("value"));
+                ABSL_ASSIGN_OR_RETURN(auto value, input->NextChunk().Await());
+                if (!value.has_value()) {
+                  return absl::DataLossError("No scalar value was published.");
+                }
+                released->Notify();
+                return absl::OkStatus();
+              }))
+          .ok());
+  const auto result = RunFlow(R"(
+flow f {
+  out outcome: string
+  receiver = run notify()
+  transfer = try ({"text": (run late()).out}) -> receiver.value
+  (status transfer).code -> outcome
+}
+
+)",
+                              "f", {}, {}, true, {}, registry);
+  ASSERT_TRUE(result.status.ok()) << result.status;
+  EXPECT_EQ(result.outputs.at("outcome"), Values({"\"NOT_FOUND\""}));
+}
+
+TEST(FlowRuntimeTest, OwnerFailureCancelsToleratedRvaluesAndRetainsDetails) {
+  auto registry = std::make_shared<actions::ActionRegistry>();
+  auto cancelled = std::make_shared<std::atomic<int>>(0);
+  actions::ActionSchema slow;
+  slow.name = "slow";
+  slow.outputs.emplace(
+      "ready", actions::ActionPortSchema{.name = "ready", .type = "str"});
+  ASSERT_TRUE(
+      registry
+          ->Register(
+              slow.name, slow,
+              actions::MakeAsyncActionHandler(
+                  [cancelled](const auto& action) -> absl::Status {
+                    ABSL_RETURN_IF_ERROR(
+                        action->SetOnCancelled([cancelled](const auto&) {
+                          ++*cancelled;
+                          return absl::OkStatus();
+                        }));
+                    ABSL_ASSIGN_OR_RETURN(auto output,
+                                          action->GetOutput("ready"));
+                    ABSL_RETURN_IF_ERROR(
+                        output->PutChunk(JsonChunk("ready")).Await().status());
+                    thread::Select({thread::OnCancel()});
+                    return absl::CancelledError("child cancellation");
+                  }))
+          .ok());
+  absl::Status cause = absl::DataLossError("distinctive owner failure");
+  cause.SetPayload("test.cause", absl::Cord("structured detail"));
+  actions::ActionSchema fail;
+  fail.name = "fail-with-detail";
+  fail.inputs.emplace(
+      "ready", actions::ActionPortSchema{.name = "ready", .type = "str"});
+  ASSERT_TRUE(registry
+                  ->Register(fail.name, fail,
+                             actions::MakeAsyncActionHandler(
+                                 [cause](const auto& action) -> absl::Status {
+                                   ABSL_ASSIGN_OR_RETURN(
+                                       auto input, action->GetInput("ready"));
+                                   ABSL_RETURN_IF_ERROR(
+                                       input->NextChunk().Await().status());
+                                   return cause;
+                                 }))
+                  .ok());
+  const auto result = RunFlow(R"(
+flow f {
+  let ready = (try run slow()).ready
+  run fail-with-detail(ready: ready)
+}
+)",
+                              "f", {}, {}, true, {}, registry);
+  EXPECT_EQ(result.status.code(), cause.code()) << result.status;
+  EXPECT_EQ(result.status.message(), cause.message());
+  EXPECT_EQ(result.status.GetPayload("test.cause"),
+            cause.GetPayload("test.cause"));
+  EXPECT_EQ(cancelled->load(), 1);
+}
+
+TEST(FlowRuntimeTest,
+     DuplicateNodeRaceSubjectsKeepTheirDataAndChooseFirstIndex) {
+  const auto result = RunFlow(R"(
+flow f {
+  out result: string stream
+  out winner: integer
+  n = node()
+  "kept" -> n
+  w = wait first of n, n
+  w -> winner
+  n -> result
+}
+)",
+                              "f");
+  ASSERT_TRUE(result.status.ok()) << result.status;
+  EXPECT_EQ(result.outputs.at("winner"), Values({"0"}));
+  EXPECT_EQ(result.outputs.at("result"), Values({"\"kept\""}));
+}
+
+TEST(FlowRuntimeTest, PerPassCallNodeBookkeepingStaysBounded) {
+  auto registry = std::make_shared<actions::ActionRegistry>();
+  std::atomic<size_t> peak = 0;
+  actions::ActionSchema schema;
+  schema.name = "peek";
+  ASSERT_TRUE(registry
+                  ->Register("peek", schema,
+                             actions::MakeAsyncActionHandler(
+                                 [&peak](const auto& action) -> absl::Status {
+                                   const auto count =
+                                       action->GetNodeMap()->Size();
+                                   auto previous = peak.load();
+                                   while (count > previous &&
+                                          !peak.compare_exchange_weak(previous,
+                                                                      count)) {}
+                                   return absl::OkStatus();
+                                 }))
+                  .ok());
+  Values numbers;
+  for (int index = 0; index < 1000; ++index) {
+    numbers.push_back(absl::StrCat(index));
+  }
+  const auto outcome = RunFlow(
+      "flow f { in numbers: integer stream\n for n in numbers parallel 4 { run "
+      "peek() } }",
+      "f", {{"numbers", numbers}}, {}, true, {}, registry);
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_LT(peak.load(), 32u);
+}
+
+TEST(FlowRuntimeTest, ToleratedInitializationFailuresKeepTheirOwnStatus) {
+  auto registry = std::make_shared<actions::ActionRegistry>();
+  std::atomic<int> entered = 0;
+  actions::ActionSchema schema;
+  schema.name = "peek";
+  ASSERT_TRUE(
+      registry
+          ->Register("peek", schema,
+                     actions::MakeAsyncActionHandler([&entered](const auto&) {
+                       ++entered;
+                       return absl::OkStatus();
+                     }))
+          .ok());
+  const auto outcome = RunFlow(R"(
+flow f {
+  out result: string
+  job = try run peek() with "bad": b64decode("!")
+  (status job).code -> result
+}
+)",
+                               "f", {}, {}, true, {}, registry);
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(entered.load(), 0);
+  EXPECT_EQ(outcome.outputs.at("result"), Values({"\"INVALID_ARGUMENT\""}));
+}
+
+TEST(FlowSchema, DeclarationGenerationReportsUnrepresentableMetadata) {
+  actions::ActionSchema schema;
+  schema.name = "work";
+  schema.inputs.emplace(
+      "value", actions::ActionPortSchema{.name = "value", .type = "dict"});
+  for (
+      const auto* metadata :
+      {R"({"type":"object","properties":{"n":{"type":["integer","null"]}}})",
+       R"({"type":"object","properties":{"n":{"type":"integer","enum":[1,null]}}})",
+       R"({"type":"object","properties":{"n":{"type":"array","items":{"type":"integer","minimum":1}}}})",
+       R"({"type":"object","properties":{},"minProperties":1})"}) {
+    schema.inputs.at("value").json_schema = metadata;
+    EXPECT_FALSE(DeclareAction(schema).diagnostics.empty()) << metadata;
+  }
+  for (
+      const auto* metadata :
+      {R"({"type":"object"})",
+       R"({"type":"object","properties":{"n":{"type":"integer","minimum":1}},"required":["n"]})"}) {
+    schema.inputs.at("value").json_schema = metadata;
+    EXPECT_TRUE(DeclareAction(schema).diagnostics.empty()) << metadata;
+  }
 }
 
 }  // namespace

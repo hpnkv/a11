@@ -32,6 +32,7 @@
 #include "a11/flow/format.h"
 #include "a11/flow/generate.h"
 #include "a11/flow/inspect.h"
+#include "a11/flow/module.h"
 #include "a11/flow/navigate.h"
 #include "a11/flow/offsets.h"
 #include "a11/flow/parser.h"
@@ -149,17 +150,6 @@ nlohmann::json SymbolToJson(const DocumentSymbol& symbol) {
   return value;
 }
 
-/// Everything wrong with one document: both passes, every problem, in order.
-std::vector<Diagnostic> Problems(std::string_view source) {
-  const ParseResult parsed = Parse(source);
-  ResolveResult resolved = Resolve(source, parsed);
-  for (Diagnostic& found : Inspect(source, parsed, resolved)) {
-    resolved.diagnostics.push_back(std::move(found));
-  }
-  SortDiagnostics(resolved.diagnostics);
-  return std::move(resolved.diagnostics);
-}
-
 }  // namespace
 
 absl::Span<const std::string_view> Methods() {
@@ -182,7 +172,7 @@ std::string_view MethodSummary(std::string_view method) {
   return "";
 }
 
-nlohmann::json Handle(const nlohmann::json& request) {
+nlohmann::json Handle(const nlohmann::json& request, ModuleResolver resolver) {
   if (!request.is_object()) {
     return Failure(nlohmann::json::object(), "A request is a JSON object.");
   }
@@ -207,15 +197,47 @@ nlohmann::json Handle(const nlohmann::json& request) {
   // client this is the whole cost of the feature.
   const TextIndex index =
       basis == OffsetBasis::kUtf16 ? TextIndex(source) : TextIndex();
+  absl::flat_hash_map<std::string, TextIndex> document_indexes;
+  const auto remember = [&](const LinkedModule& linked) {
+    if (basis != OffsetBasis::kUtf16) {
+      return;
+    }
+    for (const auto& document : linked.documents) {
+      document_indexes.insert_or_assign(
+          document.identity,
+          TextIndex(linked.source.substr(document.start,
+                                         document.end - document.start)));
+    }
+  };
   const auto answer = [&](nlohmann::json result) {
     if (basis == OffsetBasis::kUtf16) {
-      RebaseToUtf16(result, index);
+      RebaseToUtf16(result, index, document_indexes);
     }
     return Success(request, std::move(result));
   };
 
   if (method == "check") {
-    return answer(DiagnosticsToJsonValue(path, Problems(source)));
+    ModuleSources modules;
+    if (auto supplied = request.find("modules");
+        supplied != request.end() && supplied->is_object()) {
+      for (const auto& entry : supplied->items()) {
+        if (entry.value().is_string()) {
+          modules.emplace(entry.key(), entry.value().get<std::string>());
+        }
+      }
+    }
+    LinkedModule linked =
+        LinkModules(source, path, modules, std::move(resolver));
+    remember(linked);
+    const auto evidence = KnownWorld(request).SchemaProgram();
+    ResolveResult resolved =
+        Resolve(linked.source, linked.parsed, false, &evidence);
+    for (auto& diagnostic : Inspect(linked.source, linked.parsed, resolved)) {
+      resolved.diagnostics.push_back(std::move(diagnostic));
+    }
+    linked.Locate(resolved.diagnostics);
+    SortDiagnostics(resolved.diagnostics);
+    return answer(DiagnosticsToJsonValue(path, resolved.diagnostics));
   }
   if (method == "tokens") {
     return answer(TokensToJsonValue(path, source));
@@ -224,8 +246,21 @@ nlohmann::json Handle(const nlohmann::json& request) {
     return answer(SyntaxToJsonValue(path, Parse(source)));
   }
   if (method == "plan") {
-    const ParseResult parsed = Parse(source);
-    const ResolveResult resolved = Resolve(source, parsed);
+    ModuleSources modules;
+    if (auto supplied = request.find("modules");
+        supplied != request.end() && supplied->is_object()) {
+      for (const auto& entry : supplied->items()) {
+        if (entry.value().is_string()) {
+          modules.emplace(entry.key(), entry.value().get<std::string>());
+        }
+      }
+    }
+    LinkedModule linked = LinkModules(source, path, modules, resolver);
+    remember(linked);
+    const auto evidence = KnownWorld(request).SchemaProgram();
+    ResolveResult resolved =
+        Resolve(linked.source, linked.parsed, false, &evidence);
+    linked.Locate(resolved.diagnostics);
     nlohmann::json result = PlanToJsonValue(path, resolved.program);
     // A plan of a document with an error in it is a partial plan, and a reader
     // that showed it as the whole truth would be lying: the diagnostics travel
@@ -259,7 +294,27 @@ nlohmann::json Handle(const nlohmann::json& request) {
     const size_t reached = basis == OffsetBasis::kUtf16
                                ? index.ByteOf(static_cast<size_t>(at))
                                : static_cast<size_t>(at);
-    const catalogue::Catalogue known = KnownWorld(request);
+    ModuleSources modules;
+    if (auto supplied = request.find("modules");
+        supplied != request.end() && supplied->is_object()) {
+      for (const auto& entry : supplied->items()) {
+        if (entry.value().is_string()) {
+          modules.emplace(entry.key(), entry.value().get<std::string>());
+        }
+      }
+    }
+    const auto linked = LinkModules(source, path, modules, resolver);
+    remember(linked);
+    const catalogue::Catalogue known = [&] {
+      auto scope = linked.CatalogueAt(reached, method == "complete");
+      if (linked.SelectingImport(reached)) {
+        if (method == "complete") {
+          return scope;
+        }
+        scope = scope.MergedWith(linked.CatalogueAt(reached));
+      }
+      return KnownWorld(request).MergedWith(scope);
+    }();
     if (method == "complete") {
       return answer(CompletionsToJsonValue(CompleteAt(source, reached, known)));
     }
@@ -354,8 +409,19 @@ nlohmann::json Handle(const nlohmann::json& request) {
   }
   // The two directions of the shape/schema translation.
   if (method == "schema") {
-    const ParseResult parsed = Parse(source);
-    const ResolveResult resolved = Resolve(source, parsed);
+    ModuleSources modules;
+    if (auto supplied = request.find("modules");
+        supplied != request.end() && supplied->is_object()) {
+      for (const auto& entry : supplied->items()) {
+        if (entry.value().is_string()) {
+          modules.emplace(entry.key(), entry.value().get<std::string>());
+        }
+      }
+    }
+    LinkedModule linked = LinkModules(source, path, modules, resolver);
+    remember(linked);
+    ResolveResult resolved = Resolve(linked.source, linked.parsed);
+    linked.Locate(resolved.diagnostics);
     const std::string shape_name = request.value("struct", std::string());
     nlohmann::json shapes = nlohmann::json::object();
     for (const DtoPlan& dto : resolved.program.dtos) {

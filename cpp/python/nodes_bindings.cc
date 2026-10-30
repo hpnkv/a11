@@ -460,6 +460,14 @@ void BindNodes(py::module_& module) {
           "for the next chunk.",
           py::arg("timeout") = py::none())
       .def(
+          "observe_completion",
+          [](const std::shared_ptr<nodes::AsyncNode>& self) {
+            return FutureToPython(
+                WithoutGil([&] { return self->ObserveCompletion(); }));
+          },
+          "Observe stream completion without consuming data or closing the "
+          "node.")
+      .def(
           "wait_for_buffer_to_drain",
           [](const std::shared_ptr<nodes::AsyncNode>& self) {
             return FutureToPython(

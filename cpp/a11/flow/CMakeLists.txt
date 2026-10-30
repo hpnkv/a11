@@ -25,6 +25,8 @@ set(A11_FLOW_LANG_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/boundary.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/catalogue.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/complete.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/contract.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/document.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/diagnostic.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/discover.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/emit_json.cc
@@ -34,6 +36,7 @@ set(A11_FLOW_LANG_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/highlight.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/inspect.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/lexer.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/module.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/navigate.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/offsets.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/parser.cc

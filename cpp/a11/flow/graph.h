@@ -207,8 +207,6 @@ struct Ref {
   StepId subject_step = kNone;
   /// `kHeader`: the header name, and the default when it was not sent.
   std::string header;
-  syntax::Constant fallback;
-  bool has_fallback = false;
   /// `kExpr`: the expression evaluated once.
   ExprId expr = kNone;
   /// `kDerived`: what it reads, and the stage applied to it.
@@ -258,7 +256,8 @@ std::string_view StepKindName(StepKind kind);
 /// `s = try { .. }` and `done = for x in s { .. }` are the same shape.
 inline bool RecordsOutcome(StepKind kind) {
   return kind == StepKind::kBlock || kind == StepKind::kForEach ||
-         kind == StepKind::kRepeat || kind == StepKind::kPipe;
+         kind == StepKind::kRepeat || kind == StepKind::kPipe ||
+         kind == StepKind::kWait || kind == StepKind::kDrain;
 }
 
 /// One resolved statement.
@@ -271,6 +270,8 @@ struct Step {
   /// What it waits for.
   std::vector<StepId> after;
   syntax::Location location;
+  bool deferred = false;
+  StepId activation = kNone;
 
   /// `kCall`.
   std::string action;
@@ -300,6 +301,7 @@ struct Step {
   /// (see [FlowGraph::Sources]) and no destination at all: `destination` is
   /// `kNone`, nothing counts as a writer of anything, and no data is kept.
   bool discard = false;
+  std::vector<ExprId> expression_cleanups;
   /// `kSkip`: `skip n port`, which claims no reader slot -- the count is
   /// applied where the stream is produced and this step has nothing left to do.
   std::optional<long long> count;
@@ -316,6 +318,7 @@ struct Step {
   /// `outcome` -- which is also the *first* of these, so anything reading a
   /// wait's outcome keeps working without knowing which form it was.
   std::vector<RefId> subjects;
+  std::vector<bool> subject_tolerant;
   /// `kWait`: whether the first subject to finish is enough.
   bool race = false;
   /// `kWait`: the value a race is -- which subject won -- for whoever reads it.
@@ -378,6 +381,8 @@ struct Expr {
   std::vector<std::pair<const syntax::Node* absl_nonnull, RefId>> bound;
   /// The same refs, in the order they were first mentioned, for the analysis.
   std::vector<RefId> refs;
+  BodyId activation = kNone;
+  bool pipeline_owned = false;
 };
 
 /// The executable graph of one flow.

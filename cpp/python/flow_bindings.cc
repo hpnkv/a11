@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -39,7 +40,9 @@
 #include "a11/flow/complete.h"
 #include "a11/flow/diagnostic.h"
 #include "a11/flow/discover.h"
+#include "a11/flow/document.h"
 #include "a11/flow/emit_json.h"
+#include "a11/flow/file_modules.h"
 #include "a11/flow/format.h"
 #include "a11/flow/generate.h"
 #include "a11/flow/highlight.h"
@@ -88,7 +91,7 @@ py::dict TokenToDict(const flow::Token& token) {
       // Integral where it was written without a fractional part, which is what
       // the counted forms of the grammar ask for.
       if (token.is_integer) {
-        value["value"] = static_cast<long long>(token.number);
+        value["value"] = token.integer;
       } else {
         value["value"] = token.number;
       }
@@ -734,6 +737,686 @@ void BindFlow(py::module_& module) {
       "The Flow language: one lexer, one grammar, one set of checks, shared by "
       "the Python API, the `a11 flow` command and every editor.");
 
+  py::class_<flow::syntax::TypeExpression>(flow, "Type",
+                                           "A native Flow type expression.")
+      .def(py::init([](std::string name,
+                       std::vector<flow::syntax::TypeExpression> parameters,
+                       bool quoted) {
+             flow::syntax::TypeExpression type;
+             type.name = std::move(name);
+             type.parameters = std::move(parameters);
+             type.quoted = quoted;
+             const auto source = ValueOrThrow(type.ToSource());
+             const auto parsed = flow::Parse(absl::StrCat(
+                 "declare flow validate { in value: ", source, " }"));
+             if (const auto* error = parsed.FirstError(); error != nullptr) {
+               ThrowIfNotOk(absl::InvalidArgumentError(error->message));
+             }
+             return type;
+           }),
+           py::arg("name"),
+           py::arg("parameters") = std::vector<flow::syntax::TypeExpression>{},
+           py::arg("quoted") = false,
+           "Construct a type, optionally with generic arguments or a quoted "
+           "media type.")
+      .def_property_readonly(
+          "source",
+          [](const flow::syntax::TypeExpression& type) {
+            return ValueOrThrow(type.ToSource());
+          },
+          "The grammar-aware type spelling.");
+
+  auto expression =
+      py::class_<flow::Expression>(
+          flow, "Expression",
+          "A native Flow expression with grammar-aware source emission.")
+          .def_static(
+              "reference",
+              [](std::string name) {
+                return ValueOrThrow(
+                    flow::Expression::Reference(std::move(name)));
+              },
+              py::arg("name"), "Refer to a name or a qualified field.")
+          .def_static(
+              "literal",
+              [](py::object value) {
+                return ValueOrThrow(
+                    flow::Expression::Literal(PythonToJson(value)));
+              },
+              py::arg("value"), "Construct a Flow literal from a JSON value.")
+          .def_static(
+              "invoke",
+              [](std::string action,
+                 const std::map<std::string, flow::Expression>& arguments,
+                 bool remote, bool tolerant, std::string node_map) {
+                std::vector<std::pair<std::string, flow::Expression>> ordered(
+                    arguments.begin(), arguments.end());
+                return ValueOrThrow(flow::Expression::Invoke(
+                    std::move(action), std::move(ordered), remote, tolerant,
+                    std::move(node_map)));
+              },
+              py::arg("action"),
+              py::arg("arguments") = std::map<std::string, flow::Expression>{},
+              py::arg("remote") = false, py::arg("tolerant") = false,
+              py::arg("node_map") = "",
+              "Construct an action invocation, grouped for result access.")
+          .def_static(
+              "object",
+              [](const py::typing::Dict<py::str, flow::Expression>& fields) {
+                std::vector<std::pair<std::string, flow::Expression>> ordered;
+                ordered.reserve(fields.size());
+                for (const auto item : fields) {
+                  ordered.emplace_back(py::cast<std::string>(item.first),
+                                       py::cast<flow::Expression>(item.second));
+                }
+                return ValueOrThrow(
+                    flow::Expression::Object(std::move(ordered)));
+              },
+              py::arg("fields"),
+              "Construct an object, retaining field evaluation order.")
+          .def_static(
+              "array",
+              [](std::vector<flow::Expression> items) {
+                return ValueOrThrow(flow::Expression::Array(std::move(items)));
+              },
+              py::arg("items"), "Construct an array of expressions.")
+          .def_static(
+              "builtin",
+              [](std::string name, std::vector<flow::Expression> arguments) {
+                return ValueOrThrow(flow::Expression::Builtin(
+                    std::move(name), std::move(arguments)));
+              },
+              py::arg("name"), py::arg("arguments"),
+              "Apply a language builtin.")
+          .def_static(
+              "node",
+              [](std::optional<flow::Expression> id, std::string node_map) {
+                return ValueOrThrow(
+                    flow::Expression::Node(std::move(id), std::move(node_map)));
+              },
+              py::arg("id") = std::nullopt, py::arg("node_map") = "",
+              "Allocate or attach a node.")
+          .def_static(
+              "completion",
+              [](std::string operation, const flow::Expression& subject) {
+                return ValueOrThrow(flow::Expression::Completion(
+                    std::move(operation), subject));
+              },
+              py::arg("operation"), py::arg("subject"),
+              "Read status, wait for, or drain a subject.")
+          .def(
+              "cast",
+              [](const flow::Expression& self,
+                 const flow::syntax::TypeExpression& type) {
+                return ValueOrThrow(self.Cast(type));
+              },
+              py::arg("type"), "Coerce an expression to a type.")
+          .def(
+              "index",
+              [](const flow::Expression& self, const flow::Expression& index) {
+                return ValueOrThrow(self.Index(index));
+              },
+              py::arg("index"), "Select an indexed item.")
+          .def(
+              "field",
+              [](const flow::Expression& self, std::string name) {
+                return ValueOrThrow(self.Field(std::move(name)));
+              },
+              py::arg("name"), "Select a port or field.")
+          .def(
+              "pipeline",
+              [](const flow::Expression& self, std::string stage,
+                 std::optional<flow::Expression> argument) {
+                return ValueOrThrow(
+                    self.Pipeline(std::move(stage), std::move(argument)));
+              },
+              py::arg("stage"), py::arg("argument") = std::nullopt,
+              "Apply a pipeline stage with required grouping.")
+          .def_property_readonly("source", &flow::Expression::source,
+                                 "The emitted Flow expression.");
+
+  py::class_<flow::CallOptions>(flow, "CallOptions",
+                                "Typed modifiers for an invocation expression.")
+      .def(py::init<>(), "Create default local invocation options.")
+      .def_readwrite("remote", &flow::CallOptions::remote)
+      .def_readwrite("tolerant", &flow::CallOptions::tolerant)
+      .def_readwrite("tee", &flow::CallOptions::tee)
+      .def_readwrite("node_map", &flow::CallOptions::node_map)
+      .def_readwrite("id", &flow::CallOptions::id)
+      .def_readwrite("after", &flow::CallOptions::after)
+      .def_readwrite("forward", &flow::CallOptions::forward)
+      .def_property(
+          "headers",
+          [](const flow::CallOptions& self) {
+            py::typing::Dict<py::str, flow::Expression> result;
+            for (const auto& [name, value] : self.headers) {
+              result[py::str(name)] = py::cast(value);
+            }
+            return result;
+          },
+          [](flow::CallOptions& self,
+             const py::typing::Dict<py::str, flow::Expression>& values) {
+            self.headers.clear();
+            self.headers.reserve(values.size());
+            for (const auto item : values) {
+              self.headers.emplace_back(
+                  py::cast<std::string>(item.first),
+                  py::cast<flow::Expression>(item.second));
+            }
+          },
+          "Explicit header expressions in evaluation order.")
+      .def_property(
+          "timeout",
+          [](const flow::CallOptions& self) -> py::object {
+            return self.timeout.has_value() ? DurationToPython(*self.timeout)
+                                            : py::none();
+          },
+          [](flow::CallOptions& self, py::object value) {
+            if (value.is_none()) {
+              self.timeout.reset();
+            } else if (py::isinstance<py::str>(value)) {
+              absl::Duration duration;
+              if (!absl::ParseDuration(value.cast<std::string>(), &duration)) {
+                ThrowIfNotOk(
+                    absl::InvalidArgumentError("Invalid duration string."));
+              }
+              self.timeout = duration;
+            } else {
+              self.timeout = ValueOrThrow(DurationFromPython(value, true));
+            }
+          },
+          "An optional A11 duration or duration string.");
+  expression.def_static(
+      "invoke_with",
+      [](std::string action,
+         const std::map<std::string, flow::Expression>& arguments,
+         const flow::CallOptions& options) {
+        return ValueOrThrow(flow::Expression::InvokeWith(
+            std::move(action), {arguments.begin(), arguments.end()}, options));
+      },
+      py::arg("action"), py::arg("arguments"), py::arg("options"),
+      "Construct an invocation with typed modifiers.");
+
+  py::class_<flow::Statement>(flow, "Statement",
+                              "A typed statement in an executable Flow body.")
+      .def_static(
+          "bind",
+          [](std::string name, const flow::Expression& value) {
+            return ValueOrThrow(flow::Statement::Let(std::move(name), value));
+          },
+          py::arg("name"), py::arg("value"), "Bind a scalar expression.")
+      .def_static(
+          "pipe",
+          [](const flow::Expression& value,
+             const flow::Expression& destination) {
+            return ValueOrThrow(flow::Statement::Pipe(value, destination));
+          },
+          py::arg("value"), py::arg("destination"),
+          "Write a stream to a destination.")
+      .def_static(
+          "wait",
+          [](const flow::Expression& subject, bool drain) {
+            return ValueOrThrow(flow::Statement::Wait(subject, drain));
+          },
+          py::arg("subject"), py::arg("drain") = false,
+          "Wait for or drain a subject.")
+      .def_static(
+          "cancel",
+          [](const flow::Expression& subject) {
+            return ValueOrThrow(flow::Statement::Cancel(subject));
+          },
+          py::arg("subject"), "Cancel an owned action.")
+      .def_static(
+          "fail",
+          [](const flow::Expression& code,
+             std::optional<flow::Expression> message) {
+            return ValueOrThrow(
+                flow::Statement::Fail(code, std::move(message)));
+          },
+          py::arg("code"), py::arg("message") = std::nullopt,
+          "Fail with a status and optional message.")
+      .def_static(
+          "if_",
+          [](const flow::Expression& condition,
+             const std::vector<flow::Statement>& then_body,
+             const std::vector<flow::Statement>& else_body) {
+            return ValueOrThrow(
+                flow::Statement::If(condition, then_body, else_body));
+          },
+          py::arg("condition"), py::arg("then_body"),
+          py::arg("else_body") = std::vector<flow::Statement>{},
+          "Construct conditional statement bodies.")
+      .def_static(
+          "for_",
+          [](std::string variable, const flow::Expression& source,
+             const std::vector<flow::Statement>& body, int parallel) {
+            return ValueOrThrow(flow::Statement::For(std::move(variable),
+                                                     source, body, parallel));
+          },
+          py::arg("variable"), py::arg("source"), py::arg("body"),
+          py::arg("parallel") = 1, "Construct a loop over a stream.")
+      .def_static(
+          "after",
+          [](const std::vector<flow::Expression>& subjects,
+             const std::vector<flow::Statement>& body, bool tolerant) {
+            return ValueOrThrow(
+                flow::Statement::After(subjects, body, tolerant));
+          },
+          py::arg("subjects"), py::arg("body"), py::arg("tolerant") = false,
+          "Gate a concurrent block on completion subjects.")
+      .def_static(
+          "block",
+          [](const std::vector<flow::Statement>& body, bool tolerant) {
+            return ValueOrThrow(flow::Statement::Block(body, tolerant));
+          },
+          py::arg("body"), py::arg("tolerant") = false,
+          "Group concurrent statements with one outcome.")
+      .def_property_readonly("source", &flow::Statement::source,
+                             "The emitted statement.");
+
+  py::class_<flow::StructBuilder>(flow, "StructBuilder",
+                                  "Construct a native Flow struct.")
+      .def(py::init<std::string>(), py::arg("name"), "Create a struct builder.")
+      .def_property(
+          "exported",
+          [](const flow::StructBuilder& self) { return self.shape().exported; },
+          [](flow::StructBuilder& self, bool value) {
+            self.shape().exported = value;
+          },
+          "The module visibility.")
+      .def_property(
+          "description",
+          [](const flow::StructBuilder& self) {
+            return self.shape().description;
+          },
+          [](flow::StructBuilder& self, std::string value) {
+            self.shape().description = std::move(value);
+          },
+          "The struct description.")
+      .def(
+          "field",
+          [](flow::StructBuilder& self, std::string name,
+             const flow::syntax::TypeExpression& type, bool required,
+             std::optional<flow::Expression> default_value,
+             std::string description) {
+            ThrowIfNotOk(self.AddField(std::move(name), type, required,
+                                       std::move(default_value),
+                                       std::move(description)));
+          },
+          py::arg("name"), py::arg("type"), py::arg("required") = false,
+          py::arg("default_value") = std::nullopt, py::arg("description") = "",
+          "Append a typed field with an optional literal default.")
+      .def(
+          "emit",
+          [](const flow::StructBuilder& self) {
+            return ValueOrThrow(self.Emit());
+          },
+          "Emit validated struct source.");
+
+  py::class_<flow::FlowBuilder>(
+      flow, "FlowBuilder",
+      "Construct an implemented flow or an interface declaration.")
+      .def(py::init<std::string, bool>(), py::arg("name"),
+           py::arg("interface_only") = false, "Create a flow builder.")
+      .def_property(
+          "exported",
+          [](const flow::FlowBuilder& self) {
+            return self.interface().exported;
+          },
+          [](flow::FlowBuilder& self, bool value) {
+            self.interface().exported = value;
+          },
+          "Whether this flow belongs to the module's public API.")
+      .def_property(
+          "description",
+          [](const flow::FlowBuilder& self) {
+            return self.interface().description;
+          },
+          [](flow::FlowBuilder& self, std::string value) {
+            self.interface().description = std::move(value);
+          },
+          "The action description.")
+      .def(
+          "port",
+          [](flow::FlowBuilder& self, std::string name, std::string type,
+             bool output, bool unary, bool required, std::string description) {
+            flow::PortPlan port;
+            port.name = std::move(name);
+            port.declared = std::move(type);
+            port.type = port.declared;
+            port.direction = output ? flow::syntax::PortDirection::kOutput
+                                    : flow::syntax::PortDirection::kInput;
+            port.unary = unary;
+            port.required = required;
+            port.description = std::move(description);
+            self.interface().ports.push_back(std::move(port));
+          },
+          py::arg("name"), py::arg("type"), py::arg("output") = false,
+          py::arg("unary") = true, py::arg("required") = false,
+          py::arg("description") = "", "Append an input or output port.")
+      .def(
+          "port",
+          [](flow::FlowBuilder& self, std::string name,
+             const flow::syntax::TypeExpression& type, bool output, bool unary,
+             bool required, std::string description) {
+            ThrowIfNotOk(self.AddPort(std::move(name), type,
+                                      output
+                                          ? flow::syntax::PortDirection::kOutput
+                                          : flow::syntax::PortDirection::kInput,
+                                      unary, required, std::move(description)));
+          },
+          py::arg("name"), py::arg("type"), py::arg("output") = false,
+          py::arg("unary") = true, py::arg("required") = false,
+          py::arg("description") = "",
+          "Append a port with a typed grammar descriptor.")
+      .def(
+          "header",
+          [](flow::FlowBuilder& self, std::string name, std::string alias,
+             std::optional<std::string> default_value,
+             std::string description) {
+            flow::HeaderPlan header;
+            header.name = std::move(name);
+            header.alias = std::move(alias);
+            header.has_default = default_value.has_value();
+            if (default_value.has_value()) {
+              header.default_value =
+                  flow::syntax::Constant::String(*default_value);
+            }
+            header.description = std::move(description);
+            self.interface().headers.push_back(std::move(header));
+          },
+          py::arg("name"), py::arg("alias"),
+          py::arg("default_value") = std::nullopt, py::arg("description") = "",
+          "Append a documented header with an optional byte-text default.")
+      .def(
+          "bind",
+          [](flow::FlowBuilder& self, std::string name,
+             const flow::Expression& value) {
+            ThrowIfNotOk(self.AddLet(std::move(name), value));
+          },
+          py::arg("name"), py::arg("value"), "Bind an expression value.")
+      .def(
+          "pipe",
+          [](flow::FlowBuilder& self, const flow::Expression& value,
+             const flow::Expression& destination) {
+            ThrowIfNotOk(self.AddPipe(value, destination));
+          },
+          py::arg("value"), py::arg("destination"),
+          "Write an expression to a destination.")
+      .def(
+          "add_import",
+          [](flow::FlowBuilder& self, std::string reference, std::string alias,
+             std::string symbol) {
+            ThrowIfNotOk(self.AddImport(std::move(reference), std::move(alias),
+                                        std::move(symbol)));
+          },
+          py::arg("reference"), py::arg("alias"), py::arg("symbol") = "",
+          "Import a namespace or one named symbol into this flow.")
+      .def(
+          "add_declaration",
+          [](flow::FlowBuilder& self, const flow::FlowBuilder& interface) {
+            ThrowIfNotOk(self.AddDeclaration(interface.interface()));
+          },
+          py::arg("interface"), "Add a flow-local callable declaration.")
+      .def(
+          "add_struct",
+          [](flow::FlowBuilder& self, const flow::StructBuilder& shape) {
+            ThrowIfNotOk(self.AddStruct(shape.shape()));
+          },
+          py::arg("shape"), "Add a flow-local struct.")
+      .def(
+          "add",
+          [](flow::FlowBuilder& self, const flow::Statement& statement) {
+            ThrowIfNotOk(self.AddStatement(statement));
+          },
+          py::arg("statement"), "Append a typed executable statement.")
+      .def(
+          "emit",
+          [](const flow::FlowBuilder& self) {
+            return ValueOrThrow(self.Emit());
+          },
+          "Emit and validate Flow source.");
+
+  py::class_<flow::DocumentSymbolHandle>(
+      flow, "DocumentSymbolHandle",
+      "A symbol in one document revision; edits reject stale handles.")
+      .def_readonly("document", &flow::DocumentSymbolHandle::document)
+      .def_readonly("revision", &flow::DocumentSymbolHandle::revision)
+      .def_readonly("name", &flow::DocumentSymbolHandle::name)
+      .def_readonly("kind", &flow::DocumentSymbolHandle::kind)
+      .def_readonly("occurrence", &flow::DocumentSymbolHandle::occurrence);
+  py::class_<flow::Edit>(flow, "SourceEdit",
+                         "A byte-range replacement in a source document.")
+      .def(py::init<size_t, size_t, std::string>(), py::arg("start"),
+           py::arg("end"), py::arg("text"), "Construct a source replacement.")
+      .def_readwrite("start", &flow::Edit::start)
+      .def_readwrite("end", &flow::Edit::end)
+      .def_readwrite("text", &flow::Edit::text);
+  py::class_<flow::DocumentChange>(
+      flow, "DocumentChange",
+      "The edits and diagnostics returned by an atomic document transaction.")
+      .def_readonly("revision", &flow::DocumentChange::revision)
+      .def_readonly("edits", &flow::DocumentChange::edits)
+      .def_property_readonly(
+          "diagnostics",
+          [](const flow::DocumentChange& self) {
+            auto result = nlohmann::json::array();
+            for (const auto& diagnostic : self.diagnostics) {
+              result.push_back(flow::DiagnosticToJsonValue(diagnostic));
+            }
+            return JsonToPython(result);
+          },
+          "Diagnostics after the transaction.");
+  py::class_<flow::ModuleGraphChange>(
+      flow, "ModuleGraphChange",
+      "A validated source rename across an in-memory module graph.")
+      .def_property_readonly(
+          "sources",
+          [](const flow::ModuleGraphChange& self) {
+            return std::map<std::string, std::string>(self.sources.begin(),
+                                                      self.sources.end());
+          },
+          "The updated source snapshots.")
+      .def_property_readonly(
+          "edits",
+          [](const flow::ModuleGraphChange& self) {
+            return std::map<std::string, std::vector<flow::Edit>>(
+                self.edits.begin(), self.edits.end());
+          },
+          "Byte edits grouped by source identity.")
+      .def_property_readonly(
+          "diagnostics",
+          [](const flow::ModuleGraphChange& self) {
+            auto value = nlohmann::json::array();
+            for (const auto& diagnostic : self.diagnostics) {
+              value.push_back(flow::DiagnosticToJsonValue(diagnostic));
+            }
+            return JsonToPython(value);
+          },
+          "Public API and graph boundary information.");
+  auto document_class =
+      py::class_<flow::ModuleDocument>(flow, "ModuleDocument",
+                                       "An owning editable Flow module, with "
+                                       "revisioned native source transactions.")
+          .def(py::init<std::string, std::string>(),
+               py::arg("identity") = "<memory>", py::arg("source") = "",
+               "Create a module or open source for editing.")
+          .def_property_readonly("identity", &flow::ModuleDocument::identity,
+                                 "The module's canonical host identity.")
+          .def_property_readonly("source", &flow::ModuleDocument::source,
+                                 "The current source text.")
+          .def_property_readonly("revision", &flow::ModuleDocument::revision,
+                                 "The current document revision.")
+          .def("symbols", &flow::ModuleDocument::Symbols,
+               "Find the contributing declarations and definitions.")
+          .def(
+              "apply",
+              [](flow::ModuleDocument& self, uint64_t revision,
+                 std::vector<flow::Edit> edits) {
+                return ValueOrThrow(self.Apply(revision, std::move(edits)));
+              },
+              py::arg("revision"), py::arg("edits"),
+              "Commit nonoverlapping edits against an expected revision.")
+          .def(
+              "insert",
+              [](flow::ModuleDocument& self, const flow::FlowBuilder& builder) {
+                return ValueOrThrow(self.Insert(builder));
+              },
+              py::arg("flow"), "Insert one flow contribution.")
+          .def(
+              "insert_struct",
+              [](flow::ModuleDocument& self, const flow::StructBuilder& shape) {
+                return ValueOrThrow(self.InsertStruct(shape.shape()));
+              },
+              py::arg("shape"), "Insert a struct contribution.")
+          .def(
+              "update",
+              [](flow::ModuleDocument& self,
+                 const flow::DocumentSymbolHandle& symbol,
+                 const flow::FlowBuilder& builder) {
+                return ValueOrThrow(self.Update(symbol, builder));
+              },
+              py::arg("symbol"), py::arg("flow"),
+              "Replace one owned contribution, retaining visibility and "
+              "declaration kind.")
+          .def(
+              "update_struct",
+              [](flow::ModuleDocument& self,
+                 const flow::DocumentSymbolHandle& symbol,
+                 const flow::StructBuilder& shape) {
+                return ValueOrThrow(self.UpdateStruct(symbol, shape.shape()));
+              },
+              py::arg("symbol"), py::arg("shape"),
+              "Update one struct contribution, retaining visibility and "
+              "unrelated "
+              "source text.")
+          .def(
+              "remove",
+              [](flow::ModuleDocument& self,
+                 const flow::DocumentSymbolHandle& symbol) {
+                return ValueOrThrow(self.Remove(symbol));
+              },
+              py::arg("symbol"), "Remove one contributing symbol.")
+          .def(
+              "set_exported",
+              [](flow::ModuleDocument& self,
+                 const flow::DocumentSymbolHandle& symbol, bool value) {
+                return ValueOrThrow(self.SetExported(symbol, value));
+              },
+              py::arg("symbol"), py::arg("value"),
+              "Set visibility with a local source edit.")
+          .def(
+              "upsert_import",
+              [](flow::ModuleDocument& self, std::string reference,
+                 std::string alias,
+                 std::optional<flow::DocumentSymbolHandle> scope,
+                 std::string symbol) {
+                return ValueOrThrow(
+                    self.UpsertImport(std::move(reference), std::move(alias),
+                                      std::move(scope), std::move(symbol)));
+              },
+              py::arg("reference"), py::arg("alias"),
+              py::arg("scope") = std::nullopt, py::arg("symbol") = "",
+              "Insert or update an import in the module or an implemented "
+              "flow.")
+          .def(
+              "remove_import",
+              [](flow::ModuleDocument& self, std::string alias,
+                 std::optional<flow::DocumentSymbolHandle> scope) {
+                return ValueOrThrow(
+                    self.RemoveImport(std::move(alias), std::move(scope)));
+              },
+              py::arg("alias"), py::arg("scope") = std::nullopt,
+              "Remove an import from its lexical scope.")
+          .def(
+              "upsert_declaration",
+              [](flow::ModuleDocument& self,
+                 const actions::ActionSchema& schema,
+                 std::optional<flow::DocumentSymbolHandle> symbol,
+                 bool exported) {
+                auto declaration = flow::DeclareAction(schema);
+                if (!declaration.diagnostics.empty()) {
+                  return flow::DocumentChange{
+                      self.revision(), {}, std::move(declaration.diagnostics)};
+                }
+                declaration.interface.exported = exported;
+                for (auto& type : declaration.types) {
+                  type.exported = exported;
+                }
+                return ValueOrThrow(self.UpsertDeclaration(
+                    declaration.interface, declaration.types,
+                    std::move(symbol)));
+              },
+              py::arg("schema"), py::arg("symbol") = std::nullopt,
+              py::arg("exported") = false,
+              "Synchronize one owned interface from a native action schema "
+              "without "
+              "weakening unrepresentable metadata.")
+          .def(
+              "rename",
+              [](flow::ModuleDocument& self,
+                 const flow::DocumentSymbolHandle& symbol, std::string name) {
+                return ValueOrThrow(self.Rename(symbol, std::move(name)));
+              },
+              py::arg("symbol"), py::arg("name"),
+              "Rename a local symbol and its references.")
+          .def(
+              "rename_in_graph",
+              [](const flow::ModuleDocument& self,
+                 const flow::DocumentSymbolHandle& symbol, std::string name,
+                 const std::map<std::string, std::string>& modules) {
+                return ValueOrThrow(self.RenameInGraph(
+                    symbol, std::move(name),
+                    flow::ModuleSources(modules.begin(), modules.end())));
+              },
+              py::arg("symbol"), py::arg("name"),
+              py::arg("modules") = std::map<std::string, std::string>{},
+              "Prepare validated reference edits across supplied modules "
+              "without "
+              "mutating this document.")
+          .def(
+              "rename_import",
+              [](flow::ModuleDocument& self, std::string alias,
+                 std::string name,
+                 std::optional<flow::DocumentSymbolHandle> scope) {
+                return ValueOrThrow(self.RenameImport(
+                    std::move(alias), std::move(name), std::move(scope)));
+              },
+              py::arg("alias"), py::arg("name"),
+              py::arg("scope") = std::nullopt,
+              "Rename a namespace and its lexically bound action/type "
+              "references.")
+          .def(
+              "effective_schema",
+              [](const flow::ModuleDocument& self, std::string name,
+                 const std::map<std::string, std::string>& modules) {
+                flow::ModuleSources sources(modules.begin(), modules.end());
+                flow::Program program;
+                program.flows.push_back(ValueOrThrow(
+                    self.EffectiveSchema(std::move(name), sources)));
+                return JsonToPython(
+                    flow::PlanToJsonValue(self.identity(), program)
+                        .at("flows")
+                        .at(0));
+              },
+              py::arg("name"),
+              py::arg("modules") = std::map<std::string, std::string>{},
+              "Query the effective conjunction of compatible callable "
+              "contributions.")
+          .def(
+              "check",
+              [](const flow::ModuleDocument& self,
+                 const std::map<std::string, std::string>& modules) {
+                flow::ModuleSources sources(modules.begin(), modules.end());
+                auto result = nlohmann::json::array();
+                for (const auto& diagnostic : self.Check(sources)) {
+                  result.push_back(flow::DiagnosticToJsonValue(diagnostic));
+                }
+                return JsonToPython(result);
+              },
+              py::arg("modules") = std::map<std::string, std::string>{},
+              "Analyze this module and its supplied import graph.");
+
   py::class_<BoundFlow>(
       flow, "FlowPlan",
       R"doc(One compiled flow: an action schema, and the graph implementing it.
@@ -742,8 +1425,20 @@ A handle onto the program it came from, which keeps the program -- and the synta
 tree its graph borrows -- alive for as long as anything holds the flow. So a
 handler taken from one still runs after the program variable has gone.
 )doc")
+      .def_property_readonly("name",
+                             [](const BoundFlow& self) { return self.name; })
       .def_property_readonly(
-          "name", [](const BoundFlow& self) { return self.plan().name; })
+          "exported",
+          [](const BoundFlow& self) { return self.plan().exported; },
+          "Whether the flow is part of its module's public API.")
+      .def_property_readonly(
+          "imported",
+          [](const BoundFlow& self) { return self.plan().imported; },
+          "Whether the implementation belongs to an imported module.")
+      .def_property_readonly(
+          "interface_only",
+          [](const BoundFlow& self) { return self.plan().interface_only; },
+          "Whether this is an interface declaration.")
       .def_property_readonly(
           "description",
           [](const BoundFlow& self) { return self.plan().description; })
@@ -753,6 +1448,16 @@ handler taken from one still runs after the program variable has gone.
       .def_property_readonly(
           "node_maps",
           [](const BoundFlow& self) { return self.plan().node_maps; })
+      .def(
+          "action_schema",
+          [](const BoundFlow& self) {
+            const auto* resolved = self.program->Flow(self.name);
+            return ValueOrThrow(flow::FlowSchema(
+                resolved->implementation.value_or(resolved->plan),
+                &self.program->program()));
+          },
+          "The selected native implementation's action schema, including "
+          "header defaults.")
       .def("describe", &DescribeFlow,
            R"doc(The whole composition as plain data.
 
@@ -805,7 +1510,7 @@ them.
               // The entry flow is left out: it has no name, and every caller of
               // this iterates it to look a flow up or to register one as an
               // action. An entry point is neither.
-              if (one.plan.entry) {
+              if (one.plan.entry || one.plan.imported) {
                 continue;
               }
               names.push_back(one.plan.name);
@@ -853,13 +1558,34 @@ a named flow from `names`.
         return absl::StrCat("<Program [", absl::StrJoin(names, ", "), "]>");
       });
 
+  document_class.def(
+      "compile",
+      [](const flow::ModuleDocument& self,
+         const std::map<std::string, std::string>& modules) {
+        flow::ModuleSources sources(modules.begin(), modules.end());
+        return BoundProgram{ValueOrThrow(flow::CompiledProgram::Compile(
+            self.source(), self.identity(), sources))};
+      },
+      py::arg("modules") = std::map<std::string, std::string>{},
+      "Build an immutable execution snapshot from supplied modules.");
+
   flow.def(
       "compile",
-      [](std::string source, std::string source_name) {
+      [](std::string source, std::string source_name,
+         const std::map<std::string, std::string>& modules,
+         bool resolve_files) {
+        flow::ModuleSources sources;
+        for (const auto& [name, text] : modules) {
+          sources.emplace(name, text);
+        }
         return BoundProgram{ValueOrThrow(flow::CompiledProgram::Compile(
-            std::move(source), std::move(source_name)))};
+            std::move(source), std::move(source_name), sources,
+            resolve_files ? flow::FileModuleResolver()
+                          : flow::ModuleResolver{}))};
       },
       py::arg("source"), py::arg("source_name") = "",
+      py::arg("modules") = std::map<std::string, std::string>{},
+      py::arg("resolve_files") = false,
       R"doc(Compile Flow source into a runnable program.
 
 The strict door onto the engine every other function here reads through: the
@@ -943,19 +1669,25 @@ column and message the Python compiler has always reported.
 
   flow.def(
       "check",
-      [](std::string_view source, std::string_view source_name) {
-        const flow::ParseResult parsed = flow::Parse(source);
-        flow::ResolveResult resolved = flow::Resolve(source, parsed);
-        for (flow::Diagnostic& found :
-             flow::Inspect(source, parsed, resolved)) {
-          resolved.diagnostics.push_back(std::move(found));
-        }
-        flow::SortDiagnostics(resolved.diagnostics);
-        return JsonToPython(flow::DiagnosticsToJsonValue(source_name,
-                                                         resolved.diagnostics))
+      [](std::string_view source, std::string_view source_name,
+         const std::map<std::string, std::string>& modules,
+         bool resolve_files) {
+        nlohmann::json request{
+            {"method", "check"},
+            {"source", source},
+            {"path", resolve_files ? flow::FileModuleIdentity(source_name)
+                                   : std::string(source_name)},
+            {"modules", modules}};
+        return JsonToPython(
+                   flow::Handle(request, resolve_files
+                                             ? flow::FileModuleResolver()
+                                             : flow::ModuleResolver{})
+                       .at("result"))
             .cast<PyJsonObject>();
       },
       py::arg("source"), py::arg("source_name") = "-",
+      py::arg("modules") = std::map<std::string, std::string>{},
+      py::arg("resolve_files") = false,
       R"doc(Everything wrong with one flow file.
 
 Returns a ``flow.diagnostics/v1`` payload: the syntax and form problems the parser
@@ -1037,8 +1769,10 @@ definition that still keeps a copy to it.
   flow.def(
       "complete",
       [](std::string_view source, size_t offset) {
-        return JsonToPython(flow::CompletionsToJsonValue(
-                                flow::CompleteAt(source, offset)))
+        return JsonToPython(flow::Handle({{"method", "complete"},
+                                          {"source", source},
+                                          {"offset", offset}})
+                                .at("result"))
             .cast<PyJsonObject>();
       },
       py::arg("source"), py::arg("offset"),
@@ -1054,17 +1788,11 @@ filtering twice drops what a fuzzy matcher would have kept.
   flow.def(
       "plan",
       [](std::string_view source, std::string_view source_name) {
-        const flow::ParseResult parsed = flow::Parse(source);
-        const flow::ResolveResult resolved = flow::Resolve(source, parsed);
-        auto value =
-            JsonToPython(flow::PlanToJsonValue(source_name, resolved.program))
-                .cast<PyJsonObject>();
-        py::list diagnostics;
-        for (const flow::Diagnostic& diagnostic : resolved.diagnostics) {
-          diagnostics.append(DiagnosticToDict(diagnostic));
-        }
-        value["diagnostics"] = diagnostics;
-        return value;
+        return JsonToPython(flow::Handle({{"method", "plan"},
+                                          {"source", source},
+                                          {"path", source_name}})
+                                .at("result"))
+            .cast<PyJsonObject>();
       },
       py::arg("source"), py::arg("source_name") = "-",
       R"doc(What each flow of a file resolved to.
@@ -1156,6 +1884,28 @@ merges over the embedded snapshot itself.
 )doc");
 
   flow.def(
+      "standard_action_schemas",
+      []() {
+        actions::ActionRegistry registry;
+        const auto capabilities = sdk::flow::SystemCapabilities();
+        const auto status = flow::interpreter::RegisterStandardLibrary(
+            registry, capabilities, true);
+        if (!status.ok()) {
+          ThrowStatus(status);
+        }
+        std::vector<actions::ActionSchema> schemas;
+        for (const auto& name : registry.ListRegisteredActions()) {
+          auto schema = registry.GetSchema(name);
+          if (!schema.ok()) {
+            ThrowStatus(schema.status());
+          }
+          schemas.push_back(std::move(*schema));
+        }
+        return schemas;
+      },
+      "Return native standard-library schemas without running any actions.");
+
+  flow.def(
       "register_standard_actions",
       [](const std::shared_ptr<actions::ActionRegistry>& registry,
          const std::vector<std::string>& roots, bool allow_write,
@@ -1180,7 +1930,7 @@ merges over the embedded snapshot itself.
         capabilities->process.inherit_environment = inherit_environment;
         capabilities->process.max_seconds = max_seconds;
         capabilities->process.sandbox =
-            unrestricted ? sdk_flow::SandboxRequest::kNever
+            unrestricted      ? sdk_flow::SandboxRequest::kNever
             : require_sandbox ? sdk_flow::SandboxRequest::kRequired
                               : sdk_flow::SandboxRequest::kPreferred;
         const auto add_runtime_root = [&capabilities](std::string path) {
@@ -1328,13 +2078,9 @@ write and process permissions, environment filtering, and limits still apply.
       py::arg("unrestricted") = false,
       py::arg("timeout_seconds") = std::optional<double>(),
       py::arg("standard_streams") = true,
-      // `py::none()`, not a null shared_ptr: a default argument is converted
-      // when the function is *defined*, and BindFlow runs before BindActions
-      // registers ActionRegistry -- so a typed default fails at import.
-      py::arg("registry") = py::none(),
-      // Same reason as `registry` above: Session and WireStream are registered
-      // by other Bind* functions, so these are cast at call time.
-      py::arg("session") = py::none(), py::arg("dispatch_stream") = py::none(),
+      // None selects the interpreter's host registry and transport defaults.
+      py::arg("registry") = py::none(), py::arg("session") = py::none(),
+      py::arg("dispatch_stream") = py::none(),
       R"doc(Run a Flow program's entry flow, and return what it did.
 
 The same interpreter ``a11-flow-run`` is -- one implementation, called two ways
@@ -1376,13 +2122,22 @@ Raises if the source will not compile or declares no ``flow { ... }``.
 
   flow.def(
       "request",
-      [](const PyJsonObject& request) {
+      [](const PyJsonObject& request, bool resolve_files) {
         // Always an object: `{ok, result}` or `{ok, error}`, which is what
         // makes the answer safe to index rather than something to type-test.
-        return JsonToPython(flow::Handle(PythonToJson(request)))
+        auto payload = PythonToJson(request);
+        if (resolve_files && payload.contains("path") &&
+            payload["path"].is_string()) {
+          payload["path"] =
+              flow::FileModuleIdentity(payload["path"].get<std::string>());
+        }
+        return JsonToPython(
+                   flow::Handle(payload, resolve_files
+                                             ? flow::FileModuleResolver()
+                                             : flow::ModuleResolver{}))
             .cast<PyJsonObject>();
       },
-      py::arg("request"),
+      py::arg("request"), py::arg("resolve_files") = false,
       R"doc(One request to the language service, answered.
 
 The same method dispatch the standalone ``a11-flow serve`` speaks, reachable

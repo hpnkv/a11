@@ -23,6 +23,7 @@
 #include <utility>
 #include <vector>
 
+#include <absl/container/flat_hash_map.h>
 #include <nlohmann/json_fwd.hpp>
 
 namespace a11::flow {
@@ -58,6 +59,9 @@ class TextIndex {
 
   /// The byte offset of an LSP position, clamped into the document.
   [[nodiscard]] size_t ByteOfPosition(int line, int character) const;
+
+  /// Byte offset of a one-based source line and code-point column.
+  [[nodiscard]] size_t ByteOfSourcePosition(int line, int column) const;
 
  private:
   /// How many bytes the character at `offset` takes, and how many UTF-16 units
@@ -110,6 +114,11 @@ std::string_view OffsetBasisName(OffsetBasis basis);
 /// convert. A proposal's `caret` counts into the text that proposal inserts,
 /// not into the document, so a document-basis conversion of it would be wrong.
 void RebaseToUtf16(nlohmann::json& answer, const TextIndex& index);
+
+/// Rebase each document with its own pinned source index.
+void RebaseToUtf16(
+    nlohmann::json& answer, const TextIndex& index,
+    const absl::flat_hash_map<std::string, TextIndex>& documents);
 
 }  // namespace a11::flow
 

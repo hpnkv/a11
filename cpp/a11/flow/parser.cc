@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <initializer_list>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -305,6 +306,7 @@ class ParserImpl {
   std::unique_ptr<T> Make(const Token& token) {
     auto node = std::make_unique<T>();
     node->location = syntax::LocationOf(token);
+    node->extent = node->location;
     return node;
   }
 
@@ -361,6 +363,25 @@ class ParserImpl {
     return true;
   }
 
+  NodePtr Bounded(NodePtr node) {
+    std::vector<std::pair<const Node*, int>> pending{{node.get(), 1}};
+    while (!pending.empty()) {
+      const auto [current, depth] = pending.back();
+      pending.pop_back();
+      if (depth > kMaxNesting) {
+        const int saved = depth_;
+        depth_ = kMaxNesting + 1;
+        TooDeep();
+        depth_ = saved;
+        return MakeError(Current(), "a less deeply nested expression");
+      }
+      syntax::VisitChildren(*current, [&](const Node& child) {
+        pending.emplace_back(&child, depth + 1);
+      });
+    }
+    return node;
+  }
+
   /// A stand-in for a value that could not be read.
   NodePtr MakeError(const Token& token, std::string expected) {
     auto node = Make<syntax::ErrorNode>(token);
@@ -374,6 +395,11 @@ class ParserImpl {
     SkipNewlines();
     while (!At(TokenKind::kEnd)) {
       const size_t before = position_;
+      if (AtWord("import", "from")) {
+        result_.imports.push_back(ParseImport());
+        EndStatement();
+        continue;
+      }
       if (AtWord("struct") && Peek().kind == TokenKind::kWord) {
         const Token& keyword = Advance();
         result_.dtos.push_back(ParseDto(keyword));
@@ -383,6 +409,7 @@ class ParserImpl {
         }
         continue;
       }
+      const bool interface_only = AcceptWord("declare");
       if (!ExpectWord("flow")) {
         // Not a declaration at all. The line is skipped rather than read as
         // one, so a stray statement outside a flow costs one diagnostic.
@@ -393,16 +420,51 @@ class ParserImpl {
         continue;
       }
       const Token& keyword = tokens_[position_ - 1];
-      result_.flows.push_back(ParseFlow(keyword));
+      auto flow = ParseFlow(keyword, interface_only);
+      if (interface_only) {
+        flow->extent.start = tokens_[before].start;
+      }
+      result_.flows.push_back(std::move(flow));
       SkipNewlines();
       if (position_ == before) {
         Advance();
       }
     }
-    if (result_.flows.empty() && result_.dtos.empty()) {
+    if (result_.flows.empty() && result_.dtos.empty() &&
+        result_.imports.empty()) {
       ReportHere("flow.syntax.unexpected",
                  "A flow file must declare at least one flow or struct.");
     }
+  }
+
+  syntax::Import ParseImport() {
+    const Token start = Advance();
+    syntax::Import item;
+    item.location = syntax::LocationOf(start);
+    item.extent = item.location;
+    if (At(TokenKind::kString)) {
+      item.source = std::string(Advance().string_value);
+    } else {
+      ReportHere("flow.syntax.unexpected", "Expected a module source string.");
+    }
+    item.selective = vocabulary::Canonical(start.text) == "from";
+    if (item.selective) {
+      ExpectWord("import");
+      item.selection_start = tokens_[position_ - 1].end;
+      do {
+        syntax::ImportedSymbol symbol;
+        symbol.name = ParseDottedName("an imported symbol");
+        symbol.explicit_alias = AcceptWord("as");
+        symbol.alias = symbol.explicit_alias ? ExpectName("a local symbol name")
+                                             : symbol.name;
+        item.symbols.push_back(std::move(symbol));
+      } while (AcceptToken(TokenKind::kComma));
+    } else {
+      ExpectWord("as");
+      item.alias = ExpectName("a module namespace");
+    }
+    item.extent.end = tokens_[position_ - 1].end;
+    return item;
   }
 
   // `struct Name { describe ".." field: type modifiers ".." ...
@@ -414,6 +476,13 @@ class ParserImpl {
   syntax::DtoDeclarationPtr ParseDto(const Token& keyword) {
     auto declaration = Make<syntax::DtoDeclaration>(keyword);
     declaration->name = ExpectName("a struct name");
+    declaration->exported = AcceptWord("exported");
+    while ((AtWord("exported", "private") || AtWord("export"))) {
+      ReportHere("flow.form.declaration-attribute",
+                 "Only one 'exported' attribute is allowed here.",
+                 Family::kForm);
+      Advance();
+    }
     const std::string outer_flow = flow_name_;
     flow_name_ = declaration->name.text;
     if (!Expect(TokenKind::kLeftBrace)) {
@@ -433,6 +502,11 @@ class ParserImpl {
       if (AtWord("describe") && DescribeFollows()) {
         Advance();
         declaration->description = ParseDescription();
+      } else if (AtWord("import", "from") &&
+                 Peek().kind == TokenKind::kString) {
+        ReportHere("flow.form.import-context",
+                   "A struct cannot contain imports.", Family::kForm);
+        ParseImport();
       } else if (Current().IsWord() && Peek().kind == TokenKind::kColon) {
         declaration->fields.push_back(ParseField());
       } else {
@@ -447,6 +521,9 @@ class ParserImpl {
       }
     }
     AcceptToken(TokenKind::kRightBrace);
+    declaration->extent = declaration->location;
+    declaration->extent.end =
+        At(TokenKind::kEnd) ? Current().end : tokens_[position_ - 1].end;
     flow_name_ = outer_flow;
     return declaration;
   }
@@ -616,9 +693,8 @@ class ParserImpl {
     if (token.kind != TokenKind::kNumber) {
       return std::nullopt;
     }
-    return token.is_integer
-               ? syntax::Constant::Integer(static_cast<long long>(token.number))
-               : syntax::Constant::Double(token.number);
+    return token.is_integer ? syntax::Constant::Integer(token.integer)
+                            : syntax::Constant::Double(token.number);
   }
 
   void ParseFieldEnumeration(syntax::FieldDeclaration& field) {
@@ -648,14 +724,40 @@ class ParserImpl {
     }
   }
 
-  syntax::FlowDeclarationPtr ParseFlow(const Token& keyword) {
+  syntax::FlowDeclarationPtr ParseFlow(const Token& keyword,
+                                       bool interface_only = false) {
     auto declaration = Make<syntax::FlowDeclaration>(keyword);
+    Descent descent(*this);
+    if (TooDeep()) {
+      Recover();
+      return declaration;
+    }
+    declaration->interface_only = interface_only;
     // `flow { ...
     if (At(TokenKind::kLeftBrace)) {
       declaration->entry = true;
+      if (interface_only) {
+        ReportHere("flow.form.declaration-body",
+                   "A declared flow requires a name.", Family::kForm);
+      }
       declaration->name.location = syntax::LocationOf(keyword);
     } else {
       declaration->name = ParseDottedName("a flow name");
+      if (declaration->name.text.empty()) {
+        ReportHere("flow.form.declaration-body",
+                   "A named flow requires a nonempty name.", Family::kForm);
+      }
+    }
+    declaration->exported = AcceptWord("exported");
+    if (declaration->entry && declaration->exported) {
+      ReportHere("flow.form.declaration-attribute",
+                 "An entry flow cannot be exported.", Family::kForm);
+    }
+    while ((AtWord("exported", "private") || AtWord("export"))) {
+      ReportHere("flow.form.declaration-attribute",
+                 "Only one 'exported' attribute is allowed here.",
+                 Family::kForm);
+      Advance();
     }
     // The flow a diagnostic is in, for everything reported until this one ends.
     const std::string outer_flow = flow_name_;
@@ -686,6 +788,50 @@ class ParserImpl {
         declaration->ports.push_back(ParsePort());
       } else if (AtWord("header") && Peek().kind == TokenKind::kString) {
         declaration->headers.push_back(ParseHeader());
+      } else if (AtWord("import", "from") &&
+                 Peek().kind == TokenKind::kString && !interface_only) {
+        declaration->imports.push_back(ParseImport());
+      } else if (!interface_only && AtWord("declare") && Peek().IsWord() &&
+                 vocabulary::Canonical(Peek().text) == "flow") {
+        const auto start = Advance();
+        if (ExpectWord("flow")) {
+          auto nested = ParseFlow(tokens_[position_ - 1], true);
+          nested->extent.start = start.start;
+          if (nested->exported) {
+            ReportHere("flow.form.declaration-attribute",
+                       "A flow-local declaration cannot be exported. Move it "
+                       "to module scope to export it.",
+                       Family::kForm);
+          }
+          declaration->declarations.push_back(std::move(nested));
+        }
+      } else if (!interface_only && AtWord("struct") &&
+                 Peek().kind == TokenKind::kWord) {
+        const auto nested_keyword = Advance();
+        auto nested = ParseDto(nested_keyword);
+        if (nested->exported) {
+          ReportHere("flow.form.declaration-attribute",
+                     "A flow-local struct cannot be exported. Move it to "
+                     "module scope to export it.",
+                     Family::kForm);
+        }
+        declaration->structs.push_back(std::move(nested));
+      } else if (!interface_only && AtWord("flow") &&
+                 (Peek().IsWord() || Peek().kind == TokenKind::kString ||
+                  Peek().kind == TokenKind::kLeftBrace)) {
+        ReportHere("flow.form.declaration-body",
+                   "Move this executable flow definition to module scope. "
+                   "Only 'declare flow' and structs can be nested in a flow.",
+                   Family::kForm);
+        const auto nested_keyword = Advance();
+        ParseFlow(nested_keyword);
+      } else if (interface_only) {
+        ReportHere("flow.form.declaration-body",
+                   "A flow declaration must contain only descriptions, "
+                   "headers, inputs, and outputs. Remove this statement, or "
+                   "remove 'declare' to define an executable flow.",
+                   Family::kForm);
+        Recover();
       } else {
         declaration->body.push_back(ParseStatement());
       }
@@ -695,6 +841,9 @@ class ParserImpl {
       }
     }
     AcceptToken(TokenKind::kRightBrace);
+    declaration->extent = declaration->location;
+    declaration->extent.end =
+        At(TokenKind::kEnd) ? Current().end : tokens_[position_ - 1].end;
     flow_name_ = outer_flow;
     return declaration;
   }
@@ -825,14 +974,24 @@ class ParserImpl {
   /// generic one says what it holds: `list[a11.NodeFragment]`. A quoted name is
   /// a mimetype.
   syntax::TypeExpression ParseType() {
+    const Descent descent(*this);
     syntax::TypeExpression type;
+    if (TooDeep()) {
+      Recover();
+      type.name = "any";
+      return type;
+    }
     type.location = syntax::LocationOf(Current());
     if (At(TokenKind::kString)) {
       type.name = std::string(Advance().string_value);
       type.quoted = true;
       return type;
     }
-    type.name = ParseDottedName("a port type").text;
+    const auto name = ParseDottedName("a port type");
+    type.name = name.text;
+    if (!name.Empty()) {
+      type.location = name.location;
+    }
     // Brackets with something inside them are the parameters a generic type is
     // given; empty ones are the `T[]` sugar, and are read by the loop below.
     if (At(TokenKind::kLeftBracket) &&
@@ -957,10 +1116,47 @@ class ParserImpl {
     }
   }
 
+  [[nodiscard]] bool OpensEmptyBindingBlock() const {
+    if (!At(TokenKind::kLeftBrace) || Peek().kind != TokenKind::kRightBrace) {
+      return false;
+    }
+    size_t offset = 2;
+    while (Peek(offset).kind == TokenKind::kNewline) {
+      ++offset;
+    }
+    return Peek(offset).kind != TokenKind::kPipe &&
+           Peek(offset).kind != TokenKind::kArrow && !AtBareStage(offset);
+  }
+
   /// `{ ... }` as a statement, with `try` already read where it was written.
   NodePtr ParseBlockStatement(const Token& opener, bool tolerant) {
     auto block = Make<syntax::Block>(opener);
     block->tolerant = tolerant;
+    block->body = ParseBlock();
+    return block;
+  }
+
+  NodePtr ParseAfterBlock(const Token& opener, bool tolerant = false) {
+    auto block = Make<syntax::Block>(opener);
+    block->tolerant = tolerant;
+    {
+      const BlockHeader header(this);
+      ExpectWord("after");
+      do {
+        if (At(TokenKind::kLeftBrace) || Current().EndsStatement()) {
+          ReportHere(
+              "flow.syntax.unexpected",
+              "Name a completion subject before the 'after' block body.");
+          break;
+        }
+        block->after.push_back(ParseCompletionSubject());
+        if (!AcceptToken(TokenKind::kComma)) {
+          break;
+        }
+        SkipNewlines();
+      } while (true);
+    }
+    SkipNewlines();
     block->body = ParseBlock();
     return block;
   }
@@ -993,10 +1189,26 @@ class ParserImpl {
       return MakeError(Current(), "a statement");
     }
     const Token& keyword = Current();
+    if (AtWord("import", "from") && Peek().kind == TokenKind::kString) {
+      ReportHere("flow.form.import-context",
+                 "Imports belong at module scope or directly inside an "
+                 "implemented flow.",
+                 Family::kForm);
+      ParseImport();
+      return MakeError(keyword, "an executable statement");
+    }
     if (keyword.IsWord()) {
       const std::string word = Keyword();
       if (OpensStatement(word)) {
+        if (word == "after") {
+          return ParseAfterBlock(keyword);
+        }
         if (word == "run" || word == "call" || word == "try") {
+          if (word == "try" && Peek().IsWord() &&
+              vocabulary::Canonical(Peek().text) == "after") {
+            Advance();
+            return ParseAfterBlock(keyword, true);
+          }
           if (word == "try" && Peek().kind == TokenKind::kLeftBrace) {
             Advance();
             return ParseBlockStatement(keyword, /*tolerant=*/true);
@@ -1081,7 +1293,7 @@ class ParserImpl {
         if (word == "cancel") {
           Advance();
           auto cancel = Make<syntax::Cancel>(keyword);
-          cancel->name = ExpectName("a call name");
+          cancel->name = ParseCompletionSubject();
           cancel->after = ParseAfter();
           return cancel;
         }
@@ -1145,9 +1357,8 @@ class ParserImpl {
         bind->name =
             Word{std::string(Advance().text), syntax::LocationOf(keyword)};
         Advance();
-        if (AtWord("node")) {
-          bind->value = ParseNode();
-        } else if (AtWord("wait", "drain") || AtWord("for", "repeat")) {
+        if (AtWord("wait", "drain") || AtWord("for", "repeat") ||
+            AtWord("after")) {
           // A loop, bound to a name, reads as its own outcome -- the same thing
           // a bound `wait`/`drain`/block does, so it takes the same route.
           bind->value = ParseStatement();
@@ -1156,15 +1367,39 @@ class ParserImpl {
           // `p = try src -> dest`: the name reads how the pipe went, which is
           // the only way a tolerated failure is anything but silence.
           bind->value = ParseStatement();
-        } else if (At(TokenKind::kLeftBrace) ||
+        } else if (OpensBlock() || OpensEmptyBindingBlock() ||
                    (AtWord("try") && Peek().kind == TokenKind::kLeftBrace)) {
-          // Bound, so a `{` here is a block whatever it holds: a record bound
-          // to a name is not a statement this language has.
+          // Empty braces bind a block; an arrow or stage after them makes
+          // them an empty record source instead.
           const Token& opener = Current();
           const bool tolerant = AcceptWord("try");
           bind->value = ParseBlockStatement(opener, tolerant);
         } else {
-          bind->value = ParseCall();
+          const Token source = Current();
+          auto pipeline = ParsePipeline();
+          if (!pipeline->stages.empty() || ContinuesWith(TokenKind::kArrow)) {
+            auto block = Make<syntax::Block>(source);
+            block->body.push_back(
+                ParsePipeStatement(source, false, std::move(pipeline)));
+            block->extent.end = tokens_[position_ - 1].end;
+            bind->value = std::move(block);
+          } else {
+            if (const auto* name =
+                    syntax::As<syntax::Name>(pipeline->source.get());
+                name != nullptr &&
+                vocabulary::Canonical(name->name) == "node") {
+              ReportNodeParentheses(source);
+            } else if (pipeline->source->kind !=
+                           syntax::NodeKind::kCallExpression &&
+                       pipeline->source->kind !=
+                           syntax::NodeKind::kNodeExpression &&
+                       pipeline->source->groups.empty()) {
+              ReportHere("flow.syntax.unexpected",
+                         "A bound pipeline requires '->' and a destination. "
+                         "Use 'let' to bind a lazy value.");
+            }
+            bind->value = std::move(pipeline->source);
+          }
         }
         return bind;
       }
@@ -1190,10 +1425,12 @@ class ParserImpl {
   ///
   /// One routine so the plain and the tolerated form cannot drift: `try` in
   /// front changes what a failure *means* and nothing about the grammar.
-  NodePtr ParsePipeStatement(const Token& keyword, bool tolerant) {
+  NodePtr ParsePipeStatement(const Token& keyword, bool tolerant,
+                             syntax::PipelinePtr pipeline = nullptr) {
     auto pipe = Make<syntax::Pipe>(keyword);
     pipe->tolerant = tolerant;
-    pipe->pipeline = ParsePipeline();
+    pipe->pipeline =
+        pipeline != nullptr ? std::move(pipeline) : ParsePipeline();
     if (ContinuesWith(TokenKind::kArrow)) {
       SkipNewlines();
     }
@@ -1252,10 +1489,10 @@ class ParserImpl {
     Advance();  // `first` or `all`
     Advance();  // `of`
     wait->race = first;
-    wait->subjects.push_back(ParseReference());
+    wait->subjects.push_back(ParseExpression());
     while (AcceptToken(TokenKind::kComma)) {
       SkipNewlines();
-      wait->subjects.push_back(ParseReference());
+      wait->subjects.push_back(ParseExpression());
     }
     if (wait->subjects.size() < 2) {
       Report("flow.form.wait-of-one",
@@ -1289,7 +1526,7 @@ class ParserImpl {
                             " is not a number of them to skip."),
                number, Severity::kError, Family::kForm);
       } else {
-        skip->count = static_cast<long long>(number.number);
+        skip->count = number.integer;
       }
       auto pipeline = Make<syntax::Pipeline>(Current());
       pipeline->source = ParseReference();
@@ -1395,15 +1632,19 @@ class ParserImpl {
   /// The parentheses are not decoration: making a node is the one thing in the
   /// language that *does* something without naming an action, and `x = node()`
   /// reads as the construction it is.
+  void ReportNodeParentheses(const Token& keyword) {
+    Report("flow.form.node-parentheses",
+           "Making a node takes parentheses: 'node()', or 'node(id)' to "
+           "attach to one somebody else named.",
+           keyword, Severity::kError, Family::kForm);
+  }
+
   NodePtr ParseNode() {
     const Token& keyword = Current();
     ExpectWord("node");
     auto node = Make<syntax::NodeExpression>(keyword);
     if (!At(TokenKind::kLeftParen)) {
-      Report("flow.form.node-parentheses",
-             "Making a node takes parentheses: 'node()', or 'node(id)' to "
-             "attach to one somebody else named.",
-             keyword, Severity::kError, Family::kForm);
+      ReportNodeParentheses(keyword);
       return node;
     }
     Advance();
@@ -1412,7 +1653,7 @@ class ParserImpl {
     }
     Expect(TokenKind::kRightParen);
     if (AcceptWord("in")) {
-      node->node_map = ExpectName("a node map name");
+      node->node_map = ParseDottedName("a node map name");
     }
     return node;
   }
@@ -1422,15 +1663,29 @@ class ParserImpl {
   }
 
   /// A trailing `after a, b` on a statement that is not a call.
+  Word ParseCompletionSubject() {
+    auto expression = ParseExpression();
+    Word word;
+    word.location = expression->extent;
+    if (const auto* name = syntax::As<syntax::Name>(expression.get());
+        name != nullptr) {
+      word.text = name->name;
+    } else {
+      word.text = "<expression>";
+      word.expression = std::move(expression);
+    }
+    return word;
+  }
+
   std::vector<Word> ParseAfter() {
     std::vector<Word> names;
     if (!AcceptWord("after")) {
       return names;
     }
-    names.push_back(ExpectName("a step name"));
+    names.push_back(ParseCompletionSubject());
     while (AcceptToken(TokenKind::kComma)) {
       SkipNewlines();
-      names.push_back(ExpectName("a step name"));
+      names.push_back(ParseCompletionSubject());
     }
     return names;
   }
@@ -1507,8 +1762,7 @@ class ParserImpl {
     switch (Current().kind) {
       case TokenKind::kNumber: {
         const Token& token = Advance();
-        return token.is_integer ? syntax::Constant::Integer(
-                                      static_cast<long long>(token.number))
+        return token.is_integer ? syntax::Constant::Integer(token.integer)
                                 : syntax::Constant::Double(token.number);
       }
       case TokenKind::kString:
@@ -1539,7 +1793,15 @@ class ParserImpl {
                  absl::StrCat("Expected a count, found ", Found(), "."));
       return 1;
     }
-    return static_cast<int>(Advance().number);
+    const auto token = Advance();
+    if (!token.is_integer || token.integer < std::numeric_limits<int>::min() ||
+        token.integer > std::numeric_limits<int>::max()) {
+      Report("flow.form.bad-number",
+             "This count must fit in a signed 32-bit integer.", token,
+             Severity::kError, Family::kForm);
+      return 1;
+    }
+    return static_cast<int>(token.integer);
   }
 
   absl::Duration ExpectDuration() {
@@ -1565,7 +1827,15 @@ class ParserImpl {
       return call;
     }
     call->mode = mode;
-    call->action = ParseDottedName("an action name").text;
+    const auto action = ParseDottedName("an action name");
+    call->action = action.text;
+    call->action_location = action.location;
+    if (action.text.empty()) {
+      Report("flow.form.invalid-action-target",
+             "An action target requires a nonempty name.", keyword,
+             Severity::kError, Family::kForm);
+      call->invalid_target = true;
+    }
     Expect(TokenKind::kLeftParen);
     SkipNewlines();
     while (!At(TokenKind::kRightParen)) {
@@ -1595,7 +1865,35 @@ class ParserImpl {
       }
     }
     Expect(TokenKind::kRightParen);
+    const Token target_tail = Current();
+    const size_t invocation_end = tokens_[position_ - 1].end;
+    while (At(TokenKind::kDot) || At(TokenKind::kLeftBracket)) {
+      call->invalid_target = true;
+      syntax::CallExpression::TargetSuffix suffix;
+      suffix.location = syntax::LocationOf(Current());
+      if (AcceptToken(TokenKind::kDot)) {
+        suffix.member = ExpectName("a member name").text;
+      } else {
+        Advance();
+        suffix.index = ParseExpression();
+        Expect(TokenKind::kRightBracket);
+      }
+      suffix.location.end = tokens_[position_ - 1].end;
+      call->target_suffixes.push_back(std::move(suffix));
+    }
+    if (!call->target_suffixes.empty()) {
+      Report("flow.form.invalid-action-target",
+             "Invalid action target: a member or index of an invocation cannot "
+             "be run. Likely missing parentheses around 'run action(...)'.",
+             target_tail, Severity::kError, Family::kForm);
+      result_.diagnostics.back().fixes.push_back(
+          {"Group the operation before selecting its result",
+           {{keyword.start, keyword.start, "("},
+            {invocation_end, invocation_end, ")"}}});
+    }
     call->modifiers = ParseModifiers();
+    call->extent = syntax::LocationOf(keyword);
+    call->extent.end = tokens_[position_ - 1].end;
     return call;
   }
 
@@ -1614,6 +1912,41 @@ class ParserImpl {
     }
     if (!vocabulary::ModifierWords().contains(Keyword(offset))) {
       return false;
+    }
+    if (Keyword(offset) == "after") {
+      int brackets = 0;
+      for (size_t look = offset + 1;; ++look) {
+        const auto kind = Peek(look).kind;
+        if (kind == TokenKind::kEnd ||
+            (kind == TokenKind::kRightBrace && brackets == 0)) {
+          break;
+        }
+        if (brackets == 0 && kind == TokenKind::kLeftBrace) {
+          return false;
+        }
+        if (brackets == 0 && kind == TokenKind::kNewline) {
+          const bool continues = Peek(look - 1).kind == TokenKind::kComma;
+          while (Peek(look).kind == TokenKind::kNewline) {
+            ++look;
+          }
+          if (!continues) {
+            return Peek(look).kind != TokenKind::kLeftBrace;
+          }
+          --look;
+          continue;
+        }
+        if (kind == TokenKind::kLeftParen || kind == TokenKind::kLeftBracket ||
+            kind == TokenKind::kLeftBrace) {
+          ++brackets;
+        } else if (kind == TokenKind::kRightParen ||
+                   kind == TokenKind::kRightBracket ||
+                   kind == TokenKind::kRightBrace) {
+          if (brackets == 0) {
+            break;
+          }
+          --brackets;
+        }
+      }
     }
     switch (Peek(offset + 1).kind) {
       case TokenKind::kArrow:
@@ -1640,16 +1973,17 @@ class ParserImpl {
       if (modifier == "tee") {
         modifiers->tee = true;
       } else if (modifier == "via") {
-        modifiers->node_map = ExpectName("a node map name");
+        modifiers->node_map = ParseDottedName("a node map name");
       } else if (modifier == "timeout") {
         modifiers->timeout = ExpectDuration();
       } else if (modifier == "id") {
         modifiers->action_id = ParseExpression();
       } else if (modifier == "after") {
-        modifiers->after.push_back(ExpectName("a call name"));
-        while (AcceptToken(TokenKind::kComma)) {
+        modifiers->after.push_back(ParseCompletionSubject());
+        while (At(TokenKind::kComma) && Peek(2).kind != TokenKind::kColon &&
+               AcceptToken(TokenKind::kComma)) {
           SkipNewlines();
-          modifiers->after.push_back(ExpectName("a call name"));
+          modifiers->after.push_back(ParseCompletionSubject());
         }
       } else if (modifier == "forward") {
         // `forward headers "a", "b"`: send the call the headers this flow was
@@ -1724,17 +2058,18 @@ class ParserImpl {
       }
       break;
     }
+    pipeline->extent.end = tokens_[position_ - 1].end;
     return pipeline;
   }
 
   /// Whether a stage that may go without its pipe starts here.
-  [[nodiscard]] bool AtBareStage() const {
-    if (!vocabulary::BareStages().contains(Keyword())) {
+  [[nodiscard]] bool AtBareStage(size_t offset = 0) const {
+    if (!vocabulary::BareStages().contains(Keyword(offset))) {
       return false;
     }
     // `then` and `where` take an operand, so a bare one at the end of a
     // statement is a name that happens to be spelled like a stage.
-    switch (Peek().kind) {
+    switch (Peek(offset + 1).kind) {
       case TokenKind::kNewline:
       case TokenKind::kEnd:
       case TokenKind::kRightBrace:
@@ -1781,6 +2116,25 @@ class ParserImpl {
     }
     Advance();
     stage->name = vocabulary::Canonical(keyword.text);
+    if (stage->name == "take") {
+      if (AtWord("while", "until")) {
+        absl::StrAppend(&stage->name, " ", Keyword());
+        Advance();
+      } else {
+        ReportHere("flow.form.stage-argument",
+                   "Write 'take while CONDITION' or 'take until CONDITION'.",
+                   Family::kForm);
+        return stage;
+      }
+      if (Current().EndsStatement() || At(TokenKind::kPipe) ||
+          At(TokenKind::kArrow) || At(TokenKind::kRightParen) ||
+          At(TokenKind::kRightBracket)) {
+        ReportHere("flow.form.stage-argument",
+                   "A 'take while' or 'take until' stage requires a condition.",
+                   Family::kForm);
+        return stage;
+      }
+    }
     const std::optional<vocabulary::StageArgument> takes =
         vocabulary::StageTakes(stage->name);
     if (!takes.has_value()) {
@@ -1798,6 +2152,7 @@ class ParserImpl {
         if (At(TokenKind::kNumber)) {
           const Token& number = Advance();
           stage->number = number.number;
+          stage->integer = number.integer;
           stage->is_integer = number.is_integer;
         } else {
           Report("flow.form.stage-argument",
@@ -1960,6 +2315,16 @@ class ParserImpl {
       }
       break;
     }
+    if ((stage.name == "take while" || stage.name == "take until") &&
+        (stage.parallel > 1 || !stage.ordered)) {
+      Report("flow.form.stage-not-parallel",
+             absl::StrCat("'", stage.name,
+                          "' evaluates predicates in input order. Remove "
+                          "'parallel' and 'unordered' from this stage."),
+             keyword, Severity::kError, Family::kForm);
+      stage.parallel = 1;
+      stage.ordered = true;
+    }
     if (stage.parallel > 1 &&
         !vocabulary::ParallelStages().contains(stage.name)) {
       Report("flow.form.stage-not-parallel",
@@ -2005,15 +2370,22 @@ class ParserImpl {
   /// A name, optionally with `.port` -- what a pipe writes to, and what `wait`,
   /// `drain`, `status` and a counted `skip` take.
   NodePtr ParseReference() {
+    const Descent descent(*this);
+    if (TooDeep()) {
+      return MakeError(Current(), "a completion or node subject");
+    }
     const Token& at = Current();
     NodePtr node = ParsePostfix();
     // `_` is reference-shaped and only a pipe's target may be one, so it is let
     // through here and refused by the resolver -- which knows which of the
     // several statements that read a reference this is.
-    if (syntax::IsAnyOf(node.get(),
-                        {syntax::NodeKind::kName, syntax::NodeKind::kAttr,
-                         syntax::NodeKind::kOutcome, syntax::NodeKind::kDiscard,
-                         syntax::NodeKind::kError})) {
+    if (syntax::IsAnyOf(
+            node.get(),
+            {syntax::NodeKind::kName, syntax::NodeKind::kAttr,
+             syntax::NodeKind::kOutcome, syntax::NodeKind::kDiscard,
+             syntax::NodeKind::kCallExpression,
+             syntax::NodeKind::kNodeExpression, syntax::NodeKind::kWait,
+             syntax::NodeKind::kDrain, syntax::NodeKind::kError})) {
       return node;
     }
     Report("flow.syntax.unexpected",
@@ -2087,7 +2459,13 @@ class ParserImpl {
     if (TooDeep()) {
       return MakeError(Current(), "a value");
     }
-    return ParseOr();
+    const Token first = Current();
+    NodePtr result = ParseOr();
+    result->extent = syntax::LocationOf(first);
+    if (position_ > 0) {
+      result->extent.end = tokens_[position_ - 1].end;
+    }
+    return Bounded(std::move(result));
   }
 
   NodePtr ParseOr() {
@@ -2098,7 +2476,7 @@ class ParserImpl {
       binary->op = "or";
       binary->left = std::move(left);
       binary->right = ParseAnd();
-      left = std::move(binary);
+      left = Bounded(std::move(binary));
     }
     return left;
   }
@@ -2111,18 +2489,22 @@ class ParserImpl {
       binary->op = "and";
       binary->left = std::move(left);
       binary->right = ParseNot();
-      left = std::move(binary);
+      left = Bounded(std::move(binary));
     }
     return left;
   }
 
   NodePtr ParseNot() {
+    const Descent descent(*this);
+    if (TooDeep()) {
+      return MakeError(Current(), "a value");
+    }
     if (AtWord("not")) {
       const Token& op = Advance();
       auto unary = Make<syntax::Unary>(op);
       unary->op = "not";
       unary->operand = ParseNot();
-      return unary;
+      return Bounded(std::move(unary));
     }
     return ParseComparison();
   }
@@ -2149,7 +2531,7 @@ class ParserImpl {
       binary->op = std::string(KindName(op.kind));
       binary->left = std::move(left);
       binary->right = ParseAdditive();
-      return binary;
+      return Bounded(std::move(binary));
     }
     if (AtWord("in")) {
       const Token& op = Advance();
@@ -2157,7 +2539,7 @@ class ParserImpl {
       binary->op = "in";
       binary->left = std::move(left);
       binary->right = ParseAdditive();
-      return binary;
+      return Bounded(std::move(binary));
     }
     return left;
   }
@@ -2177,7 +2559,7 @@ class ParserImpl {
       binary->op = std::string(KindName(op.kind));
       binary->left = std::move(left);
       binary->right = ParseCast();
-      left = std::move(binary);
+      left = Bounded(std::move(binary));
     }
     return left;
   }
@@ -2190,7 +2572,7 @@ class ParserImpl {
       auto cast = Make<syntax::TypedValue>(op);
       cast->type = ParseType();
       cast->value = std::move(node);
-      node = std::move(cast);
+      node = Bounded(std::move(cast));
     }
     return node;
   }
@@ -2249,12 +2631,47 @@ class ParserImpl {
   NodePtr ParsePostfix() {
     NodePtr node = ParsePrimary();
     while (true) {
+      if (auto* call = syntax::As<syntax::CallExpression>(node.get());
+          call != nullptr && call->groups.empty() &&
+          (At(TokenKind::kDot) || At(TokenKind::kLeftBracket))) {
+        const Token selector = Current();
+        const size_t operation_end = call->extent.end;
+        while (At(TokenKind::kDot) || At(TokenKind::kLeftBracket)) {
+          syntax::CallExpression::TargetSuffix suffix;
+          suffix.location = syntax::LocationOf(Current());
+          if (AcceptToken(TokenKind::kDot)) {
+            suffix.member = ExpectName("a member name").text;
+          } else {
+            Advance();
+            suffix.index = ParseExpression();
+            Expect(TokenKind::kRightBracket);
+          }
+          suffix.location.end = tokens_[position_ - 1].end;
+          call->target_suffixes.push_back(std::move(suffix));
+        }
+        call->invalid_target = true;
+        Report("flow.form.invalid-action-target",
+               "An action target with modifiers cannot be selected as data. "
+               "Likely missing parentheses around the whole operation.",
+               selector, Severity::kError, Family::kForm);
+        result_.diagnostics.back().fixes.push_back(
+            {"Group the operation before selecting its result",
+             {{call->extent.start, call->extent.start, "("},
+              {operation_end, operation_end, ")"}}});
+        call->extent.end = tokens_[position_ - 1].end;
+        return node;
+      }
       if (At(TokenKind::kDot)) {
         const Token& dot = Advance();
         auto attr = Make<syntax::Attr>(dot);
         attr->name = ExpectName("a name after '.'").text;
+        attr->extent = node->extent;
+        if (!node->groups.empty()) {
+          attr->extent.start = node->groups.back().start;
+        }
+        attr->extent.end = tokens_[position_ - 1].end;
         attr->base = std::move(node);
-        node = std::move(attr);
+        node = Bounded(std::move(attr));
         continue;
       }
       if (At(TokenKind::kLeftBracket)) {
@@ -2262,8 +2679,13 @@ class ParserImpl {
         auto index = Make<syntax::Index>(bracket);
         index->index = ParseExpression();
         Expect(TokenKind::kRightBracket);
+        index->extent = node->extent;
+        if (!node->groups.empty()) {
+          index->extent.start = node->groups.back().start;
+        }
+        index->extent.end = tokens_[position_ - 1].end;
         index->base = std::move(node);
-        node = std::move(index);
+        node = Bounded(std::move(index));
         continue;
       }
       // `a11.sdk.Interaction{...}`: a value of a named type, written the way
@@ -2289,9 +2711,35 @@ class ParserImpl {
 
   NodePtr ParsePrimary() {
     const Token& token = Current();
+    if ((AtWord("try") && Peek().kind == TokenKind::kLeftBrace) ||
+        ((AtWord("fail", "cancel") || AtWord("abort", "log") ||
+          AtWord("skip", "for") || AtWord("repeat", "if") || AtWord("nodes")) &&
+         (Peek().IsWord() || Peek().kind == TokenKind::kLeftBrace))) {
+      ReportHere("flow.form.statement-as-value",
+                 "This construct is a statement. Bind its completion and read "
+                 "its status where a value is needed.",
+                 Family::kForm);
+      return ParseStatement();
+    }
+    if ((AtWord("run", "call") &&
+         (Peek().IsWord() || Peek().kind == TokenKind::kString)) ||
+        (AtWord("try") && NextWordIsCallVerb())) {
+      return ParseCall();
+    }
+    if (AtWord("node") && Peek().kind == TokenKind::kLeftParen) {
+      return ParseNode();
+    }
+    if (AtWord("drain") &&
+        (Peek().IsWord() || Peek().kind == TokenKind::kLeftParen)) {
+      Advance();
+      auto drain = Make<syntax::Drain>(token);
+      drain->target = ParseReference();
+      return drain;
+    }
     // `status` reads an outcome when something follows it to be the outcome
     // *of*; on its own it is an ordinary name, so a port may be called that.
-    if (AtWord("status") && Peek().kind == TokenKind::kWord) {
+    if (AtWord("status") &&
+        (Peek().IsWord() || Peek().kind == TokenKind::kLeftParen)) {
       Advance();
       auto outcome = Make<syntax::Outcome>(token);
       outcome->subject = ParseReference();
@@ -2306,6 +2754,16 @@ class ParserImpl {
       Advance();
       return ParseWaitOf(token);
     }
+    if (AtWord("wait") &&
+        (Peek().IsWord() || Peek().kind == TokenKind::kLeftParen)) {
+      Advance();
+      auto wait = Make<syntax::Wait>(token);
+      wait->subject = ParseReference();
+      if (AcceptWord("timeout")) {
+        wait->timeout = ExpectDuration();
+      }
+      return wait;
+    }
     if (At(TokenKind::kString)) {
       auto literal = Make<syntax::Literal>(token);
       literal->value = syntax::Constant::String(ParseStringRun());
@@ -2314,10 +2772,9 @@ class ParserImpl {
     if (At(TokenKind::kNumber)) {
       Advance();
       auto literal = Make<syntax::Literal>(token);
-      literal->value =
-          token.is_integer
-              ? syntax::Constant::Integer(static_cast<long long>(token.number))
-              : syntax::Constant::Double(token.number);
+      literal->value = token.is_integer
+                           ? syntax::Constant::Integer(token.integer)
+                           : syntax::Constant::Double(token.number);
       return literal;
     }
     if (At(TokenKind::kDuration)) {
@@ -2345,7 +2802,12 @@ class ParserImpl {
         return value;
       }
       SkipNewlines();
-      Expect(TokenKind::kRightParen);
+      const Token close = Current();
+      if (Expect(TokenKind::kRightParen)) {
+        syntax::Location group = syntax::LocationOf(token);
+        group.end = close.end;
+        node->groups.push_back(group);
+      }
       return node;
     }
     if (At(TokenKind::kLeftBracket)) {

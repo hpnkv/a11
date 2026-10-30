@@ -1250,6 +1250,7 @@ std::vector<ActionInfo> ReadSchemas(std::string_view source,
   std::vector<ActionInfo> found;
   for (const size_t at : WholeWords(masked, kSchemaWord)) {
     ActionInfo action;
+    action.schema_complete = false;
     const size_t after = SkipSpace(masked, at + kSchemaWord.size());
     if (masked.at(after) == '(') {
       ReadConstructed(masked, after, constants, language, action);

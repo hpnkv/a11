@@ -63,6 +63,7 @@ from typing import Any, Sequence
 from a11 import timing
 from a11.cli import durations
 from a11.cli.app import Command
+from a11.cli.commands import _command_help
 from a11.flow import diagnostics as diag
 
 #: What `--format` accepts, in the order `--help` lists them.
@@ -108,7 +109,7 @@ def _syntax_error_diagnostic(error: Any, source: str) -> diag.Diagnostic:
     )
 
 
-def _check_source(source: str) -> list[diag.Diagnostic]:
+def _check_source(source: str, source_name: str = "-") -> list[diag.Diagnostic]:
     """Everything wrong with one flow file.
 
     The native parser and resolver recover after errors and report every problem
@@ -116,7 +117,9 @@ def _check_source(source: str) -> list[diag.Diagnostic]:
     """
     from a11._native import flow as native_flow
 
-    payload = native_flow.check(source)
+    payload = native_flow.check(
+        source, source_name, resolve_files=source_name != _STDIN
+    )
     return [
         diag.Diagnostic.from_payload(entry) for entry in payload["diagnostics"]
     ]
@@ -136,7 +139,7 @@ async def _run_check(args: argparse.Namespace) -> int:
             exit_code = 2
             continue
 
-        found = diag.sort_diagnostics(_check_source(source))
+        found = diag.sort_diagnostics(_check_source(source, name))
         errors = sum(1 for one in found if one.severity is diag.Severity.ERROR)
         if errors:
             exit_code = max(exit_code, 1)
@@ -165,7 +168,10 @@ async def _run_describe(args: argparse.Namespace) -> int:
     from a11._native import flow as native_flow
 
     source, name = _read(args.file)
-    payload = native_flow.plan(source, "" if name == _STDIN else name)
+    payload = native_flow.request(
+        {"method": "plan", "source": source, "path": name},
+        resolve_files=name != _STDIN,
+    )["result"]
     found = diag.sort_diagnostics(
         diag.Diagnostic.from_payload(entry) for entry in payload["diagnostics"]
     )
@@ -436,12 +442,14 @@ async def _run_syntax(args: argparse.Namespace) -> int:
         )
 
     if args.format in ("json", "sarif"):
-        _emit({
-            "format": "flow.syntax-check/v1",
-            "targets": sorted(names),
-            "generated": written,
-            "out_of_date": changed,
-        })
+        _emit(
+            {
+                "format": "flow.syntax-check/v1",
+                "targets": sorted(names),
+                "generated": written,
+                "out_of_date": changed,
+            }
+        )
     return 1 if changed else 0
 
 
@@ -496,14 +504,19 @@ async def _run_serve(args: argparse.Namespace) -> int:
             request = json.loads(line)
         except ValueError:
             print(
-                json.dumps({
-                    "ok": False,
-                    "error": {"message": "That is not JSON."},
-                }),
+                json.dumps(
+                    {
+                        "ok": False,
+                        "error": {"message": "That is not JSON."},
+                    }
+                ),
                 flush=True,
             )
             continue
-        print(json.dumps(native_flow.request(request)), flush=True)
+        print(
+            json.dumps(native_flow.request(request, resolve_files=True)),
+            flush=True,
+        )
     return 0
 
 
@@ -623,7 +636,9 @@ async def _run_program(args: argparse.Namespace, source: str, name: str) -> int:
     except StatusException as error:
         print(f"{name}: {error.status.message}", file=sys.stderr)
         return 1
-    except Exception as error:  # noqa: BLE001 - the program's failure is a result
+    except (
+        Exception
+    ) as error:  # noqa: BLE001 - the program's failure is a result
         print(f"{name}: {error}", file=sys.stderr)
         return 1
     finally:
@@ -637,12 +652,14 @@ async def _run_program(args: argparse.Namespace, source: str, name: str) -> int:
         code = diagnostic.get("code", "")
         print(f"{name}: {message} [{code}]", file=sys.stderr)
     if args.format in ("json", "sarif"):
-        _emit({
-            "format": "flow.program/v1",
-            "source": name,
-            "exit_code": outcome.get("exit_code", 0),
-            "diagnostics": list(outcome.get("diagnostics", ())),
-        })
+        _emit(
+            {
+                "format": "flow.program/v1",
+                "source": name,
+                "exit_code": outcome.get("exit_code", 0),
+                "diagnostics": list(outcome.get("diagnostics", ())),
+            }
+        )
         return 0
     return int(outcome.get("exit_code", 0))
 
@@ -714,12 +731,23 @@ async def _run_run(args: argparse.Namespace) -> int:
 
     source, name = _read(args.file)
     try:
-        program = flow_api.loads(source, "" if name == _STDIN else name)
+        program = flow_api.compile_source(
+            source,
+            "" if name == _STDIN else str(pathlib.Path(name).resolve()),
+            resolve_files=name != _STDIN,
+        )
     except FlowSyntaxError as error:
-        print(
-            _syntax_error_diagnostic(error, source).as_text(
-                "" if name == _STDIN else name
+        diagnostic = next(
+            (
+                found
+                for found in _check_source(source, name)
+                if found.severity == diag.Severity.ERROR
+                and found.message == error.message
             ),
+            _syntax_error_diagnostic(error, source),
+        )
+        print(
+            diagnostic.as_text("" if name == _STDIN else name),
             file=sys.stderr,
         )
         return 1
@@ -728,7 +756,12 @@ async def _run_run(args: argparse.Namespace) -> int:
         return await _run_program(args, source, name)
 
     flows = [plan.name for plan in program]
-    wanted = args.flow or (flows[0] if flows else "")
+    wanted = args.flow or ""
+    if not wanted:
+        try:
+            wanted = program.main.name
+        except KeyError:
+            pass
     if wanted not in flows:
         known = ", ".join(flows) or "none"
         hint = ""
@@ -766,12 +799,14 @@ async def _run_run(args: argparse.Namespace) -> int:
         return 1
 
     if args.format in ("json", "sarif"):
-        _emit({
-            "format": "flow.run/v1",
-            "source": name,
-            "flow": wanted,
-            "outputs": produced,
-        })
+        _emit(
+            {
+                "format": "flow.run/v1",
+                "source": name,
+                "flow": wanted,
+                "outputs": produced,
+            }
+        )
         return 0
     for port, value in produced.items():
         if isinstance(value, list):
@@ -906,8 +941,10 @@ def _configure(parser: argparse.ArgumentParser) -> None:
 
     fmt = subparsers.add_parser(
         "fmt",
-        help="Format flows: indentation, spacing, and the columns of a run of"
-        " declarations.",
+        help=(
+            "Format flows: indentation, spacing, and the columns of a run of"
+            " declarations."
+        ),
         description=(
             "Formats each file. Prints the result by default, rewrites the file"
             " with -i, and says what would change with --check. It decides"
@@ -1047,7 +1084,7 @@ def _configure(parser: argparse.ArgumentParser) -> None:
     )
     run.add_argument(
         "--flow",
-        help="Which flow to run. The first one declared, by default.",
+        help="Which flow to run. The first root implementation, by default.",
     )
     run.add_argument(
         "--peer",
@@ -1114,9 +1151,7 @@ def _configure(parser: argparse.ArgumentParser) -> None:
     run.add_argument(
         "--allow-local-net",
         action="store_true",
-        help=(
-            "Also allow loopback, private, and link-local network addresses."
-        ),
+        help="Also allow loopback, private, and link-local network addresses.",
     )
     run.add_argument(
         "--allow-env",
@@ -1234,7 +1269,7 @@ def _configure(parser: argparse.ArgumentParser) -> None:
 
 FLOW_COMMAND = Command(
     name="flow",
-    help="Check and describe Flow programs.",
+    help=_command_help("flow"),
     description=__doc__,
     run=_run,
     configure=_configure,

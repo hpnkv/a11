@@ -380,6 +380,12 @@ Use the following minimum checks for each kind of change:
 
 Formatting and lock-file checks are:
 
+Use clang-format 15 or newer. The root `.clang-format` inserts braces around
+control-statement bodies. In IntelliJ IDEA with C/C++ support, enable
+**Editor → Code Style → C/C++ → Clang-Format** and
+**Tools → Actions on Save → Reformat code → Whole file**. Use the same
+formatter version for command-line runs and IDE saves.
+
 ```sh
 find cpp -type f \( -name '*.cc' -o -name '*.h' \) \
   -exec clang-format --dry-run --Werror {} +

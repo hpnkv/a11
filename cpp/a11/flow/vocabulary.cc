@@ -32,28 +32,31 @@ namespace {
 // Stages in the order a listing reads best: what shortens a stream, what
 // reshapes each value, what reduces it to one, what encodes it.
 constexpr std::array kStageOrder = {
-    std::string_view("first"),     std::string_view("last"),
-    std::string_view("drop"),      std::string_view("truncate"),
-    std::string_view("batch"),     std::string_view("window"),
-    std::string_view("flatten"),   std::string_view("group"),
-    std::string_view("sort"),      std::string_view("where"),
-    std::string_view("map"),       std::string_view("scan"),
-    std::string_view("match"),     std::string_view("distinct"),
-    std::string_view("then"),      std::string_view("log"),
-    std::string_view("logf"),      std::string_view("mime"),
-    std::string_view("strformat"), std::string_view("chunk"),
-    std::string_view("collect"),   std::string_view("count"),
-    std::string_view("sum"),       std::string_view("min"),
-    std::string_view("max"),       std::string_view("avg"),
-    std::string_view("fold"),      std::string_view("join"),
-    std::string_view("text"),      std::string_view("json"),
-    std::string_view("packb"),     std::string_view("timeout"),
-    std::string_view("pace"),
+    std::string_view("take while"), std::string_view("take until"),
+    std::string_view("first"),      std::string_view("last"),
+    std::string_view("drop"),       std::string_view("truncate"),
+    std::string_view("batch"),      std::string_view("window"),
+    std::string_view("flatten"),    std::string_view("group"),
+    std::string_view("sort"),       std::string_view("where"),
+    std::string_view("map"),        std::string_view("scan"),
+    std::string_view("match"),      std::string_view("distinct"),
+    std::string_view("then"),       std::string_view("log"),
+    std::string_view("logf"),       std::string_view("mime"),
+    std::string_view("strformat"),  std::string_view("chunk"),
+    std::string_view("collect"),    std::string_view("consume"),
+    std::string_view("count"),      std::string_view("sum"),
+    std::string_view("min"),        std::string_view("max"),
+    std::string_view("avg"),        std::string_view("fold"),
+    std::string_view("join"),       std::string_view("text"),
+    std::string_view("json"),       std::string_view("packb"),
+    std::string_view("timeout"),    std::string_view("pace"),
 };
 
 const absl::flat_hash_map<std::string_view, StageArgument>& StageTable() {
   static const auto* table =
       new absl::flat_hash_map<std::string_view, StageArgument>{
+          {"take while", StageArgument::kExpression},
+          {"take until", StageArgument::kExpression},
           {"first", StageArgument::kNumber},
           {"last", StageArgument::kNumber},
           {"drop", StageArgument::kNumber},
@@ -72,6 +75,7 @@ const absl::flat_hash_map<std::string_view, StageArgument>& StageTable() {
           {"log", StageArgument::kLog},
           {"logf", StageArgument::kLogFormat},
           {"collect", StageArgument::kNone},
+          {"consume", StageArgument::kNone},
           {"count", StageArgument::kNone},
           {"distinct", StageArgument::kNone},
           {"flatten", StageArgument::kNone},
@@ -94,6 +98,21 @@ const absl::flat_hash_map<std::string_view, StageArgument>& StageTable() {
 // What each stage does, as reference.
 const absl::flat_hash_map<std::string_view, WordDoc>& StageDocs() {
   static const auto* table = new absl::flat_hash_map<std::string_view, WordDoc>{
+      {"take while",
+       {"Forwards the prefix for which the condition stays true.",
+        "a condition with 'it' bound",
+        "Evaluates one item at a time. The first false item and all later "
+        "items "
+        "are excluded. Ends this subscription without cancelling its producer. "
+        "Predicate failures propagate unless the stage uses 'try'.",
+        "lines | take while lower(it) != \"/exit\" -> work.input"}},
+      {"take until",
+       {"Forwards the prefix before the condition first becomes true.",
+        "a condition with 'it' bound",
+        "Evaluates one item at a time. The first true item and all later items "
+        "are excluded. Ends this subscription without cancelling its producer. "
+        "A tolerated predicate failure drops that item and keeps looking.",
+        "lines | take until lower(it) == \"/exit\" -> work.input"}},
       {"first",
        {"The first `n` values of the stream, and then nothing.", "a count",
         "Stops reading upstream as soon as it has them, so nothing downstream "
@@ -247,6 +266,12 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StageDocs() {
         "arithmetic of everything after it: `| drop 2` yields nothing and "
         "`| count` is 1 however long the stream was.",
         "hits | collect -> all"}},
+      {"consume",
+       {"Exactly one complete value, checked before it is yielded.", "",
+        "An empty stream or a second item fails with FAILED_PRECONDITION. "
+        "Waits for normal termination after the sole value; upstream errors "
+        "retain their status. A null value counts as an item.",
+        "result | consume -> answer"}},
       {"count",
        {"How many values the stream had.", "",
         "Reads to the end and yields exactly one integer. Nothing is decoded "
@@ -710,8 +735,9 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StatementDocs() {
         "it went wrong. A reader cannot otherwise tell the two apart, and a "
         "stream cut short by something the flow noticed looks exactly like one "
         "that finished. Takes the same code and message a `fail` does, and "
-        "waits for nothing for the same reason, so it belongs in an `if` or a "
-        "loop body or carries an `after`.",
+        "reads its code and message before aborting. A data-dependent reason "
+        "synchronizes the abort; constant reasons need an `if`, a loop body "
+        "or an `after`.",
         "if not status page.ok { abort findings unavailable \"gone\" }"}},
       {"cancel",
        {"Asks a step to stop.", "a step",
@@ -724,26 +750,24 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StatementDocs() {
       {"fail",
        {"Ends the flow with a status.", "a code or a number, and a message",
         "`fail invalid_argument \"..\"`, `fail 5 \"..\"`, or `fail STATUS` to "
-        "pass one on. Waits for nothing, so like `cancel` it belongs in an "
-        "`if` or a loop body, or carries an `after`. One alone at the end of a "
-        "body reads like a last resort and is refused, because it is in fact "
-        "the first thing that would happen.",
+        "pass one on. Reads its code and message before failing. "
+        "Data-dependent arguments synchronize it; constant-only arguments "
+        "need an `if`, a loop body, or an `after`.",
         "fail invalid_argument \"the topic is empty\""}},
       {"log",
        {"Writes a line to the flow's log.",
         "optionally a level, and what to log",
         "The log requires no declared port or manual drain, and is created "
-        "only when used. This statement does not wait, "
-        "so like `fail` it belongs in an `if` or a loop body, or carries an "
-        "`after` saying what it waits for; one at the top of a body would run "
-        "before the thing it is describing.",
+        "only when used. Reads its argument before logging. A data-dependent "
+        "argument synchronizes it; constant-only arguments need an `if`, "
+        "a loop body, or an `after`.",
         "log \"searching\" after plan"}},
       {"logf",
        {"Writes a formatted line to the flow's log.",
         "optionally a level, a format, and the values to fill it with",
-        "The format is `strformat`'s. Waits for nothing, so like `log` it "
-        "needs "
-        "an `if`, a loop body, or an `after`.",
+        "The format is `strformat`'s. Reads its arguments before logging. "
+        "Data-dependent arguments synchronize it; constant-only arguments "
+        "need an `if`, a loop body, or an `after`.",
         "logf \"found %s results\" count after search"}},
       {"if",
        {"Runs a block when a condition holds, and another when it does not.",
@@ -799,6 +823,29 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StatementDocs() {
 
 const absl::flat_hash_map<std::string_view, WordDoc>& DeclarationDocs() {
   static const auto* table = new absl::flat_hash_map<std::string_view, WordDoc>{
+      {"declare",
+       {"Declares a callable interface without an implementation.",
+        "flow name { interface }",
+        "Contains descriptions, headers, inputs and outputs. Implementations "
+        "are resolved before execution.",
+        "declare flow render { in data: object }"}},
+      {"exported",
+       {"Makes a module declaration visible to importers.",
+        "after a declaration name",
+        "Unattributed declarations remain private to their module.",
+        "flow render exported { }"}},
+      {"import",
+       {"Binds a source module to a lexical namespace.",
+        "a source string and 'as name'",
+        "Supported at module level and directly inside implemented flows. "
+        "Imports resolve before execution.",
+        "import \"./render.flow\" as rendering"}},
+      {"from",
+       {"Imports selected public symbols into the current lexical scope.",
+        "a source string, 'import', and names with optional 'as' aliases",
+        "A same-name callable declaration constrains the imported symbol. "
+        "Use aliases to keep distinct symbols under separate names.",
+        "from \"./render.flow\" import render, Report as RenderReport"}},
       {"flow",
        {"Declares a composition, which is itself an action.",
         "a name, and a block",
@@ -968,7 +1015,9 @@ const absl::flat_hash_map<std::string_view, WordDoc>& ModifierDocs() {
         "statement reports is what was true by then. It is also what lets a "
         "`fail` or a `cancel` stand at the top of a body, by saying what it "
         "waits for. A named loop is a step like any other, so `after done` is "
-        "how the rest of a flow waits for one.",
+        "how the rest of a flow waits for one. The prefix form "
+        "'after a, b { ... }' gates a concurrent block, including argument "
+        "evaluation and nested action activation. It is not a finally handler.",
         "strformat(\"[done] %s\", brief) -> user_log after done"}},
       {"with",
        {"Headers to send on this step.", "one or more names and their values",
@@ -1446,7 +1495,10 @@ const absl::flat_hash_map<std::string_view, WordDoc>& SymbolDocs() {
         "a name on the left, what it is on the right",
         "The name is then what reads the thing: `x.port` for a step's outputs, "
         "`status x` for its outcome, the name itself for a node or a `let` "
-        "value. One `=` is a binding; `==` is the comparison, and a statement "
+        "value. `done = source | stage -> target` names the completion of a "
+        "one-pipeline block, including every destination and owned child. "
+        "Use `after done`, `wait done`, or `status done` to observe it. "
+        "One `=` is a binding; `==` is the comparison, and a statement "
         "word before a single `=` is read as a name rather than a keyword, so "
         "`run = run x()` means what it says.",
         "search = run web-search(query: question)"}},
@@ -1683,8 +1735,8 @@ constexpr std::array kStatementOrder = {
     std::string_view("fail"),    std::string_view("log"),
     std::string_view("logf"),    std::string_view("if"),
     std::string_view("for"),     std::string_view("repeat"),
-    std::string_view("until"),   std::string_view("while"),
-    std::string_view("nodes"),
+    std::string_view("after"),   std::string_view("until"),
+    std::string_view("while"),   std::string_view("nodes"),
 };
 
 // `else` continues an `if`; `parallel` and `max` say how wide a loop or a stage
@@ -1699,6 +1751,8 @@ constexpr std::array kClauseOrder = {
 
 // As a flow is written, top to bottom.
 constexpr std::array kDeclarationOrder = {
+    std::string_view("declare"),  std::string_view("exported"),
+    std::string_view("import"),   std::string_view("from"),
     std::string_view("flow"),     std::string_view("struct"),
     std::string_view("describe"), std::string_view("in"),
     std::string_view("out"),      std::string_view("header"),
@@ -1856,7 +1910,7 @@ const WordDoc* absl_nullable Documentation(WordRole role,
       table = &BuiltinDocs();
       break;
     case WordRole::kStatement:
-      table = &StatementDocs();
+      table = canonical_name == "after" ? &ModifierDocs() : &StatementDocs();
       break;
     case WordRole::kDeclaration:
       table = &DeclarationDocs();
@@ -2035,8 +2089,8 @@ const absl::flat_hash_set<std::string_view>& BareStages() {
 }
 
 const absl::flat_hash_set<std::string_view>& ReducingStages() {
-  static const auto* words =
-      MakeSet({"collect", "count", "join", "sum", "min", "max", "avg", "fold"});
+  static const auto* words = MakeSet({"collect", "consume", "count", "join",
+                                      "sum", "min", "max", "avg", "fold"});
   return *words;
 }
 

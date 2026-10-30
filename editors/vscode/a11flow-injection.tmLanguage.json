@@ -10,7 +10,7 @@
       "patterns": [
         {
           "//": "A Python `\"\"\"..\"\"\"` or `'''..'''` holding a flow.",
-          "begin": "(\"\"\"|''')(?=\\s*(?:#[^\\n]*\\n\\s*)*flow|FLOW\\s+[A-Za-z_][A-Za-z0-9_-]*\\s*\\{)",
+          "begin": "(\"\"\"|''')(?=\\s*(?:#[^\\n]*\\n\\s*)*(?:(?:(?:declare|DECLARE)\\s+)?(?:(?:flow|FLOW))(?:\\s+(?:[A-Za-z_$][A-Za-z0-9_$-]*(?:\\.[A-Za-z_$][A-Za-z0-9_$-]*)*|\"(?:\\\\.|[^\"\\\\\\n])+\"))?(?:\\s+(?:exported|EXPORTED))?\\s*\\{|(?:struct|STRUCT)\\s+[A-Za-z_$][A-Za-z0-9_$-]*(?:\\s+(?:exported|EXPORTED))?\\s*\\{|(?:import|IMPORT)\\s+\"[^\"\\n]+\"\\s+(?:as|AS)\\s+[A-Za-z_$][A-Za-z0-9_$-]*|(?:from|FROM)\\s+\"[^\"\\n]+\"\\s+(?:import|IMPORT)\\s+[A-Za-z_$][A-Za-z0-9_$-]*(?:\\.[A-Za-z_$][A-Za-z0-9_$-]*)*))",
           "beginCaptures": {"1": {"name": "punctuation.definition.string.begin.a11flow"}},
           "end": "\\1",
           "endCaptures": {"0": {"name": "punctuation.definition.string.end.a11flow"}},
@@ -19,7 +19,7 @@
         },
         {
           "//": "A TypeScript template literal holding one.",
-          "begin": "(`)(?=\\s*(?:#[^\\n]*\\n\\s*)*flow|FLOW\\s+[A-Za-z_][A-Za-z0-9_-]*\\s*\\{)",
+          "begin": "(`)(?=\\s*(?:#[^\\n]*\\n\\s*)*(?:(?:(?:declare|DECLARE)\\s+)?(?:(?:flow|FLOW))(?:\\s+(?:[A-Za-z_$][A-Za-z0-9_$-]*(?:\\.[A-Za-z_$][A-Za-z0-9_$-]*)*|\"(?:\\\\.|[^\"\\\\\\n])+\"))?(?:\\s+(?:exported|EXPORTED))?\\s*\\{|(?:struct|STRUCT)\\s+[A-Za-z_$][A-Za-z0-9_$-]*(?:\\s+(?:exported|EXPORTED))?\\s*\\{|(?:import|IMPORT)\\s+\"[^\"\\n]+\"\\s+(?:as|AS)\\s+[A-Za-z_$][A-Za-z0-9_$-]*|(?:from|FROM)\\s+\"[^\"\\n]+\"\\s+(?:import|IMPORT)\\s+[A-Za-z_$][A-Za-z0-9_$-]*(?:\\.[A-Za-z_$][A-Za-z0-9_$-]*)*))",
           "beginCaptures": {"1": {"name": "punctuation.definition.string.begin.a11flow"}},
           "end": "`",
           "endCaptures": {"0": {"name": "punctuation.definition.string.end.a11flow"}},

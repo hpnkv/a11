@@ -224,7 +224,8 @@ std::vector<RefId> FlowGraph::StageDestinations(StepId step) const {
 std::vector<RefId> FlowGraph::Observed(StepId step) const {
   std::vector<RefId> found;
   const Step& one = steps[step];
-  if (one.kind != StepKind::kWait && one.kind != StepKind::kDrain) {
+  if (one.race ||
+      (one.kind != StepKind::kWait && one.kind != StepKind::kDrain)) {
     return found;
   }
   // A barrier on a node watches it without writing it: the node still has to be
@@ -244,8 +245,8 @@ std::vector<BodyId> FlowGraph::NestedBodies(BodyId body) const {
   if (body == kNone) {
     return found;
   }
-  for (const StepId step : bodies[body].steps) {
-    for (const BodyId nested : steps[step].bodies) {
+  for (BodyId nested = 0; nested < bodies.size(); ++nested) {
+    if (bodies[nested].parent == body) {
       found.push_back(nested);
       for (const BodyId deeper : NestedBodies(nested)) {
         found.push_back(deeper);

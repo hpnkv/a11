@@ -30,6 +30,7 @@
 #include "a11/actions/action.h"
 #include "a11/actions/schema.h"
 #include "a11/flow/graph.h"
+#include "a11/flow/module.h"
 #include "a11/flow/parser.h"
 #include "a11/flow/plan.h"
 #include "a11/flow/resolve.h"
@@ -65,7 +66,8 @@ class CompiledProgram {
   /// the line and column on it. Everything less than an error is kept for a
   /// caller that wants to see it.
   static absl::StatusOr<std::shared_ptr<CompiledProgram>> Compile(
-      std::string source, std::string source_name = {});
+      std::string source, std::string source_name = {},
+      const ModuleSources& modules = {}, ModuleResolver resolver = {});
 
   [[nodiscard]] const Program& program() const { return resolved_.program; }
 
@@ -93,8 +95,10 @@ class CompiledProgram {
   CompiledProgram() = default;
 
   std::string source_;
+  std::string linked_source_;
   std::string source_name_;
   ParseResult parsed_;
+  std::vector<ModuleMember> members_;
   ResolveResult resolved_;
 };
 
@@ -102,10 +106,24 @@ class CompiledProgram {
 ///
 /// A flow is an action: it has ports, headers and a name, so anything that can
 /// dispatch an action can dispatch a composition without being told it is one.
-absl::StatusOr<actions::ActionSchema> FlowSchema(const FlowPlan& plan);
+absl::StatusOr<actions::ActionSchema> FlowSchema(
+    const FlowPlan& plan, const Program* absl_nullable shapes = nullptr);
+
+/// Import an action interface and representable object metadata for generation.
+struct ActionDeclaration {
+  FlowPlan interface;
+  std::vector<DtoPlan> types;
+  std::vector<Diagnostic> diagnostics;
+};
+
+ActionDeclaration DeclareAction(const actions::ActionSchema& schema);
 
 /// What a run needs besides the program.
+struct ExecutionSnapshot;
+
 struct RunOptions {
+  /// Execution-local pinned registry bindings, shared by transitive flows.
+  std::shared_ptr<ExecutionSnapshot> snapshot;
   /// Who answers the questions only the host can: coercion into a registered
   /// type, and reading and writing a chunk. The native registry's answers are
   /// used when this is null.

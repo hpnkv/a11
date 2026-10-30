@@ -14,6 +14,7 @@
 
 #include "a11/flow/inspect.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <ranges>
 #include <string>
@@ -25,8 +26,10 @@
 #include <absl/container/flat_hash_set.h>
 #include <absl/functional/function_ref.h>
 #include <absl/strings/str_cat.h>
+#include <nlohmann/json.hpp>
 
 #include "a11/flow/diagnostic.h"
+#include "a11/flow/emit_json.h"
 #include "a11/flow/plan.h"
 #include "a11/flow/resolve.h"
 #include "a11/flow/syntax.h"
@@ -45,8 +48,7 @@ std::string Quoted(std::string_view text) {
 /// A stage as a message names it: `'| drop 3'`.
 std::string StageName(const syntax::Stage& stage) {
   if (stage.takes == vocabulary::StageArgument::kNumber) {
-    return absl::StrCat("'| ", stage.name, " ",
-                        static_cast<long long>(stage.number), "'");
+    return absl::StrCat("'| ", stage.name, " ", stage.integer, "'");
   }
   return absl::StrCat("'| ", stage.name, "'");
 }
@@ -79,7 +81,7 @@ class Inspector {
 
   void Run(const ParseResult& parsed, const ResolveResult& resolved) {
     for (const ResolvedFlow& flow : resolved.flows) {
-      if (flow.declaration == nullptr) {
+      if (flow.declaration == nullptr || flow.plan.interface_only) {
         continue;
       }
       flow_ = flow.plan.name;
@@ -143,6 +145,9 @@ class Inspector {
       }
     }
     for (const syntax::DtoDeclarationPtr& declaration : parsed.dtos) {
+      if (declaration->exported) {
+        continue;
+      }
       if (named.contains(declaration->name.text)) {
         continue;
       }
@@ -514,6 +519,15 @@ class Inspector {
       return;
     }
     switch (statement->kind) {
+      case NodeKind::kBlock: {
+        const auto* block = syntax::As<syntax::Block>(statement);
+        if (block->after.empty()) {
+          Statements(block->body);
+        } else {
+          Guarded([&] { Statements(block->body); });
+        }
+        return;
+      }
       case NodeKind::kPipe: {
         const auto* pipe = syntax::As<syntax::Pipe>(statement);
         Pipeline(*pipe->pipeline);
@@ -812,6 +826,80 @@ class Inspector {
   int guarded_ = 0;
 };
 
+void StripLocations(nlohmann::json& value) {
+  if (value.is_object()) {
+    value.erase("at");
+    for (auto& child : value.items()) {
+      StripLocations(child.value());
+    }
+  } else if (value.is_array()) {
+    for (auto& child : value) {
+      StripLocations(child);
+    }
+  }
+}
+
+void RedundantGroups(std::string_view source, const ParseResult& parsed,
+                     std::vector<Diagnostic>& found) {
+  auto original = SyntaxToJsonValue("", parsed);
+  StripLocations(original);
+  std::vector<syntax::Location> groups;
+  for (const auto& flow : parsed.flows) {
+    syntax::VisitSubtree(*flow, [&](const Node& node) {
+      groups.insert(groups.end(), node.groups.begin(), node.groups.end());
+    });
+  }
+  std::sort(groups.begin(), groups.end(), [](const auto& a, const auto& b) {
+    return a.end - a.start > b.end - b.start;
+  });
+  std::vector<bool> removed(source.size(), false);
+  const LineIndex lines(source);
+  size_t inspected = 0;
+  for (const auto& group : groups) {
+    if (inspected++ >= 64) {
+      break;
+    }
+    if (group.end <= group.start + 1 || group.end > source.size()) {
+      continue;
+    }
+    const auto text = source.substr(group.start, group.end - group.start);
+    if (text.find_first_of("\n\r#") != std::string_view::npos) {
+      continue;
+    }
+    std::string edited;
+    edited.reserve(source.size());
+    for (size_t offset = 0; offset < source.size(); ++offset) {
+      if (!removed[offset] && offset != group.start &&
+          offset != group.end - 1) {
+        edited += source[offset];
+      }
+    }
+    const ParseResult reparsed = Parse(edited);
+    if (reparsed.HasErrors()) {
+      continue;
+    }
+    auto compared = SyntaxToJsonValue("", reparsed);
+    StripLocations(compared);
+    if (compared != original || Resolve(edited, reparsed).HasErrors()) {
+      continue;
+    }
+    removed[group.start] = true;
+    removed[group.end - 1] = true;
+    Diagnostic diagnostic;
+    diagnostic.code = "flow.sequence.redundant-parentheses";
+    diagnostic.severity = Severity::kInformation;
+    diagnostic.family = Family::kSequence;
+    diagnostic.message = "These parentheses can be removed.";
+    diagnostic.range = lines.Between(group.start, group.start + 1);
+    diagnostic.related.push_back({"", lines.Between(group.end - 1, group.end),
+                                  "The matching closing parenthesis."});
+    diagnostic.fixes.push_back(
+        {"Remove redundant parentheses",
+         {{group.start, group.start + 1, ""}, {group.end - 1, group.end, ""}}});
+    found.push_back(std::move(diagnostic));
+  }
+}
+
 }  // namespace
 
 std::vector<Diagnostic> Inspect(std::string_view source,
@@ -826,6 +914,7 @@ std::vector<Diagnostic> Inspect(std::string_view source,
   }
   const LineIndex lines(source);
   Inspector(lines, found).Run(parsed, resolved);
+  RedundantGroups(source, parsed, found);
   SortDiagnostics(found);
   return found;
 }

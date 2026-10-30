@@ -132,8 +132,6 @@ PYBIND11_MODULE(_native, module) {
   // Net is registered first because store writers and later runtime classes
   // accept WireStream base pointers in their signatures.
   a11::python::BindNet(module);
-  // The Flow language.
-  a11::python::BindFlow(module);
   a11::python::BindHttp(module);
   a11::python::BindWebRtc(module);
   a11::python::BindStores(module);
@@ -144,4 +142,6 @@ PYBIND11_MODULE(_native, module) {
   a11::python::BindService(module);
   a11::python::BindActions(module);
   a11::python::BindObs(module);
+  // Flow signatures refer to the registered action, node, and transport types.
+  a11::python::BindFlow(module);
 }

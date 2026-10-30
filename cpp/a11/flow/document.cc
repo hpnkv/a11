@@ -412,7 +412,11 @@ absl::StatusOr<Expression> Expression::Completion(std::string operation,
   if (operation != "wait" && operation != "close" && operation != "status") {
     return absl::InvalidArgumentError("Expected wait, close, or status.");
   }
-  return Expression(absl::StrCat("(", operation, " ", subject.source(), ")"));
+  const auto target =
+      operation == "wait" && vocabulary::Canonical(subject.source()) == "all"
+          ? absl::StrCat("(", subject.source(), ")")
+          : subject.source();
+  return Expression(absl::StrCat("(", operation, " ", target, ")"));
 }
 
 absl::StatusOr<Expression> Expression::Cast(
@@ -443,6 +447,21 @@ absl::StatusOr<Expression> Expression::Pipeline(
   text += ')';
   ABSL_RETURN_IF_ERROR(Parsed(absl::StrCat("flow { value = ", text, "\n}")));
   return Expression(std::move(text));
+}
+
+absl::StatusOr<Expression> Expression::PipelineInvoke(
+    std::string action,
+    std::vector<std::pair<std::string, Expression>> arguments,
+    const CallOptions& options) const {
+  ABSL_ASSIGN_OR_RETURN(
+      auto invocation,
+      InvokeWith(std::move(action), std::move(arguments), options));
+  const auto& called = invocation.source();
+  std::string source =
+      absl::StrCat("(", source_, " | ",
+                   std::string_view(called).substr(1, called.size() - 2), ")");
+  ABSL_RETURN_IF_ERROR(Parsed(absl::StrCat("flow { value = ", source, "\n}")));
+  return Expression(std::move(source));
 }
 
 absl::StatusOr<Statement> Statement::Validated(std::string source) {
@@ -477,7 +496,14 @@ absl::StatusOr<Statement> Statement::Pipe(const Expression& value,
 
 absl::StatusOr<Statement> Statement::Wait(const Expression& subject,
                                           bool close) {
-  return Validated(absl::StrCat(close ? "close " : "wait ", subject.source()));
+  const auto target = !close && vocabulary::Canonical(subject.source()) == "all"
+                          ? absl::StrCat("(", subject.source(), ")")
+                          : subject.source();
+  return Validated(absl::StrCat(close ? "close " : "wait ", target));
+}
+
+absl::StatusOr<Statement> Statement::WaitAll() {
+  return Validated("wait all");
 }
 
 absl::StatusOr<Statement> Statement::Cancel(const Expression& subject) {

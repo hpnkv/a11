@@ -556,3 +556,158 @@ def test_document_compilation_uses_host_source_roots_and_limits(tmp_path):
     limits.max_work = 0
     with pytest.raises(StatusException):
         document.compile(source_roots=[str(tmp_path)], limits=limits)
+
+
+@pytest.mark.asyncio
+async def test_whole_stream_pipeline_invocations_and_builder():
+    source = flow.Expression.reference("items").pipeline_invoke("clean")
+    assert "| run clean()" in source.source
+    program = flow.loads("""
+flow clean {
+  in input: string stream
+  out output: string stream
+  input | map std::trim(it) | where std::len(it) > 0 -> output
+}
+flow main {
+  in items: string stream
+  out result: string stream
+""" + source.source + " -> result\n}")
+    result = await program["main"].invoke(
+        {"items": [" a ", "", "b"]}, registry=ActionRegistry()
+    )
+    assert result == {"result": ["a", "b"]}
+
+
+def test_missing_qualified_callable_reaches_editor_diagnostics():
+    source = "flow main { run nested::test() }"
+    checked = flow.request({"method": "check", "source": source})
+    diagnostics = [
+        d
+        for d in checked["result"]["diagnostics"]
+        if d["code"] == "flow.name.unknown-call"
+    ]
+    assert len(diagnostics) == 1
+    assert diagnostics[0]["severity"] == "error"
+    with pytest.raises(FlowSyntaxError, match="nested::test"):
+        flow.loads(source)
+
+
+@pytest.mark.asyncio
+async def test_pipeline_call_preserves_peer_dispatch_with_a_local_handler():
+    import asyncio
+    import contextlib
+
+    import a11
+    from a11 import net
+
+    template = """
+flow external {
+ in input: string stream
+ out output: string stream
+ input | map std::TRANSFORM(it) -> output
+}
+"""
+    theirs = ActionRegistry()
+    ours = ActionRegistry()
+    flow.loads(template.replace("TRANSFORM", "upper")).register_all(theirs)
+    flow.loads(template.replace("TRANSFORM", "lower")).register_all(ours)
+    service = a11.Service(action_registry=theirs)
+    server, client = net.create_in_process_wire_stream_pair()
+    serving = asyncio.ensure_future(service.accept(server))
+    session = a11.Session(action_registry=ours)
+    await session.add_stream(client, mode="start")
+    source = """
+declare flow external {
+ in input: string stream
+ out output: string stream
+}
+flow main {
+ out output: string stream
+ ["Ab", "Cd"] | flatten | call external() -> output
+}
+"""
+    try:
+        peer = flow.loads(source)
+        result = await peer.main.invoke(
+            registry=ours, session=session, dispatch_stream=client
+        )
+        assert result == {"output": ["AB", "CD"]}
+        local = flow.loads(source.replace("| call external", "| run external"))
+        assert await local.main.invoke(registry=ours) == {
+            "output": ["ab", "cd"]
+        }
+    finally:
+        with contextlib.suppress(Exception):
+            await client.close()
+        service.abort(
+            a11.Status(code=a11.StatusCode.CANCELLED, message="test finished")
+        )
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(serving, timeout=10)
+
+
+def test_pipeline_invocation_hover_and_plan_describe_stream_adapter():
+    source = """
+flow clean { in input: string stream
+ out output: string stream
+ input -> output
+}
+flow main { in items: string stream
+ out result: string stream
+ items | run clean() -> result
+}
+"""
+    description = flow.request(
+        {
+            "method": "describe",
+            "source": source,
+            "offset": source.rindex("clean()"),
+        }
+    )
+    assert "Whole-stream invocation" in description["result"]["markdown"]
+    plan = flow.request({"method": "plan", "source": source})["result"]
+    main = next(item for item in plan["flows"] if item["flow"] == "main")
+    call = next(step for step in main["steps"] if "pipeline" in step)
+    assert call["mode"] == "run"
+    assert call["pipeline"] == {
+        "input": "input",
+        "output": "output",
+        "activation": "whole-stream",
+    }
+
+
+@pytest.mark.asyncio
+async def test_scope_barrier_builder_and_runtime():
+    barrier = flow.Statement.wait_all()
+    assert barrier.source == "wait all"
+    program = flow.loads("""
+flow main {
+ out result: int
+ x = 1
+""" + barrier.source + "\n x = x + 1\n x -> result\n}")
+    assert await program.main.invoke(registry=ActionRegistry()) == {"result": 2}
+
+
+def test_scope_barrier_tooling_envelopes_and_incomplete_input():
+    source = "flow main { x = 1\n wait all\n x -> _\n}"
+    syntax = flow.request({"method": "parse", "source": source})
+    assert "scope_barrier" in str(syntax)
+    plan = flow.request({"method": "plan", "source": source})["result"]
+    steps = plan["flows"][0]["steps"]
+    barrier = next(step for step in steps if step.get("scope_barrier"))
+    assert barrier["label"] in steps[-1]["after"]
+    hover = flow.request(
+        {"method": "describe", "source": source, "offset": source.index("wait")}
+    )["result"]
+    assert "all preceding work in this scope" in hover["markdown"]
+    for suffix in ("wait", "wait all", "wait all of", "wait all timeout"):
+        checked = flow.request(
+            {"method": "check", "source": "flow main { " + suffix}
+        )
+        assert checked["result"]["format"] == "flow.diagnostics/v1"
+    invalid = flow.request(
+        {"method": "check", "source": "flow main { x = wait all }"}
+    )["result"]
+    assert any(
+        d["code"] == "flow.form.scope-barrier" for d in invalid["diagnostics"]
+    )

@@ -588,6 +588,50 @@ expressions: `from std import join, trim`. Imports scope to a module or flow;
 `import "reports.flow"` uses the filename stem as its namespace. Dot access
 continues to select runtime fields and action ports.
 
+## Separate concurrent execution phases
+
+`wait all` waits for all preceding work in its executable scope before
+activating following statements. Work within each phase runs concurrently:
+
+```a11flow
+flow prepare {
+  run warm_cache()
+  run load_configuration()
+  wait all
+  run serve() deadline std::now() + 30s
+}
+```
+
+Both preparation calls complete before `serve` activates. Its arguments,
+initializers, and eager deadline expression also wait for the barrier. Completion
+includes input feeds, required output draining, owned calls, and child scopes.
+An ordinary failure prevents the next phase; tolerated failures retain their
+ordinary behavior.
+
+A barrier in a block or branch affects only that scope. A loop applies it
+independently to every iteration, including parallel iterations. Sibling scopes
+continue independently. The explicit-subject form `wait all of a, b` observes
+only those subjects and does not establish execution phases.
+
+A stream alias alone does no work. A barrier does not exhaust aliases, collect
+streams, add buffering, or cancel producers. Keep a producer and its required
+consumer in the same phase:
+
+```a11flow
+flow consume {
+  work = run read_rows()
+  work.rows -> _
+  wait all
+  log "Rows consumed"
+}
+```
+
+Moving `work.rows -> _` after the barrier would make completion depend on work
+that cannot activate. Native diagnostics report provable cross-phase cycles.
+Bare `wait all` accepts no `timeout`, `deadline`, or `after` modifier and cannot
+be bound as a value. Builders expose it as `Statement.wait_all()` in Python and
+`Statement::WaitAll()` in C++.
+
 ## Bound execution time
 
 A duration timeout and an absolute deadline can be named like other values:
@@ -739,3 +783,57 @@ all destinations and anonymous children, with normal failure propagation.
 The source may span lines and may be a literal, a stream, or an operation's
 output. Suffix `after` gates the enclosed pipeline as usual. Write
 `rows = SOURCE | STAGE` for a stream alias and `row = take rows` for one item.
+
+## Invoke flows inside pipelines
+
+Use `| run` to apply a flow or a declared action to a whole stream. Use `| call`
+to dispatch that invocation to the peer. Both forms accept ordinary call
+modifiers, including headers, `after`, `timeout`, `deadline`, and node placement.
+
+```a11flow
+flow clean_lines {
+  in input: string stream
+  out output: string stream
+  input | map std::trim(it) | where std::len(it) > 0 -> output
+}
+
+flow main {
+  in lines: string stream
+  out text: string stream
+  lines | run clean_lines() | first 10 -> text
+}
+```
+
+The invocation starts when the pipeline is read and runs once per activation.
+Readers of a shared pipeline share that invocation. A loop creates one
+activation per pass; a skipped branch creates none. A custom stage can filter,
+aggregate, keep state, and invoke other actions. Per-item invocation remains
+`lines | map (run process_line(input: it)).output`.
+
+Exactly one input must remain after named arguments, counting optional inputs
+as well. Every other configuration input must be supplied explicitly. Exactly
+one output must be declared. Use an adapter flow when an interface has several
+outputs or does not identify a unique input. `lines | run prefix(label: "> ")`
+feeds the sole remaining input and exposes the unique output. The compiler
+requires a known interface, including for external actions.
+
+Streaming and unary ports retain their contracts. A unary input validates its
+cardinality before forwarding a value: a required input needs exactly one item,
+and an optional input permits zero or one. No list expansion, collection, or
+first-item selection is implicit.
+
+Stopping a downstream reader with `first` retains ordinary draining and child
+ownership. The enclosing scope waits for the invocation, its feeds, and owned
+children; a failure after partial output still fails the scope. `try run` and
+`try call` tolerate invocation completion just as in ordinary calls. Errors
+reading an aborted output still propagate. A surrounding `try` block handles
+the complete pipeline. A `try` pipe tolerates transfer errors; combine it with
+`try run` or `try call` to tolerate invocation failure too. This differs from
+`try map`, which can drop an individual item.
+
+The plan describes the selected ports and whole-stream activation. Hover and
+completion show the adapter interface; both dispatch verbs are available, with
+`run` preferred. The native builder provides `Expression.pipeline_invoke`.
+
+An unresolved qualified call such as `run missing::work()` is a compiler error
+at the target name. Declare or import the callable contract before using it.

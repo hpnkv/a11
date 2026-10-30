@@ -939,4 +939,42 @@ mod second {
   EXPECT_NE(document.source().find("lib::action"), std::string::npos);
 }
 
+TEST(FlowDocument, PipelineInvocationBuilderUsesOrdinaryCallOptions) {
+  auto input = Expression::Reference("rows");
+  ASSERT_TRUE(input.ok());
+  CallOptions options;
+  options.remote = true;
+  options.timeout = absl::Seconds(2);
+  auto result = input->PipelineInvoke("tools::clean", {}, options);
+  ASSERT_TRUE(result.ok()) << result.status();
+  EXPECT_NE(result->source().find("| call tools::clean() timeout 2s"),
+            std::string::npos);
+}
+
+TEST(FlowModule, NestedPipelineInvocationsRespectTheParsingDepthBudget) {
+  std::string source = "flow main { 1";
+  for (int index = 0; index < 1000; ++index) {
+    source += " | run f(config: 1";
+  }
+  source += std::string(1000, ')') + " -> _\n}";
+  CompilationLimits limits;
+  limits.max_nesting = 8;
+  const auto parsed = Parse(source, limits);
+  ASSERT_TRUE(parsed.HasErrors());
+  EXPECT_TRUE(std::any_of(
+      parsed.diagnostics.begin(), parsed.diagnostics.end(),
+      [](const auto& d) { return d.code == "flow.syntax.nesting-too-deep"; }));
+}
+
+TEST(FlowDocument, ScopeBarrierBuilderAndSubjectNamedAllRemainDistinct) {
+  auto barrier = Statement::WaitAll();
+  ASSERT_TRUE(barrier.ok());
+  EXPECT_EQ(barrier->source(), "wait all");
+  auto named = Expression::Reference("all");
+  ASSERT_TRUE(named.ok());
+  auto wait = Statement::Wait(*named);
+  ASSERT_TRUE(wait.ok());
+  EXPECT_EQ(wait->source(), "wait (all)");
+}
+
 }  // namespace a11::flow

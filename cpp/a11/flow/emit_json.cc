@@ -251,6 +251,10 @@ nlohmann::json NodeJson(const syntax::Node* node) {
       const auto* stage = syntax::As<syntax::Stage>(node);
       value["name"] = stage->name;
       value["takes"] = vocabulary::StageArgumentName(stage->takes);
+      if (syntax::As<syntax::CallExpression>(stage->argument.get()) !=
+          nullptr) {
+        value["invocation"] = NodeJson(stage->argument.get());
+      }
       switch (stage->takes) {
         case vocabulary::StageArgument::kNumber:
           value["arg"] = stage->is_integer ? nlohmann::json(stage->integer)
@@ -407,6 +411,9 @@ nlohmann::json NodeJson(const syntax::Node* node) {
     }
     case syntax::NodeKind::kWait: {
       const auto* wait = syntax::As<syntax::Wait>(node);
+      if (wait->scope_barrier) {
+        value["scope_barrier"] = true;
+      }
       value["subject"] = NodeJson(wait->subject.get());
       value["subjects"] = NodeList(wait->subjects);
       value["race"] = wait->race;
@@ -1197,12 +1204,20 @@ nlohmann::json StepsToJson(const std::vector<StepPlan>& steps);
 
 nlohmann::json StepToJson(const StepPlan& step) {
   nlohmann::json written{{"step", step.kind}, {"label", step.label}};
+  if (step.scope_barrier) {
+    written["scope_barrier"] = true;
+  }
   if (!step.after.empty()) {
     written["after"] = step.after;
   }
   if (!step.action.empty()) {
     written["action"] = step.action;
     written["mode"] = step.mode;
+    if (!step.pipeline_input.empty()) {
+      written["pipeline"] = {{"input", step.pipeline_input},
+                             {"output", step.pipeline_output},
+                             {"activation", "whole-stream"}};
+    }
     if (step.tolerant) {
       written["try"] = true;
     }

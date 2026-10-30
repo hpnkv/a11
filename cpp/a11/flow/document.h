@@ -64,6 +64,11 @@ class Expression {
   absl::StatusOr<Expression> Pipeline(
       std::string stage, std::optional<Expression> argument = {}) const;
 
+  absl::StatusOr<Expression> PipelineInvoke(
+      std::string action,
+      std::vector<std::pair<std::string, Expression>> arguments,
+      const CallOptions& options) const;
+
   [[nodiscard]] const std::string& source() const { return source_; }
 
  private:
@@ -96,6 +101,7 @@ class Statement {
                                         const Expression& destination);
   static absl::StatusOr<Statement> Wait(const Expression& subject,
                                         bool close = false);
+  static absl::StatusOr<Statement> WaitAll();
   static absl::StatusOr<Statement> Cancel(const Expression& subject);
   static absl::StatusOr<Statement> Fail(const Expression& code,
                                         std::optional<Expression> message = {});

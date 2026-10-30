@@ -54,6 +54,8 @@ constexpr std::array kCodes = {
              "A loop is given a second stop condition."},
     CodeInfo{"flow.barrier.expression-cycle", Family::kBarrier,
              Severity::kError, "Expression cycle."},
+    CodeInfo{"flow.barrier.scope-cycle", Family::kBarrier, Severity::kError,
+             "A preceding producer needs a consumer after a scope barrier."},
     CodeInfo{"flow.barrier.unordered-clock", Family::kBarrier,
              Severity::kWarning,
              "A statement reads the clock against something the flow produced, "
@@ -154,6 +156,8 @@ constexpr std::array kCodes = {
              "'one of []' allows nothing, so nothing would validate."},
     CodeInfo{"flow.form.one-of-not-a-list", Family::kForm, Severity::kError,
              "'one of' is given something other than a list of constants."},
+    CodeInfo{"flow.form.pipeline-call", Family::kForm, Severity::kError,
+             "A pipeline invocation has an unknown or incompatible interface."},
     CodeInfo{"flow.form.port-modifier-order", Family::kForm, Severity::kError,
              "'stream' or 'required' is written in front of the port's type "
              "instead of after it."},
@@ -163,6 +167,8 @@ constexpr std::array kCodes = {
              "A modifier that says one thing is written twice."},
     CodeInfo{"flow.form.resource-limit", Family::kForm, Severity::kError,
              "A host-configured parsing or compilation limit was reached."},
+    CodeInfo{"flow.form.scope-barrier", Family::kForm, Severity::kError,
+             "A bare scope barrier cannot be modified or used as a value."},
     CodeInfo{"flow.form.stage-argument", Family::kForm, Severity::kError,
              "A stage is missing the argument it takes, or was given one of "
              "the wrong kind."},
@@ -244,6 +250,8 @@ constexpr std::array kCodes = {
     CodeInfo{"flow.name.unknown", Family::kName, Severity::kError,
              "A name nothing has bound, including one bound further down: a "
              "flow reads in order."},
+    CodeInfo{"flow.name.unknown-call", Family::kName, Severity::kError,
+             "A qualified invocation has no matching callable contract."},
     CodeInfo{"flow.name.unknown-node-map", Family::kName, Severity::kError,
              "A node map used before 'nodes' declares it."},
     CodeInfo{"flow.name.unknown-port", Family::kName, Severity::kError,

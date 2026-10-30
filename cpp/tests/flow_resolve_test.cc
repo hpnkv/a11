@@ -901,4 +901,103 @@ TEST(FlowResolve, ReassignmentKeepsTheDeclaredType) {
           .HasErrors());
 }
 
+TEST(FlowResolve, QualifiedUnknownCallsAreErrorsAtTheTarget) {
+  const auto result = Check("flow f { run nested::test() }");
+  ASSERT_TRUE(result.HasErrors());
+  const auto found = std::find_if(
+      result.diagnostics.begin(), result.diagnostics.end(),
+      [](const auto& d) { return d.code == "flow.name.unknown-call"; });
+  ASSERT_NE(found, result.diagnostics.end());
+  EXPECT_EQ(found->range.start.offset, 13u);
+  EXPECT_EQ(found->range.end.offset, 25u);
+}
+
+TEST(FlowResolve, PipelineCallsRequireAnUnambiguousKnownInterface) {
+  for (const auto* source : {"flow main { 1 | run missing() -> _ }",
+                             "declare flow f {in a: int\n in b: int\n out x: "
+                             "int}\nflow main {1 | run f() -> _}",
+                             "declare flow f {in a: int\n out x: int}\nflow "
+                             "main {1 | run f(a: 2) -> _}",
+                             "declare flow f {in a: int\n out x: int\n out y: "
+                             "int}\nflow main {1 | run f() -> _}",
+                             "declare flow f {in a: object\n out x: int}\nflow "
+                             "main {1 | run f() -> _}"}) {
+    const auto checked = Check(source);
+    EXPECT_TRUE(checked.HasErrors()) << source;
+    EXPECT_TRUE(std::any_of(
+        checked.diagnostics.begin(), checked.diagnostics.end(),
+        [](const auto& d) { return d.code == "flow.form.pipeline-call"; }))
+        << source;
+  }
+}
+
+TEST(FlowResolve, PipelineCallOrderingAllowsStatusReadsAndRejectsOutputCycles) {
+  const auto good = Check(R"(
+flow clean { in input: string stream
+ out output: string stream
+ input -> output
+}
+flow main { in items: string stream
+ work = run clean(input: "ready")
+ items | run clean() after work | map work.status.ok -> _
+}
+)");
+  EXPECT_FALSE(good.HasErrors()) << Messages(good);
+  const auto bad = Check(R"(
+flow clean { in input: string stream
+ out output: string stream
+ input -> output
+}
+flow main {
+ work = run clean(input: "ready")
+ work.output | run clean() after work -> _
+}
+)");
+  EXPECT_TRUE(std::any_of(bad.diagnostics.begin(), bad.diagnostics.end(),
+                          [](const auto& d) {
+                            return d.code == "flow.barrier.after-reads-subject";
+                          }));
+}
+
+TEST(FlowResolve, ScopeBarriersRejectValuesModifiersAndStreamingCycles) {
+  for (const auto* statement :
+       {"value = wait all", "wait all timeout 1s",
+        "wait all deadline std::now()", "wait all after prior"}) {
+    EXPECT_TRUE(
+        Parse(absl::StrCat("flow main { prior = {}\n", statement, "\n}"))
+            .HasErrors())
+        << statement;
+  }
+  for (const auto* body :
+       {"work = run producer()\n wait all\n work.output -> _",
+        "n = node()\n \"x\" -> n\n wait all\n n -> _",
+        "n = node()\n n -> _\n wait all\n \"x\" -> n",
+        "work = run transform()\n wait all\n \"x\" -> work.input",
+        "alias = \"x\" | run transform()\n alias -> _\n wait all\n alias -> "
+        "_"}) {
+    auto result = Check(
+        absl::StrCat("flow producer { out output: string stream\n \"x\" "
+                     "-> output }\nflow transform { in input: string stream\n"
+                     "out output: string stream\n input -> output }\n"
+                     "flow main {\n",
+                     body, "\n}"));
+    EXPECT_TRUE(std::any_of(
+        result.diagnostics.begin(), result.diagnostics.end(),
+        [](const auto& d) { return d.code == "flow.barrier.scope-cycle"; }))
+        << Messages(result);
+  }
+  EXPECT_FALSE(Check("flow main { in input: string stream\n alias = input\n "
+                     "wait all\n alias -> _ }")
+                   .HasErrors());
+  EXPECT_FALSE(Check("flow transform { in input: string stream\n"
+                     "out output: string stream\n input -> output }\n"
+                     "flow main { alias = \"x\" | run transform()\n"
+                     "wait all\n alias -> _ }")
+                   .HasErrors());
+  EXPECT_FALSE(Check("flow main { a = run noop()\n b = run noop()\n wait all "
+                     "of a, b\n if true "
+                     "{ log \"free\" } }")
+                   .HasErrors());
+}
+
 }  // namespace a11::flow

@@ -125,6 +125,7 @@ struct HeaderPlan {
 /// runtime and grows out of these, rather than being a second description of
 /// them.
 struct StepPlan {
+  bool scope_barrier = false;
   /// The kind of statement, as `a11.flow.plan`'s `Step.kind` spells it: `call`,
   /// `pipe`, `skip`, `wait`, `close`, `cancel`, `fail`, `for`, `repeat`, `if`,
   /// `capture`.
@@ -138,6 +139,8 @@ struct StepPlan {
   std::string action;
   std::string mode;
   std::string node_map;
+  std::string pipeline_input;
+  std::string pipeline_output;
   std::optional<absl::Duration> timeout;
   bool has_deadline = false;
   bool tolerant = false;

@@ -30,6 +30,33 @@
 #include "a11/flow/vocabulary.h"
 
 namespace a11::flow {
+absl::StatusOr<PipelinePorts> SelectPipelinePorts(
+    const FlowPlan& flow, absl::Span<const std::string> supplied) {
+  const PortPlan* input = nullptr;
+  const PortPlan* output = nullptr;
+  size_t inputs = 0;
+  size_t outputs = 0;
+  for (const auto& port : flow.ports) {
+    if (port.direction == syntax::PortDirection::kOutput) {
+      output = &port;
+      ++outputs;
+    } else if (std::find(supplied.begin(), supplied.end(), port.name) ==
+               supplied.end()) {
+      input = &port;
+      ++inputs;
+    }
+  }
+  if (inputs != 1 || outputs != 1) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("A pipeline invocation requires exactly one unsupplied "
+                     "input (including optional inputs) and one output; found ",
+                     inputs, " unsupplied inputs and ", outputs,
+                     " outputs. Supply configuration inputs explicitly or use "
+                     "an adapter flow."));
+  }
+  return PipelinePorts{input, output};
+}
+
 namespace {
 std::string Normal(std::string_view name) {
   std::string decoded;

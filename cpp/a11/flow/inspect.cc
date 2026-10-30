@@ -498,8 +498,17 @@ class Inspector {
   // --- sequences that cannot do what they look like -------------------------
 
   void Statements(const std::vector<syntax::NodePtr>& statements) {
+    bool phase = false;
     for (const syntax::NodePtr& statement : statements) {
       Statement(statement.get());
+      const auto* wait = syntax::As<syntax::Wait>(statement.get());
+      if (!phase && wait != nullptr && wait->scope_barrier) {
+        ++guarded_;
+        phase = true;
+      }
+    }
+    if (phase) {
+      --guarded_;
     }
   }
 
@@ -813,7 +822,8 @@ class Inspector {
   std::string flow_;
   /// The flow being walked, for the questions that are about a *name*.
   const ResolvedFlow* absl_nullable current_ = nullptr;
-  /// How many `if`/`for`/`repeat` bodies deep this statement is. What it
+  /// How many conditional bodies or execution phase gates enclose this step.
+  /// What it
   /// answers is the one `CheckReachedByChoice` asks in the resolver: whether
   /// anything at all says when this statement runs. A `nodes` block does not
   /// count -- it joins the body around it and changes nothing about when its

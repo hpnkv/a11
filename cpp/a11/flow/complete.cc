@@ -23,6 +23,7 @@
 
 #include <absl/strings/str_cat.h>
 
+#include "a11/flow/contract.h"
 #include "a11/flow/lexer.h"
 #include "a11/flow/module.h"
 #include "a11/flow/navigate.h"
@@ -484,6 +485,7 @@ class Completer {
       Add(std::string(stage), ProposalKind::kStage,
           StageTail(*vocabulary::StageTakes(stage)));
     }
+    AddCallTargets();
   }
 
   void AddFunctions() {
@@ -1002,10 +1004,46 @@ class Completer {
     return false;
   }
 
+  bool PipelineCallPosition() const {
+    if (PreviousIs(TokenKind::kPipe)) {
+      return true;
+    }
+    for (size_t at = line_.size(); at > 0; --at) {
+      const auto& token = tokens_[line_[at - 1]];
+      if (!token.IsWord() || (vocabulary::Canonical(token.text) != "run" &&
+                              vocabulary::Canonical(token.text) != "call")) {
+        continue;
+      }
+      size_t before = at - 1;
+      if (before > 0 &&
+          vocabulary::Canonical(tokens_[line_[before - 1]].text) == "try") {
+        --before;
+      }
+      return before > 0 && tokens_[line_[before - 1]].kind == TokenKind::kPipe;
+    }
+    return false;
+  }
+
   void OfferAction(std::string_view name, std::string_view description,
                    ProposalKind kind, std::string_view documentation,
                    bool explicit_verb = false, std::string_view leaf = {},
                    size_t replace_start = std::string::npos) {
+    std::string pipeline_tail;
+    if (PipelineCallPosition()) {
+      const auto* target = FlowNamed(name);
+      if (target == nullptr) {
+        return;
+      }
+      const auto inputs = target->PortNames(syntax::PortDirection::kInput);
+      const auto outputs = target->PortNames(syntax::PortDirection::kOutput);
+      if (inputs.empty() || outputs.size() != 1) {
+        return;
+      }
+      pipeline_tail = absl::StrCat(
+          "whole stream: ",
+          inputs.size() == 1 ? inputs.front() : "configure one remaining input",
+          " -> ", outputs.front());
+    }
     for (const std::string_view verb : {"run", "call"}) {
       Proposal proposal;
       proposal.name = explicit_verb ? std::string(leaf.empty() ? name : leaf)
@@ -1025,6 +1063,14 @@ class Completer {
                           : absl::StrCat(verb == "run" ? "local: " : "peer: ",
                                          Summary(description));
       proposal.documentation = documentation;
+      if (!pipeline_tail.empty()) {
+        proposal.tail =
+            absl::StrCat(verb == "run" ? "local " : "peer ", pipeline_tail);
+        proposal.documentation +=
+            "\n\nInvoked once for the whole stream. Supply configuration "
+            "arguments so exactly one input remains; the unique output "
+            "continues the pipeline.";
+      }
       proposals_.push_back(std::move(proposal));
       if (explicit_verb) {
         break;
@@ -1488,11 +1534,20 @@ class Completer {
       AddLogLevels();
       return false;
     }
+    if (previous == "all" && PreviousWord(1) == "wait") {
+      Add("of", ProposalKind::kModifier, " subjects");
+      return true;
+    }
     if (previous == "wait") {
       // `wait first of a, b` and `wait all of a, b` share the position with the
       // single subject, so both the words and the subjects are offered.
       Add("first", ProposalKind::kModifier, " of ");
-      Add("all", ProposalKind::kModifier, " of ");
+      Add("all", ProposalKind::kModifier);
+      proposals_.back().documentation =
+          "Wait for all preceding work in this scope before activating "
+          "following statements.";
+      proposals_.back().tail = proposals_.back().documentation;
+      Add("all of", ProposalKind::kModifier, " subjects");
       ProposeSubjects();
       return true;
     }

@@ -1386,27 +1386,8 @@ class ParserImpl {
         }
         if (word == "wait") {
           Advance();
-          // `wait first of a, b` holds for whichever finishes first and lets
-          // the others carry on; `wait all of a, b` is the plural of the plain
-          // form. Anything else is one subject, which is what most waits are.
-          const bool of = (AtWord("first") || AtWord("all")) &&
-                          Peek().IsWord() &&
-                          vocabulary::Canonical(Peek().text) == "of";
-          syntax::NodePtr held;
-          syntax::Wait* wait = nullptr;
-          if (of) {
-            held = ParseWaitOf(keyword);
-            // Built by ParseWaitOf one line up, so its kind is not in
-            // question.
-            // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
-            wait = static_cast<syntax::Wait*>(held.get());
-          } else {
-            auto one = Make<syntax::Wait>(keyword);
-            one->subject = ParseReference();
-            wait = one.get();
-            held = std::move(one);
-          }
-          ParseWaitLimits(*wait);
+          auto wait_node = ParseWaitSubject(keyword, false);
+          auto* wait = wait_node.get();
           // `wait first of a, b -> n` writes the winner's number, exactly as a
           // pipe writes a value. Only a race has one to write.
           if (ContinuesWith(TokenKind::kArrow)) {
@@ -1420,7 +1401,13 @@ class ParserImpl {
             }
           }
           wait->after = ParseAfter();
-          return held;
+          if (wait->scope_barrier &&
+              (!wait->after.empty() || !wait->targets.empty())) {
+            Report("flow.form.scope-barrier",
+                   "Bare 'wait all' accepts no modifiers or result binding.",
+                   keyword, Severity::kError, Family::kForm);
+          }
+          return wait_node;
         }
         if (word == "close") {
           Advance();
@@ -1538,6 +1525,12 @@ class ParserImpl {
             }
           }
         }
+        if (const auto* wait = syntax::As<syntax::Wait>(bind->value.get());
+            wait != nullptr && wait->scope_barrier) {
+          Report("flow.form.scope-barrier",
+                 "Bare 'wait all' is a scope barrier, not a value.", keyword,
+                 Severity::kError, Family::kForm);
+        }
         if (bind->type.has_value() && bind->names.empty()) {
           auto typed = Make<syntax::TypedValue>(keyword);
           typed->type = *bind->type;
@@ -1626,24 +1619,43 @@ class ParserImpl {
   ///
   /// One routine because a race is written in two places -- at the head of a
   /// statement, and where a value is expected -- and the two must not drift.
-  syntax::NodePtr ParseWaitOf(const Token& keyword) {
+  std::unique_ptr<syntax::Wait> ParseWaitSubject(const Token& keyword,
+                                                 bool value) {
     auto wait = Make<syntax::Wait>(keyword);
-    const bool first = AtWord("first");
-    Advance();  // `first` or `all`
-    Advance();  // `of`
-    wait->race = first;
-    wait->subjects.push_back(ParseExpression());
-    while (AcceptToken(TokenKind::kComma)) {
-      SkipNewlines();
+    if (AtWord("all") &&
+        !(Peek().IsWord() && vocabulary::Canonical(Peek().text) == "of")) {
+      Advance();
+      wait->scope_barrier = true;
+      wait->extent.end = tokens_[position_ - 1].end;
+      if (value) {
+        Report("flow.form.scope-barrier",
+               "Bare 'wait all' is a scope barrier, not a value.", keyword,
+               Severity::kError, Family::kForm);
+      }
+    } else if ((AtWord("first") || AtWord("all")) && Peek().IsWord() &&
+               vocabulary::Canonical(Peek().text) == "of") {
+      wait->race = AtWord("first");
+      Advance();
+      Advance();
       wait->subjects.push_back(ParseExpression());
+      while (AcceptToken(TokenKind::kComma)) {
+        SkipNewlines();
+        wait->subjects.push_back(ParseExpression());
+      }
+      if (wait->subjects.size() < 2) {
+        Report("flow.form.wait-of-one",
+               "An explicit 'wait first/all of' expects several subjects.",
+               keyword, Severity::kWarning, Family::kForm);
+      }
+    } else {
+      wait->subject = ParseReference();
     }
-    if (wait->subjects.size() < 2) {
-      Report("flow.form.wait-of-one",
-             absl::StrCat("'wait ", first ? "first" : "all",
-                          " of' waits on several subjects; with one, write "
-                          "'wait ",
-                          first ? "first" : "all", "'s subject on its own."),
-             keyword, Severity::kWarning, Family::kForm);
+    ParseWaitLimits(*wait);
+    if (wait->scope_barrier &&
+        (wait->timeout_expression != nullptr || wait->deadline != nullptr)) {
+      Report("flow.form.scope-barrier",
+             "Bare 'wait all' accepts no timeout or deadline.", keyword,
+             Severity::kError, Family::kForm);
     }
     return wait;
   }
@@ -2305,6 +2317,19 @@ class ParserImpl {
     const Token& keyword = Current();
     auto stage = Make<syntax::Stage>(keyword);
     stage->tolerant = tolerant;
+    if (AtWord("run", "call")) {
+      const Descent descent(*this);
+      if (TooDeep()) {
+        Recover();
+        return stage;
+      }
+      auto call = ParseCall();
+      call->tolerant = tolerant;
+      stage->name = call->mode;
+      stage->extent = call->extent;
+      stage->argument = std::move(call);
+      return stage;
+    }
     if (!Current().IsWord()) {
       ReportHere("flow.syntax.unexpected",
                  absl::StrCat("Expected a stage name, found ", Found(), "."));
@@ -2955,22 +2980,10 @@ class ParserImpl {
       outcome->subject = ParseReference();
       return outcome;
     }
-    // `wait first of a, b` where a value is expected: the number of whichever
-    // won.
-    if (AtWord("wait") && Peek().IsWord() &&
-        (vocabulary::Canonical(Peek().text) == "first" ||
-         vocabulary::Canonical(Peek().text) == "all") &&
-        Peek(2).IsWord() && vocabulary::Canonical(Peek(2).text) == "of") {
-      Advance();
-      return ParseWaitOf(token);
-    }
     if (AtWord("wait") &&
         (Peek().IsWord() || Peek().kind == TokenKind::kLeftParen)) {
       Advance();
-      auto wait = Make<syntax::Wait>(token);
-      wait->subject = ParseReference();
-      ParseWaitLimits(*wait);
-      return wait;
+      return ParseWaitSubject(token, true);
     }
     if (At(TokenKind::kString)) {
       auto literal = Make<syntax::Literal>(token);

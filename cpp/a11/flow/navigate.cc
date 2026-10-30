@@ -26,6 +26,7 @@
 #include <absl/strings/str_join.h>
 #include <absl/types/span.h>
 
+#include "a11/flow/contract.h"
 #include "a11/flow/highlight.h"
 #include "a11/flow/lexer.h"
 #include "a11/flow/module.h"
@@ -802,6 +803,57 @@ Description Describe(std::string_view source, size_t offset,
     }
   }
 
+  for (const auto& flow : parsed.flows) {
+    bool barrier_here = false;
+    syntax::VisitSubtree(*flow, [&](const syntax::Node& node) {
+      const auto* wait = syntax::As<syntax::Wait>(&node);
+      barrier_here |= wait != nullptr && wait->scope_barrier &&
+                      wait->location.start <= offset &&
+                      offset < wait->extent.end;
+    });
+    if (barrier_here) {
+      about.summary = "wait all — scope-local execution barrier";
+      about.detail =
+          "Wait for all preceding work in this scope before activating "
+          "following statements.";
+      about.markdown = about.summary + "\n\n" + about.detail;
+      return about;
+    }
+  }
+
+  std::string pipeline_note;
+  for (const auto& flow : parsed.flows) {
+    syntax::VisitSubtree(*flow, [&](const syntax::Node& node) {
+      const auto* stage = syntax::As<syntax::Stage>(&node);
+      if (stage == nullptr || (stage->name != "run" && stage->name != "call")) {
+        return;
+      }
+      const auto* call =
+          syntax::As<syntax::CallExpression>(stage->argument.get());
+      if (call == nullptr || offset < call->action_location.start ||
+          offset >= call->action_location.end) {
+        return;
+      }
+      const auto* target = resolved.program.Flow(call->action);
+      if (target == nullptr) {
+        return;
+      }
+      std::vector<std::string> supplied;
+      for (const auto& argument : call->args) {
+        supplied.push_back(argument.port.text);
+      }
+      const auto ports = SelectPipelinePorts(*target, supplied);
+      if (!ports.ok()) {
+        return;
+      }
+      pipeline_note =
+          absl::StrCat("\n\n**Whole-stream invocation** (", call->mode, "): `",
+                       ports->input->name, "` → `", ports->output->name,
+                       "`. One invocation per pipeline activation; ordinary "
+                       "action failure and cleanup semantics apply.");
+    });
+  }
+
   const std::vector<size_t> starts = DeclarationStarts(parsed);
 
   for (const auto& flow : resolved.flows) {
@@ -973,7 +1025,7 @@ Description Describe(std::string_view source, size_t offset,
           about.origin = action->origin;
         }
       }
-      about.markdown = FlowMarkdown(*sibling);
+      about.markdown = FlowMarkdown(*sibling) + pipeline_note;
       size_t count = 0;
       for (const auto& declaration : parsed.flows) {
         if (declaration->name.text == sibling->name) {
@@ -999,7 +1051,7 @@ Description Describe(std::string_view source, size_t offset,
       about.kind = SymbolClass::kExternal;
       about.summary = absl::StrCat("`", about.text, "` — an action");
       about.detail = action->description;
-      about.markdown = ActionMarkdown(*action);
+      about.markdown = ActionMarkdown(*action) + pipeline_note;
       // An action declared in a file something read has somewhere to go, which
       // is new: before a scan there was nothing to point at and hovering one of
       // these said "action name".

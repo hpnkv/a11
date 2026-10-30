@@ -49,6 +49,12 @@
       "summary": "Expression cycle."
     },
     {
+      "code": "flow.barrier.scope-cycle",
+      "family": "barrier",
+      "severity": "error",
+      "summary": "A preceding producer needs a consumer after a scope barrier."
+    },
+    {
       "code": "flow.barrier.unordered-clock",
       "family": "barrier",
       "severity": "warning",
@@ -283,6 +289,12 @@
       "summary": "'one of' is given something other than a list of constants."
     },
     {
+      "code": "flow.form.pipeline-call",
+      "family": "form",
+      "severity": "error",
+      "summary": "A pipeline invocation has an unknown or incompatible interface."
+    },
+    {
       "code": "flow.form.port-modifier-order",
       "family": "form",
       "severity": "error",
@@ -305,6 +317,12 @@
       "family": "form",
       "severity": "error",
       "summary": "A host-configured parsing or compilation limit was reached."
+    },
+    {
+      "code": "flow.form.scope-barrier",
+      "family": "form",
+      "severity": "error",
+      "summary": "A bare scope barrier cannot be modified or used as a value."
     },
     {
       "code": "flow.form.stage-argument",
@@ -491,6 +509,12 @@
       "family": "name",
       "severity": "error",
       "summary": "A name nothing has bound, including one bound further down: a flow reads in order."
+    },
+    {
+      "code": "flow.name.unknown-call",
+      "family": "name",
+      "severity": "error",
+      "summary": "A qualified invocation has no matching callable contract."
     },
     {
       "code": "flow.name.unknown-node-map",

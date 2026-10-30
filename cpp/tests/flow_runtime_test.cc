@@ -3159,4 +3159,482 @@ flow main {
   EXPECT_EQ(outcome.outputs.at("result"), Values({"1", "2"}));
 }
 
+TEST(FlowRuntimeTest, PipelineCallsTransformFilterAndAggregateWholeStreams) {
+  LogCapture logs;
+  const auto result = RunFlow(R"(
+flow clean {
+ in input: string stream
+ out output: string stream
+ delivered = input | map std::trim(it) | where std::len(it) > 0 -> output
+ log "clean activated" after delivered
+}
+flow count_rows {
+ in input: string stream
+ out total: int
+ input | count -> total
+}
+flow main {
+ out text: string stream
+ out count: int
+ cleaned = [" a ", "", "b"] | flatten | run clean()
+ cleaned -> text
+ cleaned | run count_rows() -> count
+}
+)",
+                              "main");
+  ASSERT_TRUE(result.status.ok()) << result.status;
+  EXPECT_EQ(result.outputs.at("text"), Values({"\"a\"", "\"b\""}));
+  EXPECT_EQ(result.outputs.at("count"), Values({"2"}));
+  EXPECT_EQ(logs.texts(), Values({"clean activated"}));
+}
+
+TEST(FlowRuntimeTest, PipelineCallsConfigureInputsAndRetainLoopState) {
+  const auto result = RunFlow(R"(
+flow number_rows {
+ in input: string stream
+ in prefix: string
+ out output: string stream
+ string label = take prefix
+ int n = 0
+ for line in input {
+  n = n + 1
+  std::strformat("%s%d:%s", label, n, line) -> output
+ }
+}
+flow main {
+ out output: string stream
+ for pass in [1, 2] | flatten {
+  ["a", "b"] | flatten | run number_rows(prefix: ">") -> output
+ }
+ if false { "unused" | run number_rows(prefix: "bad") -> output }
+}
+)",
+                              "main");
+  ASSERT_TRUE(result.status.ok()) << result.status;
+  EXPECT_EQ(result.outputs.at("output"),
+            Values({"\">1:a\"", "\">2:b\"", "\">1:a\"", "\">2:b\""}));
+}
+
+TEST(FlowRuntimeTest, PipelineCallsKeepLateFailuresAndDeadlines) {
+  const auto failed = RunFlow(R"(
+flow late {
+ in input: string stream
+ out output: string stream
+ written = input -> output
+ fail data_loss "late failure" after written
+}
+flow main { out output: string stream
+ ["a", "b"] | flatten | run late() | first 1 -> output
+}
+)",
+                              "main");
+  EXPECT_EQ(failed.status.code(), absl::StatusCode::kDataLoss) << failed.status;
+  const auto expired = RunFlow(R"(
+flow slow {
+ in input: string stream
+ out output: string stream
+ input | pace 1s -> output
+}
+flow main { out output: string stream
+ ["a", "b"] | flatten | run slow() timeout 5ms -> output
+}
+)",
+                               "main");
+  EXPECT_EQ(expired.status.code(), absl::StatusCode::kDeadlineExceeded)
+      << expired.status;
+}
+
+TEST(FlowRuntimeTest,
+     PipelineCallsCheckUnaryInputsWithoutSelectingOrCollecting) {
+  const std::string prefix = R"(
+flow scalar {
+ in input: int required
+ out output: int
+ input -> output
+}
+flow main { out result: int
+)";
+  auto good =
+      RunFlow(absl::StrCat(prefix, "42 | run scalar() -> result\n}"), "main");
+  ASSERT_TRUE(good.status.ok()) << good.status;
+  EXPECT_EQ(good.outputs.at("result"), Values({"42"}));
+  for (const auto* values : {"[]", "[1, 2]"}) {
+    auto bad = RunFlow(
+        absl::StrCat(prefix, values, " | flatten | run scalar() -> result\n}"),
+        "main");
+    EXPECT_FALSE(bad.status.ok());
+  }
+}
+
+TEST(FlowRuntimeTest, PipelineCallsDrainExternalActionsAfterEarlyTermination) {
+  auto registry = std::make_shared<actions::ActionRegistry>();
+  auto received = std::make_shared<std::atomic<int>>(0);
+  auto invoked = std::make_shared<std::atomic<int>>(0);
+  actions::ActionSchema schema;
+  schema.name = "echo";
+  schema.inputs.emplace(
+      "text", actions::ActionPortSchema{.name = "text", .type = "str"});
+  schema.outputs.emplace(
+      "out", actions::ActionPortSchema{.name = "out", .type = "str"});
+  ASSERT_TRUE(
+      registry
+          ->Register(
+              "echo", schema,
+              actions::MakeAsyncActionHandler(
+                  [received, invoked](const auto& action) -> absl::Status {
+                    ++*invoked;
+                    ABSL_ASSIGN_OR_RETURN(auto input, action->GetInput("text"));
+                    ABSL_ASSIGN_OR_RETURN(auto output,
+                                          action->GetOutput("out"));
+                    while (true) {
+                      ABSL_ASSIGN_OR_RETURN(auto chunk,
+                                            input->NextChunk().Await());
+                      if (!chunk.has_value()) {
+                        break;
+                      }
+                      if (chunk->IsNull()) {
+                        continue;
+                      }
+                      ++*received;
+                      ABSL_RETURN_IF_ERROR(
+                          output->PutChunk(*std::move(chunk)).Await().status());
+                    }
+                    return absl::OkStatus();
+                  }))
+          .ok());
+  Values words(1000, "\"word\"");
+  const auto result =
+      RunFlow(R"(
+declare flow echo { in text: string stream
+ out out: string stream }
+flow main { in words: string stream
+ out first: string
+ out count: int
+ echoed = words | run echo()
+ echoed | first 1 -> first
+ echoed | count -> count
+}
+)",
+              "main", {{"words", words}}, {}, true, {}, registry);
+  ASSERT_TRUE(result.status.ok()) << result.status;
+  EXPECT_EQ(invoked->load(), 1);
+  EXPECT_EQ(received->load(), 1000);
+  EXPECT_EQ(result.outputs.at("count"), Values({"1000"}));
+  EXPECT_EQ(result.outputs.at("first"), Values({"\"word\""}));
+  const auto remote = RunFlow(R"(
+declare flow echo { in text: string stream
+ out out: string stream }
+flow main { "x" | call echo() -> _ }
+)",
+                              "main", {}, {}, true, {}, registry);
+  EXPECT_FALSE(remote.status.ok());
+  EXPECT_EQ(invoked->load(), 1);
+}
+
+TEST(FlowRuntimeTest, ImportedPipelineCallsCaptureTheirDefiningModule) {
+  const auto result = RunFlow(R"(
+import "library.flow" as lib
+flow main { out result: string stream
+ ["a", "b"] | flatten | run lib::clean() -> result
+}
+)",
+                              "main", {}, {}, true, {{"library.flow", R"(
+flow private_clean { in input: string stream
+ out output: string stream
+ input | map std::upper(it) -> output
+}
+flow clean exported { in input: string stream
+ out output: string stream
+ input | run private_clean() -> output
+}
+)"}});
+  ASSERT_TRUE(result.status.ok()) << result.status;
+  EXPECT_EQ(result.outputs.at("result"), Values({"\"A\"", "\"B\""}));
+}
+
+TEST(FlowRuntimeTest, ScopeBarriersGatePhasesAndRetainConcurrency) {
+  LogCapture logs;
+  const auto result = RunFlow(R"(
+flow main {
+ int n = 1
+ if true {
+  logf "before-a:%s" n
+  logf "before-b:%s" n
+ }
+ wait all
+ log "after-a"
+ log "after-b"
+ wait all
+ log "last"
+}
+)",
+                              "main");
+  ASSERT_TRUE(result.status.ok()) << result.status;
+  auto text = logs.texts();
+  ASSERT_EQ(text.size(), 5u);
+  Values before{text[0], text[1]};
+  std::sort(before.begin(), before.end());
+  EXPECT_EQ(before, Values({"before-a:1", "before-b:1"}));
+  Values after{text[2], text[3]};
+  std::sort(after.begin(), after.end());
+  EXPECT_EQ(after, Values({"after-a", "after-b"}));
+  EXPECT_EQ(text[4], "last");
+}
+
+TEST(FlowRuntimeTest, ScopeBarriersJoinOwnedCallsAndDoNotReadUnusedAliases) {
+  LogCapture logs;
+  const auto result = RunFlow(R"(
+flow emit { out output: string stream
+ sent = ["a", "b", "c"] | flatten | pace 1ms -> output
+ log "child complete" after sent
+}
+flow main {
+ unused = (run emit()).output
+ first = take ((run emit()).output)
+ wait all
+ logf "after %s" first
+}
+)",
+                              "main");
+  ASSERT_TRUE(result.status.ok()) << result.status;
+  EXPECT_EQ(logs.texts(), Values({"child complete", "after a"}));
+}
+
+TEST(FlowRuntimeTest, ScopeBarriersAreLocalToBlocksBranchesAndLoopPasses) {
+  LogCapture logs;
+  const auto result = RunFlow(R"(
+flow main {
+ for n in [1, 2, 3] | flatten parallel 3 {
+  logf "before %s" n
+  wait all
+  logf "after %s" n
+ }
+ if true {
+  int n = 4
+  logf "before %s" n
+  wait all
+  logf "after %s" n
+ }
+}
+)",
+                              "main");
+  ASSERT_TRUE(result.status.ok()) << result.status;
+  const auto texts = logs.texts();
+  for (const auto* n : {"1", "2", "3", "4"}) {
+    auto before =
+        std::find(texts.begin(), texts.end(), absl::StrCat("before ", n));
+    auto after =
+        std::find(texts.begin(), texts.end(), absl::StrCat("after ", n));
+    EXPECT_NE(before, texts.end());
+    EXPECT_NE(after, texts.end());
+    EXPECT_LT(before, after);
+  }
+}
+
+TEST(FlowRuntimeTest, ScopeBarriersPreserveFailureAndTolerance) {
+  for (bool tolerant : {false, true}) {
+    LogCapture logs;
+    const auto source =
+        absl::StrCat("flow main {\n ", tolerant ? "try " : "",
+                     "run boom()\n wait all\n log \"after\"\n}");
+    const auto result = RunFlow(source, "main");
+    EXPECT_EQ(result.status.ok(), tolerant) << result.status;
+    EXPECT_EQ(logs.texts(), tolerant ? Values({"after"}) : Values{});
+  }
+}
+
+TEST(FlowRuntimeTest, ScopeBarriersGateAnonymousArgumentsAndEagerDeadlines) {
+  LogCapture logs;
+  const auto result = RunFlow(R"(
+flow marker { out output: string
+ if true { log "activated" }
+ "ready" -> output
+}
+flow sink { in input: string stream
+ input -> _
+}
+flow main {
+ first = "one" | log it -> _
+ wait all
+ value = take ((run marker()).output)
+ run sink(input: (run marker()).output)
+ late = run marker() deadline std::now() + 1s
+ late.output -> _
+ logf "%s" value
+}
+)",
+                              "main");
+  ASSERT_TRUE(result.status.ok()) << result.status;
+  const auto texts = logs.texts();
+  ASSERT_EQ(texts.size(), 5u);
+  EXPECT_EQ(texts.front(), "one");
+}
+
+TEST(FlowRuntimeTest, ScopeBarrierPhasesDoNotSerializeIndependentCalls) {
+  auto entered = std::make_shared<std::atomic<int>>(0);
+  auto release = std::make_shared<thread::PermanentEvent>();
+  auto registry = TestRegistry();
+  actions::ActionSchema schema;
+  schema.name = "meet";
+  ASSERT_TRUE(
+      registry
+          ->Register(
+              "meet", schema,
+              actions::MakeAsyncActionHandler([entered, release](
+                                                  const auto&) -> absl::Status {
+                if (++*entered == 2) {
+                  release->Notify();
+                }
+                thread::Select({thread::OnCancel(), release->OnEvent()});
+                return thread::Cancelled() ? absl::CancelledError("cancelled")
+                                           : absl::OkStatus();
+              }))
+          .ok());
+  LogCapture logs;
+  const auto result = RunFlow(
+      "flow main { run meet()\n run meet()\n wait all\n log \"complete\"\n}",
+      "main", {}, {}, true, {}, registry);
+  ASSERT_TRUE(result.status.ok()) << result.status;
+  EXPECT_EQ(entered->load(), 2);
+  EXPECT_EQ(logs.texts(), Values({"complete"}));
+}
+
+TEST(FlowRuntimeTest, ScopeBarriersDelayEagerDeadlineEvaluation) {
+  const auto result = RunFlow(R"(
+flow pause { out output: int stream
+ [1, 2] | flatten | pace 80ms -> output
+}
+flow emit { out output: string
+ "ready" -> output
+}
+flow main { out result: string
+ run pause()
+ wait all
+ job = run emit() deadline std::now() + 50ms
+ job.output -> result
+}
+)",
+                              "main");
+  ASSERT_TRUE(result.status.ok()) << result.status;
+  EXPECT_EQ(result.outputs.at("result"), Values({"\"ready\""}));
+}
+
+TEST(FlowRuntimeTest, ScopeBarriersDoNotExhaustInputAliases) {
+  LogCapture logs;
+  const auto result = RunFlow(
+      "flow main { in input: string stream\n alias = input\n wait all\n log "
+      "\"complete\"\n}",
+      "main", {}, {}, false);
+  ASSERT_TRUE(result.status.ok()) << result.status;
+  EXPECT_EQ(logs.texts(), Values({"complete"}));
+}
+
+TEST(FlowRuntimeTest, ScopeBarriersDoNotSynchronizeSiblingScopesOrIterations) {
+  for (int scenario = 0; scenario < 3; ++scenario) {
+    auto release = std::make_shared<thread::PermanentEvent>();
+    auto registry = TestRegistry();
+    actions::ActionSchema awaiting;
+    awaiting.name = "await_release";
+    actions::ActionSchema signal;
+    signal.name = "signal_release";
+    ASSERT_TRUE(
+        registry
+            ->Register("await_release", awaiting,
+                       actions::MakeAsyncActionHandler(
+                           [release](const auto&) -> absl::Status {
+                             thread::Select(
+                                 {thread::OnCancel(), release->OnEvent()});
+                             return thread::Cancelled()
+                                        ? absl::CancelledError("cancelled")
+                                        : absl::OkStatus();
+                           }))
+            .ok());
+    ASSERT_TRUE(
+        registry
+            ->Register("signal_release", signal,
+                       actions::MakeAsyncActionHandler([release](const auto&) {
+                         release->Notify();
+                         return absl::OkStatus();
+                       }))
+            .ok());
+    const auto source = scenario == 0   ? R"(
+flow main {
+ for n in [1, 2] | flatten parallel 2 {
+  if n == 2 { run await_release() }
+  wait all
+  if n == 1 { run signal_release() }
+ }
+}
+)"
+                        : scenario == 1 ? R"(
+flow main {
+ work = run await_release()
+ wait all of work
+ run signal_release()
+}
+)"
+                                        : R"(
+flow main {
+ if true { wait all
+  run signal_release()
+ }
+ if true { run await_release() }
+}
+)";
+    const auto result = RunFlow(source, "main", {}, {}, true, {}, registry);
+    ASSERT_TRUE(result.status.ok()) << result.status;
+  }
+}
+
+TEST(FlowRuntimeTest, ScopeBarriersRepeatPerSequentialPass) {
+  LogCapture logs;
+  const auto result = RunFlow(R"(
+flow main {
+ repeat n = 0 max 3 {
+  logf "before %s" n
+  wait all
+  logf "after %s" n
+  n <- n + 1
+ }
+}
+)",
+                              "main");
+  ASSERT_TRUE(result.status.ok()) << result.status;
+  EXPECT_EQ(logs.texts(), Values({"before 0", "after 0", "before 1", "after 1",
+                                  "before 2", "after 2"}));
+}
+
+TEST(FlowRuntimeTest, ScopeBarriersRetainTryBlockAndPipeSemantics) {
+  for (const auto* body : {"try { run boom()\n wait all\n log \"blocked\"\n }",
+                           "try (try run boom()).out -> _"}) {
+    SCOPED_TRACE(body);
+    LogCapture logs;
+    const auto result = RunFlow(
+        absl::StrCat("flow main {\n", body, "\n wait all\n log \"after\"\n}"),
+        "main");
+    EXPECT_TRUE(result.status.ok()) << result.status;
+    const auto text = logs.texts();
+    EXPECT_EQ(std::count(text.begin(), text.end(), "blocked"), 0);
+    EXPECT_EQ(std::count(text.begin(), text.end(), "after"), 1);
+  }
+}
+
+TEST(FlowRuntimeTest, PipelineCallsRetainInvocationAndTransferTolerance) {
+  for (const auto* statement :
+       {"try { \"x\" | run late() -> _ }", "try \"x\" | try run late() -> _"}) {
+    SCOPED_TRACE(statement);
+    const auto result = RunFlow(absl::StrCat(R"(
+flow late { in input: string stream
+ out output: string stream
+ written = input -> output
+ fail data_loss "late failure" after written
+}
+flow main {
+)",
+                                             statement, "\n wait all\n}"),
+                                "main");
+    EXPECT_TRUE(result.status.ok()) << result.status;
+  }
+}
+
 }  // namespace a11::flow

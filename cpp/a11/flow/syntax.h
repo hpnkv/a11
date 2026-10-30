@@ -573,6 +573,7 @@ struct Skip : NodeOf<NodeKind::kSkip> {
 /// `subjects` what the `of` forms do, so a reader of the tree does not have to
 /// treat the common case as a list of one.
 struct Wait : NodeOf<NodeKind::kWait> {
+  bool scope_barrier = false;
   NodePtr subject;
   std::vector<NodePtr> subjects;
   /// Whether the first to finish is enough. False for `wait all of`, and for

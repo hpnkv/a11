@@ -826,6 +826,11 @@ class Bus {
   /// Read the stream once and fan it out until it ends.
   absl::Status Pump();
 
+  absl::Status WaitFinished() {
+    thread::MutexLock lock(&monitor_->mu());
+    return monitor_->Wait(moved_, [this] { return finished_; });
+  }
+
   bool Skip() {
     thread::MutexLock lock(&monitor_->mu());
     if (handed_out_ < slots_.size()) {
@@ -861,6 +866,8 @@ class Bus {
 
  private:
   friend class BusReader;
+  absl::Status RunPump();
+  bool finished_ = false;
 
   Monitor* absl_nonnull monitor_;
   Monitor::Condition moved_;
@@ -970,6 +977,16 @@ absl::StatusOr<ReaderPtr> Bus::Take() {
 }
 
 absl::Status Bus::Pump() {
+  const auto result = RunPump();
+  {
+    thread::MutexLock lock(&monitor_->mu());
+    finished_ = true;
+  }
+  moved_.Wake();
+  return result;
+}
+
+absl::Status Bus::RunPump() {
   // Start production on the first read so effects respect `after` ordering.
   {
     thread::MutexLock lock(&monitor_->mu());
@@ -1756,7 +1773,7 @@ class Scope {
   absl::Status RunStep(StepId step);
   absl::Status Execute(StepId step);
   absl::Status StepDone(StepId step);
-  void MarkDone(StepId step);
+  void MarkDone(StepId step, const absl::Status& status);
 
   absl::Status RunForEach(StepId step);
   absl::Status RunRepeat(StepId step);
@@ -1769,6 +1786,13 @@ class Scope {
   absl::StatusOr<absl::Status> ChosenStatus(StepId step);
   absl::Status AbortNode(StepId step);
   absl::StatusOr<absl::Time> DeadlineAt(const graph::Step& step);
+
+  std::shared_ptr<a11::Promise<a11::Unit>> ExpressionCleanup(ExprId expr) {
+    thread::MutexLock lock(&monitor().mu());
+    const auto found = expression_cleanups_.find(expr);
+    return found == expression_cleanups_.end() ? nullptr : found->second;
+  }
+
   absl::Status RunWait(StepId step);
   absl::Status RunWaitMany(StepId step);
   absl::Status Failure(StepId step);
@@ -1848,6 +1872,7 @@ class Scope {
   absl::flat_hash_map<RefId, std::unique_ptr<Destination>> destinations_;
   absl::flat_hash_map<StepId, std::unique_ptr<CallHandle>> calls_;
   absl::flat_hash_map<StepId, bool> done_;
+  absl::flat_hash_map<StepId, absl::Status> completion_status_;
   absl::flat_hash_map<StepId, uint64_t> completion_order_;
   /// How a `[try] { ... }` step went, for the name bound to it to read.
   absl::flat_hash_map<StepId, absl::Status> outcomes_;
@@ -2357,6 +2382,9 @@ absl::StatusOr<ReaderPtr> Scope::Subscribe(RefId ref) {
     return Fail(absl::StrCat("Internal flow error: ", graph().refs[ref].label,
                              " is not in scope here."));
   }
+  if (graph().refs[ref].phase_gate != kNone) {
+    ABSL_RETURN_IF_ERROR(StepDone(graph().refs[ref].phase_gate));
+  }
   if (const auto found = owner->presets_.find(ref);
       found != owner->presets_.end()) {
     return ReaderPtr(new ListReader(found->second));
@@ -2380,6 +2408,9 @@ absl::StatusOr<ReaderPtr> Scope::Subscribe(RefId ref) {
 // --- Nodes -------------------------------------------------------------------
 
 absl::StatusOr<NodePtr> Scope::LocalNode(RefId ref) {
+  if (graph().refs[ref].phase_gate != kNone) {
+    ABSL_RETURN_IF_ERROR(StepDone(graph().refs[ref].phase_gate));
+  }
   Scope* owner = Owner(ref);
   Monitor& monitor = this->monitor();
   {
@@ -2558,6 +2589,9 @@ absl::StatusOr<ItemPtr> Scope::BoundItem(RefId ref) {
 }
 
 absl::Status Scope::Produce(RefId ref, const Sink& sink) {
+  if (graph().refs[ref].phase_gate != kNone) {
+    ABSL_RETURN_IF_ERROR(StepDone(graph().refs[ref].phase_gate));
+  }
   const graph::Ref& one = graph().refs[ref];
   // One place, upstream of the bus that fans the stream out, so the values
   // `skip n` spoke for are the same ones every reader misses.
@@ -2750,6 +2784,9 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
 
   if (name == "consume") {
     ABSL_ASSIGN_OR_RETURN(ItemPtr item, source->Next());
+    if (item == nullptr && stage.optional) {
+      return absl::OkStatus();
+    }
     if (item == nullptr) {
       return absl::FailedPreconditionError(
           "'consume' requires exactly one item; the stream is empty.");
@@ -3601,7 +3638,7 @@ absl::StatusOr<Value> Scope::EvaluateWith(ExprId expr, const Value& it,
     auto result = child->expression_result_->future();
     auto done = std::make_shared<a11::Promise<a11::Unit>>();
     auto completed = done->future();
-    if (!join && one.pipeline_owned) {
+    if (!join) {
       thread::MutexLock lock(&monitor().mu());
       expression_cleanups_.insert_or_assign(expr, done);
     }
@@ -3905,12 +3942,26 @@ absl::Status Scope::Run() {
   // writer pump, so the awaitables are collected and waited on together.
   std::vector<a11::Task> closing;
   closing.reserve(unwritten_.size());
+  absl::flat_hash_map<StepId, std::vector<RefId>> gated_closing;
   for (const RefId ref : unwritten_) {
+    if (graph().refs[ref].phase_gate != kNone) {
+      gated_closing[graph().refs[ref].phase_gate].push_back(ref);
+      continue;
+    }
     ABSL_ASSIGN_OR_RETURN(const NodePtr node, LocalNode(ref));
     closing.push_back(node->Finalize({.wait = true}));
   }
   for (const absl::StatusOr<a11::Unit>& closed : a11::AwaitAll(closing)) {
     ABSL_RETURN_IF_ERROR(closed.status());
+  }
+  for (auto& [gate, refs] : gated_closing) {
+    group.Spawn([this, closing_refs = std::move(refs)]() -> absl::Status {
+      for (const auto ref : closing_refs) {
+        ABSL_ASSIGN_OR_RETURN(const NodePtr node, LocalNode(ref));
+        ABSL_RETURN_IF_ERROR(node->Finalize({.wait = true}).Await().status());
+      }
+      return absl::OkStatus();
+    });
   }
   for (const auto& [ref, bus] : buses_) {
     Bus* one = bus.get();
@@ -3941,10 +3992,11 @@ absl::Status Scope::Run() {
   return result;
 }
 
-void Scope::MarkDone(StepId step) {
+void Scope::MarkDone(StepId step, const absl::Status& status) {
   {
     thread::MutexLock lock(&monitor().mu());
     done_[step] = true;
+    completion_status_[step] = status;
     completion_order_[step] = monitor().CompletionOrder();
   }
   monitor().Wake();
@@ -3958,7 +4010,9 @@ absl::Status Scope::StepDone(StepId step) {
     }
     ABSL_RETURN_IF_ERROR(at->EnsureStep(step));
     thread::MutexLock lock(&monitor().mu());
-    return monitor().Wait([at, step] { return at->done_.find(step)->second; });
+    ABSL_RETURN_IF_ERROR(
+        monitor().Wait([at, step] { return at->done_.find(step)->second; }));
+    return at->completion_status_.at(step);
   }
   return Fail(absl::StrCat("Internal flow error: ", graph().steps[step].label,
                            " is not in scope."));
@@ -3966,8 +4020,13 @@ absl::Status Scope::StepDone(StepId step) {
 
 absl::Status Scope::RunStep(StepId step) {
   absl::Status status;
+  if (graph().steps[step].phase_gate != kNone) {
+    status = StepDone(graph().steps[step].phase_gate);
+  }
   for (const StepId dependency : graph().steps[step].after) {
-    status = StepDone(dependency);
+    if (status.ok()) {
+      status = StepDone(dependency);
+    }
     if (!status.ok()) {
       break;
     }
@@ -3994,7 +4053,7 @@ absl::Status Scope::RunStep(StepId step) {
     thread::MutexLock lock(&monitor().mu());
     outcomes_.try_emplace(step, status);
   }
-  MarkDone(step);
+  MarkDone(step, status);
   return status;
 }
 
@@ -4060,14 +4119,7 @@ absl::Status Scope::Execute(StepId step) {
       };
       absl::Status result = transfer();
       for (const ExprId expr : one.expression_cleanups) {
-        std::shared_ptr<a11::Promise<a11::Unit>> cleanup;
-        {
-          thread::MutexLock lock(&monitor().mu());
-          const auto found = expression_cleanups_.find(expr);
-          if (found != expression_cleanups_.end()) {
-            cleanup = found->second;
-          }
-        }
+        auto cleanup = ExpressionCleanup(expr);
         if (cleanup == nullptr) {
           continue;
         }
@@ -4118,6 +4170,58 @@ absl::Status Scope::Execute(StepId step) {
       return absl::OkStatus();
     }
     case StepKind::kWait:
+      if (one.scope_barrier) {
+        for (const auto before : one.preceding_steps) {
+          if (!graph().steps[before].deferred) {
+            ABSL_RETURN_IF_ERROR(StepDone(before));
+          }
+        }
+        for (const auto expr : one.expression_cleanups) {
+          if (graph().exprs[expr].pipeline_owned) {
+            continue;
+          }
+          auto cleanup = ExpressionCleanup(expr);
+          if (cleanup != nullptr) {
+            ABSL_RETURN_IF_ERROR(cleanup->future().Await().status());
+          }
+        }
+        absl::flat_hash_set<StepId> joined;
+        bool changed = true;
+        while (changed) {
+          changed = false;
+          for (const auto before : one.preceding_steps) {
+            bool started;
+            {
+              thread::MutexLock lock(&monitor().mu());
+              started = started_.contains(before);
+            }
+            if (started && joined.insert(before).second) {
+              changed = true;
+              ABSL_RETURN_IF_ERROR(StepDone(before));
+            }
+          }
+          for (const auto& [ref, bus] : buses_) {
+            const auto& stream = graph().refs[ref];
+            if (stream.kind != RefKind::kCallPort ||
+                stream.direction != syntax::PortDirection::kOutput ||
+                std::find(one.preceding_steps.begin(),
+                          one.preceding_steps.end(),
+                          stream.call) == one.preceding_steps.end()) {
+              continue;
+            }
+            bool started;
+            {
+              thread::MutexLock lock(&monitor().mu());
+              started = started_.contains(stream.call);
+            }
+            if (started) {
+              ABSL_RETURN_IF_ERROR(bus->WaitFinished());
+            }
+          }
+        }
+        return absl::OkStatus();
+      }
+      [[fallthrough]];
     case StepKind::kClose:
       return RunWait(step);
     case StepKind::kCancel: {

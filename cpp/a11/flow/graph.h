@@ -107,6 +107,7 @@ struct LogTail {
 
 struct Stage {
   std::string name;
+  bool optional = false;
   std::optional<syntax::TypeExpression> type;
   vocabulary::StageArgument takes = vocabulary::StageArgument::kNone;
   /// `kNumber`: the count.
@@ -158,6 +159,7 @@ struct Stage {
 /// [Graph::Upstreams] and [Graph::ValueRefs] rather than by each kind
 /// separately.
 struct Ref {
+  StepId phase_gate = kNone;
   RefKind kind = RefKind::kExpr;
   /// How a reader would say it: `search.hits | truncate 200`.
   std::string label;
@@ -257,6 +259,9 @@ inline bool RecordsOutcome(StepKind kind) {
 
 /// One resolved statement.
 struct Step {
+  StepId phase_gate = kNone;
+  bool scope_barrier = false;
+  std::vector<StepId> preceding_steps;
   StepKind kind = StepKind::kPipe;
   /// The name this step is known by: a bound name, or `action`/`for`/`if` with
   /// a `#2` after it where one label is used twice.

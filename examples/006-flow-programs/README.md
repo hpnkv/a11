@@ -1,11 +1,12 @@
 # Flow as a program
 
-Nine programs, in a language with no arithmetic beyond `+` and `-`, no way to
-define a function, and no way to call out to code.
+Programs compose registered actions and reusable flows to process streams,
+work with files, and build prompts.
 
 ```sh
 a11-flow-run greet.flow -- Helena
 a11-flow-run wc.flow < some-file
+a11-flow-run normalize.flow < some-file
 some-command | a11-flow-run grep.flow -- warning
 a11-flow-run --allow-write copy.flow -- from.bin to.bin
 a11-flow-run --root /var/log --timeout 30s watch.flow -- /var/log/system.log
@@ -32,7 +33,7 @@ a11 flow run ask.flow --allow-llm --allow-net \
     --allow-env ANTHROPIC_API_KEY -- "why is the sky blue"
 ```
 
-`ask.flow` is the ninth program and it runs *only* this way, because
+`ask.flow` runs *only* through the Python host, because
 `interact_with_llm` needs a provider SDK and a credential and both live in
 Python. `--allow-llm` is its own flag rather than part of `--allow-net` for a
 reason worth knowing: a host-registered action is **not** bounded by the flow

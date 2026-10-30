@@ -1,11 +1,16 @@
-import "./nested.flow"
-from std import lower
+flow test {
+  in  input: string stream "Lines to write."
+  run write_stdout(content: input | map std::strformat("%s\n", it))
+}
 
 flow {
   input = run read_stdin()
-  output = run nested::test()
+  output = run test()
+
+  "Hello!\n" -> output.input
+
   forwarded = input.lines
-    | take until lower(it) == "/exit"
+    | take until std::lower(it) == "/exit"
     | log info it
     -> output.input
 

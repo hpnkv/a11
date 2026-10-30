@@ -571,6 +571,11 @@ std::string Unparse(const Node* node) {
       return absl::StrCat(Unparse(index->base.get()), "[",
                           Unparse(index->index.get()), "]");
     }
+    case NodeKind::kCallExpression: {
+      const auto& call = *syntax::As<syntax::CallExpression>(node);
+      return absl::StrCat(call.tolerant ? "try " : "", call.mode, " ",
+                          call.action, "(...)");
+    }
     case NodeKind::kBuiltin: {
       const auto* builtin = syntax::As<syntax::Builtin>(node);
       std::vector<std::string> args;
@@ -623,6 +628,9 @@ std::string Unparse(const Node* node) {
 /// `into failures` -- is written the way the author wrote it, because this
 /// label is what `describe` prints and what an error message quotes back.
 std::string StageLabel(const syntax::Stage& stage) {
+  if (syntax::As<syntax::CallExpression>(stage.argument.get()) != nullptr) {
+    return Unparse(stage.argument.get());
+  }
   std::string tail;
   if (stage.parallel > 1) {
     absl::StrAppend(&tail, " parallel ", stage.parallel);
@@ -981,6 +989,7 @@ class FlowResolver {
                         const Location& location) {
     graph::Step step;
     step.kind = kind;
+    step.phase_gate = phase_gate_;
     step.label = std::move(label);
     step.body = body_;
     step.location = location;
@@ -1352,6 +1361,10 @@ class FlowResolver {
     const auto previous_extractions = last_extraction_;
     const auto previous_dynamic = dynamic_extractions_;
     const graph::BodyId outer = body_;
+    const auto outer_gate = phase_gate_;
+    if (body != graph::kNone && body != body_) {
+      phase_gate_ = graph::kNone;
+    }
     if (body != graph::kNone) {
       body_ = body;
     }
@@ -1367,18 +1380,193 @@ class FlowResolver {
       // value read.
       std::vector<StepPlan>* const outer_pending = pending_steps_;
       pending_steps_ = &steps;
+      const auto first_ref = builder_->flow().refs.size();
+      const auto first_plan = steps.size();
+      const auto active_gate = phase_gate_;
       ResolveStatement(statement.get(), scope, steps);
+      for (size_t id = first_ref; id < builder_->flow().refs.size(); ++id) {
+        if (builder_->ref(id).owner == body_) {
+          builder_->ref(id).phase_gate = active_gate;
+        }
+      }
+      if (active_gate != graph::kNone) {
+        for (size_t id = first_plan; id < steps.size(); ++id) {
+          steps[id].after.push_back(builder_->step(active_gate).label);
+        }
+      }
       pending_steps_ = outer_pending;
     }
     if (guarded) {
       --guarded_;
     }
+    CheckScopePhases();
     body_ = outer;
+    phase_gate_ = outer_gate;
     if (body != graph::kNone) {
       last_extraction_ = previous_extractions;
       dynamic_extractions_ = previous_dynamic;
     }
     return steps;
+  }
+
+  void CheckScopePhases() {
+    auto& flow = builder_->flow();
+    if (std::none_of(
+            flow.bodies[body_].steps.begin(), flow.bodies[body_].steps.end(),
+            [&](const auto step) { return flow.steps[step].scope_barrier; })) {
+      return;
+    }
+
+    struct Read {
+      graph::RefId ref;
+      graph::StepId step;
+      graph::StepId gate;
+    };
+
+    std::vector<Read> reads;
+    std::vector<graph::StepId> owners(flow.steps.size(), graph::kNone);
+    absl::flat_hash_map<graph::RefId, graph::StepId> first_read;
+    absl::flat_hash_map<graph::StepId, graph::StepId> first_activation;
+    absl::flat_hash_map<graph::RefId, std::vector<graph::StepId>> writers;
+    const auto remember = [](auto& phases, const auto key, const auto gate) {
+      const auto found = phases.find(key);
+      if (found == phases.end() || gate == graph::kNone ||
+          (found->second != graph::kNone && gate < found->second)) {
+        phases[key] = gate;
+      }
+    };
+    for (size_t id = 0; id < flow.steps.size() && budget_.Check(); ++id) {
+      auto owner = id;
+      auto body = flow.steps[id].body;
+      while (body != body_ && body != graph::kNone && budget_.Check()) {
+        const auto& nested = flow.bodies[body];
+        if (nested.owner_step != graph::kNone) {
+          owner = nested.owner_step;
+        }
+        body = nested.parent;
+      }
+      if (body != body_) {
+        continue;
+      }
+      owners[id] = owner;
+      const auto gate = flow.steps[owner].phase_gate;
+      for (const auto destination : flow.Destinations(id)) {
+        writers[destination].push_back(id);
+      }
+      std::vector<graph::RefId> pending = flow.Sources(id);
+      for (const auto ref : flow.ValueSources(id)) {
+        pending.push_back(ref);
+      }
+      absl::flat_hash_set<graph::RefId> visited;
+      while (!pending.empty() && budget_.Check()) {
+        const auto ref = pending.back();
+        pending.pop_back();
+        if (ref == graph::kNone || !visited.insert(ref).second) {
+          continue;
+        }
+        reads.push_back({ref, id, gate});
+        const auto& read = flow.refs[ref];
+        if (read.owner == body_) {
+          remember(first_read, ref, gate);
+        }
+        if (read.kind == graph::RefKind::kCallPort) {
+          remember(first_activation, read.call, gate);
+        } else if (read.kind == graph::RefKind::kStatus &&
+                   read.subject_step != graph::kNone) {
+          remember(first_activation, read.subject_step, gate);
+        }
+        for (const auto up : flow.Upstreams(ref)) {
+          pending.push_back(up);
+        }
+        for (const auto up : flow.ValueRefs(ref)) {
+          pending.push_back(up);
+        }
+      }
+    }
+    const auto precedes = [&](const auto step, const auto gate) {
+      const auto owner = owners[step];
+      const auto& preceding = flow.steps[gate].preceding_steps;
+      return std::find(preceding.begin(), preceding.end(), owner) !=
+             preceding.end();
+    };
+    const auto active_before = [&](const auto call, const auto gate) {
+      if (!precedes(call, gate)) {
+        return false;
+      }
+      const auto found = first_activation.find(call);
+      return !flow.steps[call].deferred ||
+             (found != first_activation.end() &&
+              (found->second == graph::kNone || found->second < gate));
+    };
+    const auto cycle = [&](const auto step, const auto gate,
+                           const auto producer, std::string message) {
+      Report("flow.barrier.scope-cycle", std::move(message),
+             flow.steps[step].location, Severity::kError, Family::kBarrier);
+      for (const auto& [related, label] :
+           {std::pair{gate, "This barrier waits for preceding work."},
+            std::pair{producer, "Conflicting stream dependency."}}) {
+        const auto location = flow.steps[related].location;
+        diagnostics_.back().related.push_back(
+            {"", lines_.Between(location.start, location.end), label});
+      }
+    };
+    for (const auto& read : reads) {
+      if (!budget_.Check()) {
+        break;
+      }
+      const auto gate = read.gate;
+      if (gate == graph::kNone || !flow.steps[gate].scope_barrier) {
+        continue;
+      }
+      const auto& ref = flow.refs[read.ref];
+      graph::StepId producer = graph::kNone;
+      if (ref.kind == graph::RefKind::kCallPort &&
+          active_before(ref.call, gate)) {
+        producer = ref.call;
+      }
+      const auto found = writers.find(read.ref);
+      if (found != writers.end()) {
+        for (const auto writer : found->second) {
+          if (precedes(writer, gate) && !flow.steps[writer].deferred) {
+            producer = writer;
+            break;
+          }
+        }
+      }
+      if (producer != graph::kNone) {
+        cycle(read.step, gate, producer,
+              "A producer before 'wait all' needs a stream consumer after "
+              "the barrier. Keep the producer and consumer in the same phase.");
+      }
+    }
+    for (const auto& [ref, destinations] : writers) {
+      for (const auto writer : destinations) {
+        if (!budget_.Check()) {
+          break;
+        }
+        const auto gate = flow.steps[owners[writer]].phase_gate;
+        if (gate == graph::kNone || !flow.steps[gate].scope_barrier) {
+          continue;
+        }
+        const auto& target = flow.refs[ref];
+        const auto read = first_read.find(ref);
+        if ((target.kind == graph::RefKind::kCallPort &&
+             active_before(target.call, gate)) ||
+            (target.kind == graph::RefKind::kNode && read != first_read.end() &&
+             (read->second == graph::kNone || read->second < gate))) {
+          cycle(writer, gate, writer,
+                "Work before 'wait all' needs an input feed after the "
+                "barrier. Keep the feed and its consumer in the same phase.");
+        }
+      }
+    }
+    for (const auto& [ref, gate] : first_read) {
+      if (gate != graph::kNone &&
+          flow.refs[ref].kind != graph::RefKind::kNode &&
+          flow.refs[ref].phase_gate == graph::kNone) {
+        flow.refs[ref].phase_gate = gate;
+      }
+    }
   }
 
   bool HasDataDependency(const Node* expression, const Scope& scope) {
@@ -1457,7 +1645,8 @@ class FlowResolver {
                             const std::vector<syntax::Word>& after,
                             const Location& location,
                             bool data_dependency = false) {
-    if (guarded_ > 0 || !after.empty() || data_dependency) {
+    if (guarded_ > 0 || phase_gate_ != graph::kNone || !after.empty() ||
+        data_dependency) {
       return;
     }
     if (what == "cancel") {
@@ -1578,6 +1767,31 @@ class FlowResolver {
       }
       case NodeKind::kWait: {
         const auto* wait = syntax::As<syntax::Wait>(statement);
+        if (wait->scope_barrier) {
+          auto preceding = builder_->flow().bodies[body_].steps;
+          std::vector<graph::ExprId> cleanups;
+          for (size_t id = 0; id < builder_->flow().exprs.size(); ++id) {
+            const auto& expression = builder_->expr(id);
+            if (expression.activation != graph::kNone &&
+                builder_->flow().bodies[expression.activation].parent ==
+                    body_) {
+              cleanups.push_back(id);
+            }
+          }
+          const auto barrier = NewStep(graph::StepKind::kWait,
+                                       Label("wait all"), wait->location);
+          builder_->step(barrier).scope_barrier = true;
+          builder_->step(barrier).preceding_steps = std::move(preceding);
+          builder_->step(barrier).expression_cleanups = std::move(cleanups);
+          StepPlan plan;
+          plan.kind = "wait";
+          plan.label = builder_->step(barrier).label;
+          plan.scope_barrier = true;
+          plan.location = wait->location;
+          steps.push_back(std::move(plan));
+          phase_gate_ = barrier;
+          return;
+        }
         // `wait first of a, b` and `wait all of a, b` read several outcomes.
         if (!wait->subjects.empty()) {
           std::vector<Ref> outcomes;
@@ -2974,7 +3188,7 @@ class FlowResolver {
     const syntax::Node* found = nullptr;
     syntax::VisitSubtree(pipeline, [&](const syntax::Node& node) {
       const auto* attr = syntax::As<syntax::Attr>(&node);
-      if (attr == nullptr) {
+      if (attr == nullptr || attr->name == "status") {
         return;
       }
       const auto* base = syntax::As<syntax::Name>(attr->base.get());
@@ -3014,6 +3228,14 @@ class FlowResolver {
     symbol.action = call.action;
     symbol.tolerant = call.tolerant;
     symbol.target = call.invalid_target ? nullptr : known_.Flow(call.action);
+    if (!call.invalid_target && symbol.target == nullptr &&
+        call.action.find("::") != std::string::npos) {
+      Report("flow.name.unknown-call",
+             absl::StrCat(
+                 "Unknown qualified callable '", call.action,
+                 "'. Declare or import its module and callable contract."),
+             call.action_location, Severity::kError, Family::kName);
+    }
     if (symbol.target != nullptr && symbol.target->ambiguous) {
       Report("flow.name.ambiguous-implementation",
              "This callable has several executable bodies; qualify a unique "
@@ -3211,8 +3433,117 @@ class FlowResolver {
 
   // -- pipelines and references ----------------------------------------------
 
+  Ref ResolvePipelineCall(const syntax::CallExpression& call, Ref source,
+                          ExpressionInfo& upstream, Scope& scope,
+                          const syntax::Pipeline& pipeline) {
+    const auto* target = known_.Flow(call.action);
+    if (target == nullptr || call.invalid_target) {
+      Report("flow.form.pipeline-call",
+             "A pipeline invocation needs a known callable contract. Declare "
+             "or import its interface.",
+             call.action_location);
+      return source;
+    }
+    std::vector<std::string> supplied;
+    for (const auto& argument : call.args) {
+      supplied.push_back(argument.port.text);
+    }
+    const auto selected = SelectPipelinePorts(*target, supplied);
+    if (!selected.ok()) {
+      Report("flow.form.pipeline-call",
+             std::string(selected.status().message()), call.action_location);
+      for (const auto& port : target->ports) {
+        if (port.location.end > port.location.start) {
+          diagnostics_.back().related.push_back(
+              {"", lines_.Between(port.location.start, port.location.end),
+               absl::StrCat(syntax::PortDirectionName(port.direction),
+                            " port '", port.name, "'.")});
+        }
+      }
+      return source;
+    }
+    const auto& input = *selected->input;
+    const auto& output = *selected->output;
+    const auto expected = input.declared.empty() ? input.type : input.declared;
+    if (!upstream.type.empty() &&
+        RefinesType(upstream.type, expected, known_) == Refinement::kNo) {
+      Report(
+          "flow.form.pipeline-call",
+          absl::StrCat("Pipeline input '", input.name, "' expects ", expected,
+                       ", but the upstream carries ", upstream.type, "."),
+          call.action_location);
+    }
+    CheckArgumentReadsAwaited(pipeline, call.modifiers->after, scope);
+    std::vector<StepPlan> discarded;
+    auto& steps = pending_steps_ == nullptr ? discarded : *pending_steps_;
+    const auto first = steps.size();
+    const size_t index =
+        ResolveCall(call, scope, Label(call.action), steps, true);
+    ++resolved_.symbols[index].reads;
+    size_t call_plan = first;
+    while (call_plan < steps.size() &&
+           (steps[call_plan].action.empty() ||
+            steps[call_plan].location.start != call.location.start)) {
+      ++call_plan;
+    }
+    if (call_plan == steps.size()) {
+      Report("flow.form.pipeline-call", "The invocation could not be lowered.",
+             call.location);
+      return source;
+    }
+    steps[call_plan].pipeline_input = input.name;
+    steps[call_plan].pipeline_output = output.name;
+    const auto destination = CallPort(
+        index, input.name, syntax::PortDirection::kInput, call.location);
+    const auto result = CallPort(index, output.name,
+                                 syntax::PortDirection::kOutput, call.location);
+    const auto action = resolved_.symbols[index].step;
+    StepPlan feed;
+    feed.kind = "pipe";
+    feed.source = source.label;
+    feed.destination = destination.label;
+    feed.label = absl::StrCat(source.label, " -> ", destination.label);
+    feed.after = steps[call_plan].after;
+    feed.location = call.location;
+    if (builder_ != nullptr) {
+      if (input.unary) {
+        graph::Stage check;
+        check.name = "consume";
+        check.optional = !input.required;
+        source.node = Derive(source.node, std::move(check), source.label);
+      }
+      auto type = ParseTypeExpression(expected);
+      if (type.ok()) {
+        graph::Stage check;
+        check.name = "coerce";
+        check.type = input.syntax_type.has_value() ? *input.syntax_type
+                                                   : *std::move(type);
+        source.node = Derive(source.node, std::move(check), source.label);
+      }
+      const auto held = builder_->step(action).after;
+      const auto pipe =
+          NewStep(graph::StepKind::kPipe, feed.label, call.location);
+      builder_->step(pipe).source = source.node;
+      builder_->step(pipe).destination = destination.node;
+      builder_->step(pipe).deferred = true;
+      builder_->step(pipe).activation = action;
+      builder_->step(pipe).after = held;
+    }
+    steps.push_back(std::move(feed));
+    upstream = {};
+    upstream.category = ExpressionCategory::kStream;
+    upstream.type = output.declared.empty() ? output.type : output.declared;
+    upstream.unary = output.unary;
+    upstream.cardinality_known = true;
+    upstream.action = call.action;
+    upstream.port = output.name;
+    upstream.shape = known_.Dto(upstream.type);
+    return result;
+  }
+
   Ref ResolvePipeline(const syntax::Pipeline& pipeline, Scope& scope) {
     Ref ref = ResolveSource(pipeline.source.get(), scope);
+    ExpressionInfo carried = DescribeExpression(pipeline.source.get(), scope);
     // The pattern the values carry as the pipeline is walked, so `it` in a
     // stage knows what the stage before made of them.
     std::string previous_pattern = PatternOf(pipeline);
@@ -3220,6 +3551,14 @@ class FlowResolver {
       previous_pattern.clear();
     }
     for (const syntax::StagePtr& stage : pipeline.stages) {
+      if (const auto* call =
+              syntax::As<syntax::CallExpression>(stage->argument.get());
+          call != nullptr && (stage->name == "run" || stage->name == "call")) {
+        ref = ResolvePipelineCall(*call, ref, carried, scope, pipeline);
+        resolved_.expressions.insert_or_assign(stage.get(), carried);
+        previous_pattern.clear();
+        continue;
+      }
       graph::RefId stream = graph::kNone;
       graph::ExprId expr = graph::kNone;
       graph::RefId carry = graph::kNone;
@@ -3240,12 +3579,12 @@ class FlowResolver {
         Scope folding;
         folding.parent = &scope;
         if (!stage->carried.text.empty()) {
-          Symbol carried;
-          carried.kind = SymbolKind::kLoopVariable;
-          carried.name = stage->carried.text;
-          carried.location = stage->carried.location;
-          carried.ref = carry;
-          Define(folding, carried);
+          Symbol accumulator;
+          accumulator.kind = SymbolKind::kLoopVariable;
+          accumulator.name = stage->carried.text;
+          accumulator.location = stage->carried.location;
+          accumulator.ref = carry;
+          Define(folding, accumulator);
         }
         const std::string outer = it_pattern_;
         it_pattern_ = previous_pattern;
@@ -3294,6 +3633,31 @@ class FlowResolver {
           GraphStage(*stage, stream, expr, std::move(log), failures);
       made.carry = carry;
       ref.node = Derive(source, std::move(made), ref.label);
+      if (stage->name == "map") {
+        const auto mapped = DescribeExpression(stage->argument.get(), scope);
+        carried.type = mapped.type;
+        carried.shape = mapped.shape;
+        carried.fields = mapped.fields;
+      } else if (stage->name == "count") {
+        carried.type = "int";
+        carried.unary = true;
+        carried.cardinality_known = true;
+      } else if (stage->name == "collect") {
+        carried.type = carried.type.empty()
+                           ? "list"
+                           : absl::StrCat("list[", carried.type, "]");
+        carried.unary = true;
+        carried.cardinality_known = true;
+      } else if (stage->name == "flatten") {
+        carried.unary = false;
+        auto type = ParseTypeExpression(carried.type);
+        carried.type = type.ok() && type->parameters.size() == 1
+                           ? type->parameters.front().ToString()
+                           : "";
+      } else {
+        carried.type = ShapeAfter(*stage, carried.type);
+      }
+      resolved_.expressions.insert_or_assign(stage.get(), carried);
     }
     return ref;
   }
@@ -3761,8 +4125,15 @@ class FlowResolver {
       info = DescribeExpression(value->pipeline->source.get(), scope);
       info.category = ExpressionCategory::kValue;
       for (const auto& stage : value->pipeline->stages) {
+        if (const auto found = resolved_.expressions.find(stage.get());
+            found != resolved_.expressions.end()) {
+          info = found->second;
+          continue;
+        }
         const auto before = info.type;
-        info.type = ShapeAfter(*stage, info.type);
+        if (stage->name != "run" && stage->name != "call") {
+          info.type = ShapeAfter(*stage, info.type);
+        }
         if (info.type != before) {
           info.shape = nullptr;
         }
@@ -3771,6 +4142,7 @@ class FlowResolver {
           info.unary = true;
         }
       }
+      info.category = ExpressionCategory::kValue;
       if (value->optional) {
         info.type = info.type.empty() ? "option"
                                       : absl::StrCat("option[", info.type, "]");
@@ -5049,6 +5421,7 @@ class FlowResolver {
   /// The body statements are being read into, which is what a ref made here
   /// owns.
   graph::BodyId body_ = graph::kNone;
+  graph::StepId phase_gate_ = graph::kNone;
   /// The graph steps the last [ResolveAfter] found, for the one statement that
   /// makes several steps out of one `after`.
   std::vector<graph::StepId> after_waits_;

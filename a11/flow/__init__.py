@@ -157,6 +157,14 @@ ends it with an error. wait SUBJECT observes completion; status SUBJECT is its
 status. cancel ACTION cancels an action. fail [CODE [MESSAGE]] fails the scope.
 try run/call or try { body } exposes a failure through the operation's status.
 wait first of a, b chooses a completion; wait all of a, b waits for every one.
+Bare wait all is a scope-local execution barrier: all preceding work must
+complete successfully before any following statement activates. This includes
+initializers, arguments, eager deadlines, owned calls, feeds, draining, and child
+scopes. Work within a phase remains concurrent. Barriers inside branches,
+blocks, and loop passes affect only that scope or pass. Stream aliases do not
+read or exhaust streams; cross-phase producer/consumer cycles are errors.
+Bare wait all accepts no modifiers or value binding. wait all of a, b remains
+an explicit-subject wait and does not gate following statements.
 after a, b { body } gates a scope. Bound blocks and loops expose completion.
 
 Call and wait modifiers: timeout DURATION_EXPRESSION, deadline TIME_EXPRESSION,
@@ -169,6 +177,16 @@ Other call modifiers: via MAP, tee, id EXPR, with "header": EXPR,
 forward headers "name". Local nodes stay off the wire.
 
 source | stage -> destination [, destination]; -> _ discards results.
+source | run flow_name(config: value) | call module::flow_name() composes
+whole-stream invocations. After explicit arguments, exactly one input must
+remain (optional inputs count too), and exactly one output must be declared.
+Unary inputs validate zero/one or exactly one item according to required.
+Declare/import external interfaces before using them as stages. Calls retain
+ordinary dispatch, modifiers, draining, failure, and cleanup semantics.
+try run/call tolerates the invocation, not failures reading its output;
+use a try block for the whole pipeline, or combine a try invocation with a
+try pipe to tolerate transfer errors too. No item is dropped.
+
 Stages include map EXPR, where EXPR, first N, drop N, collect, flatten,
 scan INITIAL as state, EXPR, fold INITIAL as state, EXPR, sum, count,
 take while EXPR, take until EXPR, as TYPE, json, packb, timeout DURATION.

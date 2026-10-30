@@ -79,6 +79,20 @@ class FlowEngineTest {
         }
     }
 
+    @Test
+    fun `unresolved qualified calls report errors on their target`() {
+        val source = "flow main { run nested::test() }"
+        val checked = engine().check(source)!!
+        val diagnostics = checked["diagnostics"] as List<*>
+        val unknown = diagnostics.map { it as Map<*, *> }.single {
+            it["code"] == "flow.name.unknown-call"
+        }
+        assertEquals("error", unknown["severity"])
+        assertTrue(unknown["message"].toString().contains("nested::test"))
+        val start = (unknown["range"] as Map<*, *>)["start"] as Map<*, *>
+        assertEquals(source.indexOf("nested::test"), (start["offset"] as Number).toInt())
+    }
+
     private fun engine(): FlowEngine {
         val engine = FlowEngine.instance()
         assumeTrue(
@@ -144,6 +158,18 @@ class FlowEngineTest {
         assertTrue(names.toString(), names.contains("truncate"))
         // Only stages after a `|`: no names, no functions.
         assertTrue(names.toString(), !names.contains("len"))
+    }
+
+    @Test
+    fun `scope barriers use native diagnostics and completion`() {
+        val invalid = engine().check("flow main { wait all timeout 1s }")!!
+        assertTrue(invalid["diagnostics"].toString().contains("flow.form.scope-barrier"))
+        val source = "flow main { wait "
+        val proposals = engine().complete(source, source.length)!!["proposals"] as List<*>
+        val barrier = proposals.map { it as Map<*, *> }.first { it["name"] == "all" }
+        assertTrue(barrier.toString().contains(
+            "Wait for all preceding work in this scope before activating following statements."
+        ))
     }
 
     @Test

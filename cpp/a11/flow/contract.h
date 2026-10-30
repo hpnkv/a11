@@ -19,11 +19,22 @@
 #include <string_view>
 
 #include <absl/status/status.h>
+#include <absl/status/statusor.h>
+#include <absl/types/span.h>
 
 #include "a11/flow/limits.h"
 #include "a11/flow/plan.h"
 
 namespace a11::flow {
+/// The unique unsupplied input and unique output of a whole-stream invocation.
+struct PipelinePorts {
+  const PortPlan* absl_nonnull input;
+  const PortPlan* absl_nonnull output;
+};
+
+absl::StatusOr<PipelinePorts> SelectPipelinePorts(
+    const FlowPlan& flow, absl::Span<const std::string> supplied = {});
+
 /// Every type named by a field, including nested container parameters.
 std::vector<std::string_view> FieldTypeNames(const FieldPlan& field);
 /// Propagate byte payloads through the shape dependency graph.

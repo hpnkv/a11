@@ -214,6 +214,19 @@ TEST(FlowInspect, SaysWhenAClockIsReadAtAMomentNothingPinsDown) {
             (std::vector<std::string>{}));
 }
 
+TEST(FlowInspect, ScopeBarrierOrdersClockReadsWithoutOrderingSiblingScopes) {
+  const auto source = [](std::string_view barrier) {
+    return absl::StrCat(
+        "flow f { out text: string\n"
+        "x = run act()\n",
+        barrier,
+        "\n std::strformat(\"%s %s\", std::now(), x.status) -> text\n}");
+  };
+  EXPECT_EQ(Codes(source("wait all")), std::vector<std::string>{});
+  EXPECT_EQ(Codes(source("{ wait all }")),
+            std::vector<std::string>{"flow.barrier.unordered-clock"});
+}
+
 TEST(FlowInspect, SaysWhenOneStatementReadsOneStreamTwiceForAValue) {
   const std::vector<std::string> both{"flow.barrier.unordered-clock",
                                       "flow.barrier.value-read-twice"};

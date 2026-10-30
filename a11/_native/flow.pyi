@@ -313,6 +313,16 @@ class Expression:
         Apply a pipeline stage with required grouping.
         """
 
+    def pipeline_invoke(
+        self,
+        action: str,
+        arguments: collections.abc.Sequence[tuple[str, Expression]] = [],
+        options: CallOptions | None = None,
+    ) -> Expression:
+        """
+        Invoke an action once for the whole pipeline stream.
+        """
+
     def take(self, optional: bool = False) -> Expression:
         """
         Extract the next item, optionally representing EOF as absence.
@@ -897,6 +907,12 @@ class Statement:
     def wait(subject: Expression, close: bool = False) -> Statement:
         """
         Wait for or close a subject.
+        """
+
+    @staticmethod
+    def wait_all() -> Statement:
+        """
+        Wait for all preceding work in this scope before activating following statements.
         """
 
     @property

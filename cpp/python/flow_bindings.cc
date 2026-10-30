@@ -818,6 +818,9 @@ void BindFlow(py::module_& module) {
           },
           "The grammar-aware type spelling.");
 
+  auto call_options = py::class_<flow::CallOptions>(
+      flow, "CallOptions", "Typed modifiers for an invocation expression.");
+
   auto expression =
       py::class_<flow::Expression>(
           flow, "Expression",
@@ -924,12 +927,25 @@ void BindFlow(py::module_& module) {
               },
               py::arg("stage"), py::arg("argument") = std::nullopt,
               "Apply a pipeline stage with required grouping.")
+          .def(
+              "pipeline_invoke",
+              [](const flow::Expression& self, std::string action,
+                 std::vector<std::pair<std::string, flow::Expression>>
+                     arguments,
+                 std::optional<flow::CallOptions> options) {
+                return ValueOrThrow(
+                    self.PipelineInvoke(std::move(action), std::move(arguments),
+                                        options.value_or(flow::CallOptions{})));
+              },
+              py::arg("action"),
+              py::arg("arguments") =
+                  std::vector<std::pair<std::string, flow::Expression>>{},
+              py::arg("options") = py::none(),
+              "Invoke an action once for the whole pipeline stream.")
           .def_property_readonly("source", &flow::Expression::source,
                                  "The emitted Flow expression.");
 
-  py::class_<flow::CallOptions>(flow, "CallOptions",
-                                "Typed modifiers for an invocation expression.")
-      .def(py::init<>(), "Create default local invocation options.")
+  call_options.def(py::init<>(), "Create default local invocation options.")
       .def_readwrite("remote", &flow::CallOptions::remote)
       .def_readwrite("tolerant", &flow::CallOptions::tolerant)
       .def_readwrite("tee", &flow::CallOptions::tee)
@@ -1020,6 +1036,10 @@ void BindFlow(py::module_& module) {
           },
           py::arg("subject"), py::arg("close") = false,
           "Wait for or close a subject.")
+      .def_static(
+          "wait_all", []() { return ValueOrThrow(flow::Statement::WaitAll()); },
+          "Wait for all preceding work in this scope before activating "
+          "following statements.")
       .def_static(
           "cancel",
           [](const flow::Expression& subject) {

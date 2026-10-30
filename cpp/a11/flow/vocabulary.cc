@@ -718,7 +718,9 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StatementDocs() {
         "for. Either verb may name another flow of the same file, in any order "
         "and with nothing registered for it, which is how one composition is "
         "factored into several. Naming the step binds it: `x.port` reads its "
-        "outputs and `status x` its outcome.",
+        "outputs and `status x` its outcome. After a pipe, `| run flow_name()` "
+        "invokes once for the whole stream, connecting the unique unsupplied "
+        "input and unique output.",
         "search = run web-search(query: question, limit: 3)"}},
       {"call",
        {"Dispatches an action on the stream this flow is attached to, for the "
@@ -726,8 +728,10 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StatementDocs() {
         "an action, its arguments in parentheses, and any modifiers",
         "Needs nothing registered on this side, and the step's nodes cross the "
         "wire, which is what a `nodes` block or a `via` is for. `run` is the "
-        "other verb, for an action this side has a handler for.",
-        "said = call text-upper(std::text: words)"}},
+        "other verb, for an action this side has a handler for. After a pipe, "
+        "`| call flow_name()` is a whole-stream peer invocation with a known "
+        "interface, one unsupplied input, and one output.",
+        "said = call text-upper(text: words)"}},
       {"try",
        {"Lets a step or a block fail without ending the flow.",
         "a `run`, a `call`, or a block",
@@ -757,7 +761,11 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StatementDocs() {
         "`try`'s failure is read. This is also the way to say that a statement "
         "is the last word about a step rather than a line racing it, though "
         "`after` says the same thing without a name. Waiting twice in one body "
-        "is over as soon as it starts the second time, and is reported.",
+        "is over as soon as it starts the second time, and is reported. Bare "
+        "`wait all` waits for all preceding work in this scope before "
+        "activating "
+        "following statements. It accepts no modifiers or value binding. "
+        "`wait all of a, b` remains an explicit-subject wait.",
         "done = wait llm timeout 30s"}},
       {"close",
        {"Ends a node and says how it ended.", "a node",

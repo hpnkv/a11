@@ -503,4 +503,31 @@ TEST(FlowComplete, QualifiedActionSuggestionsInsertBothVerbsWithNativeRanges) {
             (std::vector<std::string>{"run lib::work", "call lib::work"}));
 }
 
+TEST(FlowComplete,
+     PipelineCallsOfferBothDispatchModesAndDescribeSelectedPorts) {
+  const auto result =
+      At("flow clean { in rows: string stream\n out result: string stream "
+         "}\nflow main { in rows: string stream\n rows | |CARET| }");
+  for (const auto* name : {"run clean", "call clean"}) {
+    const auto found =
+        std::find_if(result.proposals.begin(), result.proposals.end(),
+                     [&](const auto& p) { return p.name == name; });
+    ASSERT_NE(found, result.proposals.end());
+    EXPECT_NE(found->tail.find("rows -> result"), std::string::npos);
+    EXPECT_NE(found->documentation.find("whole stream"), std::string::npos);
+  }
+}
+
+TEST(FlowComplete, ScopeBarrierCompletionExplainsPhaseOrdering) {
+  const auto result = At("flow main { wait |CARET| }");
+  const auto found =
+      std::find_if(result.proposals.begin(), result.proposals.end(),
+                   [](const auto& p) { return p.name == "all"; });
+  ASSERT_NE(found, result.proposals.end());
+  EXPECT_EQ(found->insert, "all");
+  EXPECT_EQ(found->documentation,
+            "Wait for all preceding work in this scope before activating "
+            "following statements.");
+}
+
 }  // namespace a11::flow

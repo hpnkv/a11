@@ -23,22 +23,17 @@ flow triage {
   out verdict: string          "What the last pass concluded."
   out notes:   string          "The trail it left."
 
-  repeat state = {"round": 0, "notes": []} max 6 {
+  object state = {round: 0, notes: []}
+  repeat max 6 {
     step = run triage-step(state: state)
+    state = take step.next
+    state -> passes
 
-    # What the next pass starts from, and when to stop asking.
-    state <- step.next
-    until step.next.confidence >= 0.8
-
-    step.next -> passes
-
-    if step.next.done {
-      step.next.verdict -> verdict
-      # `join` the stage joins a stream; `join` the function joins a list, which
-      # is what the trail in this one value is.
-      step.next.notes | map join(it, ", ") -> notes
+    if state.done {
+      state.verdict -> verdict
+      std::join(state.notes, ", ") -> notes
     }
-  }
+  } until state.confidence >= 0.8
 }
 
 flow triage-strictly {
@@ -47,7 +42,7 @@ flow triage-strictly {
   in  report:  string required
   out verdict: string
 
-  if len(report) < 12 {
+  if std::len(report) < 12 {
     fail invalid_argument "that report is too short to triage"
   }
 

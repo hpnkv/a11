@@ -43,7 +43,7 @@ flow main {
 @pytest.mark.parametrize("items", [[], [1, 2]])
 async def test_consume_checks_cardinality(items):
     program = flow.loads(
-        "flow f { in values: integer stream\n out result: integer\n values |"
+        "flow f { in values: int stream\n out result: int\n values |"
         " consume -> result }"
     )
     with pytest.raises(StatusException) as raised:
@@ -54,13 +54,13 @@ async def test_consume_checks_cardinality(items):
 @pytest.mark.asyncio
 async def test_imported_public_flow_captures_private_dependencies():
     program = flow.loads(
-        'import "library" as lib\nflow main { out result: integer\n (run'
-        " lib.work()).result -> result }",
+        'import "library" as lib\nflow main { out result: int\n (run'
+        " lib::work()).result -> result }",
         "root",
         modules={
             "library": (
-                "flow hidden { out result: integer\n 42 -> result }\nflow work"
-                " exported { out result: integer\n (run hidden()).result ->"
+                "flow hidden { out result: int\n 42 -> result }\nflow work"
+                " exported { out result: int\n (run hidden()).result ->"
                 " result }"
             )
         },
@@ -70,7 +70,7 @@ async def test_imported_public_flow_captures_private_dependencies():
     ] == 42
     with pytest.raises(FlowSyntaxError):
         flow.loads(
-            'import "library" as lib\nflow f { run lib.hidden() }',
+            'import "library" as lib\nflow f { run lib::hidden() }',
             modules={"library": "flow hidden {}"},
         )
 
@@ -123,12 +123,12 @@ def test_graph_rename_retains_aliases_and_returns_reviewable_edits():
         "draw",
         modules={
             "root": (
-                'import "library" as lib\nflow main { (run lib.render()).result'
-                " -> _ }"
+                'import "library" as lib\nflow main { (run'
+                " lib::render()).result -> _ }"
             )
         },
     )
-    assert "lib.draw" in changed.sources["root"]
+    assert "lib::draw" in changed.sources["root"]
     assert changed.edits["library"]
     assert "flow render" in document.source
     assert changed.diagnostics
@@ -209,7 +209,8 @@ async def test_direct_import_implements_flow_local_contract():
     program = flow.loads(
         """flow main {
           declare flow render { out text: string }
-          from "library" import render
+          import "library" as library
+from library import render
           out report: string
           (run render()).text -> report
         }""",
@@ -279,18 +280,20 @@ def test_direct_import_schema_conflict_reports_local_declaration():
         flow.loads(
             """flow main {
  declare flow render { out result: string }
- from "library" import render
+ import "library" as library
+from library import render
  run render()
 }""",
             "root",
-            modules={"library": "flow render exported { out result: integer }"},
+            modules={"library": "flow render exported { out result: int }"},
         )
 
 
 def test_direct_import_does_not_auto_register_imported_implementation():
     program = flow.loads(
         """declare flow render {}
-from "library" import render
+import "library" as library
+from library import render
 flow main {}""",
         "root",
         modules={"library": "flow render exported {}"},
@@ -320,11 +323,12 @@ def test_builders_emit_local_declarations_structs_and_symbol_imports():
     shape = flow.StructBuilder("Report")
     shape.field("text", flow.Type("string"))
     builder.add_struct(shape)
+    builder.add_import("library", "library")
     builder.add_import("library", "render", symbol="render")
     source = builder.emit()
-    assert 'declare flow "render"' in source
+    assert "declare flow render" in source
     assert "struct Report" in source
-    assert 'from "library" import render' in source
+    assert "from library import render" in source
     program = flow.loads(
         source, "root", modules={"library": "flow render exported {}"}
     )
@@ -447,13 +451,13 @@ async def test_after_block_gates_nested_action_arguments():
 
 @pytest.mark.asyncio
 async def test_plain_pipeline_binding_joins_destinations_and_children():
-    program = flow.loads("""flow emit { out values: integer stream
+    program = flow.loads("""flow emit { out values: int stream
  [1, 2, 3, 1] | flatten -> values
 }
 flow main {
- out left: integer stream
- out right: integer stream
- out completed: boolean
+ out left: int stream
+ out right: int stream
+ out completed: bool
  forwarded = (run emit()).values
    | take until it == 3
    -> left, right
@@ -514,3 +518,41 @@ def test_scanning_native_sources_preserves_standard_stream_analysis():
     )
     assert hover["ok"]
     assert "content" in str(hover["result"])
+
+
+@pytest.mark.asyncio
+async def test_status_values_preserve_native_details_across_flow_ports():
+    from a11.status import Status
+
+    program = flow.loads("""flow main {
+      in original: std::status
+      out copied: std::status
+      std::status value = take original
+      value -> copied
+    }""")
+    original = Status(
+        code=StatusCode.NOT_FOUND,
+        message="missing",
+        details=[{"resource": "page", "id": 7}],
+    )
+    result = await program.main.invoke(
+        original=original, registry=ActionRegistry()
+    )
+    assert result["copied"].code == original.code
+    assert result["copied"].message == original.message
+    assert result["copied"].details == original.details
+
+
+def test_document_compilation_uses_host_source_roots_and_limits(tmp_path):
+    (tmp_path / "library.flow").write_text("flow work exported {}")
+    document = flow.ModuleDocument(
+        str(tmp_path / "root.flow"),
+        'import "library.flow"\nflow main { run library::work() }',
+    )
+    with pytest.raises(StatusException, match="imports are disallowed"):
+        document.compile()
+    assert document.compile(source_roots=[str(tmp_path)]).main.name == "main"
+    limits = flow.CompilationLimits()
+    limits.max_work = 0
+    with pytest.raises(StatusException):
+        document.compile(source_roots=[str(tmp_path)], limits=limits)

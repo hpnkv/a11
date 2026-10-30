@@ -17,10 +17,12 @@
 #include <algorithm>
 #include <utility>
 
+#include <absl/container/flat_hash_map.h>
 #include <absl/container/flat_hash_set.h>
 #include <absl/status/statusor.h>
 #include <absl/strings/ascii.h>
 #include <absl/strings/str_cat.h>
+#include <absl/strings/str_replace.h>
 #include <absl/time/time.h>
 #include <nlohmann/json.hpp>
 
@@ -37,6 +39,9 @@ std::string Normal(std::string_view name) {
       decoded = quoted.get<std::string>();
       name = decoded;
     }
+  }
+  if (name.starts_with("std::")) {
+    name.remove_prefix(5);
   }
   const auto canonical = vocabulary::Canonical(name);
   if (vocabulary::TypeNames().contains(canonical)) {
@@ -63,10 +68,10 @@ std::string Normal(std::string_view name) {
   if (name == "application/json") {
     return "json";
   }
-  if (name == "a11.Time") {
+  if (name == "a11.Time" || name == "a11::Time") {
     return "time";
   }
-  if (name == "a11.Duration") {
+  if (name == "a11.Duration" || name == "a11::Duration") {
     return "duration";
   }
   return std::string(name);
@@ -114,9 +119,6 @@ std::string Canonical(std::string_view type, int depth) {
     return base;
   }
   auto parameters = Parameters(element);
-  if (base == "object" && parameters.size() == 1) {
-    parameters.insert(parameters.begin(), "string");
-  }
   std::string output = base + "[";
   for (size_t index = 0; index < parameters.size(); ++index) {
     if (index != 0) {
@@ -171,14 +173,6 @@ Refinement Refines(std::string_view actual, std::string_view expected,
     }
     auto actual_parameters = Parameters(ae),
          expected_parameters = Parameters(ee);
-    if (a == "object") {
-      if (actual_parameters.size() == 1) {
-        actual_parameters.insert(actual_parameters.begin(), "string");
-      }
-      if (expected_parameters.size() == 1) {
-        expected_parameters.insert(expected_parameters.begin(), "string");
-      }
-    }
     if (actual_parameters.size() != expected_parameters.size()) {
       return Refinement::kUnknown;
     }
@@ -443,6 +437,66 @@ absl::Status Mismatch(const FlowPlan& flow, std::string_view member,
 }
 }  // namespace
 
+std::vector<std::string_view> FieldTypeNames(const FieldPlan& field) {
+  std::vector<std::string_view> names{field.type, field.element, field.dto_name,
+                                      field.element_dto_name};
+  if (field.syntax_type.has_value()) {
+    std::vector<const syntax::TypeExpression*> pending{&*field.syntax_type};
+    while (!pending.empty()) {
+      const auto* type = pending.back();
+      pending.pop_back();
+      names.push_back(type->name);
+      for (const auto& parameter : type->parameters) {
+        pending.push_back(&parameter);
+      }
+    }
+  }
+  return names;
+}
+
+void MarkBinaryTypes(std::vector<DtoPlan>& types, CompilationBudget* budget) {
+  CompilationBudget local_budget(CompilationLimits{});
+  if (budget == nullptr) {
+    budget = &local_budget;
+  }
+  absl::flat_hash_map<std::string_view, size_t> names;
+  for (size_t index = 0; index < types.size(); ++index) {
+    names[types[index].name] = index;
+  }
+  std::vector<std::vector<size_t>> dependents(types.size());
+  std::vector<size_t> ready;
+  for (size_t index = 0; index < types.size(); ++index) {
+    for (const auto& field : types[index].fields) {
+      if (!budget->Check()) {
+        return;
+      }
+      for (const auto name : FieldTypeNames(field)) {
+        if (name == "bytes") {
+          types[index].binary = true;
+        }
+        const auto found = names.find(name);
+        if (found != names.end()) {
+          dependents[found->second].push_back(index);
+        }
+      }
+    }
+    if (types[index].binary) {
+      ready.push_back(index);
+    }
+  }
+  for (size_t next = 0; next < ready.size(); ++next) {
+    if (!budget->Check()) {
+      return;
+    }
+    for (const auto index : dependents[ready[next]]) {
+      if (!types[index].binary) {
+        types[index].binary = true;
+        ready.push_back(index);
+      }
+    }
+  }
+}
+
 std::string CanonicalPayloadType(std::string_view type) {
   return Canonical(type, 0);
 }
@@ -585,7 +639,7 @@ absl::Status MergeContract(FlowPlan& effective, const FlowPlan& other,
       }
       const auto description =
           found->description.empty() ? h.description
-          : h.description.empty()    ? found->description
+          : h.description.empty() ? found->description
                                   : std::min(found->description, h.description);
       const auto alias = found->alias.empty() ? h.alias
                          : h.alias.empty()    ? found->alias
@@ -602,13 +656,6 @@ absl::Status MergeContract(FlowPlan& effective, const FlowPlan& other,
       (!other.description.empty() && other.description < merged.description)) {
     merged.description = other.description;
   }
-  std::sort(merged.ports.begin(), merged.ports.end(),
-            [](const auto& a, const auto& b) {
-              return a.direction != b.direction ? a.direction < b.direction
-                                                : a.name < b.name;
-            });
-  std::sort(merged.headers.begin(), merged.headers.end(),
-            [](const auto& a, const auto& b) { return a.name < b.name; });
   merged.exported = merged.exported || other.exported;
   effective = std::move(merged);
   return unknown

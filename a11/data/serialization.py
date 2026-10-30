@@ -81,15 +81,17 @@ def _is_self_describing_media_type(media_type: str) -> bool:
 #: holding one of these carries no ``type`` parameter at all: ``;type=object``
 #: on an object says nothing a parser did not already know, and a peer matching
 #: on bare ``application/json`` would fail to recognise it.
-_GENERIC_TAGS = frozenset({
-    "object",
-    "array",
-    "string",
-    "integer",
-    "number",
-    "boolean",
-    "null",
-})
+_GENERIC_TAGS = frozenset(
+    {
+        "object",
+        "array",
+        "string",
+        "integer",
+        "number",
+        "boolean",
+        "null",
+    }
+)
 
 _MIME_TOKEN_RE = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
 _MIME_PART_RE = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z?*\[\]-]+$")
@@ -339,10 +341,12 @@ def _format_exact_mimetype(mimetype: _Mimetype, type_identifier: str) -> str:
         type_identifier not in _GENERIC_TAGS
         and not _is_self_describing_media_type(mimetype.media_type)
     ):
-        parameters.append((
-            _TYPE_PARAMETER,
-            urllib.parse.quote(type_identifier, safe="!#$%&'*+.^_`|~-"),
-        ))
+        parameters.append(
+            (
+                _TYPE_PARAMETER,
+                urllib.parse.quote(type_identifier, safe="!#$%&'*+.^_`|~-"),
+            )
+        )
     suffix = "".join(
         f";{name}={_format_parameter(value)}" for name, value in parameters
     )
@@ -537,9 +541,9 @@ class SerializationRegistry:
             tuple[_DeserializerRegistration, type | None],
         ] = {}
         # Cache deserializers by selector until a registration changes them.
-        self._format_cache: dict[
-            _Mimetype, list[_DeserializerRegistration]
-        ] = {}
+        self._format_cache: dict[_Mimetype, list[_DeserializerRegistration]] = (
+            {}
+        )
         self._chunk_metadata_cache: dict[str, types.ChunkMetadata] = {}
         #: Set only while register_defaults() runs, so the registrations it
         #: makes can be told apart from a caller's.
@@ -924,6 +928,11 @@ class SerializationRegistry:
                 message="Mimetype must be a string.",
             ).to_exception()
 
+        if isinstance(obj, Status) and (
+            not mimetype or mimetype == _native.ACTION_STATUS_MIMETYPE
+        ):
+            return _native.status_to_chunk(obj)
+
         actual_type = type(obj)
         # Resolution depends on the type and the requested mimetype and on
         # nothing else, so it is done once per pair. `isinstance` against every
@@ -1027,6 +1036,14 @@ class SerializationRegistry:
                     " deserialization."
                 ),
             ).to_exception()
+
+        if _native.is_status_chunk(chunk) and not mimetype_patterns:
+            if obj_type is not None and obj_type is not Status:
+                raise Status(
+                    code=StatusCode.INVALID_ARGUMENT,
+                    message="A status chunk decodes to Status.",
+                ).to_exception()
+            return _native.status_from_chunk(chunk)
 
         actual = None
         actual_mimetype = chunk.get_mimetype()
@@ -1378,9 +1395,7 @@ def _chunk_summary(chunk: types.Chunk) -> str:
     else:
         text = data if isinstance(data, str) else repr(data)
     clipped = (
-        text
-        if len(text) <= _SUMMARY_CHARS
-        else text[:_SUMMARY_CHARS] + "..."
+        text if len(text) <= _SUMMARY_CHARS else text[:_SUMMARY_CHARS] + "..."
     )
     return f"{mimetype!r} carrying {clipped!r}"
 
@@ -1391,7 +1406,11 @@ def _validation_detail(chunk: types.Chunk, obj_type: type) -> str:
     ):
         return ""
     data = chunk.data
-    payload = bytes(data) if isinstance(data, (bytes, bytearray, memoryview)) else data
+    payload = (
+        bytes(data)
+        if isinstance(data, (bytes, bytearray, memoryview))
+        else data
+    )
     try:
         obj_type.model_validate_json(payload)
     except pydantic.ValidationError as error:

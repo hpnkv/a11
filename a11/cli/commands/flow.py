@@ -109,7 +109,9 @@ def _syntax_error_diagnostic(error: Any, source: str) -> diag.Diagnostic:
     )
 
 
-def _check_source(source: str, source_name: str = "-") -> list[diag.Diagnostic]:
+def _check_source(
+    source: str, source_name: str = "-", source_roots: list[str] | None = None
+) -> list[diag.Diagnostic]:
     """Everything wrong with one flow file.
 
     The native parser and resolver recover after errors and report every problem
@@ -118,7 +120,7 @@ def _check_source(source: str, source_name: str = "-") -> list[diag.Diagnostic]:
     from a11._native import flow as native_flow
 
     payload = native_flow.check(
-        source, source_name, resolve_files=source_name != _STDIN
+        source, source_name, source_roots=source_roots or []
     )
     return [
         diag.Diagnostic.from_payload(entry) for entry in payload["diagnostics"]
@@ -139,7 +141,9 @@ async def _run_check(args: argparse.Namespace) -> int:
             exit_code = 2
             continue
 
-        found = diag.sort_diagnostics(_check_source(source, name))
+        found = diag.sort_diagnostics(
+            _check_source(source, name, args.source_root)
+        )
         errors = sum(1 for one in found if one.severity is diag.Severity.ERROR)
         if errors:
             exit_code = max(exit_code, 1)
@@ -170,7 +174,7 @@ async def _run_describe(args: argparse.Namespace) -> int:
     source, name = _read(args.file)
     payload = native_flow.request(
         {"method": "plan", "source": source, "path": name},
-        resolve_files=name != _STDIN,
+        source_roots=args.source_root,
     )["result"]
     found = diag.sort_diagnostics(
         diag.Diagnostic.from_payload(entry) for entry in payload["diagnostics"]
@@ -514,7 +518,9 @@ async def _run_serve(args: argparse.Namespace) -> int:
             )
             continue
         print(
-            json.dumps(native_flow.request(request, resolve_files=True)),
+            json.dumps(
+                native_flow.request(request, source_roots=args.source_root)
+            ),
             flush=True,
         )
     return 0
@@ -622,6 +628,7 @@ async def _run_program(args: argparse.Namespace, source: str, name: str) -> int:
             "" if name == _STDIN else name,
             arguments=[name, *(args.arguments or ())],
             roots=args.root or (),
+            source_roots=args.source_root,
             allow_write=args.allow_write,
             allow_run=args.allow_run,
             allow_net=args.allow_net,
@@ -733,14 +740,14 @@ async def _run_run(args: argparse.Namespace) -> int:
     try:
         program = flow_api.compile_source(
             source,
-            "" if name == _STDIN else str(pathlib.Path(name).resolve()),
-            resolve_files=name != _STDIN,
+            "" if name == _STDIN else str(pathlib.Path(name).absolute()),
+            source_roots=args.source_root,
         )
     except FlowSyntaxError as error:
         diagnostic = next(
             (
                 found
-                for found in _check_source(source, name)
+                for found in _check_source(source, name, args.source_root)
                 if found.severity == diag.Severity.ERROR
                 and found.message == error.message
             ),
@@ -1265,6 +1272,15 @@ def _configure(parser: argparse.ArgumentParser) -> None:
     )
     _add_format(scan)
     scan.set_defaults(_flow_handler=_run_scan)
+
+    for command in subparsers.choices.values():
+        command.add_argument(
+            "--source-root",
+            action="append",
+            default=[],
+            metavar="DIR",
+            help="Permit imports under DIR; repeat for each approved root.",
+        )
 
 
 FLOW_COMMAND = Command(

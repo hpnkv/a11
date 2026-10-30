@@ -32,7 +32,9 @@ data class FlowProposal(
     val name: String,
     val kind: String,
     val insert: String,
+    val filter: String = name,
     val caret: Int,
+    val replaceStart: Int?,
     val tail: String,
     val type: String,
     /**
@@ -97,6 +99,8 @@ class FlowCompletionContributor : CompletionContributor() {
                 name = name,
                 kind = proposal["kind"] as? String ?: "",
                 insert = insert,
+                filter = proposal["filter"] as? String ?: name,
+                replaceStart = (proposal["replace_start"] as? Number)?.toInt(),
                 caret = (proposal["caret"] as? Number)?.toInt() ?: insert.length,
                 tail = proposal["tail"] as? String ?: "",
                 type = proposal["type"] as? String ?: "",
@@ -116,16 +120,14 @@ class FlowCompletionContributor : CompletionContributor() {
 
     private fun element(proposal: FlowProposal, rank: Int): LookupElement {
         var element = LookupElementBuilder
-            .create(proposal, proposal.name)
+            .create(proposal, proposal.filter)
             .withPresentableText(proposal.name)
             .withTailText(proposal.tail, true)
             .withIcon(iconFor(proposal.kind))
         if (proposal.type.isNotEmpty()) {
             element = element.withTypeText(proposal.type)
         }
-        if (proposal.insert != proposal.name || proposal.caret != proposal.insert.length) {
-            element = element.withInsertHandler(Insert(proposal))
-        }
+        element = element.withInsertHandler(Insert(proposal))
         return PrioritizedLookupElement.withPriority(element, rank.toDouble())
     }
 
@@ -151,14 +153,15 @@ class FlowCompletionContributor : CompletionContributor() {
         InsertHandler<LookupElement> {
 
         override fun handleInsert(context: InsertionContext, item: LookupElement) {
+            val start = proposal.replaceStart ?: context.startOffset
             context.document.replaceString(
-                context.startOffset,
+                start,
                 context.tailOffset,
                 proposal.insert,
             )
             context.commitDocument()
             context.editor.caretModel.moveToOffset(
-                context.startOffset + proposal.caret.coerceIn(0, proposal.insert.length),
+                start + proposal.caret.coerceIn(0, proposal.insert.length),
             )
         }
     }

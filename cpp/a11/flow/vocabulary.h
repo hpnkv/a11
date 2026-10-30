@@ -165,7 +165,7 @@ enum class WordRole {
   /// A built-in function, where it is called. Same table as
   /// [BuiltinDocumentation].
   kBuiltin,
-  /// A word that opens a statement: `run`, `let`, `for`. [StatementWords].
+  /// A word that opens a statement: `run`, `value`, `for`. [StatementWords].
   kStatement,
   /// A word that declares something: `flow`, `in`, `header`.
   /// [DeclarationWords].
@@ -209,6 +209,9 @@ enum class WordRole {
 /// is documented as the port modifier it is. A hover knows the position and
 /// asks [Documentation] for the role that position means; a listing does not,
 /// and asks this.
+/// Whether a standard type and its conversion are in the primitive prelude.
+bool IsPrimitiveType(std::string_view name);
+
 const WordDoc* absl_nullable AnyDocumentation(std::string_view canonical_name);
 
 /// Every role, for something walking all of them.

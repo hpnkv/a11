@@ -107,6 +107,7 @@ struct LogTail {
 
 struct Stage {
   std::string name;
+  std::optional<syntax::TypeExpression> type;
   vocabulary::StageArgument takes = vocabulary::StageArgument::kNone;
   /// `kNumber`: the count.
   long long count = 0;
@@ -121,17 +122,13 @@ struct Stage {
   /// Whether `at` was written as an index rather than a field name.
   bool indexed = false;
   long long index = 0;
-  /// Whether `at` should try its name and *then* its index, which is what a
-  /// destructuring `let` needs: `let name, age = user` is by field over a
-  /// record and by position over a pair, and only the value knows which it is.
-  bool named_or_indexed = false;
+  std::vector<std::string> destructured;
+  std::vector<std::optional<syntax::TypeExpression>> destructured_types;
   /// `kDuration`: how long `timeout` waits for the next value, or `pace` leaves
   /// between two of them.
   absl::Duration duration;
   /// `sort`: whether the order is reversed.
   bool descending = false;
-  // `fold`: what the first pass carries, the name it is bound to, and the ref
-  // that name resolves to inside the fold's expression.
   /// `fold`: what the first pass carries, the name it is bound to, and the ref
   /// that name resolves to inside the fold's expression. The ref is how the
   /// accumulator reaches [Evaluate]: a name in an expression is a ref, and
@@ -215,8 +212,6 @@ struct Ref {
   /// `kBound`: which of a loop's streams this is -- `item`, `index`, `carry`.
   std::string role;
   StepId bound_by = kNone;
-  // `kZip`: the streams read in step, in the order they were written, which is
-  // the order their values appear in each tuple.
   /// `kZip`: the streams read in step, in the order they were written, which is
   /// the order their values appear in each tuple. `kMerge`: the streams read at
   /// once, where the order they were written in says nothing about the order
@@ -230,7 +225,7 @@ enum class StepKind {
   kPipe,
   kSkip,
   kWait,
-  kDrain,
+  kClose,
   kCancel,
   /// `abort node ..`: end a node with a failure rather than with an end.
   kAbort,
@@ -257,7 +252,7 @@ std::string_view StepKindName(StepKind kind);
 inline bool RecordsOutcome(StepKind kind) {
   return kind == StepKind::kBlock || kind == StepKind::kForEach ||
          kind == StepKind::kRepeat || kind == StepKind::kPipe ||
-         kind == StepKind::kWait || kind == StepKind::kDrain;
+         kind == StepKind::kWait || kind == StepKind::kClose;
 }
 
 /// One resolved statement.
@@ -278,6 +273,8 @@ struct Step {
   std::string mode;
   std::string node_map;
   std::optional<absl::Duration> timeout;
+  StepId deadline = kNone;
+  StepId timeout_value = kNone;
   bool tee = false;
   bool tolerant = false;
   std::vector<std::pair<std::string, ExprId>> headers;
@@ -308,11 +305,9 @@ struct Step {
   /// `kCapture`: which slot of the enclosing loop it fills.
   std::string slot;
 
-  /// `kWait`/`kDrain`: the outcome read, and whether a bad one is this flow's
+  /// `kWait`/`kClose`: the outcome read, and whether a bad one is this flow's
   /// business or the subject's.
   RefId outcome = kNone;
-  // `kWait`: the outcomes of a `wait first of` / `wait all of`, in the order
-  // they were written.
   /// `kWait`: the outcomes of a `wait first of` / `wait all of`, in the order
   /// they were written. Empty for the single-subject form, whose one outcome is
   /// `outcome` -- which is also the *first* of these, so anything reading a
@@ -359,6 +354,14 @@ struct Step {
   std::optional<int> max_iterations;
   ExprId condition = kNone;
   bool stop_when = true;
+
+  /// Outer values updated by a child body, with its per-body input versions.
+  struct VariableUpdate {
+    RefId result = kNone;
+    std::vector<std::pair<BodyId, RefId>> inputs;
+  };
+
+  std::vector<VariableUpdate> variable_updates;
 };
 
 /// A block of steps: a flow's top level, or a loop or branch body.
@@ -377,6 +380,7 @@ struct Body {
 /// syntax node that named it. Keying on the node rather than rewriting the tree
 /// is what lets the tree stay immutable and shared.
 struct Expr {
+  bool materialized = false;
   const syntax::Node* absl_nullable node = nullptr;
   std::vector<std::pair<const syntax::Node* absl_nonnull, RefId>> bound;
   /// The same refs, in the order they were first mentioned, for the analysis.
@@ -412,7 +416,6 @@ struct FlowGraph {
   [[nodiscard]] std::vector<RefId> ValueSources(StepId step) const;
   /// The refs a step writes, one entry per independent writer.
   [[nodiscard]] std::vector<RefId> Destinations(StepId step) const;
-  // The refs the *stages* a step reads write to: a `try ...
   /// The refs the *stages* a step reads write to: a `try ... into failures`.
   ///
   /// A stage is part of a stream rather than of a statement, so its destination
@@ -514,7 +517,7 @@ class GraphBuilder {
         "mime", "distinct", "first", "last", "drop", "log", "logf", "scan",
         // `sort` reorders and keeps every value; `timeout` and `pace` say
         // *when* a value may pass and change nothing about which do.
-        "sort", "timeout", "pace"};
+        "sort", "timeout", "pace", "coerce", "destructure"};
     return kPerValue->contains(stage.name);
   }
 

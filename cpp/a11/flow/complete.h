@@ -23,8 +23,11 @@
 #include <vector>
 
 #include "a11/flow/catalogue.h"
+#include "a11/flow/limits.h"
 
 namespace a11::flow {
+
+struct LinkedModule;
 
 /// What a proposal *is*, which is what an editor turns into an icon.
 ///
@@ -63,7 +66,7 @@ enum class ProposalKind {
   kNodeMap,
   /// A bound `run`/`call` step.
   kCall,
-  /// A bound `wait`/`drain`.
+  /// A bound `wait`/`close`.
   kBarrier,
   /// A loop variable, the `index` a loop binds, or what a `repeat` carries.
   kVariable,
@@ -82,17 +85,19 @@ struct Proposal {
   /// function takes its parentheses, an argument takes the colon that has to
   /// follow it.
   std::string insert;
+  /// Text matched while the visible label includes an invocation verb.
+  std::string filter;
   /// Where the caret lands inside `insert`, in bytes. `-1` is the end of it,
   /// which is what almost everything wants; a function wants it between the
   /// parentheses it just wrote.
   int caret = -1;
+  /// Optional document offset overriding the common prefix replacement.
+  size_t replace_start = std::string::npos;
   /// Grey text an editor shows after the name: what a stage takes, whether a
   /// port is required. Never part of what is inserted.
   std::string tail;
   /// The type of the thing proposed, where it has one: a port's declared type.
   std::string type;
-  // The whole of what is known about it, as Markdown, for the popup an editor
-  // shows beside the list.
   /// The whole of what is known about it, as Markdown, for the popup an editor
   /// shows beside the list. Empty where the name is its own explanation.
   ///
@@ -149,7 +154,10 @@ struct CompleteResult {
 /// attached to wants.
 CompleteResult CompleteAt(
     std::string_view source, size_t offset,
-    const catalogue::Catalogue& known = catalogue::Catalogue::Builtin());
+    const catalogue::Catalogue& known = catalogue::Catalogue::Builtin(),
+    CompilationLimits limits = {},
+    CompilationBudget* absl_nullable budget = nullptr,
+    const LinkedModule* absl_nullable linked = nullptr);
 
 /// The name of a proposal kind in the output format, in kebab case.
 std::string_view ProposalKindName(ProposalKind kind);

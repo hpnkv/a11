@@ -39,6 +39,8 @@
 #include "a11/data/serialization.h"
 #include "a11/flow/internal/pattern.h"
 #include "a11/flow/vocabulary.h"
+#include "a11/json_codec.h"
+#include "a11/status.h"
 #include "a11/time.h"
 #include "a11/utf8.h"
 #include "absl/strings/match.h"
@@ -56,25 +58,6 @@ bool IsDigit(char letter) {
   return absl::ascii_isdigit(static_cast<unsigned char>(letter));
 }
 
-bool IsAlpha(char letter) {
-  return absl::ascii_isalpha(static_cast<unsigned char>(letter));
-}
-
-/// The unit table, largest first: the compact rendering walks it in this order,
-/// and a `%(spec)` looks a unit up in it. The same units a duration may be
-/// *written* in, because what a flow reads back it has to be able to write.
-struct Unit {
-  std::string_view name;
-  double seconds;
-};
-
-constexpr Unit kUnits[] = {
-    {"h", 3600.0}, {"m", 60.0},  {"s", 1.0},
-    {"ms", 1e-3},  {"us", 1e-6}, {"ns", 1e-9},
-};
-
-// A double as Python's `repr` writes it: the shortest text that reads back as
-// the same number, with a `.0` where it would otherwise look like an integer.
 /// A double as Python's `repr` writes it: the shortest text that reads back as
 /// the same number, with a `.0` where it would otherwise look like an integer.
 ///
@@ -385,6 +368,11 @@ class NativeBridge final : public HostBridge {
   }
 
   absl::StatusOr<Value> FromChunk(const data::Chunk& chunk) override {
+    if (data::IsStatusChunk(chunk)) {
+      ABSL_ASSIGN_OR_RETURN(const absl::Status status,
+                            data::StatusFromStatusChunk(chunk));
+      return StatusRecord(status);
+    }
     const std::string mimetype = chunk.GetMimetype();
     if (absl::StrContains(mimetype, "json") || mimetype.empty()) {
       return AsJson(Value::String(chunk.data));
@@ -397,6 +385,9 @@ class NativeBridge final : public HostBridge {
 
   absl::StatusOr<data::Chunk> ToChunk(const Value& value,
                                       std::string_view mimetype) override {
+    if (value.native_status() != nullptr) {
+      return data::MakeStatusChunk(*value.native_status());
+    }
     data::Chunk chunk;
     data::ChunkMetadata metadata;
     if (value.kind() == Value::Kind::kBytes) {
@@ -416,6 +407,23 @@ class NativeBridge final : public HostBridge {
 }  // namespace
 
 // --- Value -------------------------------------------------------------------
+
+Value Value::Option(std::optional<Value> value) {
+  Pairs fields;
+  fields.emplace_back("present", Bool(value.has_value()));
+  if (value.has_value()) {
+    fields.emplace_back("value", std::move(*value));
+  }
+  Value result = Object(std::move(fields));
+  result.option_ = true;
+  return result;
+}
+
+Value Value::Status(absl::Status status, Pairs fields) {
+  Value value = Object(std::move(fields));
+  value.status_ = std::make_shared<const absl::Status>(std::move(status));
+  return value;
+}
 
 Value Value::Bool(bool value) {
   Value made;
@@ -595,6 +603,16 @@ std::unique_ptr<HostBridge> NativeHostBridge() {
 }
 
 // --- Reading values ----------------------------------------------------------
+
+absl::StatusOr<Value> LookupChecked(const Value& value, const Value& key) {
+  if (value.is_option() && key.kind() == Value::Kind::kString &&
+      key.text() == "value" && value.Get("value") == nullptr) {
+    return absl::FailedPreconditionError(
+        "An absent option has no value; check its present flag before reading "
+        "value.");
+  }
+  return Lookup(value, key);
+}
 
 Value Lookup(const Value& value, const Value& key) {
   switch (value.kind()) {
@@ -911,89 +929,6 @@ double DurationSeconds(absl::Duration value) {
   return absl::ToDoubleSeconds(value);
 }
 
-absl::Duration SecondsDuration(double total) {
-  if (std::isinf(total)) {
-    return total > 0 ? absl::InfiniteDuration() : -absl::InfiniteDuration();
-  }
-  return absl::Seconds(total);
-}
-
-std::optional<absl::Duration> ParseDuration(std::string_view text) {
-  const std::string_view trimmed = absl::StripAsciiWhitespace(text);
-  if (trimmed.empty()) {
-    return std::nullopt;
-  }
-  const std::string lowered = absl::AsciiStrToLower(trimmed);
-  if (lowered == "forever" || lowered == "infinite" || lowered == "inf") {
-    return absl::InfiniteDuration();
-  }
-  double total = 0.0;
-  double sign = 1.0;
-  size_t at = 0;
-  int pieces = 0;
-  while (at < trimmed.size()) {
-    if (trimmed[at] == ' ' || trimmed[at] == '\t') {
-      ++at;
-      continue;
-    }
-    const size_t began = at;
-    if (trimmed[at] == '+' || trimmed[at] == '-') {
-      ++at;
-    }
-    const size_t whole = at;
-    while (at < trimmed.size() && IsDigit(trimmed[at])) {
-      ++at;
-    }
-    if (at == whole) {
-      return std::nullopt;
-    }
-    if (at < trimmed.size() && trimmed[at] == '.') {
-      ++at;
-      const size_t fraction = at;
-      while (at < trimmed.size() && IsDigit(trimmed[at])) {
-        ++at;
-      }
-      if (at == fraction) {
-        return std::nullopt;
-      }
-    }
-    const std::string number(trimmed.substr(began, at - began));
-    while (at < trimmed.size() && (trimmed[at] == ' ' || trimmed[at] == '\t')) {
-      ++at;
-    }
-    const size_t word = at;
-    while (at < trimmed.size() && IsAlpha(trimmed[at])) {
-      ++at;
-    }
-    const std::string_view unit = trimmed.substr(word, at - word);
-    double scale = 1.0;
-    if (!unit.empty()) {
-      bool known = false;
-      for (const Unit& one : kUnits) {
-        if (one.name == unit) {
-          scale = one.seconds;
-          known = true;
-          break;
-        }
-      }
-      if (!known) {
-        return std::nullopt;
-      }
-    }
-    // `-1m30s` is a minute and a half, backwards, not a minute back and half a
-    // second forwards: the sign belongs to the whole.
-    if (pieces == 0 && absl::StartsWith(number, "-")) {
-      sign = -1.0;
-    }
-    total += std::abs(std::strtod(number.c_str(), nullptr)) * scale;
-    ++pieces;
-  }
-  if (pieces == 0) {
-    return std::nullopt;
-  }
-  return SecondsDuration(sign * total);
-}
-
 absl::Duration AsDuration(const Value& value) {
   if (value.kind() == Value::Kind::kDuration) {
     return value.duration();
@@ -1005,31 +940,6 @@ absl::Duration AsDuration(const Value& value) {
     }
   }
   return SecondsDuration(AsDouble(value));
-}
-
-std::optional<absl::Time> ParseTime(std::string_view text) {
-  const std::string_view trimmed = absl::StripAsciiWhitespace(text);
-  if (trimmed.empty()) {
-    return std::nullopt;
-  }
-  // The spellings RFC 3339 allows and `TimeText` writes, and the one a
-  // timestamp with no zone arrives as: that one is UTC here, which is the zone
-  // every instant this language writes is in.
-  static constexpr std::string_view kPatterns[] = {
-      "%Y-%m-%dT%H:%M:%E*S%Ez",
-      "%Y-%m-%dT%H:%M:%E*S",
-      "%Y-%m-%d %H:%M:%E*S%Ez",
-      "%Y-%m-%d %H:%M:%E*S",
-      "%Y-%m-%d",
-  };
-  for (const std::string_view pattern : kPatterns) {
-    absl::Time when;
-    std::string error;
-    if (absl::ParseTime(pattern, trimmed, absl::UTCTimeZone(), &when, &error)) {
-      return when;
-    }
-  }
-  return std::nullopt;
 }
 
 absl::Time AsTime(const Value& value) {
@@ -1053,10 +963,9 @@ std::string DurationText(absl::Duration value, std::string_view spec) {
   // renders as `1500.5us`, and not as float arithmetic's opinion of it.
   const absl::StatusOr<std::int64_t> exact = DurationNanoseconds(value);
   const std::int64_t total = exact.ok() ? *exact : 0;
-  for (const Unit& unit : kUnits) {
-    if (spec == unit.name) {
-      return TrimNumber(static_cast<double>(total) / (unit.seconds * 1e9));
-    }
+  if (const auto seconds = vocabulary::DurationUnitSeconds(spec);
+      seconds.has_value()) {
+    return TrimNumber(static_cast<double>(total) / (*seconds * 1e9));
   }
   if (total == 0) {
     return "0s";
@@ -1065,21 +974,23 @@ std::string DurationText(absl::Duration value, std::string_view spec) {
   std::int64_t left = std::abs(total);
   std::string pieces;
   bool coarse = false;
-  for (const Unit& unit : kUnits) {
+  const auto units = vocabulary::DurationUnits();
+  for (auto at = units.rbegin(); at != units.rend(); ++at) {
+    const auto unit = *at;
+    const double seconds = *vocabulary::DurationUnitSeconds(unit);
     // Microseconds of an hour are noise; microseconds of a millisecond and a
     // half are the value. So the fine units are dropped only once a whole
     // second or more has already been written.
-    if ((unit.name == "us" || unit.name == "ns") && coarse) {
+    if ((unit == "us" || unit == "ns") && coarse) {
       break;
     }
-    if (unit.seconds >= 1.0 && !pieces.empty()) {
+    if (seconds >= 1.0 && !pieces.empty()) {
       coarse = true;
     }
-    const auto step =
-        static_cast<std::int64_t>(std::llround(unit.seconds * 1e9));
+    const auto step = static_cast<std::int64_t>(std::llround(seconds * 1e9));
     const std::int64_t count = left / step;
     if (count != 0) {
-      absl::StrAppend(&pieces, count, unit.name);
+      absl::StrAppend(&pieces, count, unit);
       left -= count * step;
     }
     if (left <= 0) {
@@ -1307,7 +1218,7 @@ bool Contains(const Value& container, const Value& member) {
   }
 }
 
-/// The endings `starts-with`/`ends-with` were given: one, or a list of them.
+/// The endings `startswith`/`endswith` were given: one, or a list of them.
 ///
 /// A list of candidates is one question, not three: a piece that ends a
 /// sentence ends with any of `[".", "?", "!"]`.
@@ -1329,6 +1240,15 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
                                   absl::Span<const Value> arguments,
                                   HostBridge* absl_nullable bridge) {
   const Value& first = Argument(arguments, 0);
+  if (vocabulary::TypeNames().contains(name) && name != "stream") {
+    if (arguments.size() != 1) {
+      return Invalid("A conversion requires exactly one value.");
+    }
+    syntax::TypeExpression type;
+    type.name = name;
+    return Coerce(first, type,
+                  CoerceContext{.bridge = bridge, .shapes = nullptr});
+  }
   if (name == "match") {
     return MatchPattern(AsText(first), AsText(Argument(arguments, 1)));
   }
@@ -1339,11 +1259,21 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
   if (name == "now") {
     return Value::Time(a11::Now());
   }
-  if (name == "duration") {
-    return Value::Duration(AsDuration(first));
-  }
-  if (name == "time") {
-    return Value::Time(AsTime(first));
+  if (name == "parse_duration" || name == "parse_time") {
+    if (arguments.size() != 1 || !first.IsTextlike()) {
+      return Invalid("A checked time parser requires one text value.");
+    }
+    if (name == "parse_duration") {
+      const auto parsed = ParseDuration(first.text());
+      return parsed.has_value()
+                 ? absl::StatusOr<Value>(Value::Duration(*parsed))
+                 : absl::StatusOr<Value>(
+                       Invalid("Cannot parse duration text."));
+    }
+    const auto parsed = ParseTime(first.text());
+    return parsed.has_value()
+               ? absl::StatusOr<Value>(Value::Time(*parsed))
+               : absl::StatusOr<Value>(Invalid("Cannot parse time text."));
   }
   if (name == "seconds") {
     return Value::Double(DurationSeconds(AsDuration(first)));
@@ -1407,15 +1337,6 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
           "utf8decode was given bytes that are not valid UTF-8.");
     }
     return Value::String(decoded);
-  }
-  if (name == "text") {
-    return Value::String(AsText(first));
-  }
-  if (name == "number") {
-    return AsNumber(first);
-  }
-  if (name == "bool") {
-    return Value::Bool(Truthy(first));
   }
   if (name == "keys") {
     std::vector<Value> keys;
@@ -1505,10 +1426,10 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
   if (name == "contains") {
     return Value::Bool(Contains(first, Argument(arguments, 1)));
   }
-  if (name == "starts-with" || name == "ends-with") {
+  if (name == "startswith" || name == "endswith") {
     const std::string text = AsText(first);
     const std::vector<std::string> options = Endings(Argument(arguments, 1));
-    const bool front = name == "starts-with";
+    const bool front = name == "startswith";
     for (const std::string& option : options) {
       if (front ? absl::StartsWith(text, option)
                 : absl::EndsWith(text, option)) {
@@ -1744,6 +1665,14 @@ absl::StatusOr<Value> CoerceFieldType(const FieldPlan& field,
                                       const Value& given,
                                       const CoerceContext& context,
                                       std::string_view path) {
+  if (field.type == "object" && field.syntax_type.has_value() &&
+      !field.syntax_type->parameters.empty()) {
+    auto converted = Coerce(given, *field.syntax_type, context);
+    if (!converted.ok()) {
+      return FieldError(path, std::string(converted.status().message()));
+    }
+    return converted;
+  }
   // A shape the program declared: validated rather than handed off, and by name
   // rather than by tag, which is what makes it outrank one.
   if (!field.dto_name.empty() && context.shapes != nullptr) {
@@ -1922,6 +1851,58 @@ absl::StatusOr<Value> Coerce(const Value& value,
                              const syntax::TypeExpression& type,
                              const CoerceContext& context) {
   const std::string lowered = Canonical(type.name);
+  if (lowered == "null") {
+    return value.IsNull() ? absl::StatusOr<Value>(value)
+                          : absl::StatusOr<Value>(Invalid("Expected null."));
+  }
+  if (lowered == "option") {
+    const auto* present = value.Get("present");
+    if (present == nullptr || present->kind() != Value::Kind::kBool) {
+      return Invalid("An option requires a boolean presence flag.");
+    }
+    if (!present->boolean()) {
+      return Value::Option(std::nullopt);
+    }
+    const auto* held = value.Get("value");
+    if (held == nullptr) {
+      return Invalid("A present option requires a value.");
+    }
+    if (type.parameters.empty()) {
+      return Value::Option(*held);
+    }
+    ABSL_ASSIGN_OR_RETURN(Value converted,
+                          Coerce(*held, type.parameters.front(), context));
+    return Value::Option(std::move(converted));
+  }
+  if (lowered == "status" || lowered == "a11.Status") {
+    if (value.kind() != Value::Kind::kObject) {
+      return Invalid("A status requires a code and message record.");
+    }
+    const Value* code = value.Get("code");
+    if (code == nullptr) {
+      code = value.Get("number");
+    }
+    if (code == nullptr || !StatusCodeOf(*code).has_value()) {
+      return Invalid("A status requires a canonical code.");
+    }
+    const auto canonical = *StatusCodeOf(*code);
+    if (const auto* number = value.Get("number");
+        number != nullptr && StatusCodeOf(*number) != canonical) {
+      return Invalid(
+          "A status code and number must identify the same canonical code.");
+    }
+    if (const auto* ok = value.Get("ok");
+        ok != nullptr &&
+        (ok->kind() != Value::Kind::kBool ||
+         ok->boolean() != (canonical == absl::StatusCode::kOk))) {
+      return Invalid("A status ok flag must agree with its code.");
+    }
+    if (const auto* details = value.Get("details");
+        details != nullptr && details->kind() != Value::Kind::kList) {
+      return Invalid("Status details must be a list.");
+    }
+    return StatusRecord(StatusOfRecord(value));
+  }
   if (lowered == "string" || lowered == "text") {
     return Value::String(AsText(value));
   }
@@ -1929,7 +1910,16 @@ absl::StatusOr<Value> Coerce(const Value& value,
     return AsNumber(value);
   }
   if (lowered == "integer" || lowered == "int") {
-    return Value::Integer(static_cast<std::int64_t>(AsDouble(value)));
+    if (value.kind() == Value::Kind::kInteger) {
+      return value;
+    }
+    const double number = AsDouble(value);
+    if (!std::isfinite(number) || number < -9223372036854775808.0 ||
+        number >= 9223372036854775808.0) {
+      return Invalid(
+          "An int assignment requires a finite value in signed 64-bit range.");
+    }
+    return Value::Integer(static_cast<std::int64_t>(number));
   }
   if (lowered == "bool" || lowered == "boolean") {
     return Value::Bool(Truthy(value));
@@ -1961,9 +1951,24 @@ absl::StatusOr<Value> Coerce(const Value& value,
     }
     return Value::List(std::move(items));
   }
-  if (lowered == "object" || lowered == "json") {
-    // A mapping is already what this asks for, and anything else is left as it
-    // is rather than wrapped in an invented key.
+  if (lowered == "object") {
+    if (value.kind() != Value::Kind::kObject || type.parameters.size() > 1) {
+      return Invalid(
+          "An object requires string keys and at most one value type.");
+    }
+    if (type.parameters.empty()) {
+      return value;
+    }
+    Value::Pairs pairs;
+    pairs.reserve(value.pairs().size());
+    for (const auto& [key, held] : value.pairs()) {
+      ABSL_ASSIGN_OR_RETURN(Value made,
+                            Coerce(held, type.parameters.front(), context));
+      pairs.emplace_back(key, std::move(made));
+    }
+    return Value::Object(std::move(pairs));
+  }
+  if (lowered == "json") {
     return value;
   }
   if (lowered == "any") {
@@ -2146,13 +2151,13 @@ absl::StatusOr<Value> Evaluate(const syntax::Node& node,
     case syntax::NodeKind::kAttr: {
       const auto& attr = static_cast<const syntax::Attr&>(node);
       ABSL_ASSIGN_OR_RETURN(Value base, Evaluate(*attr.base, context));
-      return Lookup(base, Value::String(attr.name));
+      return LookupChecked(base, Value::String(attr.name));
     }
     case syntax::NodeKind::kIndex: {
       const auto& index = static_cast<const syntax::Index&>(node);
       ABSL_ASSIGN_OR_RETURN(Value base, Evaluate(*index.base, context));
       ABSL_ASSIGN_OR_RETURN(Value key, Evaluate(*index.index, context));
-      return Lookup(base, key);
+      return LookupChecked(base, key);
     }
     case syntax::NodeKind::kBuiltin: {
       const auto& builtin = static_cast<const syntax::Builtin&>(node);
@@ -2242,7 +2247,13 @@ Value StatusRecord(const absl::Status& status) {
   pairs.emplace_back("code", Value::String(std::move(name)));
   pairs.emplace_back("number", Value::Integer(static_cast<std::int64_t>(code)));
   pairs.emplace_back("message", Value::String(std::string(status.message())));
-  return Value::Object(std::move(pairs));
+  Value details = Value::List({});
+  if (auto payload = status.GetPayload(a11::kStatusDetailsPayloadUrl);
+      payload.has_value()) {
+    details = AsJson(Value::String(std::string(payload->Flatten())));
+  }
+  pairs.emplace_back("details", std::move(details));
+  return Value::Status(status, std::move(pairs));
 }
 
 std::optional<absl::StatusCode> StatusCodeOf(const Value& value) {
@@ -2275,6 +2286,9 @@ std::optional<absl::StatusCode> StatusCodeOf(const Value& value) {
 }
 
 absl::Status StatusOfRecord(const Value& record) {
+  if (record.native_status() != nullptr) {
+    return *record.native_status();
+  }
   const Value* code = record.Get("code");
   std::optional<absl::StatusCode> resolved =
       code == nullptr ? std::nullopt : StatusCodeOf(*code);
@@ -2285,8 +2299,16 @@ absl::Status StatusOfRecord(const Value& record) {
     }
   }
   const Value* message = record.Get("message");
-  return {resolved.value_or(absl::StatusCode::kUnknown),
-          message == nullptr ? "" : AsText(*message)};
+  const auto* details = record.Get("details");
+  nlohmann::json payload = nlohmann::json::array();
+  if (details != nullptr) {
+    const auto parsed = a11::ParseJson(AsText(*details), "status details");
+    if (parsed.ok()) {
+      payload = *parsed;
+    }
+  }
+  return a11::MakeStatus(resolved.value_or(absl::StatusCode::kUnknown),
+                         message == nullptr ? "" : AsText(*message), payload);
 }
 
 }  // namespace a11::flow

@@ -24,29 +24,20 @@ flow resilient-read {
   out text:  string                 "The first one that could be read."
   out tried: object stream          "What happened to each candidate."
 
-  # A node of the flow's own: somewhere to put whatever came back, from a loop
-  # whose passes cannot all write the flow's own unary output.
-  best = node()
-
+  bool found = false
   for url in urls {
     page = try run web-fetch(url: url)
+    std::status outcome = wait page
+    {url: url, ok: outcome.ok, why: outcome.message} -> tried
 
-    # Reading a status waits for the call, so this is also the pass's barrier.
-    outcome = wait page
+    if outcome.ok {
+      page.text | truncate 120 -> text
+      found = true
+    }
+  } until found
 
-    {"url": url, "ok": outcome.ok, "why": outcome.message} -> tried
-
-    # A call that failed produced nothing, so no branch is needed here: there
-    # is simply nothing to pipe.
-    page.text | truncate 120 -> best
-  }
-
-  best | first 1 -> text
-
-  # The loop holds `best` open while it runs, so counting it here happens once
-  # the last pass is done.
-  if (best | count) == 0 {
-    fail NOT_FOUND "none of the candidates could be read"
+  if not found {
+    fail not_found "none of the candidates could be read"
   }
 }
 
@@ -69,7 +60,7 @@ flow annotated-read {
   seen -> progress
 
   # The reader was lent the node; the flow that lent it says when it is over.
-  drain seen after reader
+  close seen after reader
 }
 
 flow strict-read {
@@ -79,7 +70,7 @@ flow strict-read {
   out text: string
 
   page = try run web-fetch(url: url)
-  outcome = wait page
+  std::status outcome = wait page
 
   if outcome.ok {
     page.text | truncate 60 -> text

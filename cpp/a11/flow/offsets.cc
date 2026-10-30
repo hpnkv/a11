@@ -26,7 +26,7 @@ namespace {
 
 /// The four names a `flow.*` envelope uses for a byte offset into the document.
 constexpr std::string_view kOffsetFields[] = {"start", "end", "offset",
-                                              "prefix_start"};
+                                              "prefix_start", "replace_start"};
 
 bool IsOffsetField(std::string_view name) {
   return std::find(std::begin(kOffsetFields), std::end(kOffsetFields), name) !=

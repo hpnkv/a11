@@ -21,15 +21,19 @@
 #include <vector>
 
 #include <absl/base/nullability.h>
+#include <absl/status/statusor.h>
 #include <absl/types/span.h>
 
 #include "a11/flow/diagnostic.h"
+#include "a11/flow/limits.h"
 #include "a11/flow/syntax.h"
 
 namespace a11::flow {
 
 /// The flows a file declares, and everything wrong with it.
 struct ParseResult {
+  std::vector<syntax::ModuleDeclaration> modules;
+  std::vector<syntax::ExportDeclaration> exports;
   std::vector<syntax::Import> imports;
   std::vector<syntax::FlowDeclarationPtr> flows;
   /// The shapes the file declares, in declaration order.
@@ -76,7 +80,13 @@ struct ParseResult {
 /// Never throws and always returns a tree. Problems become diagnostics, and
 /// recovery skips to the statement end or inserts a `syntax::ErrorNode` where
 /// a value was required. This supports partial input in formatters and editors.
-ParseResult Parse(std::string_view source);
+ParseResult Parse(std::string_view source, CompilationLimits limits = {},
+                  CompilationBudget* absl_nullable budget = nullptr);
+
+/// Parse a standalone type with the same grammar and limits as a declaration.
+absl::StatusOr<syntax::TypeExpression> ParseTypeExpression(
+    std::string_view source, CompilationLimits limits = {},
+    CompilationBudget* absl_nullable budget = nullptr);
 
 /// Parse an already-lexed stream, sharing the lex diagnostics.
 ///
@@ -84,7 +94,9 @@ ParseResult Parse(std::string_view source);
 /// that then wants a tree -- so one file is lexed once. Comment tokens are
 /// stepped over here, which is what lets the same stream serve both.
 ParseResult ParseTokens(std::string_view source, absl::Span<const Token> tokens,
-                        std::vector<Diagnostic> diagnostics);
+                        std::vector<Diagnostic> diagnostics,
+                        CompilationLimits limits = {},
+                        CompilationBudget* absl_nullable budget = nullptr);
 
 }  // namespace a11::flow
 

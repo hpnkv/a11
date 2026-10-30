@@ -23,6 +23,7 @@
 #include <absl/strings/str_join.h>
 #include <gtest/gtest.h>
 
+#include "a11/flow/module.h"
 #include "a11/flow/parser.h"
 #include "a11/flow/resolve.h"
 
@@ -30,7 +31,8 @@ namespace a11::flow {
 namespace {
 
 ResolveResult Check(std::string_view source) {
-  return Resolve(source, Parse(source));
+  auto linked = LinkModules(std::string(source), "<test>");
+  return Resolve(linked.source, linked.parsed);
 }
 
 std::vector<std::string> Codes(const ResolveResult& result) {
@@ -182,16 +184,12 @@ TEST(FlowResolve, SaysWhatIsWrongInTheWordsThePythonCompilerUses) {
        "Unknown name 'nobody'"},
       {"flow f { in a: string\n s <- a }", "flow.barrier.carry-outside-repeat",
        "no repeat here"},
-      {"flow f { in a: string\n until a }", "flow.barrier.until-outside-repeat",
-       "no 'repeat' or 'for' here"},
-      {"flow f { in a: string\n repeat s = 1 { until a\n while a } }",
-       "flow.barrier.duplicate-until", "already has a stop condition"},
       {"flow f { in a: string\n repeat s = 1 { s <- a\n s <- a } }",
        "flow.barrier.duplicate-carry", "is already carried"},
       {"flow f { in a: string\n repeat s = 1 { t <- a } }",
        "flow.barrier.wrong-carry", "This repeat carries 's', not 't'."},
       {"flow f { in a: wat }", "flow.form.unknown-type", "Unknown type 'wat'"},
-      {"flow f { in a: list[string, object] }", "flow.form.unknown-type",
+      {"flow f { in a: std::list[string, object] }", "flow.form.unknown-type",
        "type parameter"},
       {"flow f { in a: string\n in a: string }", "flow.form.duplicate-port",
        "declared twice"},
@@ -226,7 +224,7 @@ TEST(FlowResolve, SaysWhatIsWrongInTheWordsThePythonCompilerUses) {
        "flow.name.not-writable", "is a barrier, not somewhere to write"},
       {"flow f { in a: string\n x = run t(p: a)\n x = run t(p: a) }",
        "flow.name.taken", "is already taken in this scope"},
-      {"flow f { in a: string\n repeat s = a { until a } }",
+      {"flow f { in a: string\n repeat s = a {  } until a }",
        "flow.syntax.constant-required", "Expected a constant value here"},
   };
   for (const Case& one : cases) {
@@ -248,14 +246,14 @@ TEST(FlowResolve, PlainPipelineBindingsCoverLiteralAndOperationSources) {
         "{}", "(node()).id", "(run unknown()).output",
         "status (try run unknown())"}) {
     const std::string text =
-        absl::StrCat("flow main { in values: integer stream\n done = ", source,
+        absl::StrCat("flow main { in values: int stream\n done = ", source,
                      " -> _\n after done { log \"done\" }\n}");
     for (const bool graph : {false, true}) {
       const auto result = Resolve(text, Parse(text), graph);
       EXPECT_FALSE(result.HasErrors()) << text << "\n" << Messages(result);
     }
   }
-  EXPECT_TRUE(Check("flow main { done = [1] | flatten\n}").HasErrors());
+  EXPECT_FALSE(Check("flow main { done = [1] | flatten\n}").HasErrors());
   EXPECT_TRUE(Check("flow main { done = [1] -> missing\n}").HasErrors());
 }
 
@@ -273,12 +271,12 @@ TEST(FlowResolve, AfterBlocksGateEffectsAndKeepTheirBindingsLocal) {
     const auto result = Resolve(source, Parse(source), graph);
     EXPECT_FALSE(result.HasErrors()) << Messages(result);
   }
-  EXPECT_TRUE(Check("flow main { done = {}\n after done { let hidden = 1 }\n "
-                    "log hidden }")
-                  .HasErrors());
+  EXPECT_TRUE(
+      Check("flow main { done = {}\n after done { hidden = take (1) }\n "
+            "log hidden }")
+          .HasErrors());
   for (const auto* source :
        {"flow main { after missing { log \"done\" } }",
-        "flow main { let value = 1\n after value { log \"done\" } }",
         "flow main { after {} }",
         "flow main { done = {}\n after done, { log \"done\" } }"}) {
     EXPECT_TRUE(Check(source).HasErrors()) << source;
@@ -370,11 +368,11 @@ TEST(FlowResolve, AFailOrCancelAtTheTopOfABodyIsRefused) {
 TEST(FlowResolve, EffectsMayWaitForTheirDataArguments) {
   const std::string_view statements[] = {
       "log input",
-      "let identity = input | consume\n log (node(identity)).id",
+      "identity = take (input | consume)\n log (node(identity)).id",
       "identified = node(input)\n log identified.id",
       "logf \"value: %s\" (input | consume)",
-      "let value = input | consume\n logf \"value: %s\" value",
-      "let first = input | consume\n let value = first\n log value",
+      "value = take (input | consume)\n logf \"value: %s\" value",
+      "first = take (input | consume)\n value = take (first)\n log value",
       "log {\"value\": input}",
       "fail internal input",
       "fail input",
@@ -399,8 +397,8 @@ TEST(FlowResolve, ConstantArgumentsAndHandlesDoNotGateEffects) {
   for (const auto* statement : {
            "log \"constant\"",
            "logf \"value: %s\" 42",
-           "let value = \"constant\"\n log value",
-           "let first = \"constant\"\n let value = first\n log value",
+           "value = take (\"constant\")\n log value",
+           "first = take (\"constant\")\n value = take (first)\n log value",
            "log ([1] | consume)",
            "log (true or input)",
            "log (false and input)",
@@ -486,7 +484,7 @@ TEST(FlowResolve, ARaceIsAValueAndWaitingForEveryoneIsNot) {
                   .empty());
   EXPECT_TRUE(Codes(Check("flow f {\n  in a: string\n  out n: int\n"
                           "  x = call other(a: a)\n  y = call other(a: a)\n"
-                          "  let w = wait first of x, y\n  w -> n\n}\n"
+                          "  w = take (wait first of x, y)\n  w -> n\n}\n"
                           "flow other {\n  in a: string\n  out o: string\n"
                           "  a -> o\n}\n"))
                   .empty());
@@ -499,7 +497,7 @@ TEST(FlowResolve, ARaceIsAValueAndWaitingForEveryoneIsNot) {
             (std::vector<std::string>{"flow.form.wait-all-has-no-value"}));
   EXPECT_EQ(Codes(Check("flow f {\n  in a: string\n  out n: int\n"
                         "  x = call other(a: a)\n  y = call other(a: a)\n"
-                        "  let w = wait all of x, y\n  w -> n\n}\n"
+                        "  w = take (wait all of x, y)\n  w -> n\n}\n"
                         "flow other {\n  in a: string\n  out o: string\n"
                         "  a -> o\n}\n")),
             (std::vector<std::string>{"flow.form.wait-all-has-no-value"}));
@@ -542,7 +540,7 @@ TEST(FlowResolve, ADiscardIsADestinationAndNothingElse) {
   const std::vector<std::string> read{"flow.name.discard-read"};
   EXPECT_EQ(codes("  _ -> b\n"), read);
   EXPECT_EQ(codes("  _.field -> b\n"), read);
-  EXPECT_EQ(codes("  a -> b\n  drain _\n"), read);
+  EXPECT_EQ(codes("  a -> b\n  close _\n"), read);
   EXPECT_EQ(codes("  a -> b\n  wait _\n"), read);
   // With an `after`, since an unconditional `abort` has a complaint of its own.
   EXPECT_EQ(codes("  a -> b\n  abort _ after b\n"), read);
@@ -555,7 +553,7 @@ TEST(FlowResolve, ADiscardIsADestinationAndNothingElse) {
   // And nothing may be called `_`, wherever a name is introduced.
   const std::vector<std::string> bound{"flow.name.discard-bound"};
   EXPECT_EQ(codes("  _ = node()\n  a -> b\n"), bound);
-  EXPECT_EQ(codes("  a -> b\n  let _ = a\n"), bound);
+  EXPECT_EQ(codes("  a -> b\n  _ = take (a)\n"), bound);
   EXPECT_EQ(codes("  _ = wait a\n  a -> b\n"), bound);
   EXPECT_EQ(Codes(Check("flow f {\n  in _: string\n  out b: string\n"
                         "  \"x\" -> b\n}\n")),
@@ -571,9 +569,8 @@ TEST(FlowResolve, ARepeatSaysWhenItStops) {
             (std::vector<std::string>{"flow.form.unbounded-repeat"}));
 
   // Either an `until`/`while` or the author's own `max` is enough.
-  EXPECT_TRUE(Codes(Check("flow f {\n  in a: string\n  out b: string\n"
-                          "  repeat n = 0 {\n    a -> b\n    until true\n"
-                          "  }\n}\n"))
+  EXPECT_TRUE(Codes(Check("flow f {\n  in a: string\n  out b: string\n  repeat "
+                          "n = 0 {\n    a -> b\n    \n  } until true\n}\n"))
                   .empty());
   EXPECT_TRUE(Codes(Check("flow f {\n  in a: string\n  out b: string\n"
                           "  repeat n = 0 max 4 {\n    a -> b\n  }\n}\n"))
@@ -596,8 +593,8 @@ constexpr std::string_view kShapes = R"(flow shapes {
   many | first 2  -> out
   one  | text     -> out
   one  | chunk 64 -> out
-  zip(one, one)   -> out
-  zip(one, many)  -> out
+  std::zip(one, one)   -> out
+  std::zip(one, many)  -> out
   deadline        -> out
   made            -> out
 }
@@ -624,8 +621,10 @@ TEST(FlowResolve, WorksOutWhichStreamsCarryAtMostOneValue) {
   // What a value read is allowed to *consume*. A claim, so the interesting half
   // is what is not claimed: a node the flow writes from anywhere, and a port
   // that said `stream`, are streams however they are used.
-  const ResolveResult result =
-      Resolve(kShapes, Parse(kShapes), /*build_graph=*/true);
+  const ResolveResult result = [&] {
+    auto linked = LinkModules(std::string(kShapes), "<test>");
+    return Resolve(linked.source, linked.parsed, /*build_graph=*/true);
+  }();
   ASSERT_TRUE(result.diagnostics.empty()) << absl::StrJoin(Codes(result), ", ");
   ASSERT_FALSE(result.flows.empty());
   const ResolvedFlow& flow = result.flows.front();
@@ -651,47 +650,16 @@ TEST(FlowResolve, WorksOutWhichStreamsCarryAtMostOneValue) {
   EXPECT_FALSE(Unary(flow, "zip(one, many)"));
 }
 
-TEST(FlowResolve, AdvanceOnlyMovesAValueALetBound) {
-  EXPECT_EQ(Codes(Check("flow f {\n  in q: string\n  out o: string\n"
-                        "  n = node()\n  advance n\n  q -> o\n}\n")),
-            (std::vector<std::string>{"flow.name.not-advanceable"}));
-  EXPECT_EQ(Codes(Check("flow f {\n  in q: string\n  out o: string\n"
-                        "  advance nope\n  q -> o\n}\n")),
-            (std::vector<std::string>{"flow.name.unknown"}));
-  // And the ordinary shape is clean: a value, then the next one under the same
-  // name.
-  EXPECT_TRUE(Codes(Check("flow f {\n  in q: string stream required\n"
-                          "  out o: string stream\n  let w = q\n"
-                          "  strformat(\"%s\", w) -> o\n  advance w\n"
-                          "  strformat(\"%s\", w) -> o\n}\n"))
-                  .empty());
-}
-
-TEST(FlowResolve, AdvanceOfAnOuterNameInALoopIsRefused) {
-  // `advance` moves by an offset fixed while the file is compiled, and a loop
-  // body is resolved once -- so advancing a name bound outside the loop bound
-  // the *same* value on every pass, silently.
-  EXPECT_EQ(Codes(Check("flow f {\n  in q: string stream required\n"
-                        "  out o: string stream\n  let w = q\n"
-                        "  repeat n = 0 max 4 {\n    w -> o\n"
-                        "    advance w\n  }\n}\n")),
-            (std::vector<std::string>{"flow.form.advance-in-loop"}));
-  // A `for` body is a loop body too, and the same reasoning applies.
-  EXPECT_EQ(Codes(Check("flow f {\n  in q: string stream required\n"
-                        "  in v: string stream required\n"
-                        "  out o: string stream\n  let w = q\n"
-                        "  for x in v {\n    w -> o\n    advance w\n"
-                        "    x -> o\n  }\n}\n")),
-            (std::vector<std::string>{"flow.form.advance-in-loop"}));
-  // A name bound *inside* the body is a different thing: each pass rebinds it,
-  // so advancing it reads two values of the stream per pass, which is exactly
-  // what it says. This must stay allowed.
-  EXPECT_TRUE(Codes(Check("flow f {\n  in q: string stream required\n"
-                          "  in v: string stream required\n"
-                          "  out o: string stream\n"
-                          "  for x in v {\n    let w = q\n    w -> o\n"
-                          "    advance w\n    w -> o\n    x -> o\n  }\n}\n"))
-                  .empty());
+TEST(FlowResolve, ReassignmentRejectsProtectedBindingsAndParallelUpdates) {
+  EXPECT_TRUE(Check("flow f { n = node()\n n = 1 }").HasErrors());
+  EXPECT_FALSE(
+      Check("flow f { x = 0\n repeat max 3 { x = x + 1 } }").HasErrors());
+  EXPECT_TRUE(Check("flow f { x = 0\n for item in ([1] | flatten) parallel 2 { "
+                    "x = x + 1 } }")
+                  .HasErrors());
+  EXPECT_TRUE(Check("flow f { in rows: string stream\n for item in ([1] | "
+                    "flatten) parallel 2 { x = take rows } }")
+                  .HasErrors());
 }
 
 TEST(FlowResolve, ANamedLoopNamesTheLoopAndNotAWaitItGrew) {
@@ -701,7 +669,7 @@ TEST(FlowResolve, ANamedLoopNamesTheLoopAndNotAWaitItGrew) {
       "flow f {\n  in w: string stream\n  out o: string stream\n"
       "  taken = node()\n  first = run t()\n"
       "  done = for x in w { x -> taken } after first\n"
-      "  drain taken after done\n  taken -> o\n}\n";
+      "  close taken after done\n  taken -> o\n}\n";
   // The graph, because the claim is about which *graph* step the name got.
   const ResolveResult result =
       Resolve(source, Parse(source), /*build_graph=*/true);
@@ -726,7 +694,7 @@ TEST(FlowResolve, AnAfterHoldsTheArgumentsOfTheStatementItIsOn) {
   const std::string source =
       "flow f {\n  in w: string\n  out o: string\n"
       "  first = run t(p: w)\n  done = wait first\n"
-      "  second = run t(p: strformat(\"%s\", now())) after done\n"
+      "  second = run t(p: std::strformat(\"%s\", std::now())) after done\n"
       "  second.out -> o\n}\n";
   const ResolveResult result =
       Resolve(source, Parse(source), /*build_graph=*/true);
@@ -784,81 +752,74 @@ TEST(FlowResolve, APatternIsReadWhereItIsWritten) {
   // A pattern is a literal almost every time, so a typo in one belongs in the
   // editor rather than in the failure the first value triggers.
   EXPECT_EQ(
-      Codes(Check("flow f {\n  in l: string stream\n  out o: json stream\n"
+      Codes(Check("flow f {\n  in l: string stream\n  out o: std::json stream\n"
                   "  l | match \"name={name\" -> o\n}\n")),
       (std::vector<std::string>{"flow.form.bad-pattern"}));
   EXPECT_EQ(
-      Codes(Check("flow f {\n  in l: string stream\n  out o: json stream\n"
+      Codes(Check("flow f {\n  in l: string stream\n  out o: std::json stream\n"
                   "  l | match \"{a} {a}\" -> o\n}\n")),
       (std::vector<std::string>{"flow.form.bad-pattern"}));
   // And a pattern that reads is left alone.
   EXPECT_TRUE(
-      Codes(Check("flow f {\n  in l: string stream\n"
-                  "  out o: json stream\n"
-                  "  l | match \"name={name} age={age:int}\" -> o\n}\n"))
+      Codes(
+          Check("flow f {\n  in l: string stream\n  out o: std::json stream\n  "
+                "l | match \"name={name} age={age:int}\" -> o\n}\n"))
           .empty());
 }
 
-TEST(FlowResolve, ALetMayTakeAValueApart) {
+TEST(FlowResolve, InitializersCanDestructureOneValue) {
   // Both spellings resolve, and each name is its own value.
-  EXPECT_TRUE(Codes(Check("flow f {\n  in u: json stream required\n"
-                          "  out o: string\n  let name, age = u\n"
-                          "  strformat(\"%s%s\", name, age) -> o\n}\n"))
+  EXPECT_TRUE(Codes(Check("flow f {\n  in u: std::json stream required\n  out "
+                          "o: string\n  name, age = take (u)\n  "
+                          "std::strformat(\"%s%s\", name, age) -> o\n}\n"))
                   .empty());
-  // A name taken from another value has no next one of its own, and that is
-  // said on the editor path too, where there is no graph to read it from.
-  EXPECT_EQ(Codes(Check("flow f {\n  in u: json stream required\n"
-                        "  out o: string\n  let name, age = u\n"
-                        "  strformat(\"%s%s\", name, age) -> o\n"
-                        "  advance name\n}\n")),
-            (std::vector<std::string>{"flow.name.not-advanceable"}));
   // A part taking a name something else already has is still a clash, and so is
-  // one taking a name from the same `let`: two parts called the same thing
+  // one taking a name from the same `value`: two parts called the same thing
   // would define one and shadow it with the other.
-  EXPECT_EQ(Codes(Check("flow f {\n  in u: json stream required\n"
-                        "  out o: string\n  let age, age = u\n"
-                        "  strformat(\"%s\", age) -> o\n}\n")),
-            (std::vector<std::string>{"flow.name.taken"}));
+  EXPECT_EQ(
+      Codes(Check(
+          "flow f {\n  in u: std::json stream required\n  out o: string\n  "
+          "age, age = take (u)\n  std::strformat(\"%s\", age) -> o\n}\n")),
+      (std::vector<std::string>{"flow.name.taken"}));
 }
 
 TEST(FlowResolve, ChecksAFieldAgainstWhatTheFileSaidTheValueHolds) {
   constexpr std::string_view kHead =
-      "struct Source {\n  url:  string required\n  rank: number\n}\n\n"
-      "flow f {\n  in  src:   Source required\n"
-      "  in  lines: string stream required\n  in  loose: json required\n"
-      "  out o:     string stream\n";
+      "struct Source {\n  url:  string required\n  rank: number\n}\n\nflow f "
+      "{\n  in  src:   Source required\n  in  lines: string stream required\n  "
+      "in  loose: std::json required\n  out o:     string stream\n";
 
   // A port declared with a struct, a value a literal pattern made, and `it` in
   // a stage after a `match`: three ways the file said what a value holds, and
   // one check for all of them.
   EXPECT_EQ(Codes(Check(absl::StrCat(
-                kHead, "  strformat(\"%s\", src.urll) -> o\n}\n"))),
+                kHead, "  std::strformat(\"%s\", src.urll) -> o\n}\n"))),
             (std::vector<std::string>{"flow.form.unknown-field"}));
   EXPECT_EQ(Codes(Check(absl::StrCat(
                 kHead, "  lines | match \"{a}: {b}\" | map it.c -> o\n}\n"))),
             (std::vector<std::string>{"flow.form.unknown-field"}));
-  EXPECT_EQ(
-      Codes(Check(absl::StrCat(kHead,
-                               "  let who = match(\"name={name}\", lines)\n"
-                               "  strformat(\"%s\", who.nmae) -> o\n}\n"))),
-      (std::vector<std::string>{"flow.form.unknown-field"}));
+  EXPECT_EQ(Codes(Check(absl::StrCat(
+                kHead,
+                "  who = take (std::match(\"name={name}\", lines))\n  "
+                "std::strformat(\"%s\", who.nmae) -> o\n}\n"))),
+            (std::vector<std::string>{"flow.form.unknown-field"}));
 
   // Spelled right, nothing said.
-  EXPECT_TRUE(
-      Codes(Check(absl::StrCat(kHead,
-                               "  strformat(\"%s\", src.url) -> o\n"
-                               "  lines | match \"{a}: {b}\" | map it.a -> o\n"
-                               "  let who = match(\"name={name}\", lines)\n"
-                               "  strformat(\"%s\", who.name) -> o\n}\n")))
-          .empty());
+  EXPECT_TRUE(Codes(Check(absl::StrCat(
+                        kHead,
+                        "  std::strformat(\"%s\", src.url) -> o\n  lines | "
+                        "match \"{a}: {b}\" | map it.a -> o\n  who = take "
+                        "(std::match(\"name={name}\", lines))\n  "
+                        "std::strformat(\"%s\", who.name) -> o\n}\n")))
+                  .empty());
 
   // And where the file never said, nothing is checked: a `json` port may hold
   // anything, and `it` with no pattern behind it is anybody's guess. A check
   // that cried wolf here would be worse than no check.
   EXPECT_TRUE(
       Codes(Check(absl::StrCat(kHead,
-                               "  strformat(\"%s\", loose.anything) -> o\n"
-                               "  lines | map it.whatever -> o\n}\n")))
+                               "  std::strformat(\"%s\", loose.anything) -> "
+                               "o\n  lines | map it.whatever -> o\n}\n")))
           .empty());
   // A positional pattern names no fields, so it says nothing either.
   EXPECT_TRUE(
@@ -869,7 +830,7 @@ TEST(FlowResolve, ChecksAFieldAgainstWhatTheFileSaidTheValueHolds) {
   // keys, so the chain stops rather than guessing.
   EXPECT_TRUE(
       Codes(Check(absl::StrCat(
-                kHead, "  strformat(\"%s\", src.url.deeper) -> o\n}\n")))
+                kHead, "  std::strformat(\"%s\", src.url.deeper) -> o\n}\n")))
           .empty());
 }
 
@@ -919,4 +880,25 @@ TEST(FlowResolve, CountsWhatReadsAndWritesEachName) {
 }
 
 }  // namespace
+
+TEST(FlowResolve, RejectsAnInvocationDeadlineDependingOnItsOwnResult) {
+  const auto resolved = Check(R"(
+flow main {
+  work = run fetch() deadline (take work.finished_at)
+}
+)");
+  EXPECT_TRUE(
+      std::any_of(resolved.diagnostics.begin(), resolved.diagnostics.end(),
+                  [](const auto& diagnostic) {
+                    return diagnostic.code == "flow.barrier.expression-cycle";
+                  }));
+}
+
+TEST(FlowResolve, ReassignmentKeepsTheDeclaredType) {
+  EXPECT_TRUE(Check("flow f { int n = 1\n string n = \"two\" }").HasErrors());
+  EXPECT_TRUE(
+      Check("flow f { int a, b = [1, 2]\n string a, b = [\"x\", \"y\"] }")
+          .HasErrors());
+}
+
 }  // namespace a11::flow

@@ -47,6 +47,7 @@ internal class FlowProcess(
     @Volatile private var process: Process? = null
     private var writer: BufferedWriter? = null
     private var reader: BufferedReader? = null
+    private var launchArguments: List<String> = emptyList()
 
     fun exchange(line: String): String? {
         try {
@@ -114,7 +115,12 @@ internal class FlowProcess(
     }
 
     private fun pipes(): Pair<BufferedWriter, BufferedReader>? {
-        if (process?.isAlive == true) {
+        val roots = (System.getProperty("a11.flow.sourceRoots")
+            ?: System.getenv("A11_FLOW_SOURCE_ROOTS")).orEmpty()
+            .split(File.pathSeparator).filter { it.isNotBlank() }
+        val arguments = listOf("serve", "--protocol", "json") +
+            roots.flatMap { listOf("--source-root", it) }
+        if (arguments == launchArguments && process?.isAlive == true) {
             val out = writer
             val input = reader
             if (out != null && input != null) return out to input
@@ -122,9 +128,10 @@ internal class FlowProcess(
         stop()
         val tool = executable() ?: return null
         return try {
-            val started = ProcessBuilder(tool.absolutePath, "serve", "--protocol", "json")
+            val started = ProcessBuilder(listOf(tool.absolutePath) + arguments)
                 .redirectError(ProcessBuilder.Redirect.DISCARD)
                 .start()
+            launchArguments = arguments
             process = started
             if (disposed.get()) {
                 stop()

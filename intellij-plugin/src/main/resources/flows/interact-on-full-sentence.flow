@@ -12,77 +12,46 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from std import endswith, trim, join, to_chunk
+
 flow interact-on-full-sentence {
-  describe "Listen; the first full sentence becomes the next turn of a conversation."
+  describe "Listen for a sentence, then answer it as the next conversation turn."
 
-  in  asr:     object required "Speech recognition options; model required."
-  in  device:  object required "Which input to open on the client."
-  in  history: string required "Id of the node holding the turns so far."
+  in  asr:      object required              "Speech recognition options; model required."
+  in  device:   object required              "Which input to open on the client."
+  in  history:  string required              "Id of the node holding earlier turns."
+  out sentence: string                       "The sentence used as the question."
+  out reply:    string stream                "The answer as it is written."
+  out turn:     a11::sdk::Interaction stream "The interactions to remember."
 
-  out sentence: string                     "The sentence that became the question."
-  out reply:    string stream              "The model's answer, as it is written."
-  out turn:     a11.sdk.Interaction stream "What to remember of this turn."
-
-  # if the timeout is reached, the error will propagate and the whole flow
-  # will fail
   mic = call capture_audio(options: device) timeout 600s
-
-  nodes scratch  # local nodes that are never sent to the client
-
-  # Not `try`: nothing here reads a transcription failure, and a `try` whose
-  # status nobody looks at turns a loud failure into a silent one -- the flow
-  # would go on with no sentences and no reason given.
+  nodes scratch
   transcribe = run transcribe_audio(
     asr_options: asr, audio: mic.audio | packb
-  ) via scratch  # <- never send transcription outputs to the client directly
+  ) via scratch
 
-  # The sentence is wanted twice -- by the client and by the model -- and a
-  # node is how a stream gets two readers: reading one twice would hand each
-  # reader half of it, because a node has one cursor. In `scratch`, so the
-  # only copy that crosses the wire is the one on `sentence`.
-  said = node() in scratch
-
-  transcribe.transcription_pieces
-    | group ends-with(trim(it), [".", "?", "!"])
-    | first 1
-    | map trim(join(it, " "))
-    -> said
-
+  # Capture one sentence once; both outputs and the model use the same value.
+  string said = take (transcribe.transcription_pieces
+      | group endswith(trim(it), [".", "?", "!"])
+      | first 1
+      | map trim(join(it, " ")))
   said -> sentence
+  {command: "stop"} -> mic.control_events after said
 
-  # synchronisation point: wait until we have a sentence, then stop audio capture
-  {"command": "stop"} -> mic.control_events after said
-
-  # The conversation so far, read straight off the node the caller wrote it to.
-  # Not `in scratch`: this one belongs to the caller, and attaching to it by id
-  # is how a flow reads a stream somebody else owns. Each interaction arrives as
-  # the type it was written as -- nothing here takes one apart, so nothing here
-  # can lose a field of one.
   earlier = node(history)
-
-  # This turn's question, as an interaction of the same kind. Its own node,
-  # because both the model and the client's history want it.
-  asked = node() in scratch
-  said | map a11.sdk.Interaction{
+  asked = a11::sdk::Interaction{
     role: "user",
     content: [to_chunk({
       role: "user",
-      content: [{type: "text", text: it}]
+      content: [{type: "text", text: said}]
     })]
-  } -> asked
+  }
 
   interact = run interact_with_llm(
-    interactions: earlier then asked,
+    interactions: earlier | then asked,
     config: {}
-  )
-      forward headers "x-a11-llm-*"
-      via scratch  # <- not sending outputs directly
+  ) forward headers "x-a11-llm-*" via scratch
 
-  # stream the LLM's output to the client
   interact.text_output -> reply
-
-  # ...and hand back the turn to keep: the question, then the answer and any
-  # tool interactions the model made on the way to it. The client appends these
-  # to the conversation, whose node it hands back as `history` next time round.
-  asked then interact.new_interactions -> turn
+  asked | then interact.new_interactions -> turn
 }

@@ -65,14 +65,14 @@ const Proposal* Find(std::string_view marked, std::string_view name) {
 }
 
 TEST(FlowComplete, PlainPipelineNamesOfferCompletionSubjects) {
-  EXPECT_TRUE(Offers(
-      Names("flow f { in values: integer stream\n done = |CARET|"), "values"));
-  EXPECT_TRUE(Offers(Names("flow f { in values: integer stream\n done = values "
-                           "-> _\n after |CARET|"),
+  EXPECT_TRUE(Offers(Names("flow f { in values: int stream\n done = |CARET|"),
+                     "values"));
+  EXPECT_TRUE(Offers(Names("flow f { in values: int stream\n done = values -> "
+                           "_\n after |CARET|"),
                      "done"));
-  EXPECT_TRUE(Offers(
-      Names("flow f { in values: integer stream\n done = values | |CARET|"),
-      "take until"));
+  EXPECT_TRUE(
+      Offers(Names("flow f { in values: int stream\n done = values | |CARET|"),
+             "take until"));
 }
 
 TEST(FlowComplete, PredicatePrefixCompletionOffersWordsAndValues) {
@@ -86,8 +86,8 @@ TEST(FlowComplete, PredicatePrefixCompletionOffersWordsAndValues) {
 }
 
 TEST(FlowComplete, OutsideAFlowOffersModuleDeclarations) {
-  const std::vector<std::string> declarations = {"flow", "struct", "declare",
-                                                 "import", "from"};
+  const std::vector<std::string> declarations = {
+      "mod", "export", "flow", "struct", "declare", "import", "from"};
   EXPECT_EQ(Names("|CARET|"), declarations);
   EXPECT_EQ(Names("flow a { }\n|CARET|"), declarations);
 }
@@ -184,19 +184,11 @@ TEST(FlowComplete, AnArgumentIsOfferedWithWhatThePortIsFor) {
   // The question somebody has inside a call's parentheses is "what goes here",
   // and the answer is the port's description.
   constexpr std::string_view kDescribed =
-      "flow inner {\n"
-      "  in  topic:    string required \"What to research.\"\n"
-      "  in  depth:    integer \"How many passes; three when nothing says.\"\n"
-      "  in  findings: string stream required \"One report per "
-      "investigation.\"\n"
-      "  out report:   string\n"
-      "  topic -> report\n"
-      "}\n"
-      "\n"
-      "flow outer {\n"
-      "  in  q: string\n"
-      "  out r: string\n"
-      "  x = run inner(|CARET|)\n";
+      "flow inner {\n  in  topic:    string required \"What to research.\"\n  "
+      "in  depth:    int \"How many passes; three when nothing says.\"\n  in  "
+      "findings: string stream required \"One report per investigation.\"\n  "
+      "out report:   string\n  topic -> report\n}\n\nflow outer {\n  in  q: "
+      "string\n  out r: string\n  x = run inner(|CARET|)\n";
 
   // Required first, since those are the ones that have to be written.
   EXPECT_EQ(Names(kDescribed),
@@ -228,17 +220,10 @@ TEST(FlowComplete, AnArgumentIsOfferedWithWhatThePortIsFor) {
 
   // A port already written on the line is not offered again.
   constexpr std::string_view kPartly =
-      "flow inner {\n"
-      "  in  topic: string required \"What to research.\"\n"
-      "  in  depth: integer \"How deep.\"\n"
-      "  out report: string\n"
-      "  topic -> report\n"
-      "}\n"
-      "\n"
-      "flow outer {\n"
-      "  in  q: string\n"
-      "  out r: string\n"
-      "  x = run inner(topic: q, |CARET|)\n";
+      "flow inner {\n  in  topic: string required \"What to research.\"\n  in  "
+      "depth: int \"How deep.\"\n  out report: string\n  topic -> "
+      "report\n}\n\nflow outer {\n  in  q: string\n  out r: string\n  x = run "
+      "inner(topic: q, |CARET|)\n";
   EXPECT_EQ(Names(kPartly), std::vector<std::string>{"depth"});
 }
 
@@ -250,9 +235,10 @@ TEST(FlowComplete, ACallsPortsAndItsStatusFollowItsDot) {
 }
 
 TEST(FlowComplete, ABarriersDotOffersTheFieldsOfAStatus) {
-  EXPECT_EQ(Names("flow t {\n  in q: string\n  x = run a(q: q)\n"
-                  "  held = wait x\n  held.|CARET|"),
-            (std::vector<std::string>{"ok", "code", "number", "message"}));
+  EXPECT_EQ(
+      Names("flow t {\n  in q: string\n  x = run a(q: q)\n"
+            "  held = wait x\n  held.|CARET|"),
+      (std::vector<std::string>{"ok", "code", "number", "message", "details"}));
 }
 
 TEST(FlowComplete, ANodesDotOffersItsIdAndNothingElse) {
@@ -279,9 +265,10 @@ TEST(FlowComplete, FailIsFollowedByTheStatusCodes) {
 }
 
 TEST(FlowComplete, AModifierFollowsACallsClosingParenthesis) {
-  EXPECT_EQ(Names("flow t {\n  in q: string\n  x = run a(q: q) |CARET|"),
-            (std::vector<std::string>{"tee", "via", "timeout", "after", "with",
-                                      "id", "forward headers"}));
+  EXPECT_EQ(
+      Names("flow t {\n  in q: string\n  x = run a(q: q) |CARET|"),
+      (std::vector<std::string>{"tee", "via", "timeout", "deadline", "after",
+                                "with", "id", "forward headers"}));
 }
 
 TEST(FlowComplete, ViaIsFollowedByTheNodeMapsDeclared) {
@@ -318,15 +305,15 @@ TEST(FlowComplete, AStatementStartOffersStatementsAndNames) {
 TEST(FlowComplete, UntilAndACarryAreOfferedInsideARepeat) {
   const std::vector<std::string> offered = Names(
       "flow t {\n  in q: string\n  repeat state = 0 max 3 {\n    |CARET|");
-  EXPECT_TRUE(Offers(offered, "until"));
-  EXPECT_TRUE(Offers(offered, "while"));
+  EXPECT_FALSE(Offers(offered, "until"));
+  EXPECT_FALSE(Offers(offered, "while"));
   EXPECT_TRUE(Offers(offered, "state"));
   EXPECT_TRUE(Offers(offered, "index"));
 }
 
 TEST(FlowComplete, ElseIsOfferedWhereAnIfHasJustClosed) {
-  EXPECT_TRUE(Offers(Names("flow t {\n  in q: string\n  out a: string\n"
-                           "  if len(q) > 0 {\n    q -> a\n  }\n  |CARET|"),
+  EXPECT_TRUE(Offers(Names("flow t {\n  in q: string\n  out a: string\n  if "
+                           "std::len(q) > 0 {\n    q -> a\n  }\n  |CARET|"),
                      "else"));
 }
 
@@ -338,10 +325,11 @@ TEST(FlowComplete, ItIsOfferedInsideTheStagesThatLookAtAValue) {
 }
 
 TEST(FlowComplete, AFunctionTakesItsParenthesesWithIt) {
-  const Proposal* len = Find("flow t {\n  in q: string\n  if |CARET|", "len");
+  const Proposal* len =
+      Find("flow t {\n  in q: string\n  if |CARET|", "std::len");
   ASSERT_NE(len, nullptr);
-  EXPECT_EQ(len->insert, "len()");
-  EXPECT_EQ(len->caret, 4);
+  EXPECT_EQ(len->insert, "std::len()");
+  EXPECT_EQ(len->caret, 9);
 }
 
 TEST(FlowComplete, ANameIsNotOfferedAboveTheStatementThatBindsIt) {
@@ -410,16 +398,17 @@ TEST(FlowComplete, TheOrderedTablesCoverTheirSets) {
 TEST(FlowComplete, AnActionIsOfferedUnderItsOwnNameWhereACallMayBegin) {
   // Somebody who knows the action types its name, not the verb in front of it.
   const Proposal* head =
-      Find("flow f {\n  in q: string\n  |CARET|\n}\n", "make_http_request");
+      Find("flow f {\n  in q: string\n  |CARET|\n}\n", "run make_http_request");
   ASSERT_NE(head, nullptr);
   // Taking it writes the statement, not a bare name that could not compile.
-  EXPECT_EQ(head->insert, "call make_http_request()");
+  EXPECT_EQ(head->insert, "run make_http_request()");
   EXPECT_EQ(head->caret, static_cast<int>(head->insert.size()) - 1);
 
-  const Proposal* bound = Find(
-      "flow f {\n  in q: string\n  page = |CARET|\n}\n", "make_http_request");
+  const Proposal* bound =
+      Find("flow f {\n  in q: string\n  page = |CARET|\n}\n",
+           "run make_http_request");
   ASSERT_NE(bound, nullptr);
-  EXPECT_EQ(bound->insert, "call make_http_request()");
+  EXPECT_EQ(bound->insert, "run make_http_request()");
 
   // After the verb it is the name alone, since the verb is already there.
   const Proposal* after =
@@ -452,7 +441,7 @@ TEST(FlowComplete, AProposalCarriesWhatAPopupWouldShow) {
 
   // And so does a function, told apart from the stage of the same name.
   const Proposal* function =
-      Find("flow f {\n  in q: string\n  n = |CARET|\n}\n", "join");
+      Find("flow f {\n  in q: string\n  n = |CARET|\n}\n", "std::join");
   ASSERT_NE(function, nullptr);
   EXPECT_NE(function->documentation.find("a built-in function"),
             std::string::npos)
@@ -468,8 +457,8 @@ TEST(FlowComplete, OffersTheFieldsTheFileSaidAValueHas) {
   // A value a literal pattern made: the fields are in the text that made it.
   EXPECT_EQ(Names(absl::StrCat(
                 kHead,
-                "  let who = match(\"name={name} age={age:int}\", lines)\n"
-                "  strformat(\"%s\", who.|CARET|\n}\n")),
+                "  who = take (std::match(\"name={name} age={age:int}\", "
+                "lines))\n  std::strformat(\"%s\", who.|CARET|\n}\n")),
             (std::vector<std::string>{"name", "age"}));
 
   // `it` inside a stage that follows one: read off the tokens, because the line
@@ -480,8 +469,9 @@ TEST(FlowComplete, OffersTheFieldsTheFileSaidAValueHas) {
             (std::vector<std::string>{"level", "rest"}));
 
   // A port declared with a struct, which was missing too.
-  EXPECT_EQ(Names(absl::StrCat(kHead, "  strformat(\"%s\", src.|CARET|\n}\n")),
-            (std::vector<std::string>{"url", "rank"}));
+  EXPECT_EQ(
+      Names(absl::StrCat(kHead, "  std::strformat(\"%s\", src.|CARET|\n}\n")),
+      (std::vector<std::string>{"url", "rank"}));
 
   // And nothing where nothing is known: no pattern, and a positional one names
   // no fields at all.
@@ -494,4 +484,23 @@ TEST(FlowComplete, OffersTheFieldsTheFileSaidAValueHas) {
 }
 
 }  // namespace
+
+TEST(FlowComplete, QualifiedActionSuggestionsInsertBothVerbsWithNativeRanges) {
+  const std::string source =
+      "mod lib { flow work exported {} }\nflow main { result = lib::";
+  const auto completed = CompleteAt(source, source.size());
+  std::vector<std::string> verbs;
+  for (const auto& proposal : completed.proposals) {
+    if (proposal.name != "run lib::work" && proposal.name != "call lib::work") {
+      continue;
+    }
+    verbs.push_back(proposal.name);
+    ASSERT_NE(proposal.replace_start, std::string::npos);
+    EXPECT_EQ(source.substr(proposal.replace_start), "lib::");
+    EXPECT_EQ(proposal.insert, proposal.name + "()");
+  }
+  EXPECT_EQ(verbs,
+            (std::vector<std::string>{"run lib::work", "call lib::work"}));
+}
+
 }  // namespace a11::flow

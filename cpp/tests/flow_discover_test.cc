@@ -310,9 +310,8 @@ TEST(FlowDiscover, ReadsOneDocumentWithoutOpeningIt) {
   // What a host with a file open calls on a save: the text is in hand, and the
   // path is recorded rather than read.
   const std::string source =
-      "import a11\n"
-      "S = a11.ActionSchema(name=\"live\", description=\"Read from a "
-      "buffer.\")\n";
+      "import a11\nS = a11::ActionSchema(name=\"live\", description=\"Read "
+      "from a buffer.\")\n";
   const catalogue::Catalogue found =
       discover::DiscoverInSource(source, "untitled.py", Language::kPython);
   const catalogue::ActionInfo* action = found.Action("live");
@@ -407,12 +406,8 @@ TEST(FlowDiscover, AScannedActionHoversAsItsDescriptionAndSaysWhereItIs) {
   // this project declares, and the editor can say what it does and where it
   // was written. Before a scan, hovering that word answered "action name".
   const std::string source =
-      "flow use {\n"
-      "  in text: string required\n"
-      "  out out: string\n"
-      "  s = run simple(text: text)\n"
-      "  s.out -> out\n"
-      "}\n";
+      "flow use {\n  in text: string required\n  out out: string\n  s = run "
+      "simple(text: text)\n  s.out -> out\n}\n";
   const Description about = Describe(source, source.find("simple"), Scanned());
   ASSERT_TRUE(about.found);
   EXPECT_EQ(about.text, "simple");

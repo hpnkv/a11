@@ -35,7 +35,6 @@ from a11.sdk.llm import LlmHeaders
 from a11.service.session import Session
 from a11.status import StatusCode, StatusException
 
-
 #: An action the *client* serves, for the reverse-dispatch tests. Its name is an
 #: ordinary one on purpose: A11's own `__`-prefixed actions are answered by
 #: every registry and cannot be re-registered, so they cannot stand in for "a
@@ -134,8 +133,7 @@ async def test_a_client_sends_a_flow_and_the_gateway_runs_it(
     await client.add_stream(client_stream, mode="start")
 
     call = (
-        a11
-        .Action(flow_tools.FLOW_RUN_SCHEMA)
+        a11.Action(flow_tools.FLOW_RUN_SCHEMA)
         .bind_node_map(client.node_map)
         .bind_session(client)
         .bind_stream(client_stream)
@@ -202,8 +200,7 @@ async def test_a_flow_on_the_gateway_calls_back_to_the_client(
     await client.add_stream(client_stream, mode="start")
 
     call = (
-        a11
-        .Action(flow_tools.FLOW_RUN_SCHEMA)
+        a11.Action(flow_tools.FLOW_RUN_SCHEMA)
         .bind_node_map(client.node_map)
         .bind_session(client)
         .bind_stream(client_stream)
@@ -234,11 +231,13 @@ async def test_a_flow_on_the_gateway_calls_back_to_the_client(
         await serving
 
 
-ECHO = a11.ActionSchema.model_validate({
-    "name": "__echo",
-    "inputs": {"text": {"type": str}},
-    "outputs": {"echoed": {"type": str}},
-})
+ECHO = a11.ActionSchema.model_validate(
+    {
+        "name": "__echo",
+        "inputs": {"text": {"type": str}},
+        "outputs": {"echoed": {"type": str}},
+    }
+)
 
 
 async def _echo(action: a11.Action) -> None:
@@ -264,8 +263,7 @@ flow echo-each {
 async def _run_flow_call(client: Session, stream, allowed: bytes = b"__echo"):
     """A `flow_run` call on the client's session, dispatched and ready."""
     call = (
-        a11
-        .Action(flow_tools.FLOW_RUN_SCHEMA)
+        a11.Action(flow_tools.FLOW_RUN_SCHEMA)
         .bind_node_map(client.node_map)
         .bind_session(client)
         .bind_stream(stream)
@@ -433,11 +431,13 @@ async def test_a_flows_outputs_reach_the_caller_as_they_are_produced(
     """
     # An action that takes its time, so "arrived early" is a fact rather than a
     # race: the third value cannot exist until at least 3 x 50ms have passed.
-    slow = a11.ActionSchema.model_validate({
-        "name": "__slow",
-        "inputs": {"count": {"type": int, "unary": True}},
-        "outputs": {"tick": {"type": str}},
-    })
+    slow = a11.ActionSchema.model_validate(
+        {
+            "name": "__slow",
+            "inputs": {"count": {"type": int, "unary": True}},
+            "outputs": {"tick": {"type": str}},
+        }
+    )
 
     async def emit(action: a11.Action) -> None:
         count = await action["count"].consume(int, allow_none=True) or 0
@@ -458,8 +458,7 @@ async def test_a_flows_outputs_reach_the_caller_as_they_are_produced(
     await client.add_stream(client_stream, mode="start")
 
     call = (
-        a11
-        .Action(flow_tools.FLOW_RUN_SCHEMA)
+        a11.Action(flow_tools.FLOW_RUN_SCHEMA)
         .bind_node_map(client.node_map)
         .bind_session(client)
         .bind_stream(client_stream)
@@ -476,7 +475,7 @@ async def test_a_flows_outputs_reach_the_caller_as_they_are_produced(
         call,
         """
         flow echo-each {
-          in  howmany: integer required
+          in  howmany: int required
           out said:    string stream
           one = run __slow(count: howmany)
           one.tick -> said
@@ -596,8 +595,7 @@ async def test_a_client_can_run_two_flows_over_one_connection(
     # And a plain dispatch still works after them, which is the same property
     # from the other side.
     call = (
-        a11
-        .Action(PING_SCHEMA)
+        a11.Action(PING_SCHEMA)
         .bind_node_map(client.node_map)
         .bind_session(client)
         .bind_stream(client_stream)
@@ -627,8 +625,7 @@ async def test_the_gateway_refuses_a_flow_that_reaches_too_far(
     await client.add_stream(client_stream, mode="start")
 
     call = (
-        a11
-        .Action(flow_tools.FLOW_RUN_SCHEMA)
+        a11.Action(flow_tools.FLOW_RUN_SCHEMA)
         .bind_node_map(client.node_map)
         .bind_session(client)
         .bind_stream(client_stream)

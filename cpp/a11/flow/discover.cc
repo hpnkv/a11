@@ -56,8 +56,6 @@ bool IsSpace(char c) {
 
 // --- masking -----------------------------------------------------------------
 
-// A source file with its comments and its string *contents* blanked out, and
-// the strings kept to one side.
 /// A source file with its comments and its string *contents* blanked out, and
 /// the strings kept to one side.
 ///
@@ -131,8 +129,6 @@ class Masked {
     strings_.emplace(open, Held{std::move(value), end});
   }
 
-  // Reads a quoted run starting at `index`, whose delimiter is `quote` repeated
-  // `quote_length` times, honouring `\` escapes unless `raw`.
   /// Reads a quoted run starting at `index`, whose delimiter is `quote`
   /// repeated
   /// `quote_length` times, honouring `\` escapes unless `raw`.
@@ -626,8 +622,6 @@ struct Value {
 Value ReadValue(const Masked& masked, size_t from, size_t to,
                 const Constants& constants);
 
-// A value written as a call: `Port("a", "b")`, `new ActionPortSchema({..})`,
-// `std::string(kName)`.
 /// A value written as a call: `Port("a", "b")`, `new ActionPortSchema({..})`,
 /// `std::string(kName)`.
 ///
@@ -783,8 +777,6 @@ struct Entry {
   size_t value_from = 0;
   size_t value_to = 0;
   bool keyed = false;
-  // Whether the key was written as a string literal (`"actions": ..`) rather
-  // than as a bare word (`name=..`, `text: ..`).
   /// Whether the key was written as a string literal (`"actions": ..`) rather
   /// than as a bare word (`name=..`, `text: ..`).
   ///

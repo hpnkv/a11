@@ -19,18 +19,22 @@
 
 #include <absl/strings/str_join.h>
 #include <gtest/gtest.h>
+#include <nlohmann/json.hpp>
 
 #include "a11/flow/complete.h"
 #include "a11/flow/format.h"
 #include "a11/flow/inspect.h"
+#include "a11/flow/module.h"
 #include "a11/flow/parser.h"
 #include "a11/flow/resolve.h"
+#include "a11/flow/schema.h"
 
 namespace a11::flow {
 namespace {
 
 ResolveResult Check(std::string_view source) {
-  return Resolve(source, Parse(source));
+  auto linked = LinkModules(std::string(source), "<test>");
+  return Resolve(linked.source, linked.parsed);
 }
 
 std::vector<std::string> Codes(const std::vector<Diagnostic>& diagnostics) {
@@ -75,13 +79,13 @@ constexpr std::string_view kSource = R"(struct Source {
   tags:   string[] unique
   rank:   number 0..1 default 0.5
   kind:   string one of ["page", "paper"] default "page"
-  seen:   time
-  ttl:    duration default 30s
+  seen:   std::time
+  ttl:    std::duration default 30s
   parent: Source
 }
 
 flow f {
-  in  hits:    json stream required
+  in  hits:    std::json stream required
   out sources: Source stream
 
   hits | map Source{"url": "https://x"} -> sources
@@ -162,9 +166,8 @@ TEST(FlowDto, AShapeOutranksARegistryTagOfTheSameName) {
   // one the file declares is *this* shape, whatever a registry may also know.
   // That precedence is the point of being able to declare one.
   const ResolveResult result = Check(
-      "struct AudioBuffer {\n  rate: integer required\n}\n"
-      "flow f {\n  in a: AudioBuffer required\n  out b: a11.sdk.AudioBuffer\n"
-      "  a -> b\n}\n");
+      "struct AudioBuffer {\n  rate: int required\n}\nflow f {\n  in a: "
+      "AudioBuffer required\n  out b: a11::sdk::AudioBuffer\n  a -> b\n}\n");
   EXPECT_TRUE(Joined(result.diagnostics).empty()) << Joined(result.diagnostics);
   const FlowPlan* flow = result.program.Flow("f");
   EXPECT_EQ(flow->Port("a", syntax::PortDirection::kInput)->type,
@@ -257,7 +260,7 @@ TEST(FlowDto, ASpreadStandsDownTheMissingFieldCheck) {
   // the same words, if it turns out to be wrong.
   const ResolveResult result = Check(
       "struct S {\n  id: string required\n  tags: string[]\n}\n"
-      "flow f {\n  in x: json stream required\n  out y: S stream\n"
+      "flow f {\n  in x: std::json stream required\n  out y: S stream\n"
       "  x | map S{...it, \"tags\": [\"seen\"]} -> y\n}\n");
   EXPECT_TRUE(Joined(result.diagnostics).empty()) << Joined(result.diagnostics);
 }
@@ -349,10 +352,10 @@ TEST(FlowDto, OffersWhatAFieldMaySayAboutItself) {
 
 // --- one value ---------------------------------------------------------------
 
-TEST(FlowLet, BindsAValueThatStandsWhereAnExpressionDoes) {
+TEST(FlowBinding, BindsAValueThatStandsWhereAnExpressionDoes) {
   const ResolveResult result = Check(
       "flow f {\n  in codes: number stream required\n  out ok: bool\n"
-      "  let code = codes\n  code >= 200 and code < 300 -> ok\n}\n");
+      "  code = take (codes)\n  code >= 200 and code < 300 -> ok\n}\n");
   EXPECT_TRUE(Joined(result.diagnostics).empty()) << Joined(result.diagnostics);
   ASSERT_EQ(result.flows.size(), 1u);
   const Symbol* value = nullptr;
@@ -369,36 +372,66 @@ TEST(FlowLet, BindsAValueThatStandsWhereAnExpressionDoes) {
   EXPECT_EQ(value->reads, 2);
 }
 
-TEST(FlowLet, AValueIsReadNeverWritten) {
+TEST(FlowBinding, AValueCannotBeAPipelineDestination) {
   EXPECT_TRUE(Has(Codes(Check("flow f {\n  in a: string required\n"
-                              "  let x = a\n  \"y\" -> x\n}\n")
+                              "  x = take (a)\n  \"y\" -> x\n}\n")
                             .diagnostics),
                   "flow.name.not-writable"));
 }
 
-TEST(FlowLet, TheNameIsTakenLikeAnyOther) {
+TEST(FlowBinding, TheNameIsTakenLikeAnyOther) {
   EXPECT_TRUE(Has(Codes(Check("flow f {\n  in a: string required\n"
-                              "  let a = a\n  out b: string\n}\n")
+                              "  a = take (a)\n  out b: string\n}\n")
                             .diagnostics),
                   "flow.name.taken"));
 }
 
-TEST(FlowLet, SaysSoWhenNothingReadsOne) {
-  // A `let` is lazy, so one nobody reads leaves the stream behind it unread --
-  // which is a stalled producer, not merely a dead name.
+TEST(FlowBinding, SaysSoWhenNothingReadsOne) {
+  // Eager initialization still reports an unused value.
   EXPECT_TRUE(Has(Codes(Problems("flow f {\n  in a: string stream required\n"
-                                 "  out b: string\n  let unread = a\n"
+                                 "  out b: string\n  unread = take (a)\n"
                                  "  \"x\" -> b\n}\n")),
                   "flow.unused.value"));
 }
 
-TEST(FlowLet, IsAWordOnlyWhereItOpensAStatement) {
-  // No reserved words: a port called `let` is a name like any other, and the
-  // rule is the one every other statement word follows.
+TEST(FlowBinding, TimeoutRemainsAnOrdinaryPortName) {
+  // Timeout clauses remain unambiguous when a port has the same name.
   const ResolveResult result = Check(
-      "flow f {\n  in let: string required\n  out b: string\n  let -> b\n}\n");
+      "flow f {\n  in timeout: string required\n  out b: string\n  timeout -> "
+      "b\n}\n");
   EXPECT_TRUE(Joined(result.diagnostics).empty()) << Joined(result.diagnostics);
 }
 
 }  // namespace
+
+TEST(FlowDto, StandardAndNestedContainerSchemasRoundtrip) {
+  const auto linked = LinkModules(R"(
+struct Row { id: string required }
+struct Payload {
+  counts: object[int]
+  result: std::option[Row]
+  status: std::status
+  absent: null
+  rows: object[std::list[Row]]
+}
+)",
+                                  "root");
+  const auto resolved = Resolve(linked.source, linked.parsed);
+  ASSERT_FALSE(resolved.HasErrors());
+  const auto* payload = resolved.program.Dto("Payload");
+  ASSERT_NE(payload, nullptr);
+  const auto schema = DtoToJsonSchema(*payload, resolved.program);
+  EXPECT_EQ(schema["properties"]["counts"]["additionalProperties"]["type"],
+            "integer");
+  EXPECT_EQ(schema["properties"]["absent"]["type"], "null");
+  EXPECT_EQ(schema["properties"]["status"]["properties"]["details"]["type"],
+            "array");
+  EXPECT_TRUE(schema["$defs"].contains("Row"));
+  const auto imported = JsonSchemaToDtos(schema, "Payload");
+  ASSERT_FALSE(imported.dtos.empty());
+  Program program;
+  program.dtos = imported.dtos;
+  EXPECT_EQ(DtoToJsonSchema(program.dtos.front(), program), schema);
+}
+
 }  // namespace a11::flow

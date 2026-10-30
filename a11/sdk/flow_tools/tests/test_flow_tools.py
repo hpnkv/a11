@@ -32,26 +32,32 @@ from a11.sdk import flow_tools
 from a11.sdk.llm import LlmHeaders
 from a11.status import StatusCode, StatusException
 
-UPPER = ActionSchema.model_validate({
-    "name": "text-upper",
-    "description": "Upper-case each value.",
-    "inputs": {"text": {"name": "text", "type": str}},
-    "outputs": {"upper": {"name": "upper", "type": str}},
-})
-SIZE = ActionSchema.model_validate({
-    "name": "text-size",
-    "description": "Count the characters of one value.",
-    "inputs": {
-        "text": {"name": "text", "type": str, "unary": True},
-    },
-    "outputs": {"size": {"name": "size", "type": int, "unary": True}},
-})
-SECRET = ActionSchema.model_validate({
-    "name": "launch-missiles",
-    "description": "Something the caller is not allowed to reach.",
-    "inputs": {"text": {"name": "text", "type": str}},
-    "outputs": {"done": {"name": "done", "type": str}},
-})
+UPPER = ActionSchema.model_validate(
+    {
+        "name": "text-upper",
+        "description": "Upper-case each value.",
+        "inputs": {"text": {"name": "text", "type": str}},
+        "outputs": {"upper": {"name": "upper", "type": str}},
+    }
+)
+SIZE = ActionSchema.model_validate(
+    {
+        "name": "text-size",
+        "description": "Count the characters of one value.",
+        "inputs": {
+            "text": {"name": "text", "type": str, "unary": True},
+        },
+        "outputs": {"size": {"name": "size", "type": int, "unary": True}},
+    }
+)
+SECRET = ActionSchema.model_validate(
+    {
+        "name": "launch-missiles",
+        "description": "Something the caller is not allowed to reach.",
+        "inputs": {"text": {"name": "text", "type": str}},
+        "outputs": {"done": {"name": "done", "type": str}},
+    }
+)
 
 
 @pytest_asyncio.fixture
@@ -171,7 +177,7 @@ COMPOSITION = """
 flow shout-and-measure {
   in  words: string stream required
   out loud:  string stream
-  out size:  integer
+  out size:  int
 
   up = run text-upper(text: words)
   counted = run text-size(text: up.upper | join " ")
@@ -590,3 +596,20 @@ def test_a11_is_importable_without_the_yaml_the_skill_format_needs():
 
     assert "yaml" not in dir(handlers)
     assert "Skill" not in prompt.__dict__
+
+
+@pytest.mark.parametrize("name", ["flow_run", "shell_execute"])
+def test_contract_aliases_cannot_bypass_action_permissions(name):
+    from a11.sdk.flow_tools.handlers import verify_calls
+
+    program = flow.loads(
+        'import "library"\nfrom library import target as harmless\n'
+        "flow main { run harmless() }",
+        modules={
+            "library": f"declare flow {name} {{}}\nexport {name} as target"
+        },
+    )
+    assert program.external_actions() == [name]
+    with pytest.raises(StatusException) as raised:
+        verify_calls(program, ["text-*"])
+    assert raised.value.status.code == StatusCode.PERMISSION_DENIED

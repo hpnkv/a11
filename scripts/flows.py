@@ -52,23 +52,23 @@ async def demo_echo_flow():
     flow echo {
       in input: string stream required "Input text"
       out output: string stream "Output text"
-      
+
       l1 = run log1(input: input)
       l2 = run log1(input: input)
-      
-      let n = wait first of l2, l1
-      
-      input | map strformat("%d: %s", n, it) -> output
+
+      n = take (wait first of l2, l1)
+
+      input | map std::strformat("%d: %s", n, it) -> output
     }
-    
+
     flow log1 {
       in input: string required "Input"
-      
+
       nodes scratch
-      
+
       i = node() in scratch
       input -> i
-      
+
       i | logf info "%s" it -> _
     }
     """,

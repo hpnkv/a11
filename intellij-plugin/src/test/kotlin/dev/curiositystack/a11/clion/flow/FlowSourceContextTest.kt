@@ -36,7 +36,7 @@ class FlowSourceContextTest : BasePlatformTestCase() {
         declare flow test {}
         flow main {
           import "./nested.flow" as nested
-          (run nested.work()).result -> _
+          (run nested::work()).result -> _
         }
     """.trimIndent()
     private val library = """
@@ -47,8 +47,12 @@ class FlowSourceContextTest : BasePlatformTestCase() {
         }
     """.trimIndent()
 
+    private var previousRoots: String? = null
+
     override fun setUp() {
         super.setUp()
+        previousRoots = System.getProperty("a11.flow.sourceRoots")
+        System.setProperty("a11.flow.sourceRoots", myFixture.tempDirFixture.tempDirPath)
         assumeTrue("no a11-flow on this machine", FlowEngine.instance().available)
     }
 
@@ -57,6 +61,8 @@ class FlowSourceContextTest : BasePlatformTestCase() {
             CodeInsightSettings.getInstance().AUTO_POPUP_JAVADOC_INFO =
                 CodeInsightSettings().AUTO_POPUP_JAVADOC_INFO
         } finally {
+            if (previousRoots == null) System.clearProperty("a11.flow.sourceRoots")
+            else System.setProperty("a11.flow.sourceRoots", previousRoots!!)
             super.tearDown()
         }
     }
@@ -79,7 +85,8 @@ class FlowSourceContextTest : BasePlatformTestCase() {
             flow main {
               declare flow work { out result: string }
               struct Report { text: string }
-              from "./nested.flow" import work
+              import "./nested.flow"
+              from nested import work
               (run work()).result -> _
             }
         """.trimIndent())
@@ -91,12 +98,12 @@ class FlowSourceContextTest : BasePlatformTestCase() {
         assertTrue(completion.toString(), (completion?.get("proposals") as? List<*>)?.any {
             (it as Map<*, *>)["name"] == "work"
         } == true)
-        replace(dependency, "flow work exported { out result: integer }")
+        replace(dependency, "flow work exported { out result: int }")
         val problems = errors(root)
         assertTrue(problems.toString(), problems.any {
             it.code == "flow.form.declaration-schema-mismatch" || it.code == "flow.form.declaration-conflict"
         })
-        replace(root, "flow main {\n from \"./nested.flow\" import ")
+        replace(root, "flow main {\n import \"./nested.flow\"\n from nested import ")
         val choices = engine.complete(root.text, root.textLength, FlowSourceContext.fromFile(root))
         assertTrue(choices.toString(), (choices?.get("proposals") as? List<*>)?.any {
             (it as Map<*, *>)["name"] == "work"
@@ -116,15 +123,15 @@ class FlowSourceContextTest : BasePlatformTestCase() {
         val root = myFixture.addFileToProject(
             "root.flow",
             "declare flow test { out output: string stream }\nflow main {\n" +
-                " import \"./nested.flow\" as nested\n t = run nested.\n}",
+                " import \"./nested.flow\" as nested\n t = run nested::\n}",
         )
         FileDocumentManager.getInstance().saveAllDocuments()
-        val at = root.text.indexOf("nested.\n") + "nested.".length
+        val at = root.text.indexOf("nested::\n") + "nested::".length
         val oldSetting = CodeInsightSettings.getInstance().AUTOCOMPLETE_ON_CODE_COMPLETION
         try {
             CodeInsightSettings.getInstance().AUTOCOMPLETE_ON_CODE_COMPLETION = false
             for (exported in listOf(false, true)) {
-                replace(dependency, "flow test${if (exported) " exported" else ""} { out output: integer stream }")
+                replace(dependency, "flow test${if (exported) " exported" else ""} { out output: int stream }")
                 myFixture.configureFromExistingVirtualFile(root.virtualFile)
                 myFixture.editor.caretModel.moveToOffset(at)
                 val offered = myFixture.completeBasic()?.map { it.lookupString }.orEmpty()
@@ -134,7 +141,7 @@ class FlowSourceContextTest : BasePlatformTestCase() {
             CodeInsightSettings.getInstance().AUTOCOMPLETE_ON_CODE_COMPLETION = oldSetting
         }
         replace(dependency, "flow test {}")
-        replace(root, root.text.replace("run nested.", "run nested.test()"))
+        replace(root, root.text.replace("run nested::", "run nested::test()"))
         val problem = errors(root).single { it.code == "flow.name.private-member" }
         assertTrue(problem.message, problem.message.contains("exists"))
         assertTrue(problem.message, problem.message.contains("private"))
@@ -171,7 +178,7 @@ class FlowSourceContextTest : BasePlatformTestCase() {
         val context = FlowSourceContext.fromFile(root)
         assertEquals(library, context.modules[dependency.virtualFile.canonicalPath])
         assertTrue(errors(root).isEmpty())
-        val at = source.indexOf("nested.work") + "nested.".length
+        val at = source.indexOf("nested::work") + "nested::".length
         val engine = FlowEngine.instance()
         val hover = engine.describe(source, at, context)
         assertTrue(hover.toString(), hover?.get("markdown").toString().contains("A sibling module."))

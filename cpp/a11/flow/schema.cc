@@ -28,6 +28,8 @@
 #include <absl/time/time.h>
 #include <nlohmann/json.hpp>
 
+#include "a11/flow/contract.h"
+#include "a11/flow/parser.h"
 #include "a11/flow/syntax.h"
 #include "a11/flow/vocabulary.h"
 
@@ -188,6 +190,38 @@ void WriteScalar(std::string_view type, nlohmann::json& out) {
     out[std::string(kFlowTypeKey)] = "duration";
     return;
   }
+  if (type == "null") {
+    out["type"] = "null";
+    return;
+  }
+  if (type == "status") {
+    out["type"] = "object";
+    out[std::string(kFlowTypeKey)] = "status";
+    out["properties"] = {
+        {"code", {{"type", "string"}}},
+        {"number", {{"type", "integer"}, {"minimum", 0}, {"maximum", 16}}},
+        {"message", {{"type", "string"}}},
+        {"ok", {{"type", "boolean"}}},
+        {"details", {{"type", "array"}}}};
+    out["required"] = {"code", "number", "message", "ok", "details"};
+    return;
+  }
+  if (type == "option") {
+    out["type"] = "object";
+    out[std::string(kFlowTypeKey)] = "option";
+    out["properties"] = {{"present", {{"type", "boolean"}}},
+                         {"value", nlohmann::json::object()}};
+    out["required"] = {"present"};
+    out["additionalProperties"] = false;
+    out["oneOf"] = nlohmann::json::array(
+        {{{"properties", {{"present", {{"const", false}}}}},
+          {"not", {{"required", {"value"}}}}},
+         {{"properties",
+           {{"present", {{"const", true}}},
+            {"value", nlohmann::json::object()}}},
+          {"required", {"value"}}}});
+    return;
+  }
   if (type == "object") {
     out["type"] = "object";
     return;
@@ -204,7 +238,51 @@ void WriteScalar(std::string_view type, nlohmann::json& out) {
 /// One field as a schema, following a shape it names as a `$ref`.
 nlohmann::json FieldSchema(const FieldPlan& field) {
   nlohmann::json out = nlohmann::json::object();
-  if (!field.dto_name.empty()) {
+  if (field.syntax_type.has_value() && !field.syntax_type->parameters.empty() &&
+      (field.type == "object" || field.type == "list" ||
+       field.type == "option")) {
+    std::vector<std::pair<const syntax::TypeExpression*, nlohmann::json*>>
+        pending;
+    pending.emplace_back(&*field.syntax_type, &out);
+    while (!pending.empty()) {
+      auto [type, schema] = pending.back();
+      pending.pop_back();
+      if (type->name == "object" || type->name == "list" ||
+          type->name == "option") {
+        if (type->name == "option") {
+          WriteScalar("option", *schema);
+        } else {
+          (*schema)["type"] = type->name == "list" ? "array" : "object";
+        }
+        (*schema)[std::string(kFlowTypeKey)] = type->ToString();
+        if (!type->parameters.empty()) {
+          auto& child =
+              type->name == "option"
+                  ? (*schema)["oneOf"][1]["properties"]["value"]
+                  : (*schema)[type->name == "list" ? "items"
+                                                   : "additionalProperties"];
+          child = nlohmann::json::object();
+          pending.emplace_back(&type->parameters.front(), &child);
+        }
+      } else if (!vocabulary::TypeNames().contains(type->name) &&
+                 type->name.find('.') == std::string::npos) {
+        (*schema)["$ref"] = absl::StrCat("#/$defs/", type->name);
+      } else {
+        WriteScalar(type->name, *schema);
+      }
+    }
+    if (field.type == "list") {
+      if (field.unique) {
+        out["uniqueItems"] = true;
+      }
+      if (field.range.has_minimum) {
+        out["minItems"] = field.range.minimum.integer;
+      }
+      if (field.range.has_maximum) {
+        out["maxItems"] = field.range.maximum.integer;
+      }
+    }
+  } else if (!field.dto_name.empty()) {
     // A `$ref` carries no siblings a validator has to merge, so a described
     // reference is the reference and the description beside it.
     out["$ref"] = absl::StrCat("#/$defs/", field.dto_name);
@@ -212,8 +290,7 @@ nlohmann::json FieldSchema(const FieldPlan& field) {
       out["description"] = field.description;
     }
     return out;
-  }
-  if (field.type == "list" || field.type == "array") {
+  } else if (field.type == "list" || field.type == "array") {
     out["type"] = "array";
     if (!field.element.empty()) {
       nlohmann::json items = nlohmann::json::object();
@@ -304,12 +381,11 @@ std::vector<const DtoPlan*> Reachable(const DtoPlan& dto,
   absl::flat_hash_set<std::string> seen{dto.name};
   for (size_t index = 0; index < found.size(); ++index) {
     for (const FieldPlan& field : found[index]->fields) {
-      for (const std::string& named :
-           {field.dto_name, field.element_dto_name}) {
-        if (named.empty() || !seen.insert(named).second) {
+      for (const auto named : FieldTypeNames(field)) {
+        if (named.empty() || !seen.insert(std::string(named)).second) {
           continue;
         }
-        if (const DtoPlan* next = program.Dto(named); next != nullptr) {
+        if (const auto* next = program.Dto(named); next != nullptr) {
           found.push_back(next);
         }
       }
@@ -429,6 +505,9 @@ std::string ScalarType(const nlohmann::json& property) {
       }
     }
   }
+  if (spelled == "null") {
+    return "null";
+  }
   if (spelled == "integer") {
     return "integer";
   }
@@ -469,6 +548,33 @@ std::string ScalarType(const nlohmann::json& property) {
 
 void ReadShape(const nlohmann::json& schema, std::string_view name,
                SchemaImport& into, absl::flat_hash_set<std::string>& seen);
+
+syntax::TypeExpression SchemaType(const nlohmann::json& schema,
+                                  size_t depth = 0) {
+  syntax::TypeExpression type;
+  type.name = RefName(schema);
+  if (!type.name.empty()) {
+    return type;
+  }
+  type.name = ScalarType(schema);
+  if (const auto marked = schema.find(std::string(kFlowTypeKey));
+      marked != schema.end() && marked->is_string()) {
+    const auto parsed = ParseTypeExpression(marked->get<std::string>());
+    if (parsed.ok()) {
+      return *parsed;
+    }
+  }
+  if (depth >= 128) {
+    return type;
+  }
+  const auto child =
+      schema.find(type.name == "list" ? "items" : "additionalProperties");
+  if ((type.name == "list" || type.name == "object") && child != schema.end() &&
+      child->is_object()) {
+    type.parameters.push_back(SchemaType(*child, depth + 1));
+  }
+  return type;
+}
 
 /// One property as a field.
 FieldPlan ReadField(const nlohmann::json& property, std::string_view name,
@@ -576,8 +682,18 @@ FieldPlan ReadField(const nlohmann::json& property, std::string_view name,
     field.description = said->get<std::string>();
   }
 
+  auto syntax_type = SchemaType(property);
+  if (!syntax_type.parameters.empty() || syntax_type.name == "status" ||
+      syntax_type.name == "option" || syntax_type.name == "null") {
+    field.type = syntax_type.name;
+    field.declared = syntax_type.ToString();
+    field.syntax_type = std::move(syntax_type);
+  }
   for (const auto& [keyword, unused] : property.items()) {
-    if (KnownKeywords().contains(keyword)) {
+    if (KnownKeywords().contains(keyword) ||
+        (field.type == "option" && keyword == "oneOf") ||
+        (field.type == "status" &&
+         (keyword == "properties" || keyword == "required"))) {
       continue;
     }
     Report(into, "flow.schema.unsupported-keyword",
@@ -658,9 +774,9 @@ void ReadShape(const nlohmann::json& schema, std::string_view name,
   const DtoPlan& written = into.dtos[into.dtos.size() - 1];
   std::vector<std::string> wanted;
   for (const FieldPlan& field : written.fields) {
-    for (const std::string& named : {field.dto_name, field.element_dto_name}) {
+    for (const auto named : FieldTypeNames(field)) {
       if (!named.empty()) {
-        wanted.push_back(named);
+        wanted.emplace_back(named);
       }
     }
   }
@@ -677,40 +793,6 @@ void ReadShape(const nlohmann::json& schema, std::string_view name,
         carried["$defs"] = *defs;
       }
       ReadShape(carried, named, into, seen);
-    }
-  }
-}
-
-/// Whether the shapes hold bytes anywhere, the way the resolver works it out.
-void MarkBinary(std::vector<DtoPlan>& dtos) {
-  for (DtoPlan& dto : dtos) {
-    for (const FieldPlan& field : dto.fields) {
-      if (field.type == "bytes" || field.element == "bytes") {
-        dto.binary = true;
-      }
-    }
-  }
-  bool changed = true;
-  while (changed) {
-    changed = false;
-    for (DtoPlan& dto : dtos) {
-      if (dto.binary) {
-        continue;
-      }
-      for (const FieldPlan& field : dto.fields) {
-        for (const std::string& named :
-             {field.dto_name, field.element_dto_name}) {
-          if (named.empty()) {
-            continue;
-          }
-          for (const DtoPlan& other : dtos) {
-            if (other.name == named && other.binary) {
-              dto.binary = true;
-              changed = true;
-            }
-          }
-        }
-      }
     }
   }
 }
@@ -785,7 +867,7 @@ SchemaImport JsonSchemaToDtos(const nlohmann::json& schema,
   }
   absl::flat_hash_set<std::string> seen;
   ReadShape(schema, FlowName(chosen.empty() ? "Shape" : chosen), into, seen);
-  MarkBinary(into.dtos);
+  MarkBinaryTypes(into.dtos);
   return into;
 }
 

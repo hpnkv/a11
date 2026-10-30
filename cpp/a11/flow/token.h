@@ -65,6 +65,9 @@ enum class TokenKind {
   kMinus,
   kPipe,
   kColon,
+  /// Static namespace qualification, distinct from runtime projection.
+  kScope,
+  kStar,
   kComma,
   kLeftBrace,
   kRightBrace,

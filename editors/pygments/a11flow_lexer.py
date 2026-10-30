@@ -97,7 +97,8 @@ FIELD_MODIFIERS = _keywords(
 #: The built-in port type names.
 TYPES = _keywords(
     "string", "text", "number", "integer", "int", "bool", "boolean",
-    "duration", "time", "object", "json", "list", "array", "bytes", "any"
+    "duration", "time", "object", "json", "list", "array", "bytes", "any",
+    "status", "null", "option", "stream"
 )
 
 #: What may follow a ``header``.
@@ -105,21 +106,24 @@ HEADER_WORDS = _keywords("as", "default")
 
 #: The statements that may follow a ``=``, which is what makes the name before
 #: it a bound step rather than one side of a comparison.
-BINDING_VERBS = _keywords("run", "call", "try", "node", "wait", "drain")
+BINDING_VERBS = _keywords("run", "call", "try", "node", "wait", "close")
 
 #: Words that open a statement.
 STATEMENTS = _keywords(
-    "let", "advance", "skip", "wait", "drain", "abort", "cancel", "fail",
-    "log", "logf", "if", "for", "repeat", "after", "until", "while",
-    "else"
+    "skip", "wait", "close", "abort", "cancel", "fail", "log", "logf",
+    "if", "for", "repeat", "after", "else"
 )
 
 #: Words that stand inside a statement without opening one.
-CLAUSES = _keywords("parallel", "unordered", "max", "of", "by", "desc", "into")
+CLAUSES = _keywords(
+    "parallel", "unordered", "max", "of", "by", "desc", "into", "until",
+    "while"
+)
 
 #: What may follow a call's closing parenthesis.
 MODIFIERS = _keywords(
-    "tee", "via", "timeout", "after", "with", "id", "forward", "headers"
+    "tee", "via", "timeout", "deadline", "after", "with", "id", "forward",
+    "headers"
 )
 
 #: Every pipeline stage.
@@ -143,11 +147,13 @@ OPERATOR_WORDS = _keywords("and", "or", "not", "in")
 #: The language's fixed function set. No user code, ever: a flow stays data.
 BUILTINS = _keywords(
     "len", "lower", "upper", "trim", "text", "number", "bool", "keys",
-    "values", "get", "join", "split", "merge", "contains", "starts-with",
-    "ends-with", "replace", "match", "slice", "default", "to_chunk",
+    "values", "get", "join", "split", "merge", "contains", "startswith",
+    "endswith", "replace", "match", "slice", "default", "to_chunk",
     "from_chunk", "strformat", "b64encode", "b64decode", "b64urlencode",
     "b64urldecode", "utf8encode", "utf8decode", "now", "duration", "time",
-    "seconds"
+    "seconds", "parse_time", "parse_duration", "integer", "int", "string",
+    "bytes", "object", "list", "boolean", "array", "any", "json",
+    "option", "status", "null"
 )
 
 #: The canonical status codes, which is what ``fail`` names.

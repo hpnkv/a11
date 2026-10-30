@@ -85,12 +85,12 @@ flow research {
       forward headers "authorization"
     page.text | truncate 200 | where it != "" -> pages
   }
-  drain pages after hits
+  close pages after hits
   repeat state = {"round": 0} max 6 {
     step = run think(state: state)
     state <- step.next
-    until step.next.done
-  }
+
+  } until step.next.done
   if (pages | count) > 0 {
     pages | join ", " -> answer
   } else {
@@ -165,7 +165,7 @@ TEST(FlowParser, ReadsAWholeFlowWithTheShapeItWasWrittenIn) {
   EXPECT_EQ(flow.headers[0]->default_value.integer, 3);
 
   EXPECT_EQ(BodyKinds(flow),
-            (std::vector<std::string>{"nodes", "bind", "for-each", "drain",
+            (std::vector<std::string>{"nodes", "bind", "for-each", "close",
                                       "repeat", "if"}));
 
   // The call, its modifiers, and the pipeline feeding a port.
@@ -207,7 +207,7 @@ TEST(FlowParser, ReadsAWholeFlowWithTheShapeItWasWrittenIn) {
   EXPECT_EQ(pipe->pipeline->stages[1]->argument->kind, NodeKind::kBinary);
   ASSERT_EQ(pipe->targets.size(), 1u);
 
-  const auto* drain = As<syntax::Drain>(flow.body[3].get());
+  const auto* drain = As<syntax::Close>(flow.body[3].get());
   ASSERT_NE(drain, nullptr);
   ASSERT_EQ(drain->after.size(), 1u);
   EXPECT_EQ(drain->after[0].text, "hits");
@@ -441,7 +441,7 @@ TEST(FlowParser, ALoopMayBeNamedAndMayCarryAnAfter) {
       "flow f {\n  in w: string stream\n  out o: string stream\n"
       "  taken = node()\n  first = run t()\n"
       "  done = for x in w { x -> taken } after first\n"
-      "  drain taken after done\n  taken -> o\n}\n");
+      "  close taken after done\n  taken -> o\n}\n");
   ASSERT_TRUE(result.diagnostics.empty())
       << absl::StrJoin(Messages(result), "; ");
   ASSERT_EQ(result.flows.size(), 1u);
@@ -462,7 +462,7 @@ TEST(FlowParser, AfterTakesACommaSeparatedList) {
       "  second = run b()\n"
       "  run c() after first,\n"
       "    second\n"
-      "  drain done after first, second\n"
+      "  close done after first, second\n"
       "}\n");
   ASSERT_TRUE(result.diagnostics.empty())
       << absl::StrJoin(Messages(result), "; ");
@@ -471,7 +471,7 @@ TEST(FlowParser, AfterTakesACommaSeparatedList) {
   ASSERT_EQ(call->call->modifiers->after.size(), 2u);
   EXPECT_EQ(call->call->modifiers->after[0].text, "first");
   EXPECT_EQ(call->call->modifiers->after[1].text, "second");
-  const auto* drain = As<syntax::Drain>(result.flows[0]->body[3].get());
+  const auto* drain = As<syntax::Close>(result.flows[0]->body[3].get());
   ASSERT_NE(drain, nullptr);
   ASSERT_EQ(drain->after.size(), 2u);
 }
@@ -480,18 +480,18 @@ TEST(FlowParser, InsideBracketsALineBreakIsWhitespace) {
   // A break inside `{ }`, `[ ]` or `( )` ends nothing -- the closing bracket is
   // what ends it -- so an operator may begin the next line.
   for (const std::string_view wrapped : {
-           "  l | map {\"a\": starts-with(it, \"B\")\n"
-           "       or ends-with(it, \"E\")} -> o\n",
-           "  l | map {\"a\": len(it) > 1\n       and len(it) < 9} -> o\n",
-           "  l | map {\"a\": len(it)\n       > 1} -> o\n",
-           "  l | map {\"a\": len(it)\n       + 1} -> o\n",
-           "  l | map [len(it) > 1\n       and len(it) < 9] -> o\n",
-           "  l | map (len(it)\n       + 1) -> o\n",
+           "  l | map {\"a\": std::startswith(it, \"B\")\n       or "
+           "std::endswith(it, \"E\")} -> o\n",
+           "  l | map {\"a\": std::len(it) > 1\n       and std::len(it) < 9} "
+           "-> o\n",
+           "  l | map {\"a\": std::len(it)\n       > 1} -> o\n",
+           "  l | map {\"a\": std::len(it)\n       + 1} -> o\n",
+           "  l | map [std::len(it) > 1\n       and std::len(it) < 9] -> o\n",
+           "  l | map (std::len(it)\n       + 1) -> o\n",
        }) {
-    const ParseResult result =
-        Parse(absl::StrCat("flow f {\n  in l: string stream\n"
-                           "  out o: json stream\n",
-                           wrapped, "}\n"));
+    const ParseResult result = Parse(absl::StrCat(
+        "flow f {\n  in l: string stream\n  out o: std::json stream\n", wrapped,
+        "}\n"));
     EXPECT_TRUE(result.diagnostics.empty())
         << wrapped << " gave " << absl::StrJoin(Messages(result), "; ");
   }
@@ -500,9 +500,8 @@ TEST(FlowParser, InsideBracketsALineBreakIsWhitespace) {
 TEST(FlowParser, OutsideBracketsALineBreakStillEndsTheStatement) {
   // The property the change above must not cost.
   const ParseResult result = Parse(
-      "flow f {\n  in l: string stream\n  out o: string stream\n"
-      "  l where starts-with(it, \"B\")\n"
-      "  or ends-with(it, \"E\") -> o\n}\n");
+      "flow f {\n  in l: string stream\n  out o: string stream\n  l where "
+      "std::startswith(it, \"B\")\n  or std::endswith(it, \"E\") -> o\n}\n");
   EXPECT_FALSE(result.diagnostics.empty());
 }
 
@@ -592,8 +591,7 @@ TEST(FlowParser, ReportsEveryProblemRatherThanTheFirst) {
       "}\n");
   EXPECT_EQ(Codes(result),
             (std::vector<std::string>{"flow.form.unknown-stage",
-                                      "flow.form.unknown-stage",
-                                      "flow.form.unknown-builtin"}));
+                                      "flow.form.unknown-stage"}));
 }
 
 TEST(FlowParser, SaysWhatIsMissingInTheWordsThePythonCompilerUses) {
@@ -608,7 +606,7 @@ TEST(FlowParser, SaysWhatIsMissingInTheWordsThePythonCompilerUses) {
   const Case cases[] = {
       {"flow f { in a: stream string\n }", "flow.form.port-modifier-order",
        "'stream' follows the type: write 'a: TYPE stream'"},
-      {"flow f { in a: list[string\n }", "flow.syntax.unexpected",
+      {"flow f { in a: std::list[string\n }", "flow.syntax.unexpected",
        "Expected ']'"},
       {"flow f { in a: string\n out b: string\n a -> b b -> b }",
        "flow.syntax.statement-end", "one statement per line"},
@@ -622,8 +620,6 @@ TEST(FlowParser, SaysWhatIsMissingInTheWordsThePythonCompilerUses) {
        "flow.form.count-not-positive", "counts whole values"},
       {"flow wrong { in w: string stream\n skip 1.5 w }",
        "flow.form.count-not-positive", "counts whole values"},
-      {"flow f { in a: string\n x = 5 }", "flow.syntax.unexpected",
-       "A bound pipeline requires '->' and a destination."},
       {"flow f { in a: string\n a | first -> b }", "flow.form.stage-argument",
        "Expected a count for 'first'"},
       // The tail a stage may carry, and what each part of it needs.
@@ -633,7 +629,7 @@ TEST(FlowParser, SaysWhatIsMissingInTheWordsThePythonCompilerUses) {
       {"flow f { in w: string stream\n out o: string stream\n"
        " w | map it unordered -> o }",
        "flow.form.unordered-without-parallel", "needs 'parallel n'"},
-      {"flow f { in w: string stream\n out o: string stream\n out b: json "
+      {"flow f { in w: string stream\n out o: string stream\n out b: std::json "
        "stream\n w | map it into b -> o }",
        "flow.form.into-without-try", "has to be a 'try'"},
       {"flow f { in w: number stream\n out o: number\n"
@@ -667,7 +663,7 @@ TEST(FlowParser, EveryDiagnosticCodeItProducesIsPublished) {
   // toolchain can see is a code the table explains.
   const std::string_view sources[] = {
       "flow f { in a: stream string\n }",
-      "flow f { in a: list[string\n }",
+      "flow f { in a: std::list[string\n }",
       "flow f { in a: string\n a -> b b -> b }",
       "flow f { in a: string",
       "flow f { out o: string\n n = node\n n -> o }",
@@ -777,7 +773,7 @@ TEST(FlowParser, TheSyntaxEnvelopeIsWhatTheFormatSays) {
 // missing from the switches that name a node and write one out: the envelope
 // carried a `block` with no body at all, and `abort` came back as "error".
 TEST(FlowParser, RefusesToDescendPastItsNestingBound) {
-  std::string deep = "flow f {\n  out o: json\n  ";
+  std::string deep = "flow f {\n  out o: std::json\n  ";
   deep.append(400, '[');
   deep.append(400, ']');
   deep += " -> o\n}\n";
@@ -942,12 +938,9 @@ TEST(FlowParser, ADescriptionOnItsOwnLineMayBeARunToo) {
 
 TEST(FlowParser, ALiteralMaySpreadAnotherIntoItself) {
   const ParseResult result = Parse(
-      "flow f {\n"
-      "  in a: json stream required\n"
-      "  out b: json stream\n"
-      "  a | map {...it, \"tag\": 1} -> b\n"
-      "  a | map [...it, 2] -> b\n"
-      "}\n");
+      "flow f {\n  in a: std::json stream required\n  out b: std::json "
+      "stream\n  a | map {...it, \"tag\": 1} -> b\n  a | map [...it, 2] -> "
+      "b\n}\n");
   ASSERT_TRUE(Messages(result).empty())
       << absl::StrJoin(Messages(result), "; ");
 
@@ -995,23 +988,24 @@ TEST(FlowParser, ASpreadOfConstantsIsStillAConstant) {
 
 TEST(FlowParser, ATypeMayBeWrittenWithTrailingBrackets) {
   const ParseResult result = Parse(
-      "flow f {\n  in a: string[] required\n  in b: list[string] required\n"
-      "  in c: a11.Chunk[][] required\n  out d: string\n  \"\" -> d\n}\n");
+      "flow f {\n  in a: string[] required\n  in b: std::list[string] "
+      "required\n  in c: a11::Chunk[][] required\n  out d: string\n  \"\" -> "
+      "d\n}\n");
   ASSERT_TRUE(Messages(result).empty())
       << absl::StrJoin(Messages(result), "; ");
   const syntax::TypeExpression& sugared = result.flows[0]->ports[0]->type;
   const syntax::TypeExpression& spelled = result.flows[0]->ports[1]->type;
   EXPECT_EQ(sugared.name, "list");
   EXPECT_EQ(sugared.parameters[0].name, "string");
-  EXPECT_EQ(spelled.name, "list");
+  EXPECT_EQ(spelled.name, "std::list");
   // The same type; only how it reads back differs, so a file formatted twice
   // says what its author wrote.
   EXPECT_TRUE(sugared.sugared);
   EXPECT_FALSE(spelled.sugared);
   EXPECT_EQ(sugared.ToString(), "string[]");
-  EXPECT_EQ(spelled.ToString(), "list[string]");
+  EXPECT_EQ(spelled.ToString(), "std::list[string]");
   // Each `[]` wraps what was read so far, so a list of lists is two of them.
-  EXPECT_EQ(result.flows[0]->ports[2]->type.ToString(), "a11.Chunk[][]");
+  EXPECT_EQ(result.flows[0]->ports[2]->type.ToString(), "a11::Chunk[][]");
 }
 
 TEST(FlowParser, ReadsADtoBesideAFlow) {
@@ -1057,9 +1051,10 @@ TEST(FlowParser, TellsABlockFromARecordAtTheHeadOfAStatement) {
     return syntax::NodeKindName(result.flows.front()->body.front()->kind)
         .data();
   };
-  EXPECT_STREQ(kind("flow f {\n  out o: json\n  {\"a\": 1} -> o\n}\n"), "pipe");
-  EXPECT_STREQ(kind("flow f {\n  out o: json\n  {} -> o\n}\n"), "pipe");
-  EXPECT_STREQ(kind("flow f {\n  in i: json\n  out o: json\n"
+  EXPECT_STREQ(kind("flow f {\n  out o: std::json\n  {\"a\": 1} -> o\n}\n"),
+               "pipe");
+  EXPECT_STREQ(kind("flow f {\n  out o: std::json\n  {} -> o\n}\n"), "pipe");
+  EXPECT_STREQ(kind("flow f {\n  in i: std::json\n  out o: std::json\n"
                     "  {…i, \"a\": 1} -> o\n}\n"),
                "pipe");
   // A block whose first statement writes a string starts the same way and is

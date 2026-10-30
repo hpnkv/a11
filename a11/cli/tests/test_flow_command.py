@@ -510,7 +510,7 @@ def test_run_runs_a_flow_and_prints_its_ports(capsys):
         "flow shout {\n"
         "  in  words: string stream required\n"
         "  out loud:  string\n"
-        '  words | collect | map upper(join(it, ", ")) -> loud\n'
+        '  words | collect | map std::upper(std::join(it, ", ")) -> loud\n'
         "}\n"
     )
     assert (
@@ -535,7 +535,8 @@ declare flow test { in input: string
 flow main {
  in input: string
  out result: string
- from "./nested.flow" import test
+ import "./nested.flow" as nested
+from nested import test
  (run test(input: input)).output -> result
 }
 """)
@@ -546,6 +547,8 @@ flow main {
                 "flow",
                 "run",
                 "modules/root.flow",
+                "--source-root",
+                "modules",
                 *selection,
                 "--input",
                 "input=hello",
@@ -559,17 +562,29 @@ def test_run_reports_imported_schema_conflicts_before_execution(
     tmp_path, capsys
 ):
     (tmp_path / "nested.flow").write_text(
-        "flow test exported { out output: integer }"
+        "flow test exported { out output: int }"
     )
     root = tmp_path / "root.flow"
     root.write_text("""
 declare flow test { out output: string }
 flow main {
- from "./nested.flow" import test
+ import "./nested.flow" as nested
+from nested import test
  run test()
 }
 """)
-    assert run("flow", "run", str(root), "--flow", "main") == 1
+    assert (
+        run(
+            "flow",
+            "run",
+            str(root),
+            "--source-root",
+            str(tmp_path),
+            "--flow",
+            "main",
+        )
+        == 1
+    )
     error = capsys.readouterr().err
     assert "payload contracts conflict" in error
     assert "flow.form.declaration-conflict" in error
@@ -582,14 +597,15 @@ def test_run_entry_program_resolves_sibling_modules(tmp_path, capfd):
     )
     root = tmp_path / "root.flow"
     root.write_text("""
-from "./nested.flow" import greeting
+import "./nested.flow" as nested
+from nested import greeting
 flow {
  nodes scratch
  text = run greeting() via scratch
  run write_stdout(content: text.text) via scratch
 }
 """)
-    assert run("flow", "run", str(root)) == 0
+    assert run("flow", "run", str(root), "--source-root", str(tmp_path)) == 0
     assert capfd.readouterr().out == "hello"
 
 
@@ -600,15 +616,10 @@ flow {
 # `capfd` and not `capsys`: `write_stdout` writes to file descriptor 1, so
 # nothing Python-level ever sees the bytes.
 
-GREETS = """
+GREETS = r"""
 flow {
-  describe "Greet whoever is named on the command line."
-  nodes s
-  who = node() in s
-  said = node() in s
-  argv | drop 1 then "world" | first 1 -> who
-  who | map strformat("Hello, %s!\\n", trim(it)) -> said
-  out = run write_stdout(content: said) via s
+  string name = take (argv | drop 1 | then "world")
+  run write_stdout(content: std::strformat("Hello, %s!\n", std::trim(name)))
 }
 """
 
@@ -655,7 +666,7 @@ flow {
   nodes s
   seen = node() in s
   clock = run ticker(options: {"every": "20ms"}) via s
-  clock.ticks | map strformat("tick %d\\n", it.number) -> seen
+  clock.ticks | map std::strformat("tick %d\\n", it.number) -> seen
   o = run write_stdout(content: seen) via s
 }
 """,
@@ -692,7 +703,7 @@ def test_a_programs_exit_code_is_the_commands(tmp_path, capfd):
         tmp_path,
         """
 flow {
-  out exit_code: integer "What it decided."
+  out exit_code: int "What it decided."
   nodes s
   decided = node() in s
   argv | first 1 -> decided
@@ -774,7 +785,7 @@ flow {
   q = node() in s
   argv | drop 1 | first 1 -> q
   llm = run interact_with_llm(
-    interactions: q | map a11.sdk.Interaction{role: "user", content: []},
+    interactions: q | map a11::sdk::Interaction{role: "user", content: []},
     config: {}
   ) via s
   o = run write_stdout(content: llm.text_output) via s
@@ -792,7 +803,7 @@ def test_a_named_flow_can_still_be_run_out_of_a_file_with_a_program(
     path = _program(
         tmp_path,
         "flow shout {\n  in a: string\n  out b: string\n"
-        "  a | map upper(it) -> b\n}\n"
+        "  a | map std::upper(it) -> b\n}\n"
         "flow {\n  nodes s\n  unused = node() in s\n"
         "  argv | first 1 -> unused\n}\n",
     )
@@ -820,7 +831,7 @@ def test_live_stdin_does_not_block_stdout_on_one_worker(tmp_path):
 flow test exported {
  in input: string stream
  out output: string stream
- run write_stdout(content: input | map strformat("%s\\n", it))
+ run write_stdout(content: input | map std::strformat("%s\\n", it))
  input -> output
 }
 """)
@@ -828,17 +839,27 @@ flow test exported {
     root.write_text("""
 flow {
  stdin = run read_stdin()
- from "./nested.flow" import test
+ import "./nested.flow" as nested
+from nested import test
  t1 = run test()
  done = for line in stdin.lines {
    line -> t1.input
  }
- drain t1.input after done
+ close t1.input after done
 }
 """)
     with tempfile.TemporaryFile(mode="w+") as errors:
         process = subprocess.Popen(
-            [sys.executable, "-m", "a11_cli", "flow", "run", str(root)],
+            [
+                sys.executable,
+                "-m",
+                "a11_cli",
+                "flow",
+                "run",
+                str(root),
+                "--source-root",
+                str(tmp_path),
+            ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=errors,
@@ -870,8 +891,8 @@ def test_take_until_and_after_cleanup_exit_without_stdin_eof(tmp_path):
     root.write_text("""flow {
  stdin = run read_stdin()
  echo = run write_stdout()
- forwarded = stdin.lines | take until lower(it) == "/exit"
-   | map strformat("%s\\n", it) -> echo.content
+ forwarded = stdin.lines | take until std::lower(it) == "/exit"
+   | map std::strformat("%s\\n", it) -> echo.content
  after forwarded {
    {"command": "stop"} -> stdin.control_events
    run write_stderr(content: "cleanup\\n")
@@ -880,7 +901,16 @@ def test_take_until_and_after_cleanup_exit_without_stdin_eof(tmp_path):
 """)
     with tempfile.TemporaryFile(mode="w+") as errors:
         process = subprocess.Popen(
-            [sys.executable, "-m", "a11_cli", "flow", "run", str(root)],
+            [
+                sys.executable,
+                "-m",
+                "a11_cli",
+                "flow",
+                "run",
+                str(root),
+                "--source-root",
+                str(tmp_path),
+            ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=errors,
@@ -914,3 +944,171 @@ def test_take_until_and_after_cleanup_exit_without_stdin_eof(tmp_path):
     assert process.returncode == 0, report
     assert output == b"hello\n"
     assert "cleanup" in report
+
+
+@pytest.mark.parametrize("terminal", [False, True], ids=["pipe", "tty"])
+def test_anonymous_stdin_pipeline_shuts_down_promptly(tmp_path, terminal):
+    import fcntl
+    import pty
+
+    (tmp_path / "nested.flow").write_text("""flow echo exported {
+ in input: string stream
+ stdout = run write_stdout()
+ input | map std::strformat("%s\\n", it) -> stdout.content
+}""")
+    path = tmp_path / "root.flow"
+    path.write_text("""flow {
+ stdin = run read_stdin()
+ import "./nested.flow" as nested
+from nested import echo
+ forwarded = stdin.lines | take until std::lower(it) == "/exit"
+   | log info it -> (run echo()).input
+ {"command": "stop"} -> stdin.control_events after forwarded
+}""")
+    if terminal:
+        write_fd, read_fd = pty.openpty()
+    else:
+        read_fd, write_fd = os.pipe()
+    original_flags = fcntl.fcntl(read_fd, fcntl.F_GETFL)
+    try:
+        with tempfile.TemporaryFile(mode="w+") as errors:
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "a11_cli",
+                    "flow",
+                    "run",
+                    str(path),
+                    "--source-root",
+                    str(tmp_path),
+                ],
+                stdin=read_fd,
+                stdout=subprocess.PIPE,
+                stderr=errors,
+                env={
+                    **os.environ,
+                    "A11_POOL_THREADS": "1",
+                    "A11_FIBER_WATCHDOG": "0.2",
+                },
+            )
+            try:
+                os.write(write_fd, b"hello\n")
+                with selectors.DefaultSelector() as ready:
+                    ready.register(process.stdout, selectors.EVENT_READ)
+                    assert ready.select(3), "stdout waited for stdin EOF"
+                assert process.stdout.readline() == b"hello\n"
+                os.write(write_fd, b"/exit\n")
+                try:
+                    process.wait(timeout=0.5)
+                except subprocess.TimeoutExpired:
+                    errors.seek(0)
+                    pytest.fail(
+                        "stdin delayed cleanup fibers\n" + errors.read()
+                    )
+                errors.seek(0)
+                assert process.returncode == 0, errors.read()
+                assert fcntl.fcntl(read_fd, fcntl.F_GETFL) == original_flags
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                process.communicate(timeout=3)
+    finally:
+        os.close(write_fd)
+        os.close(read_fd)
+
+
+@pytest.mark.parametrize(
+    "termination", ["control", "cancel", "deadline", "header"]
+)
+def test_idle_stdin_wakes_and_restores_descriptor_mode(tmp_path, termination):
+    import fcntl
+
+    if termination == "deadline":
+        body = (
+            "stdin = try run read_stdin() timeout 50ms\n"
+            'if (status stdin).code != "DEADLINE_EXCEEDED" {\n'
+            ' fail internal "timeout status lost"\n}'
+        )
+    elif termination == "header":
+        body = "stdin = run read_stdin()\n stdin.lines -> _"
+    else:
+        body = (
+            (
+                "stdin = try run read_stdin()\n"
+                if termination == "cancel"
+                else "stdin = run read_stdin()\n"
+            )
+            + 'clock = run sleep_for(duration: "50ms")\n'
+            + (
+                "cancel stdin after clock\n status stdin -> _"
+                if termination == "cancel"
+                else '{"command": "stop"} -> stdin.control_events after clock'
+            )
+        )
+    path = tmp_path / "root.flow"
+    path.write_text("flow {\n" + body + "\n}")
+    read_fd, write_fd = os.pipe()
+    flags = fcntl.fcntl(read_fd, fcntl.F_GETFL)
+    try:
+        arguments = [
+            sys.executable,
+            "-m",
+            "a11_cli",
+            "flow",
+            "run",
+            str(path),
+            "--source-root",
+            str(tmp_path),
+        ]
+        if termination == "header":
+            arguments += ["--timeout", "50ms"]
+        result = subprocess.run(
+            arguments,
+            stdin=read_fd,
+            capture_output=True,
+            timeout=3,
+            env={
+                **os.environ,
+                "A11_POOL_THREADS": "1",
+                "A11_FIBER_WATCHDOG": "1",
+            },
+        )
+        assert result.returncode == 0, result.stderr.decode()
+        assert fcntl.fcntl(read_fd, fcntl.F_GETFL) == flags
+    finally:
+        os.close(write_fd)
+        os.close(read_fd)
+
+
+def test_stdin_reads_regular_files_and_flushes_the_last_line(tmp_path):
+    path = tmp_path / "root.flow"
+    path.write_text("""flow {
+ run write_stdout(content: (run read_stdin()).lines
+   | map std::strformat("%s\\n", it))
+}""")
+    with tempfile.TemporaryFile() as source:
+        source.write(b"first\nlast")
+        source.seek(0)
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "a11_cli",
+                "flow",
+                "run",
+                str(path),
+                "--source-root",
+                str(tmp_path),
+            ],
+            stdin=source,
+            capture_output=True,
+            timeout=3,
+            env={
+                **os.environ,
+                "A11_POOL_THREADS": "1",
+                "A11_FIBER_WATCHDOG": "1",
+            },
+        )
+    assert result.returncode == 0, result.stderr.decode()
+    assert result.stdout == b"first\nlast\n"

@@ -73,8 +73,6 @@ struct Word {
   [[nodiscard]] bool Empty() const { return text.empty(); }
 };
 
-// A value the language can write out in full: what a literal is, and what
-// folding a literal expression gives.
 /// A value the language can write out in full: what a literal is, and what
 /// folding a literal expression gives.
 ///
@@ -117,8 +115,6 @@ struct Constant {
 /// The spelling of a constant's kind in the output formats.
 std::string_view ConstantKindName(Constant::Kind kind);
 
-// The type of a port, or of a value being made one: `string`,
-// `list[a11.NodeFragment]`, `"audio/wav"`.
 /// The type of a port, or of a value being made one: `string`,
 /// `list[a11.NodeFragment]`, `"audio/wav"`.
 ///
@@ -127,6 +123,11 @@ std::string_view ConstantKindName(Constant::Kind kind);
 /// `name` is what was written before the brackets -- a built-in name, a dotted
 /// serialisation tag, or a mimetype when `quoted` -- and `parameters` are the
 /// types a generic one was given.
+std::string SourceTypeName(std::string_view name);
+std::string SourceFunctionName(std::string_view name);
+std::string RuntimeActionName(std::string_view name);
+std::string ActionSource(std::string_view name);
+
 struct TypeExpression {
   Location location = {};
   std::string name;
@@ -177,14 +178,12 @@ enum class NodeKind {
   kCallExpression,
 
   kBind,
-  kLet,
-  kAdvance,
   kBlock,
   kCallStatement,
   kPipe,
   kSkip,
   kWait,
-  kDrain,
+  kClose,
   kCancel,
   kAbort,
   kFail,
@@ -228,7 +227,6 @@ struct NodeOf : Node {
   NodeOf() { kind = K; }
 };
 
-// `node` as a `T`, or `nullptr` if it is something else.
 /// `node` as a `T`, or `nullptr` if it is something else.
 ///
 /// The one way to go from a node to a construct: it checks the kind, so a
@@ -425,7 +423,6 @@ struct Stage : NodeOf<NodeKind::kStage> {
   /// `parallel n`: how many values this stage may be working on at once. One
   /// means the stage sees them one at a time, which is the default.
   int parallel = 1;
-  // Whether the values leave in the order they arrived.
   /// Whether the values leave in the order they arrived. True unless
   /// `unordered` was written: a parallel stage finishes its values out of
   /// order and puts them back in order on the way out, so everything after it
@@ -457,6 +454,9 @@ struct Outcome : NodeOf<NodeKind::kOutcome> {
 /// `(stream | stage ...)` used where a value is expected.
 struct PipelineValue : NodeOf<NodeKind::kPipelineValue> {
   PipelinePtr pipeline;
+  /// Explicit extraction, with absence on EOF only when optional.
+  bool take = false;
+  bool optional = false;
 };
 
 // --- Calls -------------------------------------------------------------------
@@ -466,6 +466,8 @@ struct CallModifiers : NodeOf<NodeKind::kCallModifiers> {
   bool tee = false;
   Word node_map;
   std::optional<absl::Duration> timeout;
+  NodePtr deadline;
+  NodePtr timeout_expression;
   std::vector<Word> after;
   std::vector<std::pair<std::string, NodePtr>> headers;
   NodePtr action_id;
@@ -509,43 +511,11 @@ using CallExpressionPtr = std::unique_ptr<CallExpression>;
 /// `name = ...` -- a step the rest of the flow can refer to.
 struct Bind : NodeOf<NodeKind::kBind> {
   Word name;
-  NodePtr value;
-};
-
-/// `let name = pipeline` -- one value, read from a stream and given a name.
-///
-/// **Why the language needs this.** Everything else here is a stream, and a
-/// stream is the right default: a flow is dataflow, and most of what moves
-/// through it is many values. But some of what moves through it is one value --
-/// a status code, an image, a summary -- and until now a flow could only reach
-/// one *inside* an expression, with `(x | first 1)` written out at every use.
-/// A name that is a value can be compared, added, indexed and branched on
-/// directly, which is what makes `if code >= 200 and code < 300` say what it
-/// means.
-///
-/// **Why it is a word and not an operator.** `name = ...` already says "a step
-/// of this flow"; the thing that differs here is the *kind of thing the name
-/// is*, and that is worth a word at the front of the line where a reader
-/// scanning the left margin sees it. It reads as one, too: `let code = ...`.
-struct Let : NodeOf<NodeKind::kLet> {
-  // One name is the value; several take it apart -- `let name, age = user` by
-  // field, `let first, second = pair` by position.
-  /// One name is the value; several take it apart -- `let name, age = user` by
-  /// field, `let first, second = pair` by position. Which of the two is meant
-  /// is a question about the value rather than about the text, so it is
-  /// answered where the value is: by name, and by position where there is no
-  /// such field.
   std::vector<Word> names;
-  PipelinePtr pipeline;
-
-  /// The first name, which is the whole value where there is only one.
-  [[nodiscard]] const Word& name() const {
-    static const Word kNone;
-    return names.empty() ? kNone : names.front();
-  }
+  NodePtr value;
+  std::optional<TypeExpression> type;
 };
 
-// `[try] { ...
 /// `[try] { ... }` -- a block of statements that runs as one thing.
 ///
 /// Statements in a flow body run concurrently. A block groups their outcome.
@@ -558,13 +528,6 @@ struct Block : NodeOf<NodeKind::kBlock> {
   std::vector<NodePtr> body;
 };
 
-/// `advance name` -- rebind a `let` value to the *next* value of its stream.
-///
-/// Rebinds the existing name so each use has a defined position in the stream.
-struct Advance : NodeOf<NodeKind::kAdvance> {
-  Word name;
-};
-
 /// A call whose outputs nobody names (they are drained for it).
 struct CallStatement : NodeOf<NodeKind::kCallStatement> {
   CallExpressionPtr call;
@@ -575,8 +538,6 @@ struct Pipe : NodeOf<NodeKind::kPipe> {
   PipelinePtr pipeline;
   std::vector<NodePtr> targets;
   std::vector<Word> after;
-  // `try source -> dest`: a failure arriving from the source, or refused by the
-  // destination, is a value this flow reads rather than the end of it.
   /// `try source -> dest`: a failure arriving from the source, or refused by
   /// the destination, is a value this flow reads rather than the end of it.
   ///
@@ -603,7 +564,6 @@ struct Skip : NodeOf<NodeKind::kSkip> {
   std::optional<long long> count;
 };
 
-// `wait subject` -- hold until a call, or a node this flow writes, is finished.
 /// `wait subject` -- hold until a call, or a node this flow writes, is
 /// finished.
 ///
@@ -619,20 +579,21 @@ struct Wait : NodeOf<NodeKind::kWait> {
   /// the single-subject form where there is nothing to race.
   bool race = false;
   std::optional<absl::Duration> timeout;
+  NodePtr deadline;
+  NodePtr timeout_expression;
   std::vector<Word> after;
-  // `wait first of a, b -> n`: where the winner's number goes.
   /// `wait first of a, b -> n`: where the winner's number goes.
   ///
   /// A race *is* a value -- which of them won, counted from zero -- so it is
   /// written where a value is written: piped to a destination here, named by a
-  /// `let`, or bound with `=`. The same node stands in all three places, and a
+  /// `value`, or bound with `=`. The same node stands in all three places, and a
   /// statement with no targets is the barrier on its own.
   std::vector<NodePtr> targets;
 };
 
-/// `drain target` -- hold until a node's writers are done and its buffer has
+/// `close target` -- hold until a node's writers are done and its buffer has
 /// landed.
-struct Drain : NodeOf<NodeKind::kDrain> {
+struct Close : NodeOf<NodeKind::kClose> {
   NodePtr target;
   std::vector<Word> after;
 };
@@ -645,7 +606,7 @@ struct Cancel : NodeOf<NodeKind::kCancel> {
 
 /// `abort node [code] [message]` -- end a node with a failure.
 ///
-/// The other ending a stream can have. `drain` says it is over; this says it
+/// The other ending a stream can have. `close` says it is over; this says it
 /// went wrong, and a reader cannot otherwise tell the two apart -- a stream cut
 /// short by something the flow noticed looks exactly like one that finished.
 struct Abort : NodeOf<NodeKind::kAbort> {
@@ -669,7 +630,6 @@ struct Log : NodeOf<NodeKind::kLog> {
   std::vector<Word> after;
 };
 
-// `for name[, name...] in pipeline [parallel n] { ...
 /// `for name[, name...] in pipeline [parallel n] { ... }`.
 ///
 /// Several names unpack the value by position, as in
@@ -679,6 +639,8 @@ struct ForEach : NodeOf<NodeKind::kForEach> {
   PipelinePtr pipeline;
   int parallel = 1;
   std::vector<NodePtr> body;
+  /// Optional postcondition, evaluated after a complete pass.
+  NodePtr termination;
   /// What has to have finished before the loop starts.
   ///
   /// A loop is a step like any other, so it waits like one. It can also *be*
@@ -698,7 +660,6 @@ struct Repeat : NodeOf<NodeKind::kRepeat> {
   /// Empty where the repeat carries nothing.
   Word variable;
   NodePtr start;
-  // `max n`, where one was written.
   /// `max n`, where one was written. Nothing means no bound: the loop runs
   /// until its `until`/`while` says to stop.
   ///
@@ -706,6 +667,8 @@ struct Repeat : NodeOf<NodeKind::kRepeat> {
   /// repeat independently of its condition.
   std::optional<int> max_iterations;
   std::vector<NodePtr> body;
+  /// Optional postcondition, resolved in the iteration scope.
+  NodePtr termination;
   /// What has to have finished before the loop starts. See ForEach::after.
   std::vector<Word> after;
 };
@@ -785,11 +748,32 @@ struct ImportedSymbol {
 /// A source module bound to a namespace or selected local symbols.
 struct Import {
   std::string source;
+  std::string scope;
+  bool namespace_source = false;
+  bool explicit_alias = false;
+  Location source_location;
+  bool exported = false;
   bool selective = false;
   size_t selection_start = 0;
   std::vector<ImportedSymbol> symbols;
   Word alias;
   Location location;
+  Location extent;
+};
+
+/// A namespace contribution in one source document.
+struct ModuleDeclaration {
+  Word name;
+  bool interface_only = false;
+  bool exported = false;
+  Location extent;
+};
+
+/// A public alias of an existing namespace member.
+struct ExportDeclaration {
+  Word symbol;
+  Word alias;
+  std::string scope;
   Location extent;
 };
 
@@ -800,6 +784,7 @@ struct FlowDeclaration : NodeOf<NodeKind::kFlowDeclaration> {
   Word name;
   std::string binding_name;
   std::string module;
+  std::string scope;
   /**
    * Whether this is the file's entry point: `flow { ... }`, with no name.
    *
@@ -818,6 +803,7 @@ struct FlowDeclaration : NodeOf<NodeKind::kFlowDeclaration> {
   bool interface_only = false;
   bool imported = false;
   bool exported = false;
+  bool registerable = true;
   std::string description;
   std::vector<PortDeclarationPtr> ports;
   std::vector<HeaderDeclarationPtr> headers;
@@ -869,13 +855,13 @@ struct FieldDeclaration : NodeOf<NodeKind::kFieldDeclaration> {
 
 using FieldDeclarationPtr = std::unique_ptr<FieldDeclaration>;
 
-// One `struct name { ...
 /// One `struct name { ... }` declaration: a shape a port may be typed with.
 ///
 /// A module-level shape or a shape local to an implemented flow.
 struct DtoDeclaration : NodeOf<NodeKind::kDtoDeclaration> {
   Word name;
   std::string module;
+  std::string scope;
   bool exported = false;
   std::string description;
   std::vector<FieldDeclarationPtr> fields;
@@ -883,8 +869,6 @@ struct DtoDeclaration : NodeOf<NodeKind::kDtoDeclaration> {
 
 using DtoDeclarationPtr = std::unique_ptr<DtoDeclaration>;
 
-// The constant `node` folds to, or `nullopt` where it is not one all the way
-// down.
 /// The constant `node` folds to, or `nullopt` where it is not one all the way
 /// down.
 ///

@@ -78,7 +78,7 @@ Its arguments arrive as two ports nobody declared:
 person typed starts at index 1 — which is why every example here opens with
 `argv | drop 1`.
 
-An `out exit_code: integer` port, if the flow declares one, is the process's exit
+An `out exit_code: int` port, if the flow declares one, is the process's exit
 code. `grep.flow` uses it to be usable in a shell `if`.
 
 ## What a program may expect to be bound

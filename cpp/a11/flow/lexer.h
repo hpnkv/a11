@@ -21,13 +21,13 @@
 #include <vector>
 
 #include "a11/flow/diagnostic.h"
+#include "a11/flow/limits.h"
 #include "a11/flow/token.h"
 
 namespace a11::flow {
 
 /// What to keep while lexing.
 struct LexOptions {
-  // Whether comments are tokens.
   /// Whether comments are tokens. On for a highlighter and a formatter, off for
   /// a parser, which has no use for them.
   ///
@@ -35,6 +35,8 @@ struct LexOptions {
   /// breaks included -- which means a line holding only a comment ends nothing,
   /// because with the comment gone there was no statement on it.
   bool keep_comments = true;
+  CompilationLimits limits;
+  CompilationBudget* budget = nullptr;
 };
 
 /// Tokens, and what could not be read.
@@ -51,7 +53,7 @@ struct LexResult {
 /// The rules are `a11/flow/lexer.py`'s: `#` to the end of the line is a
 /// comment, a string cannot span a line, a number may carry a duration unit,
 /// and a dash continues a name only between word characters -- which is what
-/// keeps `-3` a number, `starts-with` one name, and `a -> b` a pipe. A line
+/// keeps `-3` a number, `has-words` one name, and `a -> b` a pipe. A line
 /// break is a token, because the grammar is one statement per line; a run of
 /// them is one token, and a leading one is none.
 ///

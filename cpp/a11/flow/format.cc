@@ -107,6 +107,9 @@ bool IsCalled(std::string_view text) {
   const std::string word = vocabulary::Canonical(text);
   // `node()` is the one keyword that is constructed, and several builtins are
   // spelled like declaration words -- `default`, `text`, `number`, `join`.
+  if (word == "take") {
+    return false;
+  }
   if (word == "node") {
     return true;
   }
@@ -124,13 +127,19 @@ bool IsCalled(std::string_view text) {
 class Formatter {
  public:
   Formatter(std::string_view source, const std::vector<Token>& tokens,
-            const std::vector<size_t>& value_braces,
-            const std::vector<size_t>& tagged_braces,
-            const FormatOptions& options)
+            const ParseResult& parsed, const FormatOptions& options)
       : source_(source),
         options_(options),
-        value_braces_(value_braces.begin(), value_braces.end()),
-        tagged_braces_(tagged_braces.begin(), tagged_braces.end()) {
+        value_braces_(parsed.value_braces.begin(), parsed.value_braces.end()),
+        tagged_braces_(parsed.tagged_braces.begin(),
+                       parsed.tagged_braces.end()) {
+    for (const auto& flow : parsed.flows) {
+      syntax::VisitSubtree(*flow, [&](const syntax::Node& node) {
+        if (node.kind == syntax::NodeKind::kUntil) {
+          loop_conditions_.insert(node.location.start);
+        }
+      });
+    }
     // Line breaks are not tokens here: what matters is how *many* there were
     // between two pieces of code, and the lexer folds a run of them into one.
     size_t previous_end = 0;
@@ -242,8 +251,6 @@ class Formatter {
     }
   }
 
-  // Whether the line at `index` is a lone string: a declaration's description,
-  // written under what it describes.
   /// Whether the line at `index` is a lone string: a declaration's description,
   /// written under what it describes.
   ///
@@ -339,6 +346,7 @@ class Formatter {
                                 const Token& current) const {
     switch (previous.kind) {
       case TokenKind::kDot:
+      case TokenKind::kScope:
       case TokenKind::kLeftParen:
       case TokenKind::kLeftBracket:
         return false;
@@ -356,6 +364,7 @@ class Formatter {
     switch (current.kind) {
       case TokenKind::kComma:
       case TokenKind::kColon:
+      case TokenKind::kScope:
       case TokenKind::kRightParen:
       case TokenKind::kRightBracket:
       case TokenKind::kDot:
@@ -443,17 +452,24 @@ class Formatter {
   }
 
   /// Whether `token` is the `else` that belongs on a closing brace's line.
-  static bool IsElse(const Token& token) {
-    return token.IsWord() && vocabulary::Canonical(token.text) == "else";
+  bool JoinsBlockTail(size_t index) const {
+    const auto& token = code_[index];
+    if (loop_conditions_.contains(token.start)) {
+      return true;
+    }
+    return token.IsWord() && vocabulary::Canonical(token.text) == "else" &&
+           (index + 1 == code_.size() ||
+            code_[index + 1].kind != TokenKind::kEqual);
   }
 
   size_t Emit(size_t index) {
     const Token& token = code_[index];
     // A block brace ends its line whatever the author did one statement per
     // line is the language's own rule, and `{ a -> b }` is three of them.
-    const bool starts_line = index == 0 || breaks_[index] > 0 ||
-                             after_block_open_ ||
-                             (after_block_close_ && !IsElse(token));
+    const bool joins_tail = after_block_close_ && JoinsBlockTail(index);
+    const bool starts_line =
+        index == 0 || (breaks_[index] > 0 && !joins_tail) ||
+        after_block_open_ || (after_block_close_ && !joins_tail);
 
     if (ClosesBlock(token)) {
       Flush();
@@ -664,7 +680,7 @@ class Formatter {
     if (at >= end) {
       return index;
     }
-    // The type: a quoted mimetype, or a dotted name with its parameters. It
+    // The type: a quoted mimetype, or a qualified name with its parameters. It
     // ends
     // at the first thing that is plainly not part of a type.
     std::string type;
@@ -683,10 +699,10 @@ class Formatter {
             break;
           }
         }
-        // What a type is made of, and nothing else: a dotted name, its
+        // What a type is made of, and nothing else: a qualified name, its
         // parameters, or a quoted mimetype.
         const bool part_of_type =
-            token.kind == TokenKind::kWord || token.kind == TokenKind::kDot ||
+            token.kind == TokenKind::kWord || token.kind == TokenKind::kScope ||
             token.kind == TokenKind::kLeftBracket ||
             (first_of_type && token.kind == TokenKind::kString);
         if (!part_of_type) {
@@ -748,7 +764,6 @@ class Formatter {
     return word == "matching" || word == "default";
   }
 
-  // A `struct` field as its columns, or `index` unchanged
   /// A `struct` field as its columns, or `index` unchanged if this is not one.
   ///
   /// The same three columns a port has, minus the direction: a field opens with
@@ -917,6 +932,7 @@ class Formatter {
   std::string_view source_;
   FormatOptions options_;
   absl::flat_hash_set<size_t> value_braces_;
+  absl::flat_hash_set<size_t> loop_conditions_;
   absl::flat_hash_set<size_t> tagged_braces_;
 
   std::vector<Token> code_;
@@ -949,10 +965,18 @@ class Formatter {
 
 }  // namespace
 
-FormatResult Format(std::string_view source, FormatOptions options) {
+FormatResult Format(std::string_view source, FormatOptions options,
+                    CompilationLimits limits, CompilationBudget* budget) {
+  CompilationBudget local_budget(limits);
+  if (budget == nullptr) {
+    budget = &local_budget;
+  }
   FormatResult result;
-  LexResult lexed = Lex(source, LexOptions{.keep_comments = true});
-  ParseResult parsed = ParseTokens(source, lexed.tokens, lexed.diagnostics);
+  LexResult lexed = Lex(
+      source,
+      LexOptions{.keep_comments = true, .limits = limits, .budget = budget});
+  ParseResult parsed =
+      ParseTokens(source, lexed.tokens, lexed.diagnostics, limits, budget);
   result.diagnostics = parsed.diagnostics;
   if (parsed.HasErrors()) {
     // A file that cannot be read is a file left exactly as it is.
@@ -960,9 +984,7 @@ FormatResult Format(std::string_view source, FormatOptions options) {
     return result;
   }
 
-  result.formatted = Formatter(source, lexed.tokens, parsed.value_braces,
-                               parsed.tagged_braces, options)
-                         .Run();
+  result.formatted = Formatter(source, lexed.tokens, parsed, options).Run();
   result.changed = result.formatted != source;
   if (result.changed) {
     // Trimmed to what differs, so applying this in an editor does not touch the

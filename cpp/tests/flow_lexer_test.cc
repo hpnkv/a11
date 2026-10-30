@@ -248,7 +248,8 @@ TEST(FlowVocabulary, CanonicalFollowsTheCompilersCasingRule) {
   EXPECT_EQ(vocabulary::Canonical("FOR"), "for");
   // Mixed case is a name, which keeps the rule easy to state and to see.
   EXPECT_EQ(vocabulary::Canonical("For"), "For");
-  EXPECT_EQ(vocabulary::Canonical("STARTS-WITH"), "starts-with");
+  EXPECT_EQ(vocabulary::Canonical("STARTSWITH"), "startswith");
+  EXPECT_EQ(vocabulary::Canonical("ENDSWITH"), "endswith");
   EXPECT_EQ(vocabulary::Canonical("_"), "_");
   EXPECT_EQ(vocabulary::Canonical(""), "");
 }
@@ -448,7 +449,7 @@ TEST(FlowLexer, AQuoteInsideAStringIsWrittenWithABackslash) {
 
 TEST(FlowVocabulary, OnlyGenericTypesTakeParameters) {
   EXPECT_EQ(vocabulary::TypeParameters("list").size(), 2u);
-  EXPECT_EQ(vocabulary::TypeParameters("object").size(), 3u);
+  EXPECT_EQ(vocabulary::TypeParameters("object").size(), 2u);
   EXPECT_EQ(vocabulary::TypeParameters("string").size(), 1u);
   EXPECT_EQ(vocabulary::TypeParameters("string")[0], 0);
 }

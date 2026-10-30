@@ -24,6 +24,7 @@
 #include <absl/strings/str_cat.h>
 
 #include "a11/flow/lexer.h"
+#include "a11/flow/module.h"
 #include "a11/flow/navigate.h"
 #include "a11/flow/parser.h"
 #include "a11/flow/pattern.h"
@@ -110,9 +111,6 @@ std::string_view StageTail(vocabulary::StageArgument argument) {
   return "";
 }
 
-// Which of the language's word tables documents a proposal of this kind, or
-// `nullopt` where the proposal names something this document or the host
-// declared rather than a word of the language.
 /// Which of the language's word tables documents a proposal of this kind, or
 /// `nullopt` where the proposal names something this document or the host
 /// declared rather than a word of the language.
@@ -167,22 +165,35 @@ std::optional<vocabulary::WordRole> RoleOf(ProposalKind kind) {
 class Completer {
  public:
   Completer(std::string_view source, size_t offset,
-            const catalogue::Catalogue& known)
+            const catalogue::Catalogue& known, CompilationLimits limits,
+            CompilationBudget* budget, const LinkedModule* linked = nullptr)
       : source_(source),
-        offset_(offset < source.size() ? offset : source.size()),
+        offset_(std::min(offset, source.size())),
         known_(known) {
-    LexResult lexed = Lex(source_, LexOptions{.keep_comments = true});
+    auto lexed = Lex(
+        source_,
+        LexOptions{.keep_comments = true, .limits = limits, .budget = budget});
     tokens_ = std::move(lexed.tokens);
-    parsed_ = ParseTokens(source_, tokens_, std::move(lexed.diagnostics));
+    if (linked == nullptr) {
+      owned_linked_ =
+          LinkModules(std::string(source), "<editor>", {}, {}, limits, budget);
+      linked = &owned_linked_;
+    }
+    linked_ = linked;
+    const auto local = linked->CatalogueAt(offset_, true, limits, budget);
+    known_ = linked->SelectingImport(offset_) ? local : known.MergedWith(local);
     const auto evidence = known_.SchemaProgram();
-    resolved_ = Resolve(source_, parsed_, false, &evidence);
+    resolved_ = Resolve(linked->source, linked->parsed, false, &evidence,
+                        limits, budget);
     Locate();
   }
 
+  const ParseResult& parsed() const { return linked_->parsed; }
+
   /// Whether this text is a flow body rather than a file of flows.
   [[nodiscard]] bool IsFragment() const {
-    if (!parsed_.flows.empty() || !parsed_.dtos.empty() ||
-        !parsed_.imports.empty()) {
+    if (!parsed().flows.empty() || !parsed().dtos.empty() ||
+        !parsed().imports.empty()) {
       return false;
     }
     for (const Token& token : tokens_) {
@@ -200,7 +211,8 @@ class Completer {
       }
       const std::string word = vocabulary::Canonical(token.text);
       return word != "flow" && word != "struct" && word != "declare" &&
-             word != "import" && word != "from";
+             word != "import" && word != "from" && word != "mod" &&
+             word != "export";
     }
     return false;
   }
@@ -212,8 +224,31 @@ class Completer {
     if (blocked_) {
       return result;
     }
-    Propose();
-    result.proposals = std::move(proposals_);
+    if (linked_->SelectingImport(offset_)) {
+      absl::flat_hash_set<std::string> names;
+      for (const auto& member : linked_->members) {
+        if (!member.selection || offset_ < member.scope_start ||
+            offset_ > member.scope_end || !names.insert(member.name).second) {
+          continue;
+        }
+        const bool type =
+            member.type || (!member.intrinsic.empty() &&
+                            vocabulary::TypeNames().contains(member.intrinsic));
+        Add(member.name,
+            type            ? ProposalKind::kType
+            : member.module ? ProposalKind::kDeclaration
+                            : ProposalKind::kFlow,
+            member.module ? " module" : "");
+      }
+    } else {
+      Propose();
+    }
+    absl::flat_hash_set<std::pair<std::string, ProposalKind>> offered;
+    for (auto& proposal : proposals_) {
+      if (offered.insert({proposal.name, proposal.kind}).second) {
+        result.proposals.push_back(std::move(proposal));
+      }
+    }
     return result;
   }
 
@@ -454,44 +489,61 @@ class Completer {
   void AddFunctions() {
     for (const std::string_view name : vocabulary::OrderedBuiltins()) {
       Proposal proposal;
-      proposal.name = std::string(name);
+      proposal.name = syntax::SourceFunctionName(name);
       proposal.kind = ProposalKind::kFunction;
+      proposal.filter = std::string(name);
       // A function is never written without its parentheses, so taking one
       // writes them and leaves the caret between them.
-      proposal.insert = absl::StrCat(name, "()");
-      proposal.caret = static_cast<int>(name.size()) + 1;
+      proposal.insert = absl::StrCat(proposal.name, "()");
+      proposal.caret = static_cast<int>(proposal.name.size()) + 1;
       proposal.documentation = BuiltinMarkdown(name);
+      proposals_.push_back(std::move(proposal));
+    }
+    for (const auto& [alias, canonical] : known_.intrinsics()) {
+      if (!vocabulary::Builtins().contains(canonical)) {
+        continue;
+      }
+      Proposal proposal;
+      proposal.name = alias;
+      proposal.kind = ProposalKind::kFunction;
+      proposal.insert = absl::StrCat(alias, "()");
+      proposal.caret = static_cast<int>(alias.size()) + 1;
+      proposal.documentation = BuiltinMarkdown(canonical);
       proposals_.push_back(std::move(proposal));
     }
   }
 
   void AddTypes() {
-    // The shapes this file declares come first: they are what somebody writing
-    // in this file most likely means, and a built-in is one word away anyway.
-    for (const DtoPlan& dto : resolved_.program.dtos) {
+    const auto offer = [&](const catalogue::TypeInfo& type) {
       Proposal proposal;
-      proposal.name = dto.name;
+      proposal.name = syntax::SourceTypeName(type.tag);
       proposal.kind = ProposalKind::kType;
-      proposal.insert = dto.name;
-      proposal.tail = dto.description.empty()
-                          ? absl::StrCat(" ", dto.fields.size(), " fields")
-                          : Summary(dto.description);
-      proposal.documentation = ShapeMarkdown(dto);
-      proposals_.push_back(std::move(proposal));
-    }
-    for (const std::string_view name : vocabulary::OrderedTypeNames()) {
-      Add(std::string(name), ProposalKind::kType);
-    }
-    // Then the tags the host knows. Last because a built-in is what most ports
-    // carry, and a list that opened with twenty registry tags would bury them.
-    for (const catalogue::TypeInfo& type : known_.types()) {
-      Proposal proposal;
-      proposal.name = type.tag;
-      proposal.kind = ProposalKind::kType;
-      proposal.insert = type.tag;
+      proposal.insert = proposal.name;
       proposal.tail = Summary(type.shape.description);
       proposal.documentation = ShapeMarkdown(type.shape);
       proposals_.push_back(std::move(proposal));
+    };
+    const auto local = [&](const catalogue::TypeInfo& type) {
+      return type.origin.has_value() && !linked_->documents.empty() &&
+             type.origin->file == linked_->documents.front().identity;
+    };
+    for (const auto& type : known_.types()) {
+      if (local(type)) {
+        offer(type);
+      }
+    }
+    for (const auto name : vocabulary::OrderedTypeNames()) {
+      Add(syntax::SourceTypeName(name), ProposalKind::kType);
+    }
+    for (const auto& [alias, canonical] : known_.intrinsics()) {
+      if (vocabulary::TypeNames().contains(canonical)) {
+        Add(alias, ProposalKind::kType);
+      }
+    }
+    for (const auto& type : known_.types()) {
+      if (!local(type)) {
+        offer(type);
+      }
     }
   }
 
@@ -577,7 +629,7 @@ class Completer {
       if (symbol.location.start > offset_) {
         continue;
       }
-      // Nor a name this very statement is binding: `let x = ` should not offer
+      // Nor a name this very statement is binding: `x = ` should not offer
       // `x`, and a flow reads in order, so nothing bound here is in scope yet.
       if (symbol.location.start >= statement) {
         continue;
@@ -626,6 +678,16 @@ class Completer {
   // -- the rules --------------------------------------------------------------
 
   void Propose() {
+    if (PreviousIs(TokenKind::kScope)) {
+      const bool type_position =
+          InDtoBody() ||
+          (!line_.empty() &&
+           (vocabulary::Canonical(tokens_[line_.front()].text) == "in" ||
+            vocabulary::Canonical(tokens_[line_.front()].text) == "out")) ||
+          LineHasWord("as");
+      ProposeNamespaceAtCaret(type_position);
+      return;
+    }
     if (LineHasWord("from") && LineHasWord("import")) {
       for (const auto& action : known_.actions()) {
         Add(action.name, ProposalKind::kFlow, "(...)");
@@ -646,13 +708,15 @@ class Completer {
       return;
     }
     // Module declarations are available outside a flow or shape.
-    if (open_braces_.empty()) {
+    if (open_braces_.empty() || InDeclarationBody("mod")) {
+      Add("mod", ProposalKind::kDeclaration, " name { }");
+      Add("export", ProposalKind::kDeclaration, " symbol");
       Add("flow", ProposalKind::kDeclaration, " name { }");
       Add("struct", ProposalKind::kDeclaration, " Name { }");
       Add("declare", ProposalKind::kDeclaration, " flow name { }");
       Add("import", ProposalKind::kDeclaration,
           " \"module.flow\" as namespace");
-      Add("from", ProposalKind::kDeclaration, " \"module.flow\" import symbol");
+      Add("from", ProposalKind::kDeclaration, " namespace import symbol");
       return;
     }
 
@@ -690,15 +754,6 @@ class Completer {
       ProposeSources();
       return;
     }
-    // `let name = stream`: naming the value first, then reading one. Neither
-    // half is a statement position, so the ordinary list would be noise.
-    if (!line_.empty() && tokens_[line_.front()].IsWord() &&
-        vocabulary::Canonical(tokens_[line_.front()].text) == "let") {
-      if (LineHas(TokenKind::kEqual)) {
-        ProposeSources();
-      }
-      return;
-    }
     if (ProposeDeclaration()) {
       return;
     }
@@ -729,29 +784,29 @@ class Completer {
     }
   }
 
-  /// Whether the caret is directly inside a `struct` body.
-  ///
-  /// The outermost open brace is the body when the word before it is a shape's
-  /// name and the word before *that* is `struct`; "directly" is the depth
-  /// being one, since a value written in a field is not a place a field may be
-  /// declared.
-  [[nodiscard]] bool InDtoBody() const {
-    if (open_braces_.size() != 1) {
+  bool InDeclarationBody(std::string_view keyword) const {
+    if (open_braces_.empty()) {
       return false;
     }
-    size_t brace = open_braces_.front();
-    if (brace >= 3 && tokens_[brace - 1].IsWord() &&
-        vocabulary::Canonical(tokens_[brace - 1].text) == "exported" &&
-        tokens_[brace - 3].IsWord() &&
-        vocabulary::Canonical(tokens_[brace - 3].text) == "struct") {
-      --brace;
+    size_t at = open_braces_.back();
+    if (at > 0 && tokens_[at - 1].IsWord() &&
+        vocabulary::Canonical(tokens_[at - 1].text) == "exported") {
+      --at;
     }
-    return brace >= 2 && tokens_[brace - 1].IsWord() &&
-           tokens_[brace - 2].IsWord() &&
-           vocabulary::Canonical(tokens_[brace - 2].text) == "struct";
+    if (at == 0 || !tokens_[at - 1].IsWord()) {
+      return false;
+    }
+    --at;
+    while (at >= 2 && tokens_[at - 1].kind == TokenKind::kScope &&
+           tokens_[at - 2].IsWord()) {
+      at -= 2;
+    }
+    return at > 0 && tokens_[at - 1].IsWord() &&
+           vocabulary::Canonical(tokens_[at - 1].text) == keyword;
   }
 
-  /// A field being written: its type, then what may bound it.
+  bool InDtoBody() const { return InDeclarationBody("struct"); }
+
   void ProposeField() {
     if (PreviousIs(TokenKind::kDot)) {
       ProposeNamespaceAtCaret(true);
@@ -805,8 +860,6 @@ class Completer {
     return "";
   }
 
-  // The keys of a `Shape{...}` being written, when the shape is one this file
-  // declares.
   /// The keys of a `Shape{...}` being written, when the shape is one this file
   /// declares.
   ///
@@ -949,18 +1002,67 @@ class Completer {
     return false;
   }
 
-  bool ProposeNamespaceMembers(std::string_view name, bool types_only = false) {
-    const std::string prefix = absl::StrCat(name, ".");
+  void OfferAction(std::string_view name, std::string_view description,
+                   ProposalKind kind, std::string_view documentation,
+                   bool explicit_verb = false, std::string_view leaf = {},
+                   size_t replace_start = std::string::npos) {
+    for (const std::string_view verb : {"run", "call"}) {
+      Proposal proposal;
+      proposal.name = explicit_verb ? std::string(leaf.empty() ? name : leaf)
+                                    : absl::StrCat(verb, " ", name);
+      proposal.filter = std::string(leaf.empty() ? name : leaf);
+      proposal.kind = kind;
+      proposal.insert =
+          explicit_verb
+              ? absl::StrCat(syntax::ActionSource(leaf.empty() ? name : leaf),
+                             "()")
+              : absl::StrCat(verb, " ", syntax::ActionSource(name), "()");
+      proposal.caret = static_cast<int>(proposal.insert.size()) - 1;
+      proposal.replace_start =
+          explicit_verb ? std::string::npos : replace_start;
+      proposal.tail = explicit_verb
+                          ? Summary(description)
+                          : absl::StrCat(verb == "run" ? "local: " : "peer: ",
+                                         Summary(description));
+      proposal.documentation = documentation;
+      proposals_.push_back(std::move(proposal));
+      if (explicit_verb) {
+        break;
+      }
+    }
+  }
+
+  bool ProposeNamespaceMembers(std::string_view name, bool types_only = false,
+                               bool explicit_verb = true,
+                               size_t replace_start = std::string::npos) {
+    const std::string prefix = absl::StrCat(name, "::");
+    if (name == "std") {
+      if (!types_only) {
+        for (const auto word : vocabulary::OrderedBuiltins()) {
+          Add(std::string(word), ProposalKind::kFunction);
+          auto& proposal = proposals_.back();
+          proposal.insert += "()";
+          proposal.caret = static_cast<int>(word.size()) + 1;
+        }
+      }
+      for (const auto word : vocabulary::OrderedTypeNames()) {
+        Add(std::string(word), ProposalKind::kType);
+      }
+      return true;
+    }
     bool any = false;
     for (const auto& action : known_.actions()) {
       if (!types_only && action.name.starts_with(prefix)) {
-        Add(action.name.substr(prefix.size()), ProposalKind::kFlow, "", "");
+        OfferAction(action.name, action.description, ProposalKind::kFlow,
+                    ActionMarkdown(action), explicit_verb,
+                    action.name.substr(prefix.size()), replace_start);
         any = true;
       }
     }
     for (const auto& type : known_.types()) {
-      if (type.tag.starts_with(prefix)) {
-        Add(type.tag.substr(prefix.size()), ProposalKind::kType, "", "");
+      if (syntax::SourceTypeName(type.tag).starts_with(prefix)) {
+        Add(syntax::SourceTypeName(type.tag).substr(prefix.size()),
+            ProposalKind::kType, "", "");
         any = true;
       }
     }
@@ -974,7 +1076,7 @@ class Completer {
     }
     const size_t last = static_cast<size_t>(base - tokens_.data());
     size_t start = last;
-    while (start >= 2 && tokens_[start - 1].kind == TokenKind::kDot &&
+    while (start >= 2 && tokens_[start - 1].kind == TokenKind::kScope &&
            tokens_[start - 2].IsWord()) {
       start -= 2;
     }
@@ -982,7 +1084,12 @@ class Completer {
     for (size_t at = start; at <= last; ++at) {
       absl::StrAppend(&name, tokens_[at].text);
     }
-    ProposeNamespaceMembers(name, types_only);
+    const bool explicit_verb =
+        start > 0 && tokens_[start - 1].IsWord() &&
+        (vocabulary::Canonical(tokens_[start - 1].text) == "run" ||
+         vocabulary::Canonical(tokens_[start - 1].text) == "call");
+    ProposeNamespaceMembers(name, types_only, explicit_verb,
+                            tokens_[start].start);
   }
 
   /// What follows a `.`: only what the thing before it actually has.
@@ -1163,7 +1270,7 @@ class Completer {
     AddCallPorts(syntax::PortDirection::kOutput);
   }
 
-  /// What has a status: what `wait`, `status`, `cancel`, `drain` and `after`
+  /// What has a status: what `wait`, `status`, `cancel`, `close` and `after`
   /// name.
   void ProposeSubjects() {
     AddNames([](const Symbol& symbol) {
@@ -1173,6 +1280,7 @@ class Completer {
         case SymbolKind::kNode:
         case SymbolKind::kInputPort:
         case SymbolKind::kOutputPort:
+        case SymbolKind::kValue:
           return true;
         default:
           return false;
@@ -1249,42 +1357,7 @@ class Completer {
   bool ProposeCall() {
     const std::string previous = PreviousWord();
     if (previous == "run" || previous == "call") {
-      // A call names another flow of this file, or an action the world has.
-      // The flows first: a file that factored a step into a flow of its own
-      // means that one, and an action of the same name would be a surprise.
-      const auto offer = [&](std::string_view name,
-                             std::string_view description, ProposalKind kind,
-                             std::string documentation) {
-        Proposal proposal;
-        proposal.name = std::string(name);
-        proposal.kind = kind;
-        // A call is a name and its arguments, so taking the name writes the
-        // parentheses the arguments go in and leaves the caret in them.
-        proposal.insert = absl::StrCat(name, "()");
-        proposal.caret = static_cast<int>(name.size()) + 1;
-        proposal.tail = Summary(description);
-        // What the call target *is*, in full, for the popup beside the list.
-        // A one-line tail is what fits; deciding between two actions needs
-        // their ports, and leaving that out is what sent a reader to the docs.
-        proposal.documentation = std::move(documentation);
-        proposals_.push_back(std::move(proposal));
-      };
-      absl::flat_hash_set<std::string> offered;
-      for (const FlowPlan& candidate : resolved_.program.flows) {
-        if (flow_ != nullptr && candidate.name == flow_->plan.name) {
-          continue;
-        }
-        offered.insert(candidate.name);
-        offer(candidate.name, candidate.description, ProposalKind::kFlow,
-              FlowMarkdown(candidate));
-      }
-      for (const catalogue::ActionInfo& action : known_.actions()) {
-        if (offered.contains(action.name)) {
-          continue;
-        }
-        offer(action.name, action.description, ProposalKind::kCall,
-              ActionMarkdown(action));
-      }
+      AddCallTargets(true);
       return true;
     }
     const std::string action = CalledAction();
@@ -1317,8 +1390,8 @@ class Completer {
       Add("headers", ProposalKind::kModifier, " \"x-name\"");
       return true;
     }
-    if (previous == "timeout" || previous == "with" || previous == "id" ||
-        previous == "headers") {
+    if (previous == "timeout" || previous == "deadline" || previous == "with" ||
+        previous == "id" || previous == "headers") {
       return true;  // a duration, a header name, an expression
     }
     for (const std::string_view modifier : vocabulary::OrderedModifiers()) {
@@ -1423,7 +1496,7 @@ class Completer {
       ProposeSubjects();
       return true;
     }
-    if (previous == "drain" || previous == "cancel" || previous == "status") {
+    if (previous == "close" || previous == "cancel" || previous == "status") {
       ProposeSubjects();
       return true;
     }
@@ -1517,7 +1590,7 @@ class Completer {
       Add("try", ProposalKind::kStatement);
       Add("node", ProposalKind::kDeclaration, "()");
       Add("wait", ProposalKind::kStatement);
-      Add("drain", ProposalKind::kStatement);
+      Add("close", ProposalKind::kStatement);
       ProposeSources();
       AddFunctions();
       AddConstants(false);
@@ -1541,33 +1614,20 @@ class Completer {
   /// names *after* `call` answered that with nothing at all. Taking one writes
   /// the verb too, so what lands in the file is the statement, not a bare
   /// name.
-  void AddCallTargets() {
-    const auto offer = [&](std::string_view name, std::string_view description,
-                           ProposalKind kind, std::string documentation) {
-      Proposal proposal;
-      proposal.name = std::string(name);
-      proposal.kind = kind;
-      proposal.insert = absl::StrCat("call ", name, "()");
-      proposal.caret = static_cast<int>(name.size()) + 6;
-      proposal.tail = Summary(description);
-      proposal.documentation = std::move(documentation);
-      proposals_.push_back(std::move(proposal));
-    };
-    absl::flat_hash_set<std::string> offered;
-    for (const FlowPlan& candidate : resolved_.program.flows) {
-      if (flow_ != nullptr && candidate.name == flow_->plan.name) {
+  void AddCallTargets(bool explicit_verb = false) {
+    for (const auto& action : known_.actions()) {
+      if (flow_ != nullptr && action.name == flow_->plan.name) {
         continue;
       }
-      offered.insert(candidate.name);
-      offer(candidate.name, candidate.description, ProposalKind::kFlow,
-            FlowMarkdown(candidate));
-    }
-    for (const catalogue::ActionInfo& action : known_.actions()) {
-      if (offered.contains(action.name)) {
-        continue;
-      }
-      offer(action.name, action.description, ProposalKind::kCall,
-            ActionMarkdown(action));
+      const bool declared = std::any_of(
+          parsed().flows.begin(), parsed().flows.end(),
+          [&](const auto& flow) { return flow->name.text == action.name; });
+      const auto* local = declared ? FlowNamed(action.name) : nullptr;
+      OfferAction(
+          action.name, action.description,
+          local == nullptr ? ProposalKind::kCall : ProposalKind::kFlow,
+          local == nullptr ? ActionMarkdown(action) : FlowMarkdown(*local),
+          explicit_verb);
     }
   }
 
@@ -1575,13 +1635,12 @@ class Completer {
   void ProposeStatement() {
     Add("declare", ProposalKind::kDeclaration, " flow name { }");
     Add("struct", ProposalKind::kDeclaration, " Name { }");
-    Add("from", ProposalKind::kDeclaration, " \"module.flow\" import symbol");
+    Add("from", ProposalKind::kDeclaration, " namespace import symbol");
     Add("import", ProposalKind::kDeclaration, " \"module.flow\" as namespace");
-    const bool in_repeat = InsideBlockOf("repeat");
     for (const std::string_view statement : vocabulary::OrderedStatements()) {
       // A loop tail belongs to a `repeat`, and saying so anywhere else would be
       // offering to write something that cannot compile.
-      if ((statement == "until" || statement == "while") && !in_repeat) {
+      if (statement == "until" || statement == "while") {
         continue;
       }
       Add(std::string(statement), ProposalKind::kStatement);
@@ -1599,6 +1658,13 @@ class Completer {
     // `else` only where an `if` has just closed, which is the one place it may
     // stand.
     if (closed_open_ != kNoIndex && Previous() == nullptr &&
+        (StatementWordAt(closed_open_) == "repeat" ||
+         StatementWordAt(closed_open_) == "for")) {
+      Add("until", ProposalKind::kModifier);
+      Add("while", ProposalKind::kModifier);
+      Add("after", ProposalKind::kModifier);
+    }
+    if (closed_open_ != kNoIndex && Previous() == nullptr &&
         StatementWordAt(closed_open_) == "if") {
       Add("else", ProposalKind::kStatement, " { }");
     }
@@ -1611,10 +1677,11 @@ class Completer {
   std::string_view source_;
   size_t offset_ = 0;
   std::vector<Token> tokens_;
-  ParseResult parsed_;
+  LinkedModule owned_linked_;
+  const LinkedModule* linked_ = nullptr;
   ResolveResult resolved_;
   /// What the world outside this document contains: see [CompleteAt].
-  const catalogue::Catalogue& known_;
+  catalogue::Catalogue known_;
   const ResolvedFlow* flow_ = nullptr;
 
   /// Tokens `[0, cut_)` are before the caret.
@@ -1636,17 +1703,32 @@ class Completer {
 }  // namespace
 
 CompleteResult CompleteAt(std::string_view source, size_t offset,
-                          const catalogue::Catalogue& known) {
-  Completer completer(source, offset, known);
+                          const catalogue::Catalogue& known,
+                          CompilationLimits limits, CompilationBudget* budget,
+                          const LinkedModule* linked) {
+  CompilationBudget local_budget(limits);
+  if (budget == nullptr) {
+    budget = &local_budget;
+  }
+  Completer completer(source, offset, known, limits, budget, linked);
   if (!completer.IsFragment()) {
     return completer.Run();
   }
   const std::string wrapped = absl::StrCat(kFragmentPrefix, source, "\n}");
   CompleteResult result =
-      Completer(wrapped, offset + kFragmentPrefix.size(), known).Run();
+      Completer(wrapped, offset + kFragmentPrefix.size(), known, limits, budget)
+          .Run();
   result.prefix_start = result.prefix_start >= kFragmentPrefix.size()
                             ? result.prefix_start - kFragmentPrefix.size()
                             : 0;
+  for (auto& proposal : result.proposals) {
+    if (proposal.replace_start != std::string::npos) {
+      proposal.replace_start =
+          proposal.replace_start >= kFragmentPrefix.size()
+              ? proposal.replace_start - kFragmentPrefix.size()
+              : 0;
+    }
+  }
   return result;
 }
 

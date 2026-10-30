@@ -685,7 +685,8 @@ schema queries, and reference edits over a supplied module graph. File writes
 and application of cross-document transactions remain host operations.
 
 
-Direct symbol imports use `from "library.flow" import render, Report as LocalReport`.
+Import a document with `import "library.flow"`, then select its symbols with
+`from library import render, Report as LocalReport`.
 They bind public source members at module scope or directly inside an implemented
 flow. A same-name callable declaration constrains the imported implementation;
 compatible contracts share their strictest interface. Conflicts report the
@@ -710,3 +711,19 @@ and cardinality retain the complete runtime schema. Live registry entries are
 complete by default and replace matching schemas. The catalogue generator reads
 native interpreter schemas through `a11._native.flow.standard_action_schemas()`;
 it registers handlers for inspection and runs no actions.
+
+## Approve source imports
+
+Pass `--source-root DIR` when starting `a11-flow serve` to permit source imports
+under a directory. Repeat it for multiple roots. Without approved roots,
+filesystem imports are disabled. Documents supplied in memory remain available.
+
+VS Code uses the `a11.flow.sourceRoots` array of absolute paths; restart the
+Flow language server after changing it. IntelliJ reads the JVM property
+`a11.flow.sourceRoots` or the `A11_FLOW_SOURCE_ROOTS` environment variable,
+separated with the platform's path separator. Opening a document or workspace
+does not grant import access.
+
+The host can set cumulative compilation limits for source bytes, tokens, nesting,
+imports, modules, names, work, and elapsed time. Time limits are cooperative
+checks during compilation. Requests cannot expand the host's source roots.

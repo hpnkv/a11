@@ -104,17 +104,17 @@ TEST(FlowHighlight, APortDeclarationReadsAsOne) {
 
 TEST(FlowHighlight, APortTypeMayBeATagOrGenericAndStopsAtTheLine) {
   EXPECT_EQ(
-      Coloured("out audio: a11.sdk.AudioBuffer stream"),
-      (std::vector<std::string>{"declaration-keyword:out", "identifier:audio",
-                                "punctuation::", "type:a11", "punctuation:.",
-                                "type:sdk", "punctuation:.", "type:AudioBuffer",
-                                "declaration-keyword:stream"}));
-  EXPECT_EQ(Coloured("in frames: list[a11.NodeFragment] required"),
+      Coloured("out audio: a11::sdk::AudioBuffer stream"),
+      (std::vector<std::string>{
+          "declaration-keyword:out", "identifier:audio",
+          "punctuation::", "type:a11", "punctuation:::", "type:sdk",
+          "punctuation:::", "type:AudioBuffer", "declaration-keyword:stream"}));
+  EXPECT_EQ(Coloured("in frames: std::list[a11::NodeFragment] required"),
             (std::vector<std::string>{
                 "declaration-keyword:in", "identifier:frames",
-                "punctuation::", "type:list", "bracket:[", "type:a11",
-                "punctuation:.", "type:NodeFragment", "bracket:]",
-                "declaration-keyword:required"}));
+                "punctuation::", "type:std", "punctuation:::", "type:list",
+                "bracket:[", "type:a11", "punctuation:::", "type:NodeFragment",
+                "bracket:]", "declaration-keyword:required"}));
   // A declaration is one line: the statement under it is a statement.
   EXPECT_EQ(Coloured("in q: string\npage.text"),
             (std::vector<std::string>{"declaration-keyword:in", "identifier:q",
@@ -213,10 +213,11 @@ TEST(FlowHighlight, OfJoinsAWaitsSubjects) {
 
 TEST(FlowHighlight, AFunctionIsAFunctionWhereItIsCalled) {
   EXPECT_EQ(
-      Coloured("| map join(it, \", \")"),
-      (std::vector<std::string>{"flow-operator:|", "stage:map", "builtin:join",
-                                "parenthesis:(", "constant:it", "punctuation:,",
-                                "string:\", \"", "parenthesis:)"}));
+      Coloured("| map std::join(it, \", \")"),
+      (std::vector<std::string>{
+          "flow-operator:|", "stage:map", "identifier:std",
+          "punctuation:::", "builtin:join", "parenthesis:(", "constant:it",
+          "punctuation:,", "string:\", \"", "parenthesis:)"}));
   // `join` with no argument list after it is the stage, not the function.
   EXPECT_EQ(Coloured("| join"),
             (std::vector<std::string>{"flow-operator:|", "stage:join"}));
@@ -238,10 +239,10 @@ TEST(FlowHighlight, AStatusCodeIsAConstantAndAFieldIsAField) {
 
 TEST(FlowHighlight, ATagBeforeABraceIsAType) {
   EXPECT_EQ(
-      Coloured("| map a11.sdk.Interaction{role: \"user\"}"),
+      Coloured("| map a11::sdk::Interaction{role: \"user\"}"),
       (std::vector<std::string>{
-          "flow-operator:|", "stage:map", "type:a11", "punctuation:.",
-          "type:sdk", "punctuation:.", "type:Interaction", "brace:{",
+          "flow-operator:|", "stage:map", "type:a11", "punctuation:::",
+          "type:sdk", "punctuation:::", "type:Interaction", "brace:{",
           "identifier:role", "punctuation::", "string:\"user\"", "brace:}"}));
   // A bare name before a brace is a name and a block, which is what keeps
   // `if outcome {` reading the way it always has.
@@ -251,10 +252,10 @@ TEST(FlowHighlight, ATagBeforeABraceIsAType) {
 }
 
 TEST(FlowHighlight, ACastNamesAType) {
-  EXPECT_EQ(Coloured("x as a11.sdk.AudioBuffer"),
+  EXPECT_EQ(Coloured("x as a11::sdk::AudioBuffer"),
             (std::vector<std::string>{"identifier:x", "declaration-keyword:as",
-                                      "type:a11", "punctuation:.", "type:sdk",
-                                      "punctuation:.", "type:AudioBuffer"}));
+                                      "type:a11", "punctuation:::", "type:sdk",
+                                      "punctuation:::", "type:AudioBuffer"}));
 }
 
 TEST(FlowHighlight, EveryTokenIsClassifiedAndNoneIsInvented) {

@@ -164,21 +164,9 @@ async def write_history(
 ) -> str:
     """Put the conversation on a node of this client's, and say where.
 
-    A node, rather than a value inside ``inputs``. An `Interaction` *does*
-    serialize inside that one JSON object -- it is a pydantic model, so the JSON
-    codec dumps it -- but it does not come back: a chunk's data dumps as text for
-    a JSON mimetype while the wire validator reads base64, so an interaction
-    cannot be validated out of its own dump. Sending records the flow rebuilt was
-    the alternative, and that is two conversions to lose a field in.
+    Each interaction travels as one typed chunk. Its host codec retains ids,
+    tool metadata, and payload metadata when the flow reads the history.
 
-    Written to a node, each interaction is the whole value of its own chunk, so
-    its own codec applies and the flow reads back exactly what was sent -- ids,
-    tool metadata and all -- as the type it is.
-
-    One node per turn, written and closed *before* the flow is dispatched: the
-    flow reads it to the end before the new question, so a node still open would
-    be a conversation that never finishes arriving. The turn before's node is
-    dropped on the way past, since nothing reads a conversation twice.
     """
     session.node_map.discard(_history_node_id(turn - 1))
     node = session.node_map.get(_history_node_id(turn))

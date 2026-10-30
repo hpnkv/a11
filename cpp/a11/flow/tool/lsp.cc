@@ -246,7 +246,12 @@ std::string Snippet(const Proposal& proposal) {
 
 class Server {
  public:
-  Server(std::istream& in, std::ostream& out) : in_(in), out_(out) {}
+  Server(std::istream& in, std::ostream& out,
+         std::vector<std::string> source_roots, CompilationLimits limits)
+      : in_(in),
+        out_(out),
+        source_roots_(std::move(source_roots)),
+        limits_(limits) {}
 
   int Run() {
     std::string body;
@@ -282,18 +287,29 @@ class Server {
     if (path != request.end() && path->is_string()) {
       request["path"] = FileModuleIdentity(path->get<std::string>());
     }
-    return flow::Handle(
-        request, FileModuleResolver(8 * 1024 * 1024, std::move(sources)));
+    return flow::Handle(request,
+                        FileModuleResolver(limits_.max_source_bytes,
+                                           std::move(sources), source_roots_),
+                        limits_);
   }
 
-  catalogue::Catalogue World(const Document& document, const std::string& uri,
-                             size_t offset) const {
-    auto sources = Sources();
-    const auto linked =
-        LinkModules(document.Text(), FileModuleIdentity(uri), sources,
-                    FileModuleResolver(8 * 1024 * 1024, sources));
-    return known_.MergedWith(linked.CatalogueAt(offset));
-  }
+  struct Analysis {
+    CompilationBudget budget;
+    LinkedModule linked;
+    catalogue::Catalogue known;
+
+    Analysis(const Document& document, const std::string& uri, size_t offset,
+             const ModuleSources& sources,
+             const std::vector<std::string>& roots,
+             const catalogue::Catalogue& registry, CompilationLimits limits)
+        : budget(limits),
+          linked(LinkModules(
+              document.Text(), FileModuleIdentity(uri), sources,
+              FileModuleResolver(limits.max_source_bytes, sources, roots),
+              limits, &budget)),
+          known(registry.MergedWith(
+              linked.CatalogueAt(offset, true, limits, &budget))) {}
+  };
 
   /// One message, headers and all. False at end of stream.
   bool Read(std::string& body) {
@@ -402,8 +418,6 @@ class Server {
     return out;
   }
 
-  // A zero-width range at a 1-based line and column, as the protocol counts
-  // them: 0-based, and a column in UTF-16 units.
   /// A zero-width range at a 1-based line and column, as the protocol counts
   /// them: 0-based, and a column in UTF-16 units.
   ///
@@ -758,22 +772,28 @@ class Server {
     }
     const size_t offset = OffsetIn(*document, params);
     // Complete against the catalogue associated with this session.
-    const CompleteResult completed = CompleteAt(
-        document->Text(), offset, World(*document, Uri(params), offset));
+    Analysis analysis(*document, Uri(params), offset, Sources(), source_roots_,
+                      known_, limits_);
+    const CompleteResult completed =
+        CompleteAt(document->Text(), offset, analysis.known, limits_,
+                   &analysis.budget, &analysis.linked);
     // What taking a proposal replaces: the partial word, and nothing else.
     Range replaced;
     replaced.start.offset = std::min(completed.prefix_start, offset);
     replaced.end.offset = offset;
-    const nlohmann::json range = RangeOf(*document, replaced);
     nlohmann::json items = nlohmann::json::array();
     for (const Proposal& proposal : completed.proposals) {
+      replaced.start.offset = proposal.replace_start == std::string::npos
+                                  ? std::min(completed.prefix_start, offset)
+                                  : std::min(proposal.replace_start, offset);
       nlohmann::json item{
           {"label", proposal.name},
           {"kind", CompletionItemKind(proposal.kind)},
-          {"textEdit",
-           nlohmann::json{{"range", range}, {"newText", Snippet(proposal)}}},
+          {"textEdit", nlohmann::json{{"range", RangeOf(*document, replaced)},
+                                      {"newText", Snippet(proposal)}}},
           {"insertTextFormat", 2},  // Snippet: the caret goes where `$0` is.
-          {"filterText", proposal.name},
+          {"filterText",
+           proposal.filter.empty() ? proposal.name : proposal.filter},
           // The order the language proposes them in is the order they should be
           // offered in, so every item sorts by its position in the list rather
           // than alphabetically.
@@ -867,9 +887,12 @@ class Server {
     // The language decides what is under the caret -- it is name resolution,
     // and this adapter has no business doing it a second time. All that happens
     // here is the translation into what the protocol calls a hover.
+    const auto offset = OffsetIn(*document, params);
+    Analysis analysis(*document, Uri(params), offset, Sources(), source_roots_,
+                      known_, limits_);
     const Description about =
-        Describe(document->Text(), OffsetIn(*document, params),
-                 World(*document, Uri(params), OffsetIn(*document, params)));
+        Describe(document->Text(), offset, analysis.known, limits_,
+                 &analysis.budget, &analysis.linked);
     if (!about.found || about.markdown.empty()) {
       Answer(message, nlohmann::json());
       return;
@@ -888,7 +911,7 @@ class Server {
       Answer(message, std::move(symbols));
       return;
     }
-    for (const DocumentSymbol& symbol : Symbols(document->Text())) {
+    for (const DocumentSymbol& symbol : Symbols(document->Text(), limits_)) {
       symbols.push_back(SymbolJson(*document, symbol));
     }
     Answer(message, std::move(symbols));
@@ -900,9 +923,12 @@ class Server {
       Answer(message, nlohmann::json());
       return;
     }
+    const auto offset = OffsetIn(*document, params);
+    Analysis analysis(*document, Uri(params), offset, Sources(), source_roots_,
+                      known_, limits_);
     const Description about =
-        Describe(document->Text(), OffsetIn(*document, params),
-                 World(*document, Uri(params), OffsetIn(*document, params)));
+        Describe(document->Text(), offset, analysis.known, limits_,
+                 &analysis.budget, &analysis.linked);
     if (about.has_definition) {
       Answer(message,
              nlohmann::json{{"uri", Uri(params)},
@@ -914,8 +940,8 @@ class Server {
     if (about.origin.has_value()) {
       auto range = PositionAt(about.origin->line, about.origin->column);
       const auto identity = FileModuleIdentity(about.origin->file);
-      auto source =
-          FileModuleResolver(8 * 1024 * 1024, Sources())(identity, "<flow>");
+      auto source = FileModuleResolver(limits_.max_source_bytes, Sources(),
+                                       source_roots_)(identity, "<flow>");
       if (source.ok()) {
         const TextIndex index(source->source);
         const auto position = index.PositionOf(index.ByteOfSourcePosition(
@@ -960,6 +986,8 @@ class Server {
   /// The protocol's symbol kinds, by number.
   static int SymbolItemKind(SymbolClass kind) {
     switch (kind) {
+      case SymbolClass::kModule:
+        return 2;
       case SymbolClass::kFlow:
         return 12;  // Function
       case SymbolClass::kDto:
@@ -1011,8 +1039,6 @@ class Server {
     label_details_ = item->value("labelDetailsSupport", false);
   }
 
-  // `a11flow/scan`: read the project's own source for the actions it declares,
-  // and fold what is found into the world these documents are read against.
   /// `a11flow/scan`: read the project's own source for the actions it declares,
   /// and fold what is found into the world these documents are read against.
   ///
@@ -1116,6 +1142,8 @@ class Server {
 
   std::istream& in_;
   std::ostream& out_;
+  std::vector<std::string> source_roots_;
+  CompilationLimits limits_;
   absl::flat_hash_map<std::string, Document> documents_;
   absl::flat_hash_map<std::string, nlohmann::json> publications_;
   /// What the world outside these documents contains, for as long as this
@@ -1136,8 +1164,9 @@ class Server {
 
 }  // namespace
 
-int RunLsp(std::istream& in, std::ostream& out) {
-  return Server(in, out).Run();
+int RunLsp(std::istream& in, std::ostream& out,
+           std::vector<std::string> source_roots, CompilationLimits limits) {
+  return Server(in, out, std::move(source_roots), limits).Run();
 }
 
 }  // namespace a11::flow::tool

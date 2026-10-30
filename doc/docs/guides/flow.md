@@ -84,7 +84,7 @@ flow interact-on-full-sentence {
 
   out sentence: string                     "The sentence that became the question."
   out reply:    string stream              "The model's answer, as it is written."
-  out turn:     a11.sdk.Interaction stream "What to remember of this turn."
+  out turn:     a11::sdk::Interaction stream "What to remember of this turn."
 }
 ```
 
@@ -152,25 +152,16 @@ Recognition arrives as pieces, and a piece is not a sentence.
 ```a11flow
   said = node() in scratch
 
-  transcribe.transcription_pieces
-    | group ends-with(trim(it), [".", "?", "!"])
+  string said = take (transcribe.transcription_pieces
+    | group std::endswith(std::trim(it), [".", "?", "!"])
     | first 1
-    | map trim(join(it, " "))
-    -> said
-
+    | map std::trim(std::join(it, " ")))
   said -> sentence
 ```
 
-`| group EXPR` collects values until the expression is true for the newest
-value. Here, fragments accumulate until one ends with a full stop, question
-mark, or exclamation mark. Joining that group produces a sentence, and
-`| first 1` ends the pipeline after the first sentence.
-
-`said` is a node of the flow's own because the sentence is wanted **twice** — by
-the client, on `sentence`, and by the model, as the question. A node is how a
-stream gets two readers: reading one stream twice would hand each reader half of
-it, because a node has one cursor. It is `in scratch`, so the only copy that
-crosses the wire is the one on `sentence`.
+`| group EXPR` gathers fragments until the newest one ends a sentence.
+`take` captures that sentence once as a string. Both the client output and the
+model can use `said` without another node or another stream read.
 
 ## Stop capture after the sentence
 
@@ -187,27 +178,19 @@ body runs concurrently, with data dependencies providing synchronization.
 ```a11flow
   earlier = node(history)
 
-  asked = node() in scratch
-  said | map a11.sdk.Interaction{
+  asked = a11::sdk::Interaction{
     role: "user",
-    content: [to_chunk({
+    content: [std::to_chunk({
       role: "user",
-      content: [{type: "text", text: it}]
+      content: [{type: "text", text: said}]
     })]
-  } -> asked
+  }
 ```
 
-`node(history)` **attaches** to an existing node by the id provided
-on the `history` port, reading an external stream. Each interaction arrives
-as the type it was written as and preserves its structured payload.
-
-`TYPE{...}` builds a named value. The sentence becomes an
-`a11.sdk.Interaction`, and validation reports incompatible fields before the
-model call. The host defines available types: its serialisation registries
-resolve dotted tags, while a flow cannot import modules.
-
-`asked` is its own node for the same reason `said` was: both the model and the
-client's history want it.
+`node(history)` attaches to the caller's conversation by node id. `asked` is one
+validated interaction value, reused by the model and the `turn` output.
+`a11::sdk::Interaction` names a host type; its wire tag remains
+`a11.sdk.Interaction`.
 
 ## Generate and return the answer
 
@@ -293,6 +276,63 @@ or high-rate values such as audio buffers, fetched pages, and transcript
 fragments stay out of the model context. In this example, the model receives one
 completed sentence and the caller receives the streamed answer.
 
+## Values, assignment, and loop termination
+
+Capture an item with `take`, then use the value in ordinary expressions.
+Assignments run once when their dependencies are ready, including unused
+initializers. Later reads observe the preceding assignment in structured source
+order; independent actions still overlap.
+
+```a11flow
+from std import startswith
+
+flow between-markers {
+  in lines: string stream
+  out body: string stream
+  out count: int
+
+  bool inside = false
+  int matched = 0
+  for line in lines {
+    if startswith(line, "BEGIN") {
+      inside = true
+    } else if startswith(line, "END") {
+      inside = false
+    } else if inside {
+      line -> body
+      matched = matched + 1
+    }
+  }
+  matched -> count
+}
+```
+
+Child scopes publish updates when they finish. Sequential loop passes carry the
+updates forward; a read after the loop sees the final value. Parallel passes
+cannot update the same outer variable without explicit supported ordering.
+
+A trailing `until` or `while` tests after the entire pass finishes:
+
+```a11flow
+flow first-success {
+  in urls: string stream
+  out text: string
+
+  bool found = false
+  for url in urls {
+    page = try run fetch(url: url)
+    std::status outcome = wait page
+    if outcome.ok {
+      page.text -> text
+      found = true
+    }
+  } until found
+}
+```
+
+The successful pass finishes and its text is included. Stopping the loop releases
+its reader; the producer keeps its ordinary ownership and lifetime.
+
 ## Common composition patterns
 
 The following patterns cover common extensions to a composition.
@@ -316,7 +356,7 @@ docs | try map it as Order into rejected -> orders
 each value on arrival. A slow source does not block a fast one:
 
 ```a11flow
-interleave(llm.text_output, tool.progress) -> shown
+std::interleave(llm.text_output, tool.progress) -> shown
 ```
 
 **Whichever subject completes first.** `wait first of` holds until one of several
@@ -385,26 +425,29 @@ flow shrink {
 }
 ```
 
-`run`, `call`, `node`, `status`, `wait`, and `drain` produce expressions.
-They can appear in arguments, object and array values, indices, and stage
-expressions. Whole prefix chains need no wrapper:
-`let outcome = wait try run check()` and `let finished = drain existing_node`.
-A multi-part operation needs parentheses before selecting its result:
-`(run fetch(url: url)).metadata.title`. The spelling
-`run fetch(url: url).metadata.title` is an invalid action target, with a suggested
-grouping repair. `run` remains explicit; `call` still dispatches on the wire.
+`run`, `call`, `node`, `status`, `wait`, and `close` can appear inside
+expressions. Parenthesize an invocation before selecting one of its outputs:
+`(run fetch(url: url)).metadata`. Keep the handle when several consumers use it.
 
-A scalar object field reads a value from the selected output. If the output is a
-stream, Flow gives an informational suggestion to make cardinality explicit:
+Name a value explicitly when it is used in several places:
 
 ```a11flow
-let report = {"text": ((run render(data: data)).text | consume), "source": url}
+page = run fetch(url: url)
+metadata = take page.metadata
+report = {title: metadata.title, source: url}
 ```
 
-`consume` waits for the stream to end and emits its sole logical item. Zero or
-multiple items fail with `FAILED_PRECONDITION`; an upstream error retains its
-status. `collect` instead produces an array. Selecting a stream directly as a
-pipeline source preserves streaming.
+`take` returns the next item as soon as it arrives. `try take` returns an option
+on normal EOF; upstream errors still fail. `consume` waits for the stream to
+end and requires exactly one item. `collect` returns a list of all items.
+
+```a11flow
+first = try take candidates
+if first.present {
+  chosen = run inspect(candidate: first.value)
+  chosen.report -> reports
+}
+```
 
 An operation activates when its containing expression is demanded. `and` and
 `or` short-circuit, and skipped branches do not start their operations.
@@ -427,7 +470,7 @@ observation. Already completed candidates use list order; later completions
 use the order observed under the execution monitor.
 
 ```a11flow
-let winner = wait first of try run primary(), try run backup()
+winner = take (wait first of try run primary(), try run backup())
 ```
 
 The loser continues. The winner can feed another step immediately, while the
@@ -482,7 +525,7 @@ import "report.flow" as report
 flow publish {
   in data: object
   out text: string stream
-  (run report.render(data: data)).text -> text
+  (run report::render(data: data)).text -> text
 }
 ```
 
@@ -494,14 +537,24 @@ interfaces are allowed; distinct executable bodies remain ambiguous. Identical
 struct contributions of the same identity are accepted; different module-local
 struct identities remain distinct.
 
-`flow.load(path)` resolves local file imports relative to the defining file.
-For generated or embedded source, supply an explicit in-memory map:
+Approve source roots explicitly when loading filesystem dependencies:
+
+```python
+program = flow.load("pipelines/main.flow", source_roots=["pipelines"])
+```
+
+Imports are relative to their defining file and cannot read outside those
+roots. No approved roots means no filesystem imports. Symlinks are rejected
+when traversing imported paths, including links whose targets are inside a root.
+The filesystem importer uses POSIX directory handles; other platforms report an
+unavailable importer. Explicit in-memory sources work on every platform. For generated or embedded
+source, supply an in-memory map:
 
 ```python
 program = flow.loads(
-    'import "library" as lib\nflow main { (run lib.work()).result -> _ }',
+    'import "library" as lib\nflow main { (run lib::work()).result -> _ }',
     "root",
-    modules={"library": 'flow work exported { out result: integer\n 42 -> result }'},
+    modules={"library": 'flow work exported { out result: int\n 42 -> result }'},
 )
 ```
 
@@ -510,6 +563,51 @@ program = flow.loads(
 automatically registered. Interface-only declarations are not registered either.
 The same document needs explicit exports when imported by another module,
 including an import back to the root through a dependency cycle.
+
+## Organize a public module interface
+
+Modules are private by default. Expose a module and selected members explicitly:
+
+```a11flow
+mod reports exported {
+  struct Summary { text: string required }
+  declare flow build { in source: string
+    out result: Summary }
+  export Summary
+  export build as summarize
+}
+```
+
+`reports::summarize` is a public alias of the declared contract. Types and flows
+keep their identities through aliases and reexports. A `declare mod` contains
+contracts and complete structs; implementations can be supplied by the host.
+`declare flow company::search::find` creates the declared module prefixes.
+
+The reserved `std` module is always available. Import selected names to shorten
+expressions: `from std import join, trim`. Imports scope to a module or flow;
+`import "reports.flow"` uses the filename stem as its namespace. Dot access
+continues to select runtime fields and action ports.
+
+## Bound execution time
+
+A duration timeout and an absolute deadline can be named like other values:
+
+```a11flow
+from std import now, time, duration
+
+flow search {
+  in query: string
+  out text: string
+  duration timeout = 30s
+  time deadline = now() + 1m
+  results = run find(query: query) timeout timeout deadline deadline
+  results.text -> text
+}
+```
+
+A deadline expression is eager and fixed while other arguments become ready.
+`deadline now() + 30s after prepared` evaluates the whole expression after
+`prepared` finishes. If both limits are present, the earlier one applies.
 
 ## Maintain generated modules
 
@@ -563,7 +661,8 @@ interface and struct descriptors for `UpsertDeclaration`. File access and
 registry bindings stay in the host adapters.
 
 
-Direct symbol imports use `from "library.flow" import render, Report as LocalReport`.
+Import a document with `import "library.flow"`, then select its symbols with
+`from library import render, Report as LocalReport`.
 They bind public source members at module scope or directly inside an implemented
 flow. A same-name callable declaration constrains the imported implementation;
 compatible contracts share their strictest interface. Conflicts report the
@@ -582,10 +681,10 @@ direct imports.
 
 
 `log`, `logf`, `fail`, and `abort` evaluate their value arguments before acting.
-Reading an input stream, an action output, a completion status, or a lazy value
+Reading an input stream, an action output, a completion status, or an initialized value
 derived from those supplies a data dependency. For example,
 `logf "result: %s" (work.output | consume)` waits for the consumed output without
-an `after`. Constant-only arguments, including lazy bindings of constants, need
+an `after`. Constant-only arguments, including initializers containing only constants, need
 an `if`, a loop body, or an explicit `after`. Reading a node's `id` supplies no
 stream dependency. `cancel` still requires a condition, loop body, or `after`;
 naming its target does not wait for that action.
@@ -604,8 +703,8 @@ flow {
   stdin = run read_stdin()
   echo = run write_stdout()
 
-  forwarded = stdin.lines | take until lower(it) == "/exit"
-    | map strformat("%s\n", it) -> echo.content
+  forwarded = stdin.lines | take until std::lower(it) == "/exit"
+    | map std::strformat("%s\n", it) -> echo.content
 
   after forwarded {
     {"command": "stop"} -> stdin.control_events
@@ -638,5 +737,5 @@ activate work beyond the stopping boundary.
 shorthand for `forwarded = { SOURCE | STAGE -> DEST }`: completion includes
 all destinations and anonymous children, with normal failure propagation.
 The source may span lines and may be a literal, a stream, or an operation's
-output. Suffix `after` gates the enclosed pipeline as usual. Use `let name =
-SOURCE | STAGE` when the name should expose a lazy value rather than completion.
+output. Suffix `after` gates the enclosed pipeline as usual. Write
+`rows = SOURCE | STAGE` for a stream alias and `row = take rows` for one item.

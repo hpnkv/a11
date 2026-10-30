@@ -75,7 +75,7 @@
     },
     "builtin": {
       "//": "A function only where it is called, which is what tells `text(it)` from the port type of the same name.",
-      "match": "\\b(len|lower|upper|trim|text|number|bool|keys|values|get|join|split|merge|contains|starts-with|ends-with|replace|match|slice|default|to_chunk|from_chunk|strformat|b64encode|b64decode|b64urlencode|b64urldecode|utf8encode|utf8decode|now|duration|time|seconds|LEN|LOWER|UPPER|TRIM|TEXT|NUMBER|BOOL|KEYS|VALUES|GET|JOIN|SPLIT|MERGE|CONTAINS|STARTS-WITH|ENDS-WITH|REPLACE|MATCH|SLICE|DEFAULT|TO_CHUNK|FROM_CHUNK|STRFORMAT|B64ENCODE|B64DECODE|B64URLENCODE|B64URLDECODE|UTF8ENCODE|UTF8DECODE|NOW|DURATION|TIME|SECONDS)(?=\\s*\\()",
+      "match": "\\b(len|lower|upper|trim|text|number|bool|keys|values|get|join|split|merge|contains|startswith|endswith|replace|match|slice|default|to_chunk|from_chunk|strformat|b64encode|b64decode|b64urlencode|b64urldecode|utf8encode|utf8decode|now|duration|time|seconds|parse_time|parse_duration|integer|int|string|bytes|object|list|boolean|array|any|json|option|status|null|LEN|LOWER|UPPER|TRIM|TEXT|NUMBER|BOOL|KEYS|VALUES|GET|JOIN|SPLIT|MERGE|CONTAINS|STARTSWITH|ENDSWITH|REPLACE|MATCH|SLICE|DEFAULT|TO_CHUNK|FROM_CHUNK|STRFORMAT|B64ENCODE|B64DECODE|B64URLENCODE|B64URLDECODE|UTF8ENCODE|UTF8DECODE|NOW|DURATION|TIME|SECONDS|PARSE_TIME|PARSE_DURATION|INTEGER|INT|STRING|BYTES|OBJECT|LIST|BOOLEAN|ARRAY|ANY|JSON|OPTION|STATUS|NULL)(?=\\s*\\()",
       "name": "support.function.builtin.a11flow"
     },
     "port-type": {
@@ -101,15 +101,15 @@
       ]
     },
     "declaration": {
-      "match": "\\b(declare|exported|import|from|flow|struct|describe|in|out|header|as|default|stream|required|node|nodes|DECLARE|EXPORTED|IMPORT|FROM|FLOW|STRUCT|DESCRIBE|IN|OUT|HEADER|AS|DEFAULT|STREAM|REQUIRED|NODE|NODES)\\b",
+      "match": "\\b(declare|exported|mod|export|import|from|flow|struct|describe|in|out|header|as|default|stream|required|node|nodes|DECLARE|EXPORTED|MOD|EXPORT|IMPORT|FROM|FLOW|STRUCT|DESCRIBE|IN|OUT|HEADER|AS|DEFAULT|STREAM|REQUIRED|NODE|NODES)\\b",
       "name": "keyword.declaration.a11flow"
     },
     "statement": {
-      "match": "\\b(abort|advance|after|by|call|cancel|desc|drain|else|fail|for|if|interleave|into|let|log|logf|max|nodes|of|parallel|repeat|run|skip|status|try|unordered|until|wait|while|zip|ABORT|ADVANCE|AFTER|BY|CALL|CANCEL|DESC|DRAIN|ELSE|FAIL|FOR|IF|INTERLEAVE|INTO|LET|LOG|LOGF|MAX|NODES|OF|PARALLEL|REPEAT|RUN|SKIP|STATUS|TRY|UNORDERED|UNTIL|WAIT|WHILE|ZIP)\\b",
+      "match": "\\b(abort|after|by|call|cancel|close|desc|else|fail|for|if|interleave|into|log|logf|max|nodes|of|parallel|repeat|run|skip|status|try|unordered|until|wait|while|zip|ABORT|AFTER|BY|CALL|CANCEL|CLOSE|DESC|ELSE|FAIL|FOR|IF|INTERLEAVE|INTO|LOG|LOGF|MAX|NODES|OF|PARALLEL|REPEAT|RUN|SKIP|STATUS|TRY|UNORDERED|UNTIL|WAIT|WHILE|ZIP)\\b",
       "name": "keyword.control.a11flow"
     },
     "modifier": {
-      "match": "\\b(tee|via|timeout|after|with|id|forward|headers|TEE|VIA|TIMEOUT|AFTER|WITH|ID|FORWARD|HEADERS)\\b",
+      "match": "\\b(tee|via|timeout|deadline|after|with|id|forward|headers|TEE|VIA|TIMEOUT|DEADLINE|AFTER|WITH|ID|FORWARD|HEADERS)\\b",
       "name": "keyword.other.modifier.a11flow"
     },
     "status-code": {

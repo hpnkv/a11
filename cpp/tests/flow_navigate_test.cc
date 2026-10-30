@@ -334,12 +334,12 @@ TEST(FlowNavigate, ARegisteredTypeReadsTheWayAShapeDoes) {
   // Both are records with described fields, and the catalogue records them the
   // same way -- so hover, completion and everything else is one code path.
   const std::string source =
-      "flow f {\n  in a: a11.sdk.AudioBuffer required\n  out b: string\n"
+      "flow f {\n  in a: a11::sdk::AudioBuffer required\n  out b: string\n"
       "  a.rate | text -> b\n}\n";
   const Description about =
-      Describe(source, source.find("a11.sdk.AudioBuffer"), Known());
+      Describe(source, source.find("a11::sdk::AudioBuffer"), Known());
   ASSERT_TRUE(about.found);
-  EXPECT_EQ(about.text, "a11.sdk.AudioBuffer");
+  EXPECT_EQ(about.text, "a11::sdk::AudioBuffer");
   EXPECT_NE(about.markdown.find("A block of samples."), std::string::npos);
   EXPECT_NE(about.markdown.find("`rate`: integer *(required)*"),
             std::string::npos)
@@ -347,7 +347,7 @@ TEST(FlowNavigate, ARegisteredTypeReadsTheWayAShapeDoes) {
   // A caret anywhere in the dotted name describes the whole type, not the one
   // word it happens to be in.
   EXPECT_EQ(Describe(source, source.find("AudioBuffer"), Known()).text,
-            "a11.sdk.AudioBuffer");
+            "a11::sdk::AudioBuffer");
 }
 
 TEST(FlowCatalogue, MergesWhatAFrontendSentOverWhatIsEmbedded) {
@@ -466,7 +466,7 @@ TEST(FlowNavigate, AWordThatIsBothAStageAndAFunctionAnswersForWhereItStands) {
   in  q: string stream
   out a: string
   q | text -> a
-  let one = text(q)
+  one = take (std::text(q))
 }
 )";
   const Description staged = Describe(kBoth, kBoth.find("| text") + 2);
@@ -475,7 +475,7 @@ TEST(FlowNavigate, AWordThatIsBothAStageAndAFunctionAnswersForWhereItStands) {
       << staged.summary;
   EXPECT_NE(staged.summary.find("stream"), std::string::npos) << staged.summary;
 
-  const Description called = Describe(kBoth, kBoth.find("text(q)"));
+  const Description called = Describe(kBoth, kBoth.find("std::text(q)"));
   ASSERT_TRUE(called.found);
   EXPECT_NE(called.summary.find("a built-in function"), std::string::npos)
       << called.summary;

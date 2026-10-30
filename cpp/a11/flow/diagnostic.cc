@@ -46,7 +46,7 @@ constexpr std::array kCodes = {
              "A '<-' carries a value where there is no 'repeat' to carry it "
              "into."},
     CodeInfo{"flow.barrier.duplicate", Family::kBarrier, Severity::kWeakWarning,
-             "A second 'wait' or 'drain' on something this body already holds "
+             "A second 'wait' or 'close' on something this body already holds "
              "for."},
     CodeInfo{"flow.barrier.duplicate-carry", Family::kBarrier, Severity::kError,
              "A repeat carries the same name twice."},
@@ -71,13 +71,10 @@ constexpr std::array kCodes = {
              "the two reads take turns on it rather than seeing one value."},
     CodeInfo{"flow.barrier.wait-lends-node", Family::kBarrier,
              Severity::kWarning,
-             "A 'wait' or 'drain' on a node nothing in the flow writes: it "
+             "A 'wait' or 'close' on a node nothing in the flow writes: it "
              "ends the node at once rather than waiting for it."},
     CodeInfo{"flow.barrier.wrong-carry", Family::kBarrier, Severity::kError,
              "A carry names something other than what its repeat carries."},
-    CodeInfo{"flow.form.advance-in-loop", Family::kForm, Severity::kError,
-             "An 'advance' names a value bound outside the loop, where its "
-             "fixed step would bind the same value on every pass."},
     CodeInfo{"flow.form.bad-number", Family::kForm, Severity::kError,
              "A number the language cannot read."},
     CodeInfo{"flow.form.bad-pattern", Family::kForm, Severity::kError,
@@ -164,6 +161,8 @@ constexpr std::array kCodes = {
              "Private type exposed."},
     CodeInfo{"flow.form.repeated-modifier", Family::kForm, Severity::kError,
              "A modifier that says one thing is written twice."},
+    CodeInfo{"flow.form.resource-limit", Family::kForm, Severity::kError,
+             "A host-configured parsing or compilation limit was reached."},
     CodeInfo{"flow.form.stage-argument", Family::kForm, Severity::kError,
              "A stage is missing the argument it takes, or was given one of "
              "the wrong kind."},
@@ -217,7 +216,7 @@ constexpr std::array kCodes = {
              "'_' used as a name: bound to a statement, declared as a port, or "
              "given to a loop. It is the discard, not a name."},
     CodeInfo{"flow.name.discard-read", Family::kName, Severity::kError,
-             "'_' read: as a pipeline source, as something to wait on, drain "
+             "'_' read: as a pipeline source, as something to wait on, close "
              "or abort, or inside an expression. It keeps nothing, so there is "
              "nothing there to read."},
     CodeInfo{"flow.name.import-alias-conflict", Family::kName, Severity::kError,
@@ -235,10 +234,6 @@ constexpr std::array kCodes = {
              "Something that is not a call is asked to stop."},
     CodeInfo{"flow.name.not-a-stream", Family::kName, Severity::kError,
              "Something that cannot be read is used as a pipeline source."},
-    CodeInfo{
-        "flow.name.not-advanceable", Family::kName, Severity::kError,
-        "'advance' names something other than a value a 'let' bound, which "
-        "is the only thing with a next value."},
     CodeInfo{"flow.name.not-writable", Family::kName, Severity::kError,
              "A stream is written somewhere that cannot be written: an 'in' "
              "port, a call's output, a barrier."},
@@ -260,9 +255,15 @@ constexpr std::array kCodes = {
     CodeInfo{"flow.schema.unsupported-keyword", Family::kForm,
              Severity::kWarning,
              "A JSON Schema contains a constraint without a Flow spelling."},
+    CodeInfo{"flow.sequence.conflicting-access", Family::kSequence,
+             Severity::kError,
+             "Parallel accesses require a deterministic order."},
     CodeInfo{"flow.sequence.impossible", Family::kSequence, Severity::kWarning,
              "A sequence of stages that cannot produce what it appears to: "
              "dropping from one value, counting a reduced stream, 'first 0'."},
+    CodeInfo{"flow.sequence.lossy-conversion", Family::kSequence,
+             Severity::kWarning,
+             "A constant conversion loses precision or falls back to zero."},
     CodeInfo{"flow.sequence.redundant-declaration", Family::kSequence,
              Severity::kInformation, "Redundant declaration."},
     CodeInfo{"flow.sequence.redundant-definition", Family::kSequence,
@@ -331,8 +332,8 @@ constexpr std::array kCodes = {
              "A 'try' whose status nothing reads: a failure leaves the ports "
              "it feeds silently empty."},
     CodeInfo{"flow.unused.value", Family::kUnused, Severity::kWarning,
-             "A `let` nothing reads: the stream behind it is never read "
-             "either, so whatever produces it may be left waiting."},
+             "An initialized value that no expression reads."},
+
 };
 
 }  // namespace

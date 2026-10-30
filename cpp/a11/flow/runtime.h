@@ -67,7 +67,8 @@ class CompiledProgram {
   /// caller that wants to see it.
   static absl::StatusOr<std::shared_ptr<CompiledProgram>> Compile(
       std::string source, std::string source_name = {},
-      const ModuleSources& modules = {}, ModuleResolver resolver = {});
+      const ModuleSources& modules = {}, ModuleResolver resolver = {},
+      CompilationLimits limits = {});
 
   [[nodiscard]] const Program& program() const { return resolved_.program; }
 
@@ -83,6 +84,9 @@ class CompiledProgram {
   [[nodiscard]] const std::vector<ResolvedFlow>& flows() const {
     return resolved_.flows;
   }
+
+  /// Runtime identities of external actions called by this composition.
+  std::vector<std::string> ExternalActions() const;
 
   /// The flow of this name, or `nullptr`. Never the entry flow.
   [[nodiscard]] const ResolvedFlow* absl_nullable Flow(
@@ -129,9 +133,6 @@ struct RunOptions {
   /// used when this is null.
   std::shared_ptr<HostBridge> bridge;
 
-  // For a flow a **client** runs over a session it already holds: the `call`
-  // steps that belong to the peer are bound to this stream, and the flow's own
-  // action is not.
   /// For a flow a **client** runs over a session it already holds: the `call`
   /// steps that belong to the peer are bound to this stream, and the flow's own
   /// action is not.

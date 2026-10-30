@@ -20,6 +20,8 @@
 # the caller's header rather than anything in this file. Served by
 # `a11.demos.web_demos_server`; the guide is doc/docs/guides/deep-research.md.
 
+from std import join, startswith, strformat, to_chunk
+
 flow plan-research {
   describe """
     Turn a topic into a handful of briefs that can be investigated separately.
@@ -36,7 +38,7 @@ flow plan-research {
   strformat("[plan] planning research on: %s", topic) -> narration
 
   llm = run ask_model(
-    interactions: topic | map a11.sdk.Interaction{
+    interactions: topic | map a11::sdk::Interaction{
       role: "user",
       system_instructions: [to_chunk("""
         You plan research. Given a topic, write a short plan for investigating
@@ -64,10 +66,10 @@ flow plan-research {
   # -- one value per line, which is what the fan-out downstream reads.
   lines = run split_lines(text: llm.text_output | join "")
 
-  lines.lines | where not starts-with(it, "FINALLY:") -> briefs
-  lines.lines | where starts-with(it, "FINALLY:") | first 1 -> synthesis
+  lines.lines | where not startswith(it, "FINALLY:") -> briefs
+  lines.lines | where startswith(it, "FINALLY:") | first 1 -> synthesis
   lines.lines
-    | where not starts-with(it, "FINALLY:")
+    | where not startswith(it, "FINALLY:")
     | strformat "[plan] brief: %s"
     -> narration
 }
@@ -83,7 +85,7 @@ flow investigate {
   strformat("[investigate] %s", brief) -> narration
 
   llm = run ask_model(
-    interactions: brief | map a11.sdk.Interaction{
+    interactions: brief | map a11::sdk::Interaction{
       role: "user",
       system_instructions: [to_chunk("""
         You are one of several research agents working on one topic. Carry out
@@ -137,7 +139,7 @@ flow synthesise-findings {
     -> asked
 
   llm = run ask_model(
-    interactions: asked | map a11.sdk.Interaction{
+    interactions: asked | map a11::sdk::Interaction{
       role: "user",
       system_instructions: [to_chunk("""
         You write the final report of a research project out of the

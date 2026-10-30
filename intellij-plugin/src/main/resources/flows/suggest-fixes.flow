@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from std import contains, default, get, join, replace, slice, split, strformat, to_chunk, trim
+
 flow suggest-fixes {
   describe "Review the file the developer is looking at and suggest fixes for it, on the IDE's ranges and on its own."
 
@@ -28,16 +30,12 @@ flow suggest-fixes {
 
   active = call ide__get_active_file(request: {include_line_numbers: true})
 
-  file_path = node() in scratch
-  active.path -> file_path
-
-  file_text = node() in scratch
-  active.lines | join "\n" | truncate 40000 -> file_text
+  string file_path = take active.path
+  string file_text = take (active.lines | join "\n" | truncate 40000)
 
   found = call ide__get_error_highlights(
-    request: file_path | map {path: it, start_line: 0}
+    request: {path: file_path, start_line: 0}
   )
-  skip found.path  # we asked about a path we already have
 
   whole = run interact_with_llm(
     config: {max_tokens: 48000, effort: "medium", max_output_tokens: 48000, num_predict: 48000}
@@ -45,9 +43,6 @@ flow suggest-fixes {
       forward headers "x-a11-llm-*"
       with "x-a11-allowed-llm-actions": ""
       via scratch
-  skip whole.event_stream
-  skip whole.thoughts
-  skip whole.new_interactions
 
   found.highlights
     | map strformat(
@@ -56,58 +51,58 @@ flow suggest-fixes {
       it.message, it.text, default(get(it, "tooltip", ""), "(none)")
     )
     | join "\n"
-    | map a11.sdk.Interaction{
+    | map a11::sdk::Interaction{
       role: "user",
-      system_instructions: [to_chunk(join([
-        "Review one file in the IDE: the file, then what its analysis",
-        "underlines. Lines and columns are 0-based, end_column exclusive.",
-        "",
-        "Each line arrives as its 0-based number, a tab, then the line. Read start_line",
-        "and end_line off them; a hunk header's N is that number plus one. The margin is",
-        "not the file: column 0 follows the tab, patch lines are copied from after it, a",
-        "patch carrying it is refused.",
-        "",
-        "Suggest fixes anywhere, underlined or not, each small, safe and obviously right;",
-        "skip what you cannot explain or fix. Small is a reason to patch, not to skip.",
-        "",
-        "Write two parts and nothing else: no headings, fences, preamble or closing.",
-        "",
-        "Part one: JSON objects, each preceded by a line of exactly `§§§§§§`, the first",
-        "included. One suggestion is two objects sharing an `id`, `id` first:",
-        "",
-        "  §§§§§§",
-        "  {\"id\": \"s1\", \"start_line\": 11, \"start_column\": 4, \"end_line\": 11,",
-        "   \"end_column\": 20, \"origin\": \"reported\", \"comment\": \"...\"}",
-        "",
-        "The patch object repeats all of that after its own separator, with",
-        "\"patch\": \"@@ -12,3 +12,3 @@\\n ...\" instead of \"comment\".",
-        "",
-        "Comment object before patch object, always. Either may stand alone: a patch",
-        "alone suits anything too small for a sentence, and a repeated change -- comment",
-        "the first at most, patch the rest silently. One suggestion per occurrence, never",
-        "a patch spanning the file; a comment alone only when the fix is not small and",
-        "local.",
-        "",
-        "`origin`: \"reported\" if the range is a highlight's, its four numbers copied",
-        "exactly; \"found\" if yours.",
-        "",
-        "`comment`: 30 words at most, saying what the diff cannot. No preamble, markdown,",
-        "restating the IDE's message or narrating the diff; omit if it adds nothing.",
-        "",
-        "`patch`: a unified diff of this file -- \"@@ -N,C +N,C @@\", then one line per",
-        "line, prefixed ' ' to keep, '-' to remove, '+' to add. Kept and removed lines",
-        "are the file's own, character for character including whitespace; one that does",
-        "not match is refused. Change as few lines as you can. It is a JSON string:",
-        "newlines are \\n, quotes are \\\" -- one unescaped quote loses the suggestion.",
-        "",
-        "Part two, last: another `§§§§§§` line, then at most 120 words of prose on what the",
-        "file needs, grouped by cause, each fix named, which first. No headings, no",
-        "restating messages; say in a clause if you went beyond the IDE; if nothing, say",
-        "so. It summarises the objects, never replaces one: anything in it a small edit",
-        "would fix needs a patch object above.",
-        "",
-        "Write the separator exactly, all six; `§` nowhere else."
-      ], "\n"))],
+      system_instructions: [to_chunk("""
+        Review one file in the IDE: the file, then what its analysis
+        underlines. Lines and columns are 0-based, end_column exclusive.
+
+        Each line arrives as its 0-based number, a tab, then the line. Read start_line
+        and end_line off them; a hunk header's N is that number plus one. The margin is
+        not the file: column 0 follows the tab, patch lines are copied from after it, a
+        patch carrying it is refused.
+
+        Suggest fixes anywhere, underlined or not, each small, safe and obviously right;
+        skip what you cannot explain or fix. Small is a reason to patch, not to skip.
+
+        Write two parts and nothing else: no headings, fences, preamble or closing.
+
+        Part one: JSON objects, each preceded by a line of exactly `§§§§§§`, the first
+        included. One suggestion is two objects sharing an `id`, `id` first:
+
+          §§§§§§
+          {"id": "s1", "start_line": 11, "start_column": 4, "end_line": 11,
+           "end_column": 20, "origin": "reported", "comment": "..."}
+
+        The patch object repeats all of that after its own separator, with
+        "patch": "@@ -12,3 +12,3 @@\\n ..." instead of "comment".
+
+        Comment object before patch object, always. Either may stand alone: a patch
+        alone suits anything too small for a sentence, and a repeated change -- comment
+        the first at most, patch the rest silently. One suggestion per occurrence, never
+        a patch spanning the file; a comment alone only when the fix is not small and
+        local.
+
+        `origin`: "reported" if the range is a highlight's, its four numbers copied
+        exactly; "found" if yours.
+
+        `comment`: 30 words at most, saying what the diff cannot. No preamble, markdown,
+        restating the IDE's message or narrating the diff; omit if it adds nothing.
+
+        `patch`: a unified diff of this file -- "@@ -N,C +N,C @@", then one line per
+        line, prefixed ' ' to keep, '-' to remove, '+' to add. Kept and removed lines
+        are the file's own, character for character including whitespace; one that does
+        not match is refused. Change as few lines as you can. It is a JSON string:
+        newlines are \\n, quotes are \\" -- one unescaped quote loses the suggestion.
+
+        Part two, last: another `§§§§§§` line, then at most 120 words of prose on what the
+        file needs, grouped by cause, each fix named, which first. No headings, no
+        restating messages; say in a clause if you went beyond the IDE; if nothing, say
+        so. It summarises the objects, never replaces one: anything in it a small edit
+        would fix needs a patch object above.
+
+        Write the separator exactly, all six; `§` nowhere else.
+        """)],
       content: [to_chunk({
         role: "user",
         content: [{
@@ -152,7 +147,7 @@ flow suggest-fixes {
     | map trim(it)
     -> file_comment
 
-  # Parsed once, into a node, because the two ports below both read it.
+  # Parse each suggestion once and fan it out to the two output streams.
   #
   # A piece is an object when it has braces, and nothing narrower: keying on a
   # field name means a model that leaves that field out, or writes the fields in

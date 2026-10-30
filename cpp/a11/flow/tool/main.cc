@@ -74,6 +74,8 @@ struct Options {
   /// is the default.
   std::string target;
   std::string root = ".";
+  std::vector<std::string> source_roots;
+  CompilationLimits limits;
   std::string protocol = "json";
   /// Which shape `schema` is asked about; every one of them when empty.
   std::string dto;
@@ -122,6 +124,10 @@ Options:
                    ", ")
             << R"(
   --root DIR                 the checkout an editor definition lives in
+  --source-root DIR          permit imports under DIR (repeatable; default none)
+  --compile-timeout-ms N      compilation time budget
+  --compile-work N            compilation work budget
+  --parse-depth N             maximum parsing depth (up to 128)
   --protocol json|lsp        what `serve` speaks
   --stdio                    serve LSP over stdio, which is what an LSP client
                              says; the same as `serve --protocol lsp`
@@ -179,13 +185,15 @@ void Emit(const nlohmann::json& payload) {
 }
 
 /// Everything wrong with one document, both passes, in source order.
-std::vector<Diagnostic> Problems(std::string_view source,
-                                 std::string_view path) {
+std::vector<Diagnostic> Problems(std::string_view source, std::string_view path,
+                                 const Options& options) {
   const nlohmann::json answer =
       Handle(nlohmann::json{{"method", "check"},
                             {"source", std::string(source)},
                             {"path", FileModuleIdentity(path)}},
-             FileModuleResolver());
+             FileModuleResolver(options.limits.max_source_bytes, {},
+                                options.source_roots),
+             options.limits);
   std::vector<Diagnostic> found;
   for (const nlohmann::json& entry : answer.at("result").at("diagnostics")) {
     found.push_back(DiagnosticFromJsonValue(entry));
@@ -215,7 +223,7 @@ int Check(const Options& options) {
       exit_code = 2;
       continue;
     }
-    const std::vector<Diagnostic> found = Problems(source, path);
+    const std::vector<Diagnostic> found = Problems(source, path, options);
     if (CountErrors(found) > 0) {
       exit_code = std::max(exit_code, 1);
     }
@@ -436,8 +444,10 @@ int Describe(const Options& options) {
     std::cerr << path << ": cannot read: " << reason << "\n";
     return 2;
   }
-  auto linked =
-      LinkModules(source, FileModuleIdentity(path), {}, FileModuleResolver());
+  auto linked = LinkModules(source, FileModuleIdentity(path), {},
+                            FileModuleResolver(options.limits.max_source_bytes,
+                                               {}, options.source_roots),
+                            options.limits);
   auto resolved = Resolve(linked.source, linked.parsed);
   linked.Locate(resolved.diagnostics);
   if (options.format != Output::kText) {
@@ -526,8 +536,10 @@ int Schema(const Options& options) {
     std::cerr << path << ": cannot read: " << reason << "\n";
     return 2;
   }
-  auto linked =
-      LinkModules(source, FileModuleIdentity(path), {}, FileModuleResolver());
+  auto linked = LinkModules(source, FileModuleIdentity(path), {},
+                            FileModuleResolver(options.limits.max_source_bytes,
+                                               {}, options.source_roots),
+                            options.limits);
   auto resolved = Resolve(linked.source, linked.parsed);
   linked.Locate(resolved.diagnostics);
   if (resolved.HasErrors()) {
@@ -586,7 +598,10 @@ int Complete(const Options& options) {
     return 2;
   }
   const auto linked =
-      LinkModules(source, FileModuleIdentity(path), {}, FileModuleResolver());
+      LinkModules(source, FileModuleIdentity(path), {},
+                  FileModuleResolver(options.limits.max_source_bytes, {},
+                                     options.source_roots),
+                  options.limits);
   const CompleteResult completed = CompleteAt(
       source, offset,
       catalogue::Catalogue::Builtin().MergedWith(linked.CatalogueAt(offset)));
@@ -736,7 +751,7 @@ int Syntax(const Options& options) {
 
 int Serve(const Options& options) {
   if (options.protocol == "lsp") {
-    return RunLsp(std::cin, std::cout);
+    return RunLsp(std::cin, std::cout, options.source_roots, options.limits);
   }
   if (options.protocol != "json") {
     std::cerr << "serve speaks json or lsp, not " << options.protocol << "\n";
@@ -759,7 +774,12 @@ int Serve(const Options& options) {
       std::cout.flush();
       continue;
     }
-    std::cout << Handle(request, FileModuleResolver()).dump() << "\n";
+    std::cout << Handle(request,
+                        FileModuleResolver(options.limits.max_source_bytes, {},
+                                           options.source_roots),
+                        options.limits)
+                     .dump()
+              << "\n";
     std::cout.flush();
   }
   return 0;
@@ -817,6 +837,21 @@ Options ReadOptions(int argc, char** argv) {
       options.target = value("--target");
     } else if (argument == "--root") {
       options.root = value("--root");
+    } else if (argument == "--source-root") {
+      options.source_roots.push_back(value("--source-root"));
+    } else if (argument == "--compile-timeout-ms" ||
+               argument == "--compile-work" || argument == "--parse-depth") {
+      size_t limit = 0;
+      if (!absl::SimpleAtoi(value(argument), &limit)) {
+        options.complaint =
+            absl::StrCat(argument, " requires a nonnegative integer.");
+      } else if (argument == "--compile-timeout-ms") {
+        options.limits.max_duration_ms = limit;
+      } else if (argument == "--compile-work") {
+        options.limits.max_work = limit;
+      } else {
+        options.limits.max_nesting = limit;
+      }
     } else if (argument == "--protocol") {
       options.protocol = value("--protocol");
     } else if (argument == "--stdio") {

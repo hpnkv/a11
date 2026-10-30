@@ -34,8 +34,6 @@ enum class SyntaxTarget {
   /// built
   /// on Pygments (MkDocs, Sphinx, `pygmentize`).
   kPygments,
-  // `editors/vscode/a11flow.tmLanguage.json`: a TextMate grammar in the JSON
-  // dialect VSCode reads.
   /// `editors/vscode/a11flow.tmLanguage.json`: a TextMate grammar in the JSON
   /// dialect VSCode reads.
   ///
@@ -47,8 +45,6 @@ enum class SyntaxTarget {
   /// of
   /// words, strings and marks, and it does not try to be a parser.
   kVsCode,
-  // `editors/vscode/a11flow-injection.tmLanguage.json`: the same words, as an
-  // injection into the string literals of a host language.
   /// `editors/vscode/a11flow-injection.tmLanguage.json`: the same words, as an
   /// injection into the string literals of a host language.
   ///
@@ -61,6 +57,9 @@ enum class SyntaxTarget {
   /// Native vocabulary data for the browser fallback highlighter.
   kBrowser,
 };
+
+/// Native document-start pattern used by host-string injectors.
+std::string FragmentStartPattern();
 
 /// Every target, for a command that offers a choice of them.
 absl::Span<const SyntaxTarget> SyntaxTargets();

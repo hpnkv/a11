@@ -53,7 +53,7 @@ async def run_rounds(rounds, values):
     seen = 0
     for _ in range(rounds):
         out = await flow_lang.invoke(plan, items=values)
-        seen += len(out["result"])
+        seen += std::len(out["result"])
     return seen
 """
 

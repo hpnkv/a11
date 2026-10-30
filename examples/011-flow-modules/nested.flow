@@ -1,6 +1,8 @@
-flow test exported {
-  in  input:  string stream "Input"
+from std import strformat
 
-  stdout = run write_stdout()
-  input | map strformat("%s\n", it) -> stdout.content
+flow test {
+  in  input: string stream "Lines to write."
+  run write_stdout(content: input | map strformat("%s\n", it))
 }
+
+export test

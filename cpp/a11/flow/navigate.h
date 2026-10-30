@@ -25,10 +25,12 @@
 
 #include "a11/flow/catalogue.h"
 #include "a11/flow/diagnostic.h"
+#include "a11/flow/limits.h"
 #include "a11/flow/syntax.h"
 #include "a11/flow/vocabulary.h"
 
 namespace a11::flow {
+struct LinkedModule;
 
 // Moving around a document: what is under the caret, what the file declares,
 // and where a name was bound.
@@ -42,6 +44,7 @@ namespace a11::flow {
 ///
 /// Serialized in `flow.symbols/v1` and `flow.hover/v1`.
 enum class SymbolClass {
+  kModule,
   kFlow,
   kDto,
   kField,
@@ -80,7 +83,9 @@ struct DocumentSymbol {
 /// Every symbol a document declares, nested as it is written.
 ///
 /// Top-level flows and shapes contain their ports, fields, and local bindings.
-std::vector<DocumentSymbol> Symbols(std::string_view source);
+std::vector<DocumentSymbol> Symbols(
+    std::string_view source, CompilationLimits limits = {},
+    CompilationBudget* absl_nullable budget = nullptr);
 
 /// What is at one offset, described.
 struct Description {
@@ -102,8 +107,6 @@ struct Description {
   /// Where it was declared, when it was declared in this document.
   bool has_definition = false;
   Range definition;
-  // Where it was declared, when it was declared in *another* file and something
-  // read that file: an action or a type the catalogue carries an origin for.
   /// Where it was declared, when it was declared in *another* file and
   /// something
   /// read that file: an action or a type the catalogue carries an origin for.
@@ -115,10 +118,11 @@ struct Description {
 /// What is at `offset`, and where it came from.
 Description Describe(
     std::string_view source, size_t offset,
-    const catalogue::Catalogue& known = catalogue::Catalogue::Builtin());
+    const catalogue::Catalogue& known = catalogue::Catalogue::Builtin(),
+    CompilationLimits limits = {},
+    CompilationBudget* absl_nullable budget = nullptr,
+    const LinkedModule* absl_nullable linked = nullptr);
 
-// An action, written out as the Markdown a reader wants to see: what it does,
-// then every port it has.
 /// An action, written out as the Markdown a reader wants to see: what it does,
 /// then every port it has.
 ///
@@ -139,8 +143,6 @@ std::string FlowMarkdown(const FlowPlan& flow);
 /// A struct, written out the same way: how many fields, then each of them.
 std::string ShapeMarkdown(const DtoPlan& shape);
 
-// One word or mark of the language, written out as reference: what it does,
-// what it takes, how it behaves, and a line of Flow using it.
 /// One word or mark of the language, written out as reference: what it does,
 /// what it takes, how it behaves, and a line of Flow using it.
 ///

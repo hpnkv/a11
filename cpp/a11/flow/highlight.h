@@ -75,7 +75,7 @@ enum class SemanticKind {
   /// are the outside world and which are local plumbing. Deciding it needs the
   /// resolver, so it is [RefinePorts] rather than [Highlight] that says so.
   kPortName,
-  /// Any other word: a node, a step, a loop variable, a `let` value.
+  /// Any other word: a node, a step, a loop variable, a `value` value.
   kIdentifier,
   /// `->`, `<-`, `|`: where a stream is going.
   kFlowOperator,

@@ -1027,14 +1027,13 @@ ActionSchema ReadFileSchema() {
   schema.name = std::string(kReadFileAction);
   schema.description =
       "Read a file, with each way of wanting it on a port of its own: the "
-      "bytes "
-      "as they arrive, the whole thing as text, one value per line, and the "
-      "metadata -- which is written before any content, so a composition can "
-      "act on the size while the reading is still going on. Reading streams, "
-      "so "
-      "a file larger than memory costs a chunk at a time. In Flow, pipe "
-      "`bytes` straight into a streaming consumer, or filter and bound "
-      "`lines` before routing only the useful selection to a flow output.";
+      "bytes as they arrive, the whole thing as std::text, one value per line, "
+      "and the metadata -- which is written before any content, so a "
+      "composition can act on the size while the reading is still going on. "
+      "Reading streams, so a file larger than memory costs a chunk at a time. "
+      "In Flow, pipe `bytes` straight into a streaming consumer, or filter and "
+      "bound `lines` before routing only the useful selection to a flow "
+      "output.";
   schema.inputs.emplace("path",
                         Port("path", kTextPlain,
                              "File to read; relative paths use the current "

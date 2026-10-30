@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -36,6 +37,7 @@
 #include <nlohmann/json.hpp>
 #include <poll.h>
 #include <unistd.h>
+#include <uvw/poll.h>
 
 #include "a11/actions/action.h"
 #include "a11/actions/registry.h"
@@ -45,6 +47,7 @@
 #include "a11/data/types.h"
 #include "a11/nodes/async_node.h"
 #include "a11/uuid.h"
+#include "a11/uv/loop.h"
 #include "sdk/flow/actions/options.h"
 #include "sdk/flow/actions/policy.h"
 #include "sdk/flow/actions/ports.h"
@@ -59,7 +62,6 @@ using ::a11::actions::ActionHandler;
 using ::a11::actions::ActionSchema;
 using ::a11::nodes::AsyncNode;
 
-constexpr int kPollMilliseconds = 50;
 /// Largest single draw of randomness. A caller wanting more than this wants a
 /// stream cipher, not this action.
 constexpr std::int64_t kMaxRandomBytes = 1024 * 1024;
@@ -71,6 +73,133 @@ absl::Status ErrnoStatus(int code, std::string_view what) {
 // ---------------------------------------------------------------------------
 // read_stdin
 // ---------------------------------------------------------------------------
+
+class StdinReadiness {
+ public:
+  ~StdinReadiness() { Close().IgnoreError(); }
+
+  absl::StatusOr<bool> Wait(const std::shared_ptr<StopSignal>& stop) {
+    if (stop->stopped()) {
+      return false;
+    }
+    struct pollfd input{};
+    input.fd = STDIN_FILENO;
+    input.events = POLLIN;
+    int ready;
+    do {
+      ready = ::poll(&input, 1, 0);
+    } while (ready < 0 && errno == EINTR);
+    if (ready < 0 || (input.revents & POLLNVAL) != 0) {
+      return ErrnoStatus(ready < 0 ? errno : EBADF,
+                         "cannot wait for standard input");
+    }
+    // Regular files and /dev/null are immediately readable, and may not be
+    // supported by the platform's asynchronous descriptor watcher.
+    if (ready > 0) {
+      return true;
+    }
+    const auto result = std::make_shared<Completion>();
+    ABSL_RETURN_IF_ERROR(OnLoop([this, result]() -> absl::Status {
+      if (handle_ == nullptr) {
+        original_flags_ = ::fcntl(STDIN_FILENO, F_GETFL);
+        if (original_flags_ < 0) {
+          return ErrnoStatus(errno, "cannot inspect standard input");
+        }
+        handle_ = uv::UvExecutor::Instance()
+                      .loop()
+                      ->uninitialized_resource<uvw::poll_handle>(STDIN_FILENO);
+        if (const int initialized = handle_->init(); initialized != 0) {
+          handle_.reset();
+          return uv::UvError(initialized, "cannot watch standard input");
+        }
+      }
+      handle_->on<uvw::poll_event>(
+          [result](const uvw::poll_event&, uvw::poll_handle& handle) {
+            handle.stop();
+            result->done.Notify();
+          });
+      handle_->on<uvw::error_event>([result](const uvw::error_event& error,
+                                             uvw::poll_handle& handle) {
+        handle.stop();
+        result->status = uv::UvError(error.code(), "standard input readiness");
+        result->done.Notify();
+      });
+      const int started =
+          handle_->start(uvw::poll_handle::poll_event_flags::READABLE);
+      return started == 0 ? absl::OkStatus()
+                          : uv::UvError(started, "cannot watch standard input");
+    }));
+    const int selected = thread::Select(
+        {thread::OnCancel(), stop->OnStop(), result->done.OnEvent()});
+    if (selected == 0) {
+      stop->Stop(StopReason::kCancelled);
+    }
+    if (selected != 2) {
+      return false;
+    }
+    ABSL_RETURN_IF_ERROR(result->status);
+    return true;
+  }
+
+  absl::Status Close() {
+    if (handle_ == nullptr && original_flags_ < 0) {
+      return absl::OkStatus();
+    }
+    auto handle = std::move(handle_);
+    const int flags = std::exchange(original_flags_, -1);
+    if (handle == nullptr) {
+      return OnLoop([flags] { return RestoreFlags(flags); });
+    }
+    const auto closed = std::make_shared<Completion>();
+    ABSL_RETURN_IF_ERROR(
+        uv::UvExecutor::Instance().Post([handle, closed, flags] {
+          handle->stop();
+          handle->on<uvw::close_event>(
+              [closed, flags](const uvw::close_event&, uvw::poll_handle&) {
+                closed->status = RestoreFlags(flags);
+                closed->done.Notify();
+              });
+          handle->close();
+        }));
+    thread::Select({closed->done.OnEvent()});
+    return closed->status;
+  }
+
+ private:
+  struct Completion {
+    thread::PermanentEvent done;
+    absl::Status status;
+  };
+
+  // Resource setup and teardown must finish even if the waiting fiber is
+  // cancelled; callbacks retain their completion state until notification.
+  static absl::Status OnLoop(std::function<absl::Status()> operation) {
+    const auto completed = std::make_shared<Completion>();
+    ABSL_RETURN_IF_ERROR(uv::UvExecutor::Instance().Post(
+        [completed, operation = std::move(operation)] {
+          completed->status = operation();
+          completed->done.Notify();
+        }));
+    thread::Select({completed->done.OnEvent()});
+    return completed->status;
+  }
+
+  static absl::Status RestoreFlags(int original) {
+    if (original < 0) {
+      return absl::OkStatus();
+    }
+    const int current = ::fcntl(STDIN_FILENO, F_GETFL);
+    if (current < 0 ||
+        ::fcntl(STDIN_FILENO, F_SETFL,
+                (current & ~O_NONBLOCK) | (original & O_NONBLOCK)) < 0) {
+      return ErrnoStatus(errno, "cannot restore standard input mode");
+    }
+    return absl::OkStatus();
+  }
+
+  std::shared_ptr<uvw::poll_handle> handle_;
+  int original_flags_ = -1;
+};
 
 absl::Status RunReadStdin(const std::shared_ptr<Action>& action) {
   ABSL_ASSIGN_OR_RETURN(const std::optional<nlohmann::json> raw_options,
@@ -106,28 +235,18 @@ absl::Status RunReadStdin(const std::shared_ptr<Action>& action) {
   LineSplitter line_splitter(lines);
   absl::Status trouble = absl::OkStatus();
 
+  StdinReadiness readiness;
   while (trouble.ok()) {
-    // Poll blocks this OS worker; let its sibling fibers run between polls.
+    // A continuously readable input still shares its worker with control and
+    // cleanup fibers.
     thread::SleepFor(absl::ZeroDuration());
-    if (stop->stopped()) {
-      break;  // a source asked to finish has finished
-    }
-    // Polled rather than read straight through, so that a stop is acted on
-    // while standard input is quiet -- which, for a terminal, is most of the
-    // time.
-    struct pollfd waiting{};
-    waiting.fd = STDIN_FILENO;
-    waiting.events = POLLIN;
-    const int ready = ::poll(&waiting, 1, kPollMilliseconds);
-    if (ready < 0) {
-      if (errno == EINTR) {
-        continue;
-      }
-      trouble = ErrnoStatus(errno, "cannot wait for standard input");
+    const auto ready = readiness.Wait(stop);
+    if (!ready.ok()) {
+      trouble = ready.status();
       break;
     }
-    if (ready == 0) {
-      continue;
+    if (!*ready) {
+      break;
     }
     const ssize_t got = ::read(STDIN_FILENO, buffer.data(), buffer.size());
     if (got < 0) {
@@ -153,6 +272,7 @@ absl::Status RunReadStdin(const std::shared_ptr<Action>& action) {
     }
   }
 
+  trouble.Update(readiness.Close());
   if (trouble.ok()) {
     trouble = line_splitter.Flush();
   }

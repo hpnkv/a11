@@ -172,7 +172,9 @@ std::string_view MethodSummary(std::string_view method) {
   return "";
 }
 
-nlohmann::json Handle(const nlohmann::json& request, ModuleResolver resolver) {
+nlohmann::json Handle(const nlohmann::json& request, ModuleResolver resolver,
+                      CompilationLimits limits) {
+  CompilationBudget budget(limits);
   if (!request.is_object()) {
     return Failure(nlohmann::json::object(), "A request is a JSON object.");
   }
@@ -226,12 +228,12 @@ nlohmann::json Handle(const nlohmann::json& request, ModuleResolver resolver) {
         }
       }
     }
-    LinkedModule linked =
-        LinkModules(source, path, modules, std::move(resolver));
+    LinkedModule linked = LinkModules(source, path, modules,
+                                      std::move(resolver), limits, &budget);
     remember(linked);
     const auto evidence = KnownWorld(request).SchemaProgram();
-    ResolveResult resolved =
-        Resolve(linked.source, linked.parsed, false, &evidence);
+    ResolveResult resolved = Resolve(linked.source, linked.parsed, false,
+                                     &evidence, limits, &budget);
     for (auto& diagnostic : Inspect(linked.source, linked.parsed, resolved)) {
       resolved.diagnostics.push_back(std::move(diagnostic));
     }
@@ -243,7 +245,7 @@ nlohmann::json Handle(const nlohmann::json& request, ModuleResolver resolver) {
     return answer(TokensToJsonValue(path, source));
   }
   if (method == "parse") {
-    return answer(SyntaxToJsonValue(path, Parse(source)));
+    return answer(SyntaxToJsonValue(path, Parse(source, limits, &budget)));
   }
   if (method == "plan") {
     ModuleSources modules;
@@ -255,11 +257,12 @@ nlohmann::json Handle(const nlohmann::json& request, ModuleResolver resolver) {
         }
       }
     }
-    LinkedModule linked = LinkModules(source, path, modules, resolver);
+    LinkedModule linked =
+        LinkModules(source, path, modules, resolver, limits, &budget);
     remember(linked);
     const auto evidence = KnownWorld(request).SchemaProgram();
-    ResolveResult resolved =
-        Resolve(linked.source, linked.parsed, false, &evidence);
+    ResolveResult resolved = Resolve(linked.source, linked.parsed, false,
+                                     &evidence, limits, &budget);
     linked.Locate(resolved.diagnostics);
     nlohmann::json result = PlanToJsonValue(path, resolved.program);
     // A plan of a document with an error in it is a partial plan, and a reader
@@ -273,7 +276,7 @@ nlohmann::json Handle(const nlohmann::json& request, ModuleResolver resolver) {
     return answer(std::move(result));
   }
   if (method == "format") {
-    return answer(FormatToJsonValue(Format(source)));
+    return answer(FormatToJsonValue(Format(source, {}, limits, &budget)));
   }
   // The methods that take a caret.
   if (method == "complete" || method == "describe" || method == "definition") {
@@ -303,22 +306,27 @@ nlohmann::json Handle(const nlohmann::json& request, ModuleResolver resolver) {
         }
       }
     }
-    const auto linked = LinkModules(source, path, modules, resolver);
+    const auto linked =
+        LinkModules(source, path, modules, resolver, limits, &budget);
     remember(linked);
     const catalogue::Catalogue known = [&] {
-      auto scope = linked.CatalogueAt(reached, method == "complete");
+      auto scope =
+          linked.CatalogueAt(reached, method == "complete", limits, &budget);
       if (linked.SelectingImport(reached)) {
         if (method == "complete") {
           return scope;
         }
-        scope = scope.MergedWith(linked.CatalogueAt(reached));
+        scope = scope.MergedWith(
+            linked.CatalogueAt(reached, true, limits, &budget));
       }
       return KnownWorld(request).MergedWith(scope);
     }();
     if (method == "complete") {
-      return answer(CompletionsToJsonValue(CompleteAt(source, reached, known)));
+      return answer(CompletionsToJsonValue(
+          CompleteAt(source, reached, known, limits, &budget, &linked)));
     }
-    const Description about = Describe(source, reached, known);
+    const Description about =
+        Describe(source, reached, known, limits, &budget, &linked);
     if (method == "definition") {
       nlohmann::json result{{"format", kDefinitionFormat},
                             {"source", path},
@@ -357,7 +365,7 @@ nlohmann::json Handle(const nlohmann::json& request, ModuleResolver resolver) {
   }
   if (method == "symbols") {
     nlohmann::json symbols = nlohmann::json::array();
-    for (const DocumentSymbol& symbol : Symbols(source)) {
+    for (const DocumentSymbol& symbol : Symbols(source, limits, &budget)) {
       symbols.push_back(SymbolToJson(symbol));
     }
     return answer(nlohmann::json{{"format", kSymbolsFormat},
@@ -418,9 +426,11 @@ nlohmann::json Handle(const nlohmann::json& request, ModuleResolver resolver) {
         }
       }
     }
-    LinkedModule linked = LinkModules(source, path, modules, resolver);
+    LinkedModule linked =
+        LinkModules(source, path, modules, resolver, limits, &budget);
     remember(linked);
-    ResolveResult resolved = Resolve(linked.source, linked.parsed);
+    ResolveResult resolved =
+        Resolve(linked.source, linked.parsed, false, nullptr, limits, &budget);
     linked.Locate(resolved.diagnostics);
     const std::string shape_name = request.value("struct", std::string());
     nlohmann::json shapes = nlohmann::json::object();

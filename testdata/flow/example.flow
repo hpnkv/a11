@@ -24,7 +24,7 @@ struct Source {
   tags:   string[] unique
   rank:   number 0..1 default 0.5
   kind:   string one of ["page", "paper"] default "page"
-  seen:   time
+  seen:   std::time
   parent: Source
 }
 
@@ -67,24 +67,24 @@ flow example {
     }
   }
 
-  drain pages after search
+  close pages after search
 
   # Two streams read in step, taken apart by name. A source that ends first
   # contributes a null from then on, so the longer one is still read out.
-  for page_text, url in zip(pages, search.hits) {
-    strformat("%s: %s", url, page_text) -> notes
+  for page_text, url in std::zip(pages, search.hits) {
+    std::strformat("%s: %s", url, page_text) -> notes
   }
 
   brief = run llm-summarize(question: question, pages: pages)
       with "x-a11-deadline": deadline
 
   # The other direction: one value, cut into pieces of a size the far end wants.
-  let summary = brief.summary
+  summary = take (brief.summary)
   summary | chunk 4096 -> frames
 
   # One value, named: `budget` is a header and `read` is however many pages
   # actually arrived, and both read as values rather than as streams.
-  let read = pages | count
+  read = take (pages | count)
   logf "read %s pages" read after search
   if read > 0 {
     summary -> answer
@@ -96,18 +96,18 @@ flow example {
   # Several values of one stream, one at a time. The k-th binding of a name is
   # the k-th value of its stream, so `advance` is exact without a barrier, and
   # statements above it keep the value they were written against.
-  let page_line = pages
-  strformat("first: %s", page_line) -> notes
-  advance page_line
-  strformat("second: %s", page_line) -> notes
+  page_line = take (pages)
+  std::strformat("first: %s", page_line) -> notes
+  page_line = take (pages)
+  std::strformat("second: %s", page_line) -> notes
 
   # A pattern pulls named fields out of text: literal text matches itself and
   # `{name}` captures, so a line that does not fit is dropped rather than parsed
   # badly. Several names then take one value apart, by field where the value has
   # one and by position where it is a list.
   pages | match "{title:line}" | map it.title -> notes
-  let head, tail = match("{head}. {tail:rest}", summary)
-  strformat("%s || %s", head, tail) -> notes
+  head, tail = take (std::match("{head}. {tail:rest}", summary))
+  std::strformat("%s || %s", head, tail) -> notes
 
   # A block runs its statements as one step and says how they went. A condition
   # inside it blocks what is in the braces and nothing else, which is what a
@@ -118,5 +118,5 @@ flow example {
       fail resource_exhausted "more pages than the budget allowed"
     }
   }
-  strformat("checked: %s", checked.ok) -> notes
+  std::strformat("checked: %s", checked.ok) -> notes
 }

@@ -18,6 +18,10 @@
 #define A11_FLOW_TOOL_LSP_H_
 
 #include <iosfwd>
+#include <string>
+#include <vector>
+
+#include "a11/flow/limits.h"
 
 namespace a11::flow::tool {
 
@@ -32,7 +36,9 @@ namespace a11::flow::tool {
 ///
 /// Returns the process's exit code: 0 for a clean `shutdown`/`exit`, 1 when the
 /// stream ended without one.
-int RunLsp(std::istream& in, std::ostream& out);
+int RunLsp(std::istream& in, std::ostream& out,
+           std::vector<std::string> source_roots = {},
+           CompilationLimits limits = {});
 
 }  // namespace a11::flow::tool
 

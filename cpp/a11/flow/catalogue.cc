@@ -285,11 +285,13 @@ std::vector<std::string> ActionInfo::PortNames(
   return names;
 }
 
-Catalogue Catalogue::Of(std::vector<ActionInfo> actions,
-                        std::vector<TypeInfo> types) {
+Catalogue Catalogue::Of(
+    std::vector<ActionInfo> actions, std::vector<TypeInfo> types,
+    absl::flat_hash_map<std::string, std::string> intrinsics) {
   Catalogue built;
   built.actions_ = std::move(actions);
   built.types_ = std::move(types);
+  built.intrinsics_ = std::move(intrinsics);
   return built;
 }
 
@@ -344,6 +346,14 @@ Catalogue Catalogue::FromJson(const nlohmann::json& value) {
       built.types_.push_back(std::move(type));
     }
   }
+  if (const auto values = value.find("intrinsics");
+      values != value.end() && values->is_object()) {
+    for (const auto& item : values->items()) {
+      if (item.value().is_string()) {
+        built.intrinsics_[item.key()] = item.value().get<std::string>();
+      }
+    }
+  }
   return built;
 }
 
@@ -386,9 +396,14 @@ nlohmann::json Catalogue::ToJson() const {
     }
     types.push_back(std::move(one));
   }
+  nlohmann::json intrinsics = nlohmann::json::object();
+  for (const auto& [name, canonical] : intrinsics_) {
+    intrinsics[name] = canonical;
+  }
   return nlohmann::json{{"format", kCatalogueFormat},
                         {"actions", std::move(actions)},
-                        {"types", std::move(types)}};
+                        {"types", std::move(types)},
+                        {"intrinsics", std::move(intrinsics)}};
 }
 
 Program Catalogue::SchemaProgram() const {
@@ -466,6 +481,9 @@ Catalogue Catalogue::MergedWith(const Catalogue& other) const {
       merged.types_.push_back(type);
     }
   }
+  for (const auto& [name, canonical] : other.intrinsics_) {
+    merged.intrinsics_[name] = canonical;
+  }
   return merged;
 }
 
@@ -480,7 +498,7 @@ const ActionInfo* absl_nullable Catalogue::Action(std::string_view name) const {
 
 const TypeInfo* absl_nullable Catalogue::Type(std::string_view tag) const {
   for (const TypeInfo& type : types_) {
-    if (type.tag == tag) {
+    if (type.tag == tag || syntax::SourceTypeName(type.tag) == tag) {
       return &type;
     }
   }

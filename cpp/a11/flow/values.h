@@ -38,6 +38,7 @@
 #include "a11/flow/pattern.h"
 #include "a11/flow/plan.h"
 #include "a11/flow/syntax.h"
+#include "a11/flow/temporal.h"
 
 namespace a11::flow {
 
@@ -127,6 +128,11 @@ class Value {
   static Value Bytes(data::Bytes value);
   static Value List(std::vector<Value> items);
   static Value Object(Pairs pairs);
+  static Value Status(absl::Status status, Pairs fields);
+  static Value Option(std::optional<Value> value);
+
+  bool is_option() const { return option_; }
+
   static Value Duration(absl::Duration value);
   static Value Time(absl::Time value);
   static Value Chunk(data::Chunk chunk);
@@ -164,6 +170,10 @@ class Value {
 
   [[nodiscard]] const Pairs& pairs() const { return *pairs_; }
 
+  [[nodiscard]] const absl::Status* absl_nullable native_status() const {
+    return status_.get();
+  }
+
   [[nodiscard]] absl::Duration duration() const { return duration_; }
 
   [[nodiscard]] absl::Time time() const { return time_; }
@@ -185,6 +195,7 @@ class Value {
  private:
   Kind kind_ = Kind::kNull;
   bool boolean_ = false;
+  bool option_ = false;
   std::int64_t integer_ = 0;
   double number_ = 0.0;
   absl::Duration duration_;
@@ -192,6 +203,7 @@ class Value {
   std::shared_ptr<const std::string> text_;
   std::shared_ptr<const std::vector<Value>> items_;
   std::shared_ptr<const Pairs> pairs_;
+  std::shared_ptr<const absl::Status> status_;
   std::shared_ptr<const data::Chunk> chunk_;
   std::shared_ptr<const HostObject> host_;
 };
@@ -260,7 +272,6 @@ class HostBridge {
     return chunks;
   }
 
-  // How this host would rather hold a value of a shape the *language* declared.
   /// How this host would rather hold a value of a shape the *language*
   /// declared.
   ///
@@ -302,6 +313,7 @@ std::unique_ptr<HostBridge> NativeHostBridge();
 /// did not send should be able to say `if not thing.field` rather than fall
 /// over.
 Value Lookup(const Value& value, const Value& key);
+absl::StatusOr<Value> LookupChecked(const Value& value, const Value& key);
 
 /// Whether `value` counts as true, as an `if` and a `where` decide it.
 bool Truthy(const Value& value);
@@ -373,29 +385,11 @@ std::string JsonText(const Value& value);
 /// subtracted the wrong way round give.
 double DurationSeconds(absl::Duration value);
 
-/// A duration of `total` seconds, negative ones included.
-///
-/// `absl::Seconds` is fine with a negative, but A11's own `Duration.seconds`
-/// reads one as *infinite*, and this is the language's spelling: a number
-/// beside a duration is a length, so `-30` is thirty seconds the other way.
-absl::Duration SecondsDuration(double total);
-
-/// A duration from the way the language writes one, or `nullopt`.
-///
-/// The source's spelling and the formatter's, both ways round: `30s`, `250ms`,
-/// `1m30s`, `forever`, and a bare number of seconds. A duration a flow put on a
-/// port comes back as text often enough -- through a header, a JSON field, a
-/// model's answer -- that reading it back has to be as ordinary as writing it.
-std::optional<absl::Duration> ParseDuration(std::string_view text);
-
 /// A duration from a duration, from written text, or from seconds.
 absl::Duration AsDuration(const Value& value);
 
 /// An instant from an instant, from RFC 3339 text, or from epoch seconds.
 absl::Time AsTime(const Value& value);
-
-/// An instant from RFC 3339 text, as `TimeText` writes it.
-std::optional<absl::Time> ParseTime(std::string_view text);
 
 /// A duration as text: `1m30s` by default, or one unit when `spec` names one.
 std::string DurationText(absl::Duration value, std::string_view spec = {});
@@ -474,8 +468,6 @@ absl::StatusOr<Value> Coerce(const Value& value,
                              const syntax::TypeExpression& type,
                              const CoerceContext& context);
 
-// Make `value` a value of `shape`: fill its defaults, check its bounds, and
-// coerce every field to the type the shape gives it.
 /// Make `value` a value of `shape`: fill its defaults, check its bounds, and
 /// coerce every field to the type the shape gives it.
 ///

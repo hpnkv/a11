@@ -37,6 +37,7 @@
 
 #include "a11/actions/registry.h"
 #include "a11/flow/diagnostic.h"
+#include "a11/flow/limits.h"
 #include "a11/flow/values.h"
 #include "a11/net/wire_stream.h"
 #include "sdk/flow/actions/policy.h"
@@ -47,6 +48,8 @@ namespace a11::flow::interpreter {
 struct Source {
   std::string text;
   std::string name;
+  std::vector<std::string> source_roots = {};
+  CompilationLimits limits = {};
 };
 
 /// How to run it.

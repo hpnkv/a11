@@ -20,9 +20,15 @@
 
 #include <absl/status/status.h>
 
+#include "a11/flow/limits.h"
 #include "a11/flow/plan.h"
 
 namespace a11::flow {
+/// Every type named by a field, including nested container parameters.
+std::vector<std::string_view> FieldTypeNames(const FieldPlan& field);
+/// Propagate byte payloads through the shape dependency graph.
+void MarkBinaryTypes(std::vector<DtoPlan>& types,
+                     CompilationBudget* absl_nullable budget = nullptr);
 /// Whether available metadata proves payload refinement.
 enum class Refinement { kYes, kNo, kUnknown };
 /// Canonical payload spelling for alias and generic equality.

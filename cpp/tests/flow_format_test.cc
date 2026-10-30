@@ -139,8 +139,8 @@ std::string ReadFile(const std::filesystem::path& path) {
 }
 
 TEST(FlowFormat, PlainPipelineBindingsPreserveTheirCompletionGroup) {
-  const std::string source = R"(flow main{in values:integer stream
-out kept:integer stream
+  const std::string source = R"(flow main{in values:int stream
+out kept:int stream
 forwarded=values
 |take until it==3
 ->kept,_
@@ -267,27 +267,14 @@ TEST(FlowFormat, KeepsTheBreaksTheAuthorWroteAndIndentsThem) {
 
 TEST(FlowFormat, ABracketedGroupIndentsFromTheLineThatOpenedIt) {
   const std::string source =
-      "flow t {\n"
-      "  in  a: string\n"
-      "  llm = call interact(\n"
-      "interactions: a | map a11.sdk.Interaction{\n"
-      "role: \"user\",\n"
-      "content: [to_chunk(it)]\n"
-      "},\n"
-      "config: {}\n"
-      ")\n"
-      "}\n";
-  EXPECT_EQ(Formatted(source),
-            "flow t {\n"
-            "  in  a: string\n"
-            "  llm = call interact(\n"
-            "    interactions: a | map a11.sdk.Interaction{\n"
-            "      role: \"user\",\n"
-            "      content: [to_chunk(it)]\n"
-            "    },\n"
-            "    config: {}\n"
-            "  )\n"
-            "}\n");
+      "flow t {\n  in  a: string\n  llm = call interact(\ninteractions: a | "
+      "map a11::sdk::Interaction{\nrole: \"user\",\ncontent: "
+      "[std::to_chunk(it)]\n},\nconfig: {}\n)\n}\n";
+  EXPECT_EQ(
+      Formatted(source),
+      "flow t {\n  in  a: string\n  llm = call interact(\n    interactions: a "
+      "| map a11::sdk::Interaction{\n      role: \"user\",\n      content: "
+      "[std::to_chunk(it)]\n    },\n    config: {}\n  )\n}\n");
 }
 
 TEST(FlowFormat, AFoldArgumentOnTheNextLineIsIndentedUnderItsStage) {
@@ -505,9 +492,9 @@ declare flow render exported { in data: object
 out text: string stream }
 flow f exported {
   out result: string stream
-  let outcome=wait try run check()
-  let finished=drain node("existing")
-  (run lib.render(data:{"ok":outcome.ok}) via scratch).text|consume->result
+  outcome=take (wait try run check())
+  finished=take (close node("existing"))
+  (run lib::render(data:{"ok":outcome.ok}) via scratch).text|consume->result
 }
 )";
   const auto formatted = Format(source);

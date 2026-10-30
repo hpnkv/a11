@@ -33,6 +33,7 @@ from a11._native import (
 
 __all__: list[str] = [
     "CallOptions",
+    "CompilationLimits",
     "DocumentChange",
     "DocumentSymbolHandle",
     "Expression",
@@ -88,6 +89,14 @@ class CallOptions:
     def after(self, arg0: collections.abc.Sequence[Expression]) -> None: ...
 
     @property
+    def deadline(self) -> Expression | None:
+        """
+        An eager absolute std::time expression.
+        """
+    @deadline.setter
+    def deadline(self, arg0: Expression | None) -> None: ...
+
+    @property
     def forward(self) -> list[str]: ...
     @forward.setter
     def forward(self, arg0: collections.abc.Sequence[str]) -> None: ...
@@ -107,6 +116,77 @@ class CallOptions:
         """
     @timeout.setter
     def timeout(self, arg1: typing.Any) -> None: ...
+
+class CompilationLimits:
+    """
+    Host-controlled bounds for parsing, imports and semantic analysis.
+    """
+
+    def __init__(self) -> None: ...
+
+    @property
+    def max_depth(self) -> int:
+        """
+        Compilation bound for depth.
+        """
+    @max_depth.setter
+    def max_depth(self, arg0: typing.SupportsInt) -> None: ...
+
+    @property
+    def max_duration_ms(self) -> int:
+        """
+        Compilation bound for duration ms.
+        """
+    @max_duration_ms.setter
+    def max_duration_ms(self, arg0: typing.SupportsInt) -> None: ...
+
+    @property
+    def max_linked_name_bytes(self) -> int:
+        """
+        Compilation bound for linked name bytes.
+        """
+    @max_linked_name_bytes.setter
+    def max_linked_name_bytes(self, arg0: typing.SupportsInt) -> None: ...
+
+    @property
+    def max_modules(self) -> int:
+        """
+        Compilation bound for modules.
+        """
+    @max_modules.setter
+    def max_modules(self, arg0: typing.SupportsInt) -> None: ...
+
+    @property
+    def max_nesting(self) -> int:
+        """
+        Compilation bound for nesting.
+        """
+    @max_nesting.setter
+    def max_nesting(self, arg0: typing.SupportsInt) -> None: ...
+
+    @property
+    def max_source_bytes(self) -> int:
+        """
+        Compilation bound for source bytes.
+        """
+    @max_source_bytes.setter
+    def max_source_bytes(self, arg0: typing.SupportsInt) -> None: ...
+
+    @property
+    def max_tokens(self) -> int:
+        """
+        Compilation bound for tokens.
+        """
+    @max_tokens.setter
+    def max_tokens(self, arg0: typing.SupportsInt) -> None: ...
+
+    @property
+    def max_work(self) -> int:
+        """
+        Compilation bound for work.
+        """
+    @max_work.setter
+    def max_work(self, arg0: typing.SupportsInt) -> None: ...
 
 class DocumentChange:
     """
@@ -162,7 +242,7 @@ class Expression:
     @staticmethod
     def completion(operation: str, subject: Expression) -> Expression:
         """
-        Read status, wait for, or drain a subject.
+        Read status, wait for, or close a subject.
         """
 
     @staticmethod
@@ -233,6 +313,11 @@ class Expression:
         Apply a pipeline stage with required grouping.
         """
 
+    def take(self, optional: bool = False) -> Expression:
+        """
+        Extract the next item, optionally representing EOF as absence.
+        """
+
     @property
     def source(self) -> str:
         """
@@ -269,9 +354,11 @@ class FlowBuilder:
         Add a flow-local struct.
         """
 
-    def bind(self, name: str, value: Expression) -> None:
+    def bind(
+        self, name: str, value: Expression, type: Type | None = None
+    ) -> None:
         """
-        Bind an expression value.
+        Initialize or reassign an expression value.
         """
 
     def emit(self) -> str:
@@ -449,6 +536,12 @@ class FlowPlan:
         """
 
     @property
+    def registerable(self) -> bool:
+        """
+        Whether bulk registration exposes this root or exported implementation.
+        """
+
+    @property
     def schema(self) -> ActionSchema:
         """
         The [ActionSchema][a11.actions.action.ActionSchema] a flow presents.
@@ -484,21 +577,31 @@ class ModuleDocument:
         """
 
     def check(
-        self, modules: collections.abc.Mapping[str, str] = {}
+        self,
+        modules: collections.abc.Mapping[str, str] = {},
+        source_roots: collections.abc.Sequence[str] = [],
+        limits: CompilationLimits = ...,
     ) -> typing.Any:
         """
         Analyze this module and its supplied import graph.
         """
 
     def compile(
-        self, modules: collections.abc.Mapping[str, str] = {}
+        self,
+        modules: collections.abc.Mapping[str, str] = {},
+        source_roots: collections.abc.Sequence[str] = [],
+        limits: CompilationLimits = ...,
     ) -> Program:
         """
-        Build an immutable execution snapshot from supplied modules.
+        Compile an immutable snapshot with explicit source roots and compilation limits.
         """
 
     def effective_schema(
-        self, name: str, modules: collections.abc.Mapping[str, str] = {}
+        self,
+        name: str,
+        modules: collections.abc.Mapping[str, str] = {},
+        source_roots: collections.abc.Sequence[str] = [],
+        limits: CompilationLimits = ...,
     ) -> typing.Any:
         """
         Query the effective conjunction of compatible callable contributions.
@@ -651,6 +754,11 @@ class Program:
     def __len__(self) -> int: ...
     def __repr__(self) -> str: ...
     def describe(self) -> dict[str, typing.Any]: ...
+    def external_actions(self) -> list[str]:
+        """
+        Runtime action identities reachable through external calls and contracts.
+        """
+
     def get(self, name: str) -> FlowPlan | None:
         """
         The flow of this name, or ``None``.
@@ -731,9 +839,11 @@ class Statement:
         """
 
     @staticmethod
-    def bind(name: str, value: Expression) -> Statement:
+    def bind(
+        name: str, value: Expression, type: Type | None = None
+    ) -> Statement:
         """
-        Bind a scalar expression.
+        Initialize or reassign a value with an optional type guarantee.
         """
 
     @staticmethod
@@ -784,9 +894,9 @@ class Statement:
         """
 
     @staticmethod
-    def wait(subject: Expression, drain: bool = False) -> Statement:
+    def wait(subject: Expression, close: bool = False) -> Statement:
         """
-        Wait for or drain a subject.
+        Wait for or close a subject.
         """
 
     @property
@@ -863,7 +973,8 @@ def check(
     source: str,
     source_name: str = "-",
     modules: collections.abc.Mapping[str, str] = {},
-    resolve_files: bool = False,
+    source_roots: collections.abc.Sequence[str] = [],
+    limits: CompilationLimits = ...,
 ) -> dict[str, typing.Any]:
     """
     Everything wrong with one flow file.
@@ -895,15 +1006,11 @@ def compile(
     source: str,
     source_name: str = "",
     modules: collections.abc.Mapping[str, str] = {},
-    resolve_files: bool = False,
+    source_roots: collections.abc.Sequence[str] = [],
+    limits: CompilationLimits = ...,
 ) -> Program:
     """
-    Compile Flow source into a runnable program.
-
-    The strict door onto the engine every other function here reads through: the
-    parser and the resolver both recover and report everything, and this refuses on
-    the first error with the line, the column and the message. ``a11.flow.loads``
-    turns that into ``FlowSyntaxError``.
+    Compile Flow source with explicit source roots and compilation limits.
     """
 
 def complete(source: str, offset: typing.SupportsInt) -> dict[str, typing.Any]:
@@ -988,7 +1095,9 @@ def register_standard_actions(
     """
 
 def request(
-    request: dict[str, typing.Any], resolve_files: bool = False
+    request: dict[str, typing.Any],
+    source_roots: collections.abc.Sequence[str] = [],
+    limits: CompilationLimits = ...,
 ) -> dict[str, typing.Any]:
     """
     One request to the language service, answered.
@@ -1018,6 +1127,8 @@ def run_program(
     registry: typing.Any | None = None,
     session: typing.Any | None = None,
     dispatch_stream: typing.Any | None = None,
+    source_roots: collections.abc.Sequence[str] = [],
+    limits: CompilationLimits = ...,
 ) -> dict[str, typing.Any]:
     """
     Run a Flow program's entry flow, and return what it did.

@@ -230,13 +230,9 @@ class Inspector {
           break;
         case SymbolKind::kValue:
           if (symbol.reads == 0) {
-            // A `let` is lazy: nothing is read until the name is, so one nobody
-            // reads is not merely a dead name -- the stream behind it is never
-            // touched either, and whatever produces it may be left waiting.
             Report("flow.unused.value",
                    absl::StrCat("Nothing reads ", Quoted(symbol.name),
-                                ", so the stream behind it is never read. Use "
-                                "it, or pipe the stream to '_'."),
+                                "; its initializer still executes once."),
                    symbol.location, Severity::kWarning, Family::kUnused);
           }
           break;
@@ -375,11 +371,11 @@ class Inspector {
   /// renders as nothing at all. Within one statement there is no `after` that
   /// could say which read comes first, so the only fix is to stop reading
   /// twice:
-  /// `let` names a value, and a value is shared.
+  /// `value` names a value, and a value is shared.
   ///
   /// Only nodes of the flow's own: everything else a flow reads for a value
   /// either provably carries one (a port that did not say `stream`, a header, a
-  /// status) or is a `let` value already.
+  /// status) or is a `value` value already.
   void ValueReadTwice(const std::vector<const Node*>& roots) {
     // Counted first and reported afterwards, at the *second* read in the text:
     // [syntax::VisitSubtree] promises only that a parent comes before its
@@ -426,8 +422,8 @@ class Inspector {
                           "stream take turns on one view of it: they see two "
                           "different values, and the second sees nothing at "
                           "all when the node carries one. Read it once into a "
-                          "value -- 'let one = ",
-                          name, "' -- and use that twice."),
+                          "value: 'one = take ",
+                          name, "'; use that value twice."),
              second->location, Severity::kWarning, Family::kBarrier);
     }
   }
@@ -437,7 +433,7 @@ class Inspector {
   /// Nothing here writes it, so nothing here would close it either -- and the
   /// barrier does, which makes it an *ending* rather than a wait: it returns as
   /// soon as it has closed the node, and the callee that was lent `n.id` finds
-  /// its writer shut. `drain n after <call>` is the one that waits, and says
+  /// its writer shut. `close n after <call>` is the one that waits, and says
   /// out loud that the flow which lent the node is the flow that ends it.
   void LentNodes(const ResolvedFlow& flow) {
     absl::flat_hash_set<std::string> written;
@@ -447,7 +443,7 @@ class Inspector {
 
   /// Every node a pipe of this flow puts values into, however deeply nested.
   ///
-  /// Pipes only: a `drain` carries its node as a destination too, and counting
+  /// Pipes only: a `close` carries its node as a destination too, and counting
   /// that would be this check answering itself.
   static void Written(const std::vector<StepPlan>& steps,
                       absl::flat_hash_set<std::string>& written) {
@@ -467,7 +463,7 @@ class Inspector {
       for (const std::vector<StepPlan>& body : step.bodies) {
         Holds(body, written);
       }
-      if (step.kind != "wait" && step.kind != "drain") {
+      if (step.kind != "wait" && step.kind != "close") {
         continue;
       }
       if (!step.after.empty()) {
@@ -493,7 +489,7 @@ class Inspector {
                           "at once: whoever was lent '",
                           subject,
                           ".id' finds its writer closed. Say which step fills "
-                          "it: 'drain ",
+                          "it: 'close ",
                           subject, " after <that step>'."),
              step.location, Severity::kWarning, Family::kBarrier);
     }
@@ -778,7 +774,7 @@ class Inspector {
   void Barriers(const std::vector<StepPlan>& steps) {
     absl::flat_hash_map<std::string, size_t> waited;
     for (const StepPlan& step : steps) {
-      if (step.kind == "wait" || step.kind == "drain") {
+      if (step.kind == "wait" || step.kind == "close") {
         const std::string subject =
             step.kind == "wait" ? step.source : step.destination;
         if (subject.empty()) {
@@ -817,7 +813,6 @@ class Inspector {
   std::string flow_;
   /// The flow being walked, for the questions that are about a *name*.
   const ResolvedFlow* absl_nullable current_ = nullptr;
-  // How many `if`/`for`/`repeat` bodies deep this statement is.
   /// How many `if`/`for`/`repeat` bodies deep this statement is. What it
   /// answers is the one `CheckReachedByChoice` asks in the resolver: whether
   /// anything at all says when this statement runs. A `nodes` block does not

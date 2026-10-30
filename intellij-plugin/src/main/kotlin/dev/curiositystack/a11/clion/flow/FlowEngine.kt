@@ -78,6 +78,9 @@ class FlowEngine : Disposable {
     fun check(text: String, sourceContext: FlowSourceContext = FlowSourceContext()): Map<String, Any?>? =
         ask("check", text, sourceContext)
 
+    /** The native document-start pattern shared with static injection grammars. */
+    fun fragmentPattern(): String? = ask("vocabulary", "")?.get("fragment_pattern") as? String
+
     /** Every token and what it *means*: `flow.tokens/v1`, or `null`. */
     fun tokens(text: String): Map<String, Any?>? = ask("tokens", text)
 

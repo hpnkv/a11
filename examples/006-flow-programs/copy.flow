@@ -29,28 +29,25 @@
 flow {
   describe "Copy one file to another, streaming."
 
-  out copied: integer "How many bytes were written."
+  out copied: int "How many bytes were written."
 
-  nodes scratch
-  from = node() in scratch
-  to = node() in scratch
-
-  argv | drop 1 | first 1 -> from
-  argv | drop 2 | first 1 -> to
+  arguments = argv | drop 1
+  string source_path = take arguments
+  string target_path = take arguments
 
   # Automatic draining still produces an unbound output. For a binary file,
   # `text` and `lines` cannot be produced because they are text. Omitting them
   # closes the ports before anything is read.
   source = run read_file(
-    path: from,
+    path: source_path,
     options: {"omit": ["text", "lines", "info"]}
-  ) via scratch
+  )
 
   target = run write_file(
-    path: to,
+    path: target_path,
     content: source.bytes,
     options: {"omit": ["resolved", "info"]}
-  ) via scratch
+  )
 
   target.bytes_written -> copied
 }

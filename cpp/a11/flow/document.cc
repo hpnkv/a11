@@ -40,9 +40,11 @@ absl::Status Name(std::string_view name, bool dotted = false) {
       break;
     }
     if (word ? token.kind != TokenKind::kWord
-             : (!dotted || token.kind != TokenKind::kDot)) {
+             : (!dotted || (token.kind != TokenKind::kDot &&
+                            token.kind != TokenKind::kScope))) {
       return absl::InvalidArgumentError(
-          "A name must contain words separated by dots.");
+          "A name must contain words separated by namespace or projection "
+          "tokens.");
     }
     word = !word;
   }
@@ -159,9 +161,9 @@ absl::StatusOr<std::string> Interface(const FlowPlan& plan, bool declaration) {
   if (plan.name.empty()) {
     return absl::InvalidArgumentError("A constructed flow requires a name.");
   }
-  std::string text =
-      absl::StrCat(declaration ? "declare flow " : "flow ", Quote(plan.name),
-                   plan.exported ? " exported" : "", " {\n");
+  std::string text = absl::StrCat(declaration ? "declare flow " : "flow ",
+                                  syntax::ActionSource(plan.name),
+                                  plan.exported ? " exported" : "", " {\n");
   if (!plan.description.empty()) {
     absl::StrAppend(&text, "  describe ", Quote(plan.description), "\n");
   }
@@ -171,7 +173,8 @@ absl::StatusOr<std::string> Interface(const FlowPlan& plan, bool declaration) {
         !utf8::IsValid(port.type)) {
       return absl::InvalidArgumentError("Port text must contain valid UTF-8.");
     }
-    std::string type_source = port.declared.empty() ? port.type : port.declared;
+    std::string type_source = syntax::SourceTypeName(
+        port.declared.empty() ? port.type : port.declared);
     if (!port.constraints.empty() && port.declared == "any") {
       return absl::FailedPreconditionError(
           "An unresolved payload conjunction has no lossless Flow spelling.");
@@ -217,6 +220,11 @@ absl::StatusOr<std::string> Interface(const FlowPlan& plan, bool declaration) {
 }
 }  // namespace
 
+Expression Expression::Take(bool optional) const {
+  return Expression(
+      absl::StrCat("(", optional ? "try take (" : "take (", source_, "))"));
+}
+
 absl::StatusOr<Expression> Expression::Reference(std::string name) {
   ABSL_RETURN_IF_ERROR(Name(name, true));
   return Expression(std::move(name));
@@ -258,8 +266,7 @@ absl::StatusOr<Expression> Expression::Literal(nlohmann::json value) {
     }
   }
   std::string text = value.dump();
-  ABSL_RETURN_IF_ERROR(
-      Parsed(absl::StrCat("flow { let value = ", text, "\n}")));
+  ABSL_RETURN_IF_ERROR(Parsed(absl::StrCat("flow { value = ", text, "\n}")));
   return Expression(std::move(text));
 }
 
@@ -271,8 +278,9 @@ absl::StatusOr<Expression> Expression::Invoke(
     return absl::InvalidArgumentError(
         "An action name must contain valid UTF-8.");
   }
-  std::string text = absl::StrCat(
-      tolerant ? "try " : "", remote ? "call " : "run ", Quote(action), "(");
+  std::string text =
+      absl::StrCat(tolerant ? "try " : "", remote ? "call " : "run ",
+                   syntax::ActionSource(action), "(");
   bool first = true;
   for (const auto& [name, value] : arguments) {
     ABSL_RETURN_IF_ERROR(Name(name));
@@ -310,6 +318,9 @@ absl::StatusOr<Expression> Expression::InvokeWith(
     absl::StrAppend(&source, " timeout ",
                     absl::FormatDuration(*options.timeout));
   }
+  if (options.deadline.has_value()) {
+    absl::StrAppend(&source, " deadline ", options.deadline->source());
+  }
   if (options.id.has_value()) {
     absl::StrAppend(&source, " id ", options.id->source());
   }
@@ -343,8 +354,7 @@ absl::StatusOr<Expression> Expression::InvokeWith(
     }
   }
   source += ')';
-  ABSL_RETURN_IF_ERROR(
-      Parsed(absl::StrCat("flow { let value = ", source, "\n}")));
+  ABSL_RETURN_IF_ERROR(Parsed(absl::StrCat("flow { value = ", source, "\n}")));
   return Expression(std::move(source));
 }
 
@@ -370,6 +380,9 @@ absl::StatusOr<Expression> Expression::Array(std::vector<Expression> items) {
 
 absl::StatusOr<Expression> Expression::Builtin(
     std::string name, std::vector<Expression> arguments) {
+  if (name.starts_with("std::")) {
+    name.erase(0, 5);
+  }
   if (!vocabulary::Builtins().contains(name)) {
     return absl::InvalidArgumentError("Unknown Flow builtin.");
   }
@@ -377,9 +390,9 @@ absl::StatusOr<Expression> Expression::Builtin(
   for (const auto& item : arguments) {
     parts.push_back(item.source());
   }
-  std::string source = absl::StrCat(name, "(", absl::StrJoin(parts, ", "), ")");
-  ABSL_RETURN_IF_ERROR(
-      Parsed(absl::StrCat("flow { let value = ", source, "\n}")));
+  std::string source = absl::StrCat(syntax::SourceFunctionName(name), "(",
+                                    absl::StrJoin(parts, ", "), ")");
+  ABSL_RETURN_IF_ERROR(Parsed(absl::StrCat("flow { value = ", source, "\n}")));
   return Expression(std::move(source));
 }
 
@@ -396,8 +409,8 @@ absl::StatusOr<Expression> Expression::Node(std::optional<Expression> id,
 
 absl::StatusOr<Expression> Expression::Completion(std::string operation,
                                                   const Expression& subject) {
-  if (operation != "wait" && operation != "drain" && operation != "status") {
-    return absl::InvalidArgumentError("Expected wait, drain, or status.");
+  if (operation != "wait" && operation != "close" && operation != "status") {
+    return absl::InvalidArgumentError("Expected wait, close, or status.");
   }
   return Expression(absl::StrCat("(", operation, " ", subject.source(), ")"));
 }
@@ -428,8 +441,7 @@ absl::StatusOr<Expression> Expression::Pipeline(
     absl::StrAppend(&text, " ", argument->source());
   }
   text += ')';
-  ABSL_RETURN_IF_ERROR(
-      Parsed(absl::StrCat("flow { let value = ", text, "\n}")));
+  ABSL_RETURN_IF_ERROR(Parsed(absl::StrCat("flow { value = ", text, "\n}")));
   return Expression(std::move(text));
 }
 
@@ -446,10 +458,16 @@ std::string Statement::Body(const std::vector<Statement>& statements) {
   return source + "}";
 }
 
-absl::StatusOr<Statement> Statement::Let(std::string name,
-                                         const Expression& value) {
+absl::StatusOr<Statement> Statement::Initialize(
+    std::string name, const Expression& value,
+    std::optional<syntax::TypeExpression> type) {
   ABSL_RETURN_IF_ERROR(Name(name));
-  return Validated(absl::StrCat("let ", name, " = ", value.source()));
+  std::string prefix;
+  if (type.has_value()) {
+    ABSL_ASSIGN_OR_RETURN(prefix, type->ToSource());
+    prefix += " ";
+  }
+  return Validated(absl::StrCat(prefix, name, " = ", value.source()));
 }
 
 absl::StatusOr<Statement> Statement::Pipe(const Expression& value,
@@ -458,8 +476,8 @@ absl::StatusOr<Statement> Statement::Pipe(const Expression& value,
 }
 
 absl::StatusOr<Statement> Statement::Wait(const Expression& subject,
-                                          bool drain) {
-  return Validated(absl::StrCat(drain ? "drain " : "wait ", subject.source()));
+                                          bool close) {
+  return Validated(absl::StrCat(close ? "close " : "wait ", subject.source()));
 }
 
 absl::StatusOr<Statement> Statement::Cancel(const Expression& subject) {
@@ -551,13 +569,13 @@ absl::Status FlowBuilder::AddPort(std::string name,
   return absl::OkStatus();
 }
 
-absl::Status FlowBuilder::AddLet(std::string name, const Expression& value) {
-  ABSL_RETURN_IF_ERROR(Name(name));
-  if (plan_.interface_only) {
-    return absl::InvalidArgumentError("An interface has no statements.");
-  }
-  statements_.push_back(absl::StrCat("let ", name, " = ", value.source()));
-  return absl::OkStatus();
+absl::Status FlowBuilder::AddInitialize(
+    std::string name, const Expression& value,
+    std::optional<syntax::TypeExpression> type) {
+  ABSL_ASSIGN_OR_RETURN(
+      auto statement,
+      Statement::Initialize(std::move(name), value, std::move(type)));
+  return AddStatement(statement);
 }
 
 absl::Status FlowBuilder::AddPipe(const Expression& value,
@@ -585,6 +603,7 @@ absl::Status FlowBuilder::AddImport(std::string reference, std::string alias,
   if (!symbol.empty()) {
     ABSL_RETURN_IF_ERROR(Name(symbol, true));
     item.selective = true;
+    item.namespace_source = true;
     item.symbols.push_back({syntax::Word{symbol, {}, {}},
                             syntax::Word{alias, {}, {}}, symbol != alias});
   } else {
@@ -623,7 +642,7 @@ absl::StatusOr<std::string> FlowBuilder::Emit() const {
   for (const auto& item : imports_) {
     if (item.selective) {
       const auto& symbol = item.symbols.front();
-      absl::StrAppend(&text, "  from ", Quote(item.source), " import ",
+      absl::StrAppend(&text, "  from ", item.source, " import ",
                       symbol.name.text, symbol.explicit_alias ? " as " : "",
                       symbol.explicit_alias ? symbol.alias.text : "", "\n");
     } else {
@@ -665,18 +684,17 @@ absl::Status StructBuilder::AddField(std::string name,
   field.required = required;
   field.description = std::move(description);
   if (default_value.has_value()) {
-    const auto parsed = Parse(
-        absl::StrCat("flow { let value = ", default_value->source(), "\n}"));
+    const auto parsed =
+        Parse(absl::StrCat("flow { value = ", default_value->source(), "\n}"));
     if (parsed.HasErrors() || parsed.flows.empty() ||
         parsed.flows.front()->body.empty()) {
       return absl::InvalidArgumentError("A field default must be a constant.");
     }
     const auto* binding =
-        syntax::As<syntax::Let>(parsed.flows.front()->body.front().get());
-    const auto constant =
-        binding == nullptr
-            ? std::optional<syntax::Constant>{}
-            : syntax::ConstantValue(binding->pipeline->source.get());
+        syntax::As<syntax::Bind>(parsed.flows.front()->body.front().get());
+    const auto constant = binding == nullptr
+                              ? std::optional<syntax::Constant>{}
+                              : syntax::ConstantValue(binding->value.get());
     if (!constant.has_value()) {
       return absl::InvalidArgumentError("A field default must be a constant.");
     }
@@ -742,6 +760,13 @@ std::vector<DocumentSymbolHandle> ModuleDocument::Symbols() const {
                        counts[absl::StrCat(kind, ":", name)]++, span.start,
                        span.end});
   };
+  for (const auto& module : parsed.modules) {
+    const auto text = std::string_view(source_).substr(
+        module.extent.start, module.extent.end - module.extent.start);
+    if (text.starts_with("mod") || text.starts_with("MOD")) {
+      add(module.name.text, "module", module.extent);
+    }
+  }
   for (const auto& flow : parsed.flows) {
     add(flow->name.text, flow->interface_only ? "declaration" : "flow",
         flow->extent);
@@ -1006,9 +1031,8 @@ absl::StatusOr<DocumentChange> ModuleDocument::UpsertImport(
   size_t at = 0;
   if (scope.has_value()) {
     ABSL_RETURN_IF_ERROR(Validate(*scope));
-    if (scope->kind != "flow") {
-      return absl::InvalidArgumentError(
-          "Only an implemented flow may import a module.");
+    if (scope->kind != "flow" && scope->kind != "module") {
+      return absl::InvalidArgumentError("Imports scope to a flow or a module.");
     }
     for (const auto& flow : parsed.flows) {
       if (flow->extent.start == scope->start) {
@@ -1028,12 +1052,28 @@ absl::StatusOr<DocumentChange> ModuleDocument::UpsertImport(
     return absl::InvalidArgumentError(
         "An import reference must contain valid UTF-8.");
   }
+  if (scope.has_value() && scope->kind == "module") {
+    const auto local = std::find_if(
+        parsed.modules.begin(), parsed.modules.end(), [&](const auto& module) {
+          return module.extent.start == scope->start;
+        });
+    if (local != parsed.modules.end()) {
+      at = source_.find('{', local->extent.start) + 1;
+    }
+  }
   const auto text =
       symbol.empty() ? absl::StrCat("import ", Quote(reference), " as ", alias)
-                     : absl::StrCat("from ", Quote(reference), " import ",
-                                    symbol, symbol == alias ? "" : " as ",
+                     : absl::StrCat("from ", reference, " import ", symbol,
+                                    symbol == alias ? "" : " as ",
                                     symbol == alias ? "" : alias);
   for (const auto& item : *imports) {
+    if (scope.has_value() && scope->kind == "module" &&
+        item.scope != scope->name) {
+      continue;
+    }
+    if (!scope.has_value() && !item.scope.empty()) {
+      continue;
+    }
     if (item.alias.text == alias) {
       return Apply(revision_, {{item.extent.start, item.extent.end, text}});
     }
@@ -1113,7 +1153,7 @@ absl::StatusOr<DocumentChange> ModuleDocument::Rename(
           call != nullptr && symbol.kind == "flow" &&
           call->action == symbol.name) {
         edits.push_back({call->action_location.start, call->action_location.end,
-                         Quote(name)});
+                         syntax::ActionSource(name)});
       }
     });
   }
@@ -1293,7 +1333,7 @@ absl::StatusOr<ModuleGraphChange> ModuleDocument::RenameInGraph(
                   .substr(flow->name.location.start,
                           flow->name.location.end - flow->name.location.start),
               flow->name.location)) {
-        add(flow->name.location, Quote(name));
+        add(flow->name.location, syntax::ActionSource(name));
       }
       syntax::VisitSubtree(*flow, [&](const syntax::Node& node) {
         if (!type) {
@@ -1312,7 +1352,7 @@ absl::StatusOr<ModuleGraphChange> ModuleDocument::RenameInGraph(
                 if (value.is_string()) {
                   spelling = value.get<std::string>();
                 }
-              } else if (token.IsWord() || token.kind == TokenKind::kDot) {
+              } else if (token.IsWord() || token.kind == TokenKind::kScope) {
                 spelling += token.text;
               }
             }
@@ -1384,7 +1424,7 @@ absl::StatusOr<DocumentChange> ModuleDocument::RenameImport(
   const syntax::FlowDeclaration* owner = nullptr;
   if (scope.has_value()) {
     ABSL_RETURN_IF_ERROR(Validate(*scope));
-    if (scope->kind != "flow") {
+    if (scope->kind != "flow" && scope->kind != "module") {
       return absl::InvalidArgumentError(
           "Imports belong to implemented flows or modules.");
     }
@@ -1397,7 +1437,12 @@ absl::StatusOr<DocumentChange> ModuleDocument::RenameImport(
   }
   const syntax::Import* target = nullptr;
   const syntax::ImportedSymbol* selected = nullptr;
+  const std::string module_scope =
+      scope.has_value() && scope->kind == "module" ? scope->name : "";
   for (const auto& import : *imports) {
+    if (owner == nullptr && import.scope != module_scope) {
+      continue;
+    }
     for (const auto& symbol : import.symbols) {
       if (symbol.alias.text == name && name != alias) {
         return absl::AlreadyExistsError("The new local name is already bound.");
@@ -1430,12 +1475,17 @@ absl::StatusOr<DocumentChange> ModuleDocument::RenameImport(
                                selected->name.location.end,
                                absl::StrCat(" as ", name)});
   } else {
-    edits.push_back(
-        {target->alias.location.start, target->alias.location.end, name});
+    edits.push_back(target->explicit_alias
+                        ? Edit{target->alias.location.start,
+                               target->alias.location.end, name}
+                        : Edit{target->source_location.end,
+                               target->source_location.end,
+                               absl::StrCat(" as ", name)});
   }
   const auto matches = [&](std::string_view value) {
-    return selected != nullptr ? value == alias
-                               : value.starts_with(alias + ".");
+    return selected != nullptr
+               ? value == alias
+               : value == alias || value.starts_with(alias + "::");
   };
   const auto change_type = [&](const auto& self,
                                const syntax::TypeExpression& type) -> void {
@@ -1447,7 +1497,31 @@ absl::StatusOr<DocumentChange> ModuleDocument::RenameImport(
       self(self, parameter);
     }
   };
+  const auto visible_in = [&](std::string_view local) {
+    if (!module_scope.empty() && local != module_scope &&
+        !local.starts_with(module_scope + "::")) {
+      return false;
+    }
+    for (const auto& item : parsed.imports) {
+      if (item.scope == module_scope ||
+          (local != item.scope && !local.starts_with(item.scope + "::"))) {
+        continue;
+      }
+      if (item.alias.text == alias) {
+        return false;
+      }
+      for (const auto& selected : item.symbols) {
+        if (selected.alias.text == alias) {
+          return false;
+        }
+      }
+    }
+    return true;
+  };
   for (const auto& flow : parsed.flows) {
+    if (!visible_in(flow->scope)) {
+      continue;
+    }
     if (owner != nullptr && flow.get() != owner) {
       continue;
     }
@@ -1464,11 +1538,20 @@ absl::StatusOr<DocumentChange> ModuleDocument::RenameImport(
       }
     }
     syntax::VisitSubtree(*flow, [&](const syntax::Node& node) {
+      const auto* function = syntax::As<syntax::Builtin>(&node);
+      const auto* zip = syntax::As<syntax::Zip>(&node);
+      const auto qualified = function != nullptr ? function->name
+                             : zip != nullptr    ? zip->name
+                                                 : "";
+      if (!qualified.empty() && matches(qualified)) {
+        edits.push_back(
+            {node.location.start, node.location.start + alias.size(), name});
+      }
       if (const auto* call = syntax::As<syntax::CallExpression>(&node);
           call != nullptr && matches(call->action)) {
         auto action = name + call->action.substr(alias.size());
         edits.push_back({call->action_location.start, call->action_location.end,
-                         Quote(action)});
+                         syntax::ActionSource(action)});
       }
       if (const auto* port = syntax::As<syntax::PortDeclaration>(&node);
           port != nullptr) {
@@ -1482,18 +1565,31 @@ absl::StatusOr<DocumentChange> ModuleDocument::RenameImport(
   }
   if (owner == nullptr) {
     for (const auto& shape : parsed.dtos) {
+      if (!visible_in(shape->scope)) {
+        continue;
+      }
       for (const auto& field : shape->fields) {
         change_type(change_type, field->type);
       }
+    }
+  }
+  for (const auto& item : parsed.exports) {
+    if (owner == nullptr && visible_in(item.scope) &&
+        matches(item.symbol.text)) {
+      edits.push_back({item.symbol.location.start,
+                       item.symbol.location.start + alias.size(), name});
     }
   }
   return Apply(revision_, std::move(edits));
 }
 
 absl::StatusOr<FlowPlan> ModuleDocument::EffectiveSchema(
-    std::string name, const ModuleSources& sources) const {
-  auto linked = Link(sources);
-  const auto resolved = Resolve(linked.source, linked.parsed);
+    std::string name, const ModuleSources& sources, ModuleResolver resolver,
+    CompilationLimits limits) const {
+  CompilationBudget budget(limits);
+  auto linked = Link(sources, std::move(resolver), limits, &budget);
+  const auto resolved =
+      Resolve(linked.source, linked.parsed, false, nullptr, limits, &budget);
   if (const auto* error = resolved.FirstError(); error != nullptr) {
     return absl::FailedPreconditionError(error->message);
   }
@@ -1514,17 +1610,23 @@ absl::StatusOr<FlowPlan> ModuleDocument::EffectiveSchema(
 }
 
 LinkedModule ModuleDocument::Link(const ModuleSources& sources,
-                                  ModuleResolver resolver) const {
-  return LinkModules(source_, identity_, sources, std::move(resolver));
+                                  ModuleResolver resolver,
+                                  CompilationLimits limits,
+                                  CompilationBudget* budget) const {
+  return LinkModules(source_, identity_, sources, std::move(resolver), limits,
+                     budget);
 }
 
-std::vector<Diagnostic> ModuleDocument::Check(
-    const ModuleSources& sources) const {
+std::vector<Diagnostic> ModuleDocument::Check(const ModuleSources& sources,
+                                              ModuleResolver resolver,
+                                              CompilationLimits limits) const {
   if (source_.empty()) {
     return {};
   }
-  auto linked = Link(sources);
-  auto resolved = Resolve(linked.source, linked.parsed);
+  CompilationBudget budget(limits);
+  auto linked = Link(sources, std::move(resolver), limits, &budget);
+  auto resolved =
+      Resolve(linked.source, linked.parsed, false, nullptr, limits, &budget);
   for (auto& diagnostic : Inspect(linked.source, linked.parsed, resolved)) {
     resolved.diagnostics.push_back(std::move(diagnostic));
   }

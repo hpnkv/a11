@@ -67,15 +67,17 @@ export class FlowServer {
 
   /** Start the server and attach it to `.flow` documents. */
   async start(): Promise<void> {
+    const roots = vscode.workspace.getConfiguration('a11.flow').get<string[]>('sourceRoots', []);
+    const rootArgs = roots.flatMap(root => ['--source-root', root]);
     const server: ServerOptions = {
       run: {
         command: this.executable,
-        args: ['serve', '--protocol', 'lsp'],
+        args: ['serve', '--protocol', 'lsp', ...rootArgs],
         transport: TransportKind.stdio,
       },
       debug: {
         command: this.executable,
-        args: ['serve', '--protocol', 'lsp'],
+        args: ['serve', '--protocol', 'lsp', ...rootArgs],
         transport: TransportKind.stdio,
       },
     };

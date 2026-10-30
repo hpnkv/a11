@@ -22,6 +22,7 @@
 #include <absl/strings/str_join.h>
 #include <gtest/gtest.h>
 
+#include "a11/flow/module.h"
 #include "a11/flow/parser.h"
 #include "a11/flow/resolve.h"
 #include "a11/flow/values.h"
@@ -43,8 +44,9 @@ struct Compiled {
 
 Compiled Compile(std::string_view source) {
   Compiled compiled;
-  compiled.parsed = Parse(source);
-  compiled.resolved = Resolve(source, compiled.parsed);
+  auto linked = LinkModules(std::string(source), "<test>");
+  compiled.parsed = std::move(linked.parsed);
+  compiled.resolved = Resolve(linked.source, compiled.parsed);
   return compiled;
 }
 
@@ -59,7 +61,7 @@ constexpr std::string_view kShapes = R"(struct Source {
   tags:  string[] unique
   rank:  number 0..1 default 0.5
   title: string 1..10
-  ttl:   duration 1s..1m
+  ttl:   std::duration 1s..1m
 }
 
 struct Cited {

@@ -74,18 +74,11 @@ async def run(source: str, **how) -> dict:
 # --- the plainest thing a program does ---------------------------------------
 
 
-ARGV_TO_STDOUT = """
+ARGV_TO_STDOUT = r"""
 flow {
   describe "Write what was passed on the command line."
-
-  nodes scratch
-  who = node() in scratch
-
-  argv | drop 1 then "world" | first 1 -> who
-
-  out = run write_stdout(
-    content: who | map strformat("Hello, %s!\\n", trim(it))
-  ) via scratch
+  string name = take (argv | drop 1 | then "world")
+  run write_stdout(content: std::strformat("Hello, %s!\n", std::trim(name)))
 }
 """
 
@@ -134,7 +127,7 @@ flow {
   argv | drop 1 | first 1 -> said
 
   loud = run shout(text: said) via scratch
-  out = run write_stdout(content: loud.result | map strformat("%s\\n", it))
+  out = run write_stdout(content: loud.result | map std::strformat("%s\\n", it))
     via scratch
 }
 """
@@ -311,7 +304,7 @@ async def test_a_program_chooses_its_exit_code():
     source = """
 flow {
   describe "Fail, on purpose."
-  out exit_code: integer "What the program decided."
+  out exit_code: int "What the program decided."
 
   nodes scratch
   decided = node() in scratch
@@ -338,7 +331,7 @@ flow {
   total = node() in scratch
   input = run read_stdin() via scratch
   input.lines | count -> total
-  out = run write_stdout(content: total | map strformat("%d\\n", it))
+  out = run write_stdout(content: total | map std::strformat("%d\\n", it))
     via scratch
 }
 """
@@ -371,9 +364,9 @@ flow {
   argv | drop 1 | first 1 -> question
 
   llm = run interact_with_llm(
-    interactions: question | map a11.sdk.Interaction{
+    interactions: question | map a11::sdk::Interaction{
       role: "user",
-      content: [to_chunk({
+      content: [std::to_chunk({
         role: "user",
         content: [{type: "text", text: it}]
       })]
@@ -383,7 +376,7 @@ flow {
 
   llm.text_output -> answer
 
-  out = run write_stdout(content: answer | map strformat("%s\\n", it))
+  out = run write_stdout(content: answer | map std::strformat("%s\\n", it))
     via scratch
 }
 """

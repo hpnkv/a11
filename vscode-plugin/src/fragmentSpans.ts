@@ -28,6 +28,9 @@
  * both editors, and prose merely mentioning a flow is recognised in neither.
  */
 
+const {FLOW_FRAGMENT_PATTERN}: {FLOW_FRAGMENT_PATTERN: string} =
+  require('../../js/src/flow_vocabulary.ts');
+
 /** Where one flow's text runs in a host document, in UTF-16 offsets. */
 export interface Span {
   start: number;
@@ -48,7 +51,7 @@ const OPENERS = ['"""', "'''", '`'] as const;
  *
  * Either casing of the keyword, as the language allows every keyword to be shouted.
  */
-const STARTS_A_FLOW = /^\s*(?:#[^\n]*\n\s*)*(?:(?:(?:declare|DECLARE)\s+)?(?:flow|FLOW)(?:\s+(?:[A-Za-z_$][A-Za-z0-9_$-]*(?:\.[A-Za-z_$][A-Za-z0-9_$-]*)*|"(?:\\.|[^"\\\n])+"))?(?:\s+(?:exported|EXPORTED))?\s*\{|(?:struct|STRUCT)\s+[A-Za-z_$][A-Za-z0-9_$-]*(?:\s+(?:exported|EXPORTED))?\s*\{|(?:import|IMPORT)\s+"[^"\n]+"\s+(?:as|AS)\s+[A-Za-z_$][A-Za-z0-9_$-]*|(?:from|FROM)\s+"[^"\n]+"\s+(?:import|IMPORT)\s+[A-Za-z_$][A-Za-z0-9_$-]*)/;
+const STARTS_A_FLOW = new RegExp(String.raw`^\s*(?:#[^\n]*\n\s*)*` + FLOW_FRAGMENT_PATTERN);
 
 /** Every flow written in `text`, as offsets into it. */
 export function fragmentSpans(text: string): Span[] {

@@ -19,6 +19,8 @@
 # conversation or on a wire. Here they go from one gateway action straight into
 # another, and what comes back to the caller is sentences.
 
+from std import endswith, join, to_chunk, trim
+
 flow live-captions {
   describe "Turn the microphone into sentences, until the caller says stop."
 
@@ -46,7 +48,7 @@ flow live-captions {
   # grammar, so "what is" and "a fiber?" arrive separately. `group` gathers
   # them until one ends like a sentence.
   heard.transcription_pieces
-    | group ends-with(trim(it), [".", "?", "!"])
+    | group endswith(trim(it), [".", "?", "!"])
     | map trim(join(it, " "))
     -> sentences
 }
@@ -77,7 +79,7 @@ flow dictate-a-note {
   llm = call interact_with_llm(
     interactions: spoken
       | collect
-      | map a11.sdk.Interaction{
+      | map a11::sdk::Interaction{
         role: "user",
         content: [to_chunk({
           role: "user",

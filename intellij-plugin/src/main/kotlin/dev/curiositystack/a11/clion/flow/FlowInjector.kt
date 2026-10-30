@@ -83,15 +83,9 @@ class FlowInjector : MultiHostInjector {
         /** Past this, a string literal is not a flow somebody is reading. */
         private const val MAXIMUM_LENGTH = 200_000
 
-        /**
-         * `flow NAME {`, and `flow {` for a file's unnamed entry point.
-         *
-         * The name is one group, optional as a whole: dropping the `\s+` with
-         * it is what keeps `flowing {` from reading as an unnamed flow.
-         */
-        private val DECLARATION = Regex(
-            """(?:(?:(?:declare|DECLARE)\s+)?(?:flow|FLOW)(?:\s+(?:[A-Za-z_$][A-Za-z0-9_$-]*(?:\.[A-Za-z_$][A-Za-z0-9_$-]*)*|"(?:\\.|[^"\\\n]){1,200}"))?(?:\s+(?:exported|EXPORTED))?\s*\{|(?:struct|STRUCT)\s+[A-Za-z_$][A-Za-z0-9_$-]*(?:\s+(?:exported|EXPORTED))?\s*\{|(?:import|IMPORT)\s+"[^"\n]+"\s+(?:as|AS)\s+[A-Za-z_$][A-Za-z0-9_$-]*|(?:from|FROM)\s+"[^"\n]+"\s+(?:import|IMPORT)\s+[A-Za-z_$][A-Za-z0-9_$-]*)""",
-        )
+        private val declaration: Regex? by lazy {
+            FlowEngine.instance().fragmentPattern()?.let(::Regex)
+        }
 
         /**
          * Whether ``text`` opens with a flow declaration.
@@ -113,7 +107,7 @@ class FlowInjector : MultiHostInjector {
                         }
                     }
 
-                    else -> return DECLARATION.matchesAt(text, index)
+                    else -> return declaration?.matchesAt(text, index) == true
                 }
             }
             return false

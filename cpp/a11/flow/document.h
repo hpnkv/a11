@@ -57,6 +57,7 @@ class Expression {
                                          std::string node_map = {});
   static absl::StatusOr<Expression> Completion(std::string operation,
                                                const Expression& subject);
+  Expression Take(bool optional = false) const;
   absl::StatusOr<Expression> Cast(const syntax::TypeExpression& type) const;
   absl::StatusOr<Expression> Index(const Expression& index) const;
   absl::StatusOr<Expression> Field(std::string name) const;
@@ -78,6 +79,7 @@ struct CallOptions {
   bool tee = false;
   std::string node_map;
   std::optional<absl::Duration> timeout;
+  std::optional<Expression> deadline;
   std::optional<Expression> id;
   std::vector<Expression> after;
   std::vector<std::pair<std::string, Expression>> headers;
@@ -87,12 +89,13 @@ struct CallOptions {
 /// Typed statements for constructing executable bodies.
 class Statement {
  public:
-  static absl::StatusOr<Statement> Let(std::string name,
-                                       const Expression& value);
+  static absl::StatusOr<Statement> Initialize(
+      std::string name, const Expression& value,
+      std::optional<syntax::TypeExpression> type = {});
   static absl::StatusOr<Statement> Pipe(const Expression& value,
                                         const Expression& destination);
   static absl::StatusOr<Statement> Wait(const Expression& subject,
-                                        bool drain = false);
+                                        bool close = false);
   static absl::StatusOr<Statement> Cancel(const Expression& subject);
   static absl::StatusOr<Statement> Fail(const Expression& code,
                                         std::optional<Expression> message = {});
@@ -133,7 +136,8 @@ class FlowBuilder {
       syntax::PortDirection direction = syntax::PortDirection::kInput,
       bool unary = true, bool required = false, std::string description = {});
   absl::Status AddStatement(const Statement& statement);
-  absl::Status AddLet(std::string name, const Expression& value);
+  absl::Status AddInitialize(std::string name, const Expression& value,
+                             std::optional<syntax::TypeExpression> type = {});
   absl::Status AddPipe(const Expression& value, const Expression& destination);
   absl::Status AddImport(std::string reference, std::string alias,
                          std::string symbol = {});
@@ -231,11 +235,16 @@ class ModuleDocument {
   absl::StatusOr<DocumentChange> RenameImport(
       std::string alias, std::string name,
       std::optional<DocumentSymbolHandle> scope = {});
-  absl::StatusOr<FlowPlan> EffectiveSchema(
-      std::string name, const ModuleSources& sources = {}) const;
+  absl::StatusOr<FlowPlan> EffectiveSchema(std::string name,
+                                           const ModuleSources& sources = {},
+                                           ModuleResolver resolver = {},
+                                           CompilationLimits limits = {}) const;
   LinkedModule Link(const ModuleSources& sources = {},
-                    ModuleResolver resolver = {}) const;
-  std::vector<Diagnostic> Check(const ModuleSources& sources = {}) const;
+                    ModuleResolver resolver = {}, CompilationLimits limits = {},
+                    CompilationBudget* absl_nullable budget = nullptr) const;
+  std::vector<Diagnostic> Check(const ModuleSources& sources = {},
+                                ModuleResolver resolver = {},
+                                CompilationLimits limits = {}) const;
 
  private:
   absl::Status Validate(const DocumentSymbolHandle& symbol) const;

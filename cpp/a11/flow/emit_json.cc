@@ -28,6 +28,7 @@
 #include <nlohmann/json.hpp>
 
 #include "a11/flow/diagnostic.h"
+#include "a11/flow/generate.h"
 #include "a11/flow/highlight.h"
 #include "a11/flow/lexer.h"
 #include "a11/flow/parser.h"
@@ -43,7 +44,11 @@ nlohmann::json ImportJson(const syntax::Import& item) {
     symbols.push_back(
         {{"name", symbol.name.text}, {"alias", symbol.alias.text}});
   }
-  nlohmann::json value{{"source", item.source}, {"alias", item.alias.text}};
+  nlohmann::json value{{"source", item.source},
+                       {"alias", item.alias.text},
+                       {"namespace", item.namespace_source},
+                       {"exported", item.exported},
+                       {"scope", item.scope}};
   if (item.selective) {
     value["selective"] = true;
     value["symbols"] = std::move(symbols);
@@ -87,6 +92,13 @@ std::string_view SarifLevel(Severity severity) {
 // --- The syntax tree ---------------------------------------------------------
 // One function, one switch, one case per node kind, and the compiler holds it
 // to being exhaustive -- which is what makes a node added to the.
+
+nlohmann::json LocationJson(const syntax::Location& location) {
+  return {{"start", location.start},
+          {"end", location.end},
+          {"line", location.line},
+          {"column", location.column}};
+}
 
 nlohmann::json NodeJson(const syntax::Node* node);
 
@@ -305,6 +317,8 @@ nlohmann::json NodeJson(const syntax::Node* node) {
           NodeJson(syntax::As<syntax::Outcome>(node)->subject.get());
       break;
     case syntax::NodeKind::kPipelineValue:
+      value["take"] = syntax::As<syntax::PipelineValue>(node)->take;
+      value["optional"] = syntax::As<syntax::PipelineValue>(node)->optional;
       value["pipeline"] =
           NodeJson(syntax::As<syntax::PipelineValue>(node)->pipeline.get());
       break;
@@ -315,6 +329,9 @@ nlohmann::json NodeJson(const syntax::Node* node) {
                               ? nlohmann::json(nullptr)
                               : nlohmann::json(modifiers->node_map.text);
       value["timeout"] = DurationJson(modifiers->timeout);
+      value["deadline"] = NodeJson(modifiers->deadline.get());
+      value["timeout_expression"] =
+          NodeJson(modifiers->timeout_expression.get());
       value["after"] = WordList(modifiers->after);
       value["headers"] = PairsJson(modifiers->headers);
       value["action_id"] = NodeJson(modifiers->action_id.get());
@@ -344,19 +361,10 @@ nlohmann::json NodeJson(const syntax::Node* node) {
       value["tolerant"] = call->tolerant;
       break;
     }
-    case syntax::NodeKind::kLet: {
-      const auto* let = syntax::As<syntax::Let>(node);
-      value["name"] = let->name().text;
-      value["names"] = WordList(let->names);
-      value["pipeline"] = NodeJson(let->pipeline.get());
-      break;
-    }
-    case syntax::NodeKind::kAdvance:
-      value["name"] = syntax::As<syntax::Advance>(node)->name.text;
-      break;
     case syntax::NodeKind::kBind: {
       const auto* bind = syntax::As<syntax::Bind>(node);
       value["name"] = bind->name.text;
+      value["names"] = WordList(bind->names);
       value["value"] = NodeJson(bind->value.get());
       break;
     }
@@ -404,11 +412,13 @@ nlohmann::json NodeJson(const syntax::Node* node) {
       value["race"] = wait->race;
       value["targets"] = NodeList(wait->targets);
       value["timeout"] = DurationJson(wait->timeout);
+      value["deadline"] = NodeJson(wait->deadline.get());
+      value["timeout_expression"] = NodeJson(wait->timeout_expression.get());
       value["after"] = WordList(wait->after);
       break;
     }
-    case syntax::NodeKind::kDrain: {
-      const auto* drain = syntax::As<syntax::Drain>(node);
+    case syntax::NodeKind::kClose: {
+      const auto* drain = syntax::As<syntax::Close>(node);
       value["target"] = NodeJson(drain->target.get());
       value["after"] = WordList(drain->after);
       break;
@@ -450,6 +460,7 @@ nlohmann::json NodeJson(const syntax::Node* node) {
       value["variables"] = std::move(names);
       value["pipeline"] = NodeJson(loop->pipeline.get());
       value["parallel"] = loop->parallel;
+      value["termination"] = NodeJson(loop->termination.get());
       value["body"] = NodeList(loop->body);
       value["after"] = WordList(loop->after);
       break;
@@ -460,6 +471,7 @@ nlohmann::json NodeJson(const syntax::Node* node) {
                               ? nlohmann::json(nullptr)
                               : nlohmann::json(repeat->variable.text);
       value["start"] = NodeJson(repeat->start.get());
+      value["termination"] = NodeJson(repeat->termination.get());
       if (repeat->max_iterations.has_value()) {
         value["max_iterations"] = *repeat->max_iterations;
       }
@@ -833,6 +845,7 @@ nlohmann::json VocabularyToJsonValue() {
 
   return nlohmann::json{
       {"format", kVocabularyFormat},
+      {"fragment_pattern", FragmentStartPattern()},
       {"stages", ordered(vocabulary::Stages())},
       {"stage_arguments", stages},
       {"bare_stages", sorted(vocabulary::BareStages())},
@@ -982,9 +995,24 @@ nlohmann::json SyntaxToJsonValue(std::string_view source,
   for (const auto& item : result.imports) {
     imports.push_back(ImportJson(item));
   }
+  nlohmann::json modules = nlohmann::json::array();
+  for (const auto& module : result.modules) {
+    modules.push_back({{"name", module.name.text},
+                       {"declaration", module.interface_only},
+                       {"exported", module.exported},
+                       {"at", LocationJson(module.extent)}});
+  }
+  nlohmann::json exports = nlohmann::json::array();
+  for (const auto& symbol : result.exports) {
+    exports.push_back({{"symbol", symbol.symbol.text},
+                       {"alias", symbol.alias.text},
+                       {"scope", symbol.scope},
+                       {"at", LocationJson(symbol.extent)}});
+  }
   return nlohmann::json{
       {"format", kSyntaxFormat}, {"source", std::string(source)},
       {"flows", flows},          {"imports", imports},
+      {"modules", modules},      {"exports", exports},
       {"structs", dtos},         {"diagnostics", diagnostics},
   };
 }
@@ -1064,6 +1092,12 @@ nlohmann::json CompletionsToJsonValue(const CompleteResult& result) {
     // make the payload longer than the list it describes.
     if (proposal.caret >= 0) {
       written["caret"] = proposal.caret;
+    }
+    if (proposal.replace_start != std::string::npos) {
+      written["replace_start"] = proposal.replace_start;
+    }
+    if (!proposal.filter.empty()) {
+      written["filter"] = proposal.filter;
     }
     if (!proposal.tail.empty()) {
       written["tail"] = proposal.tail;
@@ -1178,6 +1212,9 @@ nlohmann::json StepToJson(const StepPlan& step) {
   }
   if (!step.node_map.empty()) {
     written["via"] = step.node_map;
+  }
+  if (step.has_deadline) {
+    written["deadline"] = true;
   }
   if (step.timeout.has_value()) {
     written["timeout"] = absl::ToDoubleSeconds(*step.timeout);

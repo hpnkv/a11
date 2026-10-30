@@ -48,13 +48,13 @@ enum class SymbolKind {
   kNode,
   /// A node map, from `nodes`.
   kNodeMap,
-  /// A bound `wait` or `drain`: a barrier that also reads as its outcome.
+  /// A bound `wait` or `close`: a barrier that also reads as its outcome.
   kBarrier,
   /// A `for` variable, or the `index` every loop binds.
   kLoopVariable,
   /// What a `repeat` carries.
   kCarry,
-  /// One value, read from a stream and given a name by `let`.
+  /// One value, read from a stream and given a name by `value`.
   ///
   /// Read as a value wherever an expression is accepted. It is never a write
   /// target.
@@ -90,25 +90,15 @@ struct Symbol {
   /// bound `wait`. A `try` whose status nobody reads is the flow ignoring the
   /// failure it just said it expected.
   int status_reads = 0;
-  // The graph ref this name reads and writes, when a graph was built: a port, a
-  // node, a header, a loop variable.
   /// The graph ref this name reads and writes, when a graph was built: a port,
   /// a node, a header, a loop variable. Memoised here because identity is the
   /// whole point -- two mentions of one node are one stream, and `skip n`
   /// accumulates on it.
   graph::RefId ref = graph::kNone;
-  /// The graph step this name *is*: a call, or a bound `wait`/`drain`.
+  /// The graph step this name *is*: a call, or a bound `wait`/`close`.
   graph::StepId step = graph::kNone;
-  /// For a value a `let` bound: the stream it took a value *of*, and which
-  /// value
-  /// of that stream it is. `advance` reads both to bind the next one, which is
-  /// what makes "the first use sees the first value" a fact rather than a hope.
-  graph::RefId value_source = graph::kNone;
-  int value_offset = 0;
   /// Whether reading this lazy value can read a data or completion stream.
   bool data_dependency = false;
-  // The `match` pattern this value came out of, where it came out of a literal
-  // one.
   /// The `match` pattern this value came out of, where it came out of a literal
   /// one.
   ///
@@ -120,12 +110,7 @@ struct Symbol {
   /// than offering nothing.
   std::string pattern;
   std::string shape;
-  /// Whether this name is one *part* of a value a `let` took apart.
-  ///
-  /// A fact rather than something inferred from `value_source` being absent:
-  /// the editor path builds no graph, so every ref is absent there and a check
-  /// that read the ref would be a check an editor never runs.
-  bool value_part = false;
+  std::optional<syntax::TypeExpression> value_type;
 };
 
 /// Native result categories used by resolution and editor queries.
@@ -159,7 +144,6 @@ struct ResolvedFlow {
   std::optional<FlowPlan> implementation;
   std::vector<FlowPlan> contracts;
   bool ambiguous = false;
-  // The executable graph, when [Resolve] was asked for one.
   /// The executable graph, when [Resolve] was asked for one. Empty otherwise --
   /// `root` is [graph::kNone] and nothing else is filled in.
   ///
@@ -209,7 +193,9 @@ struct ResolveResult {
 /// wants every problem in the file rather than the first.
 ResolveResult Resolve(std::string_view source, const ParseResult& parsed,
                       bool build_graph = false,
-                      const Program* absl_nullable context = nullptr);
+                      const Program* absl_nullable context = nullptr,
+                      CompilationLimits limits = {},
+                      CompilationBudget* absl_nullable budget = nullptr);
 
 /// The name of a symbol kind, for a message and for the JSON.
 std::string_view SymbolKindName(SymbolKind kind);

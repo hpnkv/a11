@@ -15,6 +15,8 @@
 // What the native runtime is *for*: running flows.
 
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
 
 #include <absl/strings/str_cat.h>
 #include <gtest/gtest.h>
@@ -39,7 +41,8 @@ flow render exported { out value: string
 )"}};
   auto linked = LinkModules(R"(
 declare flow render { out value: string }
-from "lib" import render, Report as ImportedReport
+import "lib" as lib
+from lib import render, Report as ImportedReport
 flow main { out value: string
  (run render()).value -> value
 }
@@ -61,7 +64,7 @@ flow first {
  run external(request: request)
 }
 flow second {
- struct Request { count: integer }
+ struct Request { count: int }
  in request: Request
  declare flow external { in request: Request }
  run external(request: request)
@@ -84,13 +87,14 @@ TEST(FlowModule, LocalDeclarationsConstrainDirectImports) {
   const std::string source = R"(
 flow main {
  declare flow render { out value: string stream }
- from "lib" import render
+ import "lib" as lib
+from lib import render
  (run render()).value -> _
 }
 )";
-  auto linked = LinkModules(
-      source, "root",
-      {{"lib", "flow render exported { out value: integer stream }"}});
+  auto linked =
+      LinkModules(source, "root",
+                  {{"lib", "flow render exported { out value: int stream }"}});
   auto resolved = Resolve(linked.source, linked.parsed);
   linked.Locate(resolved.diagnostics);
   bool conflict = false;
@@ -116,7 +120,8 @@ TEST(FlowModule, RejectsNestedExecutableDefinitionsAndDeclarationBodies) {
 
 TEST(FlowModule, DirectImportSelectionCompletesOnlyPublicSymbols) {
   for (const auto* source :
-       {"from \"lib\" import ", "flow main {\n from \"lib\" import "}) {
+       {"import \"lib\" as lib\nfrom lib import ",
+        "flow main {\n import \"lib\" as lib\nfrom lib import "}) {
     const auto answer = Handle({{"method", "complete"},
                                 {"source", source},
                                 {"offset", std::string_view(source).size()},
@@ -140,9 +145,10 @@ TEST(FlowModule, DirectImportSelectionCompletesOnlyPublicSymbols) {
 TEST(FlowModule, MultipleDirectContractsMergeAndBodiesAreAmbiguousAtUse) {
   ModuleSources sources{
       {"one", "declare flow work exported { out value: number }"},
-      {"two", "flow work exported { out value: integer\n 42 -> value }"}};
+      {"two", "flow work exported { out value: int\n 42 -> value }"}};
   const std::string source =
-      "from \"one\" import work\nfrom \"two\" import work\nflow main { (run "
+      "import \"one\" as one\nfrom one import work\nimport \"two\" as "
+      "two\nfrom two import work\nflow main { (run "
       "work()).value -> _ }";
   auto linked = LinkModules(source, "root", sources);
   auto resolved = Resolve(linked.source, linked.parsed);
@@ -151,7 +157,7 @@ TEST(FlowModule, MultipleDirectContractsMergeAndBodiesAreAmbiguousAtUse) {
   const auto catalogue = linked.CatalogueAt(source.find("run work"));
   ASSERT_NE(catalogue.Action("work"), nullptr);
   ASSERT_EQ(catalogue.Action("work")->outputs.size(), 1u);
-  EXPECT_EQ(catalogue.Action("work")->outputs.front().type, "integer");
+  EXPECT_EQ(catalogue.Action("work")->outputs.front().type, "int");
   sources["one"] =
       "flow work exported { out value: string\n \"other\" -> value }";
   auto ambiguous = LinkModules(source, "root", sources);
@@ -182,13 +188,13 @@ TEST(FlowModule, NestedSymbolsAppearInDocumentOutlineAndNavigateLocally) {
 }
 
 TEST(FlowModule, EditsOneDirectSymbolWithoutChangingOtherSelections) {
-  ModuleDocument document(
-      "root",
-      "from \"lib\" import work, Report as R\nflow main { run work() }\n");
+  ModuleDocument document("root",
+                          "import \"lib\" as lib\nfrom lib import work, Report "
+                          "as R\nflow main { run work() }\n");
   ASSERT_TRUE(document.RenameImport("work", "render").ok());
   EXPECT_NE(document.source().find("work as render, Report as R"),
             std::string::npos);
-  EXPECT_NE(document.source().find("run \"render\"()"), std::string::npos);
+  EXPECT_NE(document.source().find("run render()"), std::string::npos);
   ASSERT_TRUE(document.UpsertImport("lib", "render", {}, "other").ok());
   EXPECT_NE(document.source().find("other as render, Report as R"),
             std::string::npos);
@@ -200,10 +206,10 @@ TEST(FlowModule, EditsOneDirectSymbolWithoutChangingOtherSelections) {
 TEST(FlowModule, GraphRenamePreservesDirectImportAliasesAndContracts) {
   ModuleDocument library(
       "lib", "flow render exported { out text: string\n \"ok\" -> text }");
-  ModuleSources sources{
-      {"root",
-       "from \"lib\" import render\nflow main {\n declare flow render { out "
-       "text: string }\n (run render()).text -> _ }"}};
+  ModuleSources sources{{"root",
+                         "import \"lib\" as lib\nfrom lib import render\nflow "
+                         "main {\n declare flow render { out "
+                         "text: string }\n (run render()).text -> _ }"}};
   const auto renamed =
       library.RenameInGraph(library.Symbols().front(), "paint", sources);
   ASSERT_TRUE(renamed.ok()) << renamed.status();
@@ -221,33 +227,33 @@ TEST(FlowModule, GraphRenamePreservesDirectImportAliasesAndContracts) {
 TEST(FlowModule, ResolvesCyclesAndKeepsPrivateDependencies) {
   ModuleSources sources{{"lib.flow", R"(
 import "root.flow" as root
-flow hidden { out value: integer
+flow hidden { out value: int
   42 -> value
 }
-flow public exported { out value: integer
+flow public exported { out value: int
   (run hidden()).value -> value
 }
 )"}};
   auto linked = LinkModules(
-      "import \"lib.flow\" as lib\nflow f { out value: integer\n (run "
-      "lib.public()).value -> value }",
+      "import \"lib.flow\" as lib\nflow f { out value: int\n (run "
+      "lib::public()).value -> value }",
       "root.flow", sources);
   auto resolved = Resolve(linked.source, linked.parsed, true);
   ASSERT_FALSE(resolved.HasErrors())
       << DiagnosticsToJsonValue("root.flow", resolved.diagnostics);
   EXPECT_EQ(linked.documents.size(), 2u);
   const auto catalogue = linked.CatalogueAt(0);
-  EXPECT_NE(catalogue.Action("lib.public"), nullptr);
-  EXPECT_EQ(catalogue.Action("lib.hidden"), nullptr);
+  EXPECT_NE(catalogue.Action("lib::public"), nullptr);
+  EXPECT_EQ(catalogue.Action("lib::hidden"), nullptr);
 }
 
 TEST(FlowModule, PrivateMembersAndPrivateExportedTypesAreErrors) {
   const ModuleSources sources{
       {"lib",
-       "struct Hidden { value: integer }\nflow private { }\nflow public "
-       "exported { out value: Hidden }"}};
+       "struct Hidden { value: int }\nflow private { }\nflow public exported { "
+       "out value: Hidden }"}};
   auto linked = LinkModules(
-      "import \"lib\" as lib\nflow f { run lib.private() }", "root", sources);
+      "import \"lib\" as lib\nflow f { run lib::private() }", "root", sources);
   auto resolved = Resolve(linked.source, linked.parsed);
   bool private_member = false, private_type = false;
   for (const auto& diagnostic : resolved.diagnostics) {
@@ -260,21 +266,21 @@ TEST(FlowModule, PrivateMembersAndPrivateExportedTypesAreErrors) {
 
 TEST(FlowModule, ImportedCallTargetsCompleteAfterNamespaceDots) {
   const std::string source =
-      "flow main {\n import \"lib\" as nested\n"
-      " (run nested.package.work()).result -> _\n}";
-  for (const auto* prefix : {"nested.", "nested.package."}) {
+      "flow main {\n import \"lib\" as nested\n (run "
+      "nested::package::work()).result -> _\n}";
+  for (const auto* prefix : {"nested::", "nested::package::"}) {
     const auto offset = source.find(prefix) + std::string_view(prefix).size();
-    const auto answer =
-        Handle({{"method", "complete"},
-                {"source", source},
-                {"path", "root"},
-                {"offset", offset},
-                {"modules",
-                 {{"lib",
-                   "flow hidden {}\nflow package.work exported { "
-                   "out result: string\n \"ok\" -> result }"}}}});
+    const auto answer = Handle(
+        {{"method", "complete"},
+         {"source", source},
+         {"path", "root"},
+         {"offset", offset},
+         {"modules",
+          {{"lib",
+            "flow hidden {}\nmod package exported { flow work exported { "
+            "out result: string\n \"ok\" -> result } }"}}}});
     const auto expected =
-        std::string_view(prefix) == "nested." ? "package.work" : "work";
+        std::string_view(prefix) == "nested::" ? "package::work" : "work";
     bool found = false;
     for (const auto& proposal : answer["result"]["proposals"]) {
       found |= proposal["name"] == expected;
@@ -287,13 +293,13 @@ TEST(FlowModule, ImportedCallTargetsCompleteAfterNamespaceDots) {
 TEST(FlowModule, IncompleteCallsOfferOnlyExportedModuleSymbols) {
   const std::string source =
       "declare flow test { out output: string stream }\nflow main {\n"
-      " import \"nested\" as nested\n t = run nested.\n}";
+      " import \"nested\" as nested\n t = run nested::\n}";
   for (const bool exported : {false, true}) {
     const auto answer = Handle(
         {{"method", "complete"},
          {"source", source},
          {"path", "root"},
-         {"offset", source.find("nested.\n") + 7},
+         {"offset", source.find("nested::\n") + 8},
          {"modules",
           {{"nested", absl::StrCat("flow test", exported ? " exported" : "",
                                    " { out output: integer stream }")}}}});
@@ -308,12 +314,12 @@ TEST(FlowModule, IncompleteCallsOfferOnlyExportedModuleSymbols) {
 TEST(FlowModule, EmptyPrivateNamespaceDoesNotLeakShadowedExports) {
   const std::string source =
       "import \"outer\" as nested\nflow main {\n import \"inner\" as nested\n"
-      " t = run nested.\n}";
+      " t = run nested::\n}";
   const auto answer = Handle(
       {{"method", "complete"},
        {"source", source},
        {"path", "root"},
-       {"offset", source.find("nested.\n") + 7},
+       {"offset", source.find("nested::\n") + 8},
        {"modules",
         {{"outer", "flow visible exported {}"}, {"inner", "flow hidden {}"}}}});
   EXPECT_TRUE(answer["result"]["proposals"].empty()) << answer;
@@ -325,11 +331,11 @@ TEST(FlowModule, ImportedStructTypesCompleteInInterfacesAndStructFields) {
     const bool shape = std::string_view(declaration).starts_with("struct");
     const auto source =
         absl::StrCat("import \"nested\" as nested\n", declaration, " {\n ",
-                     shape ? "row" : "in row", ": nested.\n}");
+                     shape ? "row" : "in row", ": nested::\n}");
     const auto answer = Handle({{"method", "complete"},
                                 {"source", source},
                                 {"path", "root"},
-                                {"offset", source.find("nested.\n") + 7},
+                                {"offset", source.find("nested::\n") + 8},
                                 {"modules",
                                  {{"nested",
                                    "struct Row exported { value: string }\n"
@@ -344,8 +350,8 @@ TEST(FlowModule, ImportedStructTypesCompleteInInterfacesAndStructFields) {
 
 TEST(FlowModule, PrivateMemberDiagnosticsIdentifyExistingDeclarations) {
   const std::string source =
-      "import \"nested\" as nested\nflow main {\n in row: nested.Row\n"
-      " run nested.test()\n}";
+      "import \"nested\" as nested\nflow main {\n in row: nested::Row\n run "
+      "nested::test()\n}";
   const std::string dependency = "struct Row { value: string }\nflow test {}";
   auto linked = LinkModules(source, "root", {{"nested", dependency}});
   auto resolved = Resolve(linked.source, linked.parsed);
@@ -369,13 +375,13 @@ TEST(FlowModule, PrivateMemberDiagnosticsIdentifyExistingDeclarations) {
     const auto& use = diagnostic.range;
     EXPECT_TRUE(
         source.substr(use.start.offset, use.end.offset - use.start.offset)
-            .starts_with("nested."));
+            .starts_with("nested::"));
   }
   EXPECT_EQ(count, 2u);
 }
 
 TEST(FlowModule, DeclarationBodyDiagnosticExplainsTheRepair) {
-  const auto parsed = Parse("declare flow test {\n let a = 1\n}");
+  const auto parsed = Parse("declare flow test {\n a = take (1)\n}");
   ASSERT_TRUE(parsed.HasErrors());
   bool found = false;
   for (const auto& diagnostic : parsed.diagnostics) {
@@ -395,7 +401,8 @@ TEST(FlowModule, DeclarationBodyDiagnosticExplainsTheRepair) {
 TEST(FlowModule, RootInterfacesDoNotRequireExportAttributes) {
   for (const auto* attribute : {"", " exported"}) {
     auto linked = LinkModules(
-        absl::StrCat("struct Report { title: string }\nflow main", attribute,
+        absl::StrCat("struct Report exported { title: string }\nflow main",
+                     attribute,
                      " { out report: Report\n Report{title: \"ready\"} -> "
                      "report }"),
         "root");
@@ -409,8 +416,8 @@ TEST(FlowModule, RootVisibilityDoesNotGrantExportsToImportersInACycle) {
   auto linked =
       LinkModules("import \"library\" as lib\nflow root_helper {}", "root",
                   {{"library",
-                    "import \"root\" as root\nflow work exported { "
-                    "run root.root_helper() }"}});
+                    "import \"root\" as root\nflow work exported { run "
+                    "root::root_helper() }"}});
   const auto resolved = Resolve(linked.source, linked.parsed);
   EXPECT_TRUE(
       std::any_of(resolved.diagnostics.begin(), resolved.diagnostics.end(),
@@ -434,8 +441,8 @@ TEST(FlowModule, CompatibleContractsConjoinMembersAndRequiredness) {
 declare flow work { in data: number
   out one: string
 }
-declare flow work { in data: integer required
-  out two: boolean
+declare flow work { in data: int required
+  out two: bool
 }
 )");
   const auto resolved = Resolve("", parsed);
@@ -446,14 +453,15 @@ declare flow work { in data: integer required
   const auto* data = interface->Port("data", syntax::PortDirection::kInput);
   ASSERT_NE(data, nullptr);
   EXPECT_TRUE(data->required);
-  EXPECT_EQ(data->declared, "integer");
+  EXPECT_EQ(data->declared, "int");
 }
 
 TEST(FlowModule, OpaqueComparisonsStayUnprovenOffline) {
   const std::string source =
-      "declare flow work { in value: a11.UnknownOne }\ndeclare flow work { in "
-      "value: a11.UnknownTwo }";
-  const auto resolved = Resolve(source, Parse(source));
+      "declare flow work { in value: a11::UnknownOne }\ndeclare flow work { in "
+      "value: a11::UnknownTwo }";
+  auto linked = LinkModules(source, "root");
+  const auto resolved = Resolve(linked.source, linked.parsed);
   EXPECT_FALSE(resolved.HasErrors())
       << DiagnosticsToJsonValue("", resolved.diagnostics);
   bool unproven = false;
@@ -465,28 +473,29 @@ TEST(FlowModule, OpaqueComparisonsStayUnprovenOffline) {
 
 TEST(FlowModule, EffectiveSchemaHoverRetainsEveryModuleContributor) {
   const auto linked = LinkModules(
-      "import \"one\" as one\nimport \"two\" as two\nflow main {}", "root",
+      "import \"one\" as one\nimport \"two\" as two\n"
+      "from one import work\nfrom two import work\nflow main {}",
+      "root",
       {{"one", "declare flow work exported { in value: number }"},
-       {"two", "declare flow work exported { in value: integer required }"}});
+       {"two", "declare flow work exported { in value: int required }"}});
   const auto catalogue = linked.CatalogueAt(0);
-  const auto* action = catalogue.Action("one.work");
+  const auto* action = catalogue.Action("work");
   ASSERT_NE(action, nullptr);
   ASSERT_EQ(action->schema_origins.size(), 2u);
-  EXPECT_EQ(action->inputs.front().type, "integer");
+  EXPECT_EQ(action->inputs.front().type, "int");
   const auto markdown = ActionMarkdown(*action);
   EXPECT_NE(markdown.find("one:1"), std::string::npos);
   EXPECT_NE(markdown.find("two:1"), std::string::npos);
   const auto restored = catalogue::Catalogue::FromJson(catalogue.ToJson());
-  ASSERT_NE(restored.Action("one.work"), nullptr);
-  EXPECT_EQ(restored.Action("one.work")->schema_origins,
-            action->schema_origins);
+  ASSERT_NE(restored.Action("work"), nullptr);
+  EXPECT_EQ(restored.Action("work")->schema_origins, action->schema_origins);
 }
 
 TEST(FlowModule, ImplementationCannotWeakenRequirednessOrTypes) {
   for (const auto& definition :
-       {"flow work { in value: object }", "flow work { in value: integer }"}) {
+       {"flow work { in value: object }", "flow work { in value: int }"}) {
     const auto source = absl::StrCat(
-        "declare flow work { in value: integer required }\n", definition);
+        "declare flow work { in value: int required }\n", definition);
     EXPECT_TRUE(Resolve(source, Parse(source)).HasErrors());
   }
 }
@@ -502,7 +511,7 @@ TEST(FlowModule, EqualStructsAreRepeatedSchemas) {
 
 TEST(FlowModule, RedundantGroupingFixesPreserveTheRequiredPair) {
   const std::string source =
-      "flow f { out value: integer\n let n = ((1))\n n -> value }";
+      "flow f { out value: int\n n = take (((1)))\n n -> value }";
   auto parsed = Parse(source);
   auto resolved = Resolve(source, parsed);
   const auto diagnostics = Inspect(source, parsed, resolved);
@@ -519,8 +528,8 @@ TEST(FlowModule, RedundantGroupingFixesPreserveTheRequiredPair) {
   ASSERT_TRUE(document.Apply(0, edits).ok());
   EXPECT_EQ(document.source().find("((1))"), std::string::npos);
   const std::string required =
-      "flow helper { out value: integer\n 1 -> value }\nflow f { out value: "
-      "integer\n (run helper()).value -> value }";
+      "flow helper { out value: int\n 1 -> value }\nflow f { out value: int\n "
+      "(run helper()).value -> value }";
   const auto required_parsed = Parse(required);
   const auto required_resolved = Resolve(required, required_parsed);
   for (const auto& diagnostic :
@@ -602,15 +611,15 @@ TEST(FlowDocument, SynchronizationRetainsCommentsAndUnchangedTokens) {
 
 TEST(FlowDocument, AliasRenameRespectsLexicalShadowing) {
   ModuleDocument document("root", R"(import "one" as lib
-flow first { run lib.work() }
+flow first { run lib::work() }
 flow second { import "two" as lib
-  run lib.work()
+  run lib::work()
 }
 )");
   auto change = document.RenameImport("lib", "tools");
   ASSERT_TRUE(change.ok()) << change.status();
-  EXPECT_NE(document.source().find("run \"tools.work\"()"), std::string::npos);
-  EXPECT_NE(document.source().find("run lib.work()"), std::string::npos);
+  EXPECT_NE(document.source().find("run tools::work()"), std::string::npos);
+  EXPECT_NE(document.source().find("run lib::work()"), std::string::npos);
 }
 
 TEST(FlowModule, AnalysisUsesTheStrictestContextContract) {
@@ -634,7 +643,7 @@ TEST(FlowModule, AnalysisUsesTheStrictestContextContract) {
 TEST(FlowModule, AnonymousResultsHavePortAndFieldCompletionAndNavigation) {
   const std::string prefix =
       "struct Row { title: string }\ndeclare flow work { out result: Row "
-      "}\nflow f { let x = ";
+      "}\nflow f { x = ";
   for (const auto& suffix : {"(run work()).", "(run work()).result."}) {
     const auto source = prefix + suffix;
     const auto result = CompleteAt(source, source.size());
@@ -681,16 +690,17 @@ TEST(FlowModule, RootSourceAndIdentityBudgetsApplyBeforeParsing) {
 
 TEST(FlowDocument, GraphRenameUpdatesImportersAndRetainsCompiledSources) {
   ModuleDocument library(
-      "lib", "flow work exported { out result: integer\n 1 -> result }");
+      "lib", "flow work exported { out result: int\n 1 -> result }");
   ModuleSources modules{{"root",
-                         "import \"lib\" as tools\nflow f { out result: "
-                         "integer\n (run tools.work()).result -> result }"}};
+                         "import \"lib\" as tools\nflow f { out result: int\n "
+                         "(run tools::work()).result -> result }"}};
   const auto before = library.source();
   auto change =
       library.RenameInGraph(library.Symbols().front(), "render", modules);
   ASSERT_TRUE(change.ok()) << change.status();
   EXPECT_EQ(library.source(), before);
-  EXPECT_NE(change->sources.at("root").find("tools.render"), std::string::npos);
+  EXPECT_NE(change->sources.at("root").find("tools::render"),
+            std::string::npos);
   auto linked =
       LinkModules(change->sources.at("root"), "root", change->sources);
   EXPECT_FALSE(Resolve(linked.source, linked.parsed).HasErrors());
@@ -700,9 +710,10 @@ TEST(FlowModule, InvalidExpressionCategoriesHaveSpecificDiagnostics) {
   const std::vector<std::pair<std::string, std::string>> cases{
       {"flow f { out result: object\n {\"handle\": run work()} -> result }",
        "flow.form.handle-escape"},
-      {"flow f { let result = (fail unavailable) }",
+      {"flow f { result = take ((fail unavailable)) }",
        "flow.form.statement-as-value"},
-      {"flow f { let result = wait first of 1, 2 }", "flow.form.not-waitable"},
+      {"flow f { result = take (wait first of 1, 2) }",
+       "flow.form.not-waitable"},
       {"flow f { job = run work() with \"x\": job.out }",
        "flow.barrier.expression-cycle"},
       {"flow f { if true { import \"lib\" as lib } }",
@@ -722,7 +733,7 @@ TEST(FlowModule, InvalidExpressionCategoriesHaveSpecificDiagnostics) {
 
 TEST(FlowModule, FlatExpressionAndPrefixChainsHaveDepthLimits) {
   for (const auto& operation : {std::string("not "), std::string("wait ")}) {
-    std::string source = "flow f { let result = ";
+    std::string source = "flow f { result = ";
     for (int index = 0; index < 1000; ++index) {
       source += operation;
     }
@@ -734,7 +745,7 @@ TEST(FlowModule, FlatExpressionAndPrefixChainsHaveDepthLimits) {
     }
     EXPECT_TRUE(found);
   }
-  std::string source = "flow f { let result = 1";
+  std::string source = "flow f { result = take (1)";
   for (int index = 0; index < 1000; ++index) {
     source += " + 1";
   }
@@ -756,27 +767,28 @@ TEST(FlowModule, QualifiedNameGrowthIsBudgeted) {
   ModuleLimits limits;
   limits.max_linked_name_bytes = 1;
   const auto linked =
-      LinkModules("import \"lib\" as lib\nflow f { run lib.work() }", "root",
+      LinkModules("import \"lib\" as lib\nflow f { run lib::work() }", "root",
                   {{"lib", "flow work exported {}"}}, {}, limits);
   EXPECT_TRUE(linked.parsed.HasErrors());
 }
 
 TEST(FlowModule, IntegerLiteralsAreExactAndCountsAreChecked) {
-  const auto parsed = Parse("flow f { let value = 9223372036854775807 }");
+  const auto parsed = Parse("flow f { value = 9223372036854775807 }");
   ASSERT_FALSE(parsed.HasErrors());
   const auto* value =
-      syntax::As<syntax::Let>(parsed.flows.front()->body.front().get());
+      syntax::As<syntax::Bind>(parsed.flows.front()->body.front().get());
   ASSERT_NE(value, nullptr);
-  const auto constant = syntax::ConstantValue(value->pipeline->source.get());
+  const auto constant = syntax::ConstantValue(value->value.get());
   ASSERT_TRUE(constant.has_value());
   EXPECT_EQ(constant->integer, 9223372036854775807LL);
-  EXPECT_TRUE(Parse("flow f { let value = 9223372036854775808 }").HasErrors());
+  EXPECT_TRUE(
+      Parse("flow f { value = take (9223372036854775808) }").HasErrors());
   EXPECT_TRUE(
       Parse("flow f { repeat max 9223372036854775807 { } }").HasErrors());
 }
 
 TEST(FlowModule, EqualStructsIgnoreDescriptionsFieldOrderAndBuiltinAliases) {
-  const std::string source = R"(struct Row { a: integer "first"
+  const std::string source = R"(struct Row { a: int "first"
  b: string }
 struct Row exported { b: string "second"
  a: int }
@@ -798,5 +810,133 @@ TEST(FlowModule, HostFileResolverReadsUnsavedSourceWithoutAFile) {
   EXPECT_EQ(resolved->identity, library);
   EXPECT_EQ(resolved->source, "flow work exported {}");
 }
+
+TEST(FlowModule, FilesystemImportsRequireExplicitApprovedRoots) {
+  auto resolver = FileModuleResolver();
+  for (const auto* path : {"/etc/passwd", "/missing/never-existed.flow"}) {
+    const auto result = resolver(path, "/root.flow");
+    ASSERT_FALSE(result.ok());
+    EXPECT_TRUE(absl::IsPermissionDenied(result.status()));
+    EXPECT_NE(result.status().message().find("imports are disallowed"),
+              std::string_view::npos);
+  }
+  auto confined = FileModuleResolver(1024, {}, {"/approved"});
+  const auto existing = confined("/etc/passwd", "/approved/root.flow");
+  const auto missing = confined("/never-existed.flow", "/approved/root.flow");
+  EXPECT_EQ(existing.status(), missing.status());
+  EXPECT_EQ(confined("../etc/passwd", "/approved/root.flow").status(),
+            existing.status());
+  EXPECT_EQ(confined("/approved-other/file", "/approved/root.flow").status(),
+            existing.status());
+}
+
+TEST(FlowModule, ApprovedImportsRejectSymlinksAndEnforceFileSize) {
+  const auto base =
+      std::filesystem::canonical(std::filesystem::temp_directory_path()) /
+      absl::StrCat("a11-flow-roots-", ::getpid());
+  std::filesystem::create_directories(base / "approved");
+
+  struct Cleanup {
+    std::filesystem::path path;
+
+    ~Cleanup() { std::filesystem::remove_all(path); }
+  } cleanup{base};
+
+  const auto approved = base / "approved";
+  std::ofstream(approved / "library.flow") << "flow work exported {}";
+  std::ofstream(base / "secret.flow") << "secret";
+  std::filesystem::create_symlink(base / "secret.flow", approved / "link.flow");
+  std::filesystem::create_directory_symlink(base, approved / "escape");
+  auto resolver = FileModuleResolver(1024, {}, {approved.string()});
+  const auto source =
+      resolver("library.flow", (approved / "root.flow").string());
+  ASSERT_TRUE(source.ok()) << source.status();
+  EXPECT_EQ(source->source, "flow work exported {}");
+  EXPECT_FALSE(resolver("link.flow", (approved / "root.flow").string()).ok());
+  EXPECT_FALSE(
+      resolver("escape/secret.flow", (approved / "root.flow").string()).ok());
+  EXPECT_TRUE(absl::IsResourceExhausted(
+      FileModuleResolver(1, {}, {approved.string()})(
+          "library.flow", (approved / "root.flow").string())
+          .status()));
+}
+
+TEST(FlowModule, CompilationBudgetsBoundParsingAndReexports) {
+  CompilationLimits limits;
+  limits.max_tokens = 4;
+  EXPECT_TRUE(Parse("flow sample { value = 1 }", limits).HasErrors());
+  limits = {};
+  limits.max_nesting = 2;
+  EXPECT_TRUE(Parse("mod a { mod b { mod c { flow sample {} } } }", limits)
+                  .HasErrors());
+  limits = {};
+  limits.max_duration_ms = 0;
+  auto stopped = LinkModules("flow sample {}", "root", {}, {}, limits);
+  ASSERT_TRUE(stopped.parsed.HasErrors());
+  EXPECT_EQ(stopped.parsed.FirstError()->code, "flow.form.resource-limit");
+  limits = {};
+  limits.max_work = 10;
+  stopped = LinkModules("import \"a\"\nfrom a import * exported", "root",
+                        {{"a", "import \"root\"\nfrom root import * exported"}},
+                        {}, limits);
+  EXPECT_TRUE(stopped.parsed.HasErrors());
+}
+
+TEST(FlowModule, LongReexportChainsConvergeWithoutAnArbitraryPassLimit) {
+  std::string source = "flow original {}\n";
+  for (int index = 50; index > 0; --index) {
+    source += absl::StrCat("export alias", index - 1, " as alias", index, "\n");
+  }
+  source += "export original as alias0\n";
+  const auto linked = LinkModules(source, "root");
+  ASSERT_FALSE(linked.parsed.HasErrors())
+      << DiagnosticsToJsonValue("root", linked.parsed.diagnostics);
+  EXPECT_NE(linked.CatalogueAt(0).Action("alias50"), nullptr);
+}
 }  // namespace
+
+TEST(FlowModule, PublicInterfacesUseTheirOwnModuleVisibility) {
+  auto good = LinkModules(R"(
+mod internal {
+  struct Result exported { value: string }
+  declare flow work exported { out result: Result }
+}
+flow main {}
+)",
+                          "root");
+  EXPECT_FALSE(Resolve(good.source, good.parsed).HasErrors());
+  auto bad = LinkModules(R"(
+mod internal {
+  struct Result exported { value: string }
+  declare flow work exported { out result: Result }
+}
+export internal::work
+flow main {}
+)",
+                         "root");
+  EXPECT_TRUE(Resolve(bad.source, bad.parsed).HasErrors());
+}
+
+TEST(FlowDocument, ModuleScopedImportRenamingKeepsOtherScopesIntact) {
+  ModuleDocument document("root", R"(
+mod first {
+  import "one.flow" as lib
+  flow work { run lib::action() }
+}
+mod second {
+  import "two.flow" as lib
+  flow work { run lib::action() }
+}
+)");
+  const auto symbols = document.Symbols();
+  const auto scope =
+      std::find_if(symbols.begin(), symbols.end(), [](const auto& symbol) {
+        return symbol.kind == "module" && symbol.name == "first";
+      });
+  ASSERT_NE(scope, symbols.end());
+  ASSERT_TRUE(document.RenameImport("lib", "tools", *scope).ok());
+  EXPECT_NE(document.source().find("tools::action"), std::string::npos);
+  EXPECT_NE(document.source().find("lib::action"), std::string::npos);
+}
+
 }  // namespace a11::flow

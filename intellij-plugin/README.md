@@ -82,11 +82,11 @@ its own, from `in`/`out` to the end of the line, which is what lets a type be
 written as the tag a serialisation registry knows it by:
 
 ```
-in  frames: list[a11.NodeFragment] stream
-out audio:  a11.sdk.AudioBuffer stream required
+in  frames: std::list[a11::NodeFragment] stream
+out audio:  a11::sdk::AudioBuffer stream required
 ```
 
-Everything up to `stream`/`required` is the type, dots and brackets included —
+Everything up to `stream`/`required` is the type, `::` and brackets included —
 there is no list of tags to fall behind, because the position says it is one.
 Colours are all customisable under
 Settings | Editor | Color Scheme | **A11 Flow**.

@@ -47,8 +47,6 @@ inline constexpr std::string_view kFormatFormat = "flow.format/v1";
 /// One diagnostic, as it appears in the envelope.
 nlohmann::json DiagnosticToJsonValue(const Diagnostic& diagnostic);
 
-// A diagnostic read back from its JSON, for frontends that consume the envelope
-// rather than the library -- the IntelliJ plugin, a CI script.
 /// A diagnostic read back from its JSON, for frontends that consume the
 /// envelope rather than the library -- the IntelliJ plugin, a CI script.
 ///
@@ -167,8 +165,6 @@ nlohmann::json DtoToJsonValue(const DtoPlan& dto,
 /// The envelope, serialised with a trailing newline and two-space indent.
 std::string PlanToJson(std::string_view source_name, const Program& program);
 
-// One diagnostic on one line, in the shape editors and compilers have used for
-// decades: `path:line:column: severity: message [code]`.
 /// One diagnostic on one line, in the shape editors and compilers have used for
 /// decades: `path:line:column: severity: message [code]`.
 ///

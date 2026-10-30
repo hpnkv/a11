@@ -23,6 +23,7 @@
 #include <vector>
 
 #include <absl/base/nullability.h>
+#include <absl/container/flat_hash_map.h>
 #include <nlohmann/json_fwd.hpp>
 
 #include "a11/flow/plan.h"
@@ -133,8 +134,9 @@ class Catalogue {
   /// is what `discover::Discover` is: it reads source and builds
   /// `ActionInfo`s, and routing them out through JSON and back would be a
   /// round trip that could only lose things.
-  static Catalogue Of(std::vector<ActionInfo> actions,
-                      std::vector<TypeInfo> types = {});
+  static Catalogue Of(
+      std::vector<ActionInfo> actions, std::vector<TypeInfo> types = {},
+      absl::flat_hash_map<std::string, std::string> intrinsics = {});
 
   /// The catalogue `value` describes, in the shape [ToJson] writes.
   ///
@@ -162,8 +164,12 @@ class Catalogue {
 
   [[nodiscard]] const std::vector<TypeInfo>& types() const { return types_; }
 
+  const absl::flat_hash_map<std::string, std::string>& intrinsics() const {
+    return intrinsics_;
+  }
+
   [[nodiscard]] bool Empty() const {
-    return actions_.empty() && types_.empty();
+    return actions_.empty() && types_.empty() && intrinsics_.empty();
   }
 
   [[nodiscard]] nlohmann::json ToJson() const;
@@ -171,6 +177,7 @@ class Catalogue {
  private:
   std::vector<ActionInfo> actions_;
   std::vector<TypeInfo> types_;
+  absl::flat_hash_map<std::string, std::string> intrinsics_;
 };
 
 /// The `format` field of the catalogue envelope.

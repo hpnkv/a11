@@ -130,15 +130,20 @@ test('a flow-shaped string that is not a declaration is not a fragment', () => {
 test('declaration, struct, and import first modules are fragments', () => {
   for (const source of [
     'declare flow render exported { out text: string }',
-    'declare flow package.render exported { out text: string }',
+    'declare flow package::render exported { out text: string }',
     'DECLARE FLOW render EXPORTED { OUT text: string }',
     'struct Row exported { title: string }',
-    'import "library.flow" as lib\nflow entry { run lib.work() }',
+    'mod tools exported { flow work exported {} }',
+    'declare mod tools { declare flow work {} }',
+    'import "library.flow"\nflow main {}',
+    'export tools::work as work',
+    'from std import *',
+    'import "library.flow" as lib\nflow entry { run lib::work() }',
     '# π\ndeclare flow render { out text: string }\nflow main { }',
   ]) assert.equal(only('x = `\n' + source + '\n`;').trim(), source);
 });
 
 test('finds a fragment beginning with a direct symbol import', () => {
-  const source = 'x = `from "lib.flow" import render\nflow main { run render() }`;';
-  assert.match(only(source), /^from "lib.flow" import render/);
+  const source = 'x = `from lib import render\nflow main { run render() }`;';
+  assert.match(only(source), /^from lib import render/);
 });

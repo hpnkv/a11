@@ -67,7 +67,22 @@ class Lexer {
       : source_(source), options_(options) {}
 
   LexResult Run() {
+    CompilationBudget local_budget(options_.limits);
+    auto& budget = options_.budget == nullptr ? local_budget : *options_.budget;
+    if (source_.size() > options_.limits.max_source_bytes) {
+      Report("flow.form.resource-limit",
+             "Source exceeds the configured byte limit.", 0, 0);
+      Push(TokenKind::kEnd, 0, 0);
+      return std::move(result_);
+    }
     while (index_ < source_.size()) {
+      if (result_.tokens.size() >= options_.limits.max_tokens ||
+          !budget.Check()) {
+        Report("flow.form.resource-limit",
+               "Parsing exceeded the configured token, work or time limit.",
+               index_, index_);
+        break;
+      }
       const char letter = source_[index_];
       if (letter == '\n') {
         // A statement ends at the end of its line. The parser steps over these
@@ -128,6 +143,11 @@ class Lexer {
       ReadPunctuation();
     }
 
+    if (!budget.ConsumeTokens(result_.tokens.size())) {
+      Report("flow.form.resource-limit",
+             "Parsing exceeded the cumulative token, work or time limit.",
+             index_, index_);
+    }
     // A trailing run of line breaks ends nothing, so it is not there.
     while (!result_.tokens.empty() &&
            result_.tokens.back().kind == TokenKind::kNewline) {
@@ -454,7 +474,7 @@ class Lexer {
       }
       // A dash continues a name only when a word follows it, which is what
       // keeps
-      // `starts-with` one name and `a -> b` a pipe.
+      // `has-words` one name and `a -> b` a pipe.
       if (source_[index_] == '-' && index_ + 1 < source_.size() &&
           IsNamePart(source_[index_ + 1])) {
         index_ += 2;
@@ -469,6 +489,9 @@ class Lexer {
     const size_t start = index_;
     const char letter = source_[index_];
     const char next = index_ + 1 < source_.size() ? source_[index_ + 1] : '\0';
+    if (letter == ':' && next == ':') {
+      return Take(TokenKind::kScope, start, 2);
+    }
 
     // Longest first, so `...` wins over `..` wins over `.`, `->` over `-` and
     // `<=` over `<`.
@@ -500,6 +523,8 @@ class Lexer {
     switch (letter) {
       case '.':
         return Take(TokenKind::kDot, start, 1);
+      case '*':
+        return Take(TokenKind::kStar, start, 1);
       case '{':
         return Take(TokenKind::kLeftBrace, start, 1);
       case '}':
@@ -614,6 +639,10 @@ std::string_view KindName(TokenKind kind) {
       return "|";
     case TokenKind::kColon:
       return ":";
+    case TokenKind::kScope:
+      return "::";
+    case TokenKind::kStar:
+      return "*";
     case TokenKind::kComma:
       return ",";
     case TokenKind::kLeftBrace:
@@ -649,6 +678,7 @@ TokenKind KindFromName(std::string_view name) {
       TokenKind::kGreater,      TokenKind::kGreaterEqual,
       TokenKind::kPlus,         TokenKind::kMinus,
       TokenKind::kPipe,         TokenKind::kColon,
+      TokenKind::kScope,        TokenKind::kStar,
       TokenKind::kComma,        TokenKind::kLeftBrace,
       TokenKind::kRightBrace,   TokenKind::kLeftParen,
       TokenKind::kRightParen,   TokenKind::kLeftBracket,

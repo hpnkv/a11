@@ -58,6 +58,7 @@
 #include "a11/flow/vocabulary.h"
 #include "a11/net/wire_stream.h"
 #include "a11/service/session.h"
+#include "native_types.h"
 #include "python/bindings.h"
 #include "python/interop.h"
 #include "python/native_types.h"
@@ -391,6 +392,9 @@ std::string TypeName(const py::handle& value) {
 /// else -- a pydantic model, an enum member, a dataclass -- becomes a host
 /// object, which is the escape hatch that lets `coerce` mean anything at all.
 flow::Value ValueFromPython(const py::handle& value) {
+  if (py::isinstance<NativeStatus>(value)) {
+    return flow::StatusRecord(value.cast<const NativeStatus&>().value());
+  }
   if (value.is_none()) {
     return flow::Value::Null();
   }
@@ -442,6 +446,9 @@ flow::Value ValueFromPython(const py::handle& value) {
 
 /// A Flow value as the Python object it stands for.
 py::object ValueToPython(const flow::Value& value) {
+  if (value.native_status() != nullptr) {
+    return StatusToPython(*value.native_status());
+  }
   switch (value.kind()) {
     case flow::Value::Kind::kNull:
       return py::none();
@@ -525,6 +532,11 @@ class PythonBridge : public flow::HostBridge {
   }
 
   absl::StatusOr<flow::Value> FromChunk(const data::Chunk& chunk) override {
+    if (data::IsStatusChunk(chunk)) {
+      ABSL_ASSIGN_OR_RETURN(const absl::Status status,
+                            data::StatusFromStatusChunk(chunk));
+      return flow::StatusRecord(status);
+    }
     const py::gil_scoped_acquire acquire;
     absl::Status from_registry;
     try {
@@ -547,6 +559,9 @@ class PythonBridge : public flow::HostBridge {
 
   absl::StatusOr<data::Chunk> ToChunk(const flow::Value& value,
                                       std::string_view mimetype) override {
+    if (value.native_status() != nullptr) {
+      return data::MakeStatusChunk(*value.native_status());
+    }
     const py::gil_scoped_acquire acquire;
     try {
       const py::object chunk = Registry().attr("to_chunk")(
@@ -582,6 +597,15 @@ class PythonBridge : public flow::HostBridge {
       return values;
     }
     for (const data::Chunk* chunk : chunks) {
+      if (data::IsStatusChunk(*chunk)) {
+        const auto status = data::StatusFromStatusChunk(*chunk);
+        if (status.ok()) {
+          values.emplace_back(flow::StatusRecord(*status));
+        } else {
+          values.emplace_back(status.status());
+        }
+        continue;
+      }
       absl::Status from_registry;
       try {
         values.emplace_back(ValueFromPython(from_chunk(py::cast(*chunk))));
@@ -620,6 +644,10 @@ class PythonBridge : public flow::HostBridge {
     }
     const std::string requested(mimetype);
     for (const flow::Value* value : values) {
+      if (value->native_status() != nullptr) {
+        chunks.emplace_back(data::MakeStatusChunk(*value->native_status()));
+        continue;
+      }
       try {
         chunks.emplace_back(
             to_chunk(ValueToPython(*value), requested).cast<data::Chunk>());
@@ -737,6 +765,30 @@ void BindFlow(py::module_& module) {
       "The Flow language: one lexer, one grammar, one set of checks, shared by "
       "the Python API, the `a11 flow` command and every editor.");
 
+  py::class_<flow::CompilationLimits>(
+      flow, "CompilationLimits",
+      "Host-controlled bounds for parsing, imports and semantic analysis.")
+      .def(py::init<>())
+      .def_readwrite("max_modules", &flow::CompilationLimits::max_modules,
+                     "Compilation bound for modules.")
+      .def_readwrite("max_source_bytes",
+                     &flow::CompilationLimits::max_source_bytes,
+                     "Compilation bound for source bytes.")
+      .def_readwrite("max_depth", &flow::CompilationLimits::max_depth,
+                     "Compilation bound for depth.")
+      .def_readwrite("max_nesting", &flow::CompilationLimits::max_nesting,
+                     "Compilation bound for nesting.")
+      .def_readwrite("max_tokens", &flow::CompilationLimits::max_tokens,
+                     "Compilation bound for tokens.")
+      .def_readwrite("max_work", &flow::CompilationLimits::max_work,
+                     "Compilation bound for work.")
+      .def_readwrite("max_linked_name_bytes",
+                     &flow::CompilationLimits::max_linked_name_bytes,
+                     "Compilation bound for linked name bytes.")
+      .def_readwrite("max_duration_ms",
+                     &flow::CompilationLimits::max_duration_ms,
+                     "Compilation bound for duration ms.");
+
   py::class_<flow::syntax::TypeExpression>(flow, "Type",
                                            "A native Flow type expression.")
       .def(py::init([](std::string name,
@@ -843,7 +895,7 @@ void BindFlow(py::module_& module) {
                     std::move(operation), subject));
               },
               py::arg("operation"), py::arg("subject"),
-              "Read status, wait for, or drain a subject.")
+              "Read status, wait for, or close a subject.")
           .def(
               "cast",
               [](const flow::Expression& self,
@@ -883,6 +935,8 @@ void BindFlow(py::module_& module) {
       .def_readwrite("tee", &flow::CallOptions::tee)
       .def_readwrite("node_map", &flow::CallOptions::node_map)
       .def_readwrite("id", &flow::CallOptions::id)
+      .def_readwrite("deadline", &flow::CallOptions::deadline,
+                     "An eager absolute std::time expression.")
       .def_readwrite("after", &flow::CallOptions::after)
       .def_readwrite("forward", &flow::CallOptions::forward)
       .def_property(
@@ -926,6 +980,9 @@ void BindFlow(py::module_& module) {
             }
           },
           "An optional A11 duration or duration string.");
+  expression.def(
+      "take", &flow::Expression::Take, py::arg("optional") = false,
+      "Extract the next item, optionally representing EOF as absence.");
   expression.def_static(
       "invoke_with",
       [](std::string action,
@@ -941,10 +998,13 @@ void BindFlow(py::module_& module) {
                               "A typed statement in an executable Flow body.")
       .def_static(
           "bind",
-          [](std::string name, const flow::Expression& value) {
-            return ValueOrThrow(flow::Statement::Let(std::move(name), value));
+          [](std::string name, const flow::Expression& value,
+             std::optional<flow::syntax::TypeExpression> type) {
+            return ValueOrThrow(flow::Statement::Initialize(
+                std::move(name), value, std::move(type)));
           },
-          py::arg("name"), py::arg("value"), "Bind a scalar expression.")
+          py::arg("name"), py::arg("value"), py::arg("type") = std::nullopt,
+          "Initialize or reassign a value with an optional type guarantee.")
       .def_static(
           "pipe",
           [](const flow::Expression& value,
@@ -955,11 +1015,11 @@ void BindFlow(py::module_& module) {
           "Write a stream to a destination.")
       .def_static(
           "wait",
-          [](const flow::Expression& subject, bool drain) {
-            return ValueOrThrow(flow::Statement::Wait(subject, drain));
+          [](const flow::Expression& subject, bool close) {
+            return ValueOrThrow(flow::Statement::Wait(subject, close));
           },
-          py::arg("subject"), py::arg("drain") = false,
-          "Wait for or drain a subject.")
+          py::arg("subject"), py::arg("close") = false,
+          "Wait for or close a subject.")
       .def_static(
           "cancel",
           [](const flow::Expression& subject) {
@@ -1131,10 +1191,13 @@ void BindFlow(py::module_& module) {
       .def(
           "bind",
           [](flow::FlowBuilder& self, std::string name,
-             const flow::Expression& value) {
-            ThrowIfNotOk(self.AddLet(std::move(name), value));
+             const flow::Expression& value,
+             std::optional<flow::syntax::TypeExpression> type) {
+            ThrowIfNotOk(
+                self.AddInitialize(std::move(name), value, std::move(type)));
           },
-          py::arg("name"), py::arg("value"), "Bind an expression value.")
+          py::arg("name"), py::arg("value"), py::arg("type") = std::nullopt,
+          "Initialize or reassign an expression value.")
       .def(
           "pipe",
           [](flow::FlowBuilder& self, const flow::Expression& value,
@@ -1389,11 +1452,16 @@ void BindFlow(py::module_& module) {
           .def(
               "effective_schema",
               [](const flow::ModuleDocument& self, std::string name,
-                 const std::map<std::string, std::string>& modules) {
+                 const std::map<std::string, std::string>& modules,
+                 const std::vector<std::string>& source_roots,
+                 flow::CompilationLimits limits) {
                 flow::ModuleSources sources(modules.begin(), modules.end());
                 flow::Program program;
-                program.flows.push_back(ValueOrThrow(
-                    self.EffectiveSchema(std::move(name), sources)));
+                program.flows.push_back(ValueOrThrow(self.EffectiveSchema(
+                    std::move(name), sources,
+                    flow::FileModuleResolver(limits.max_source_bytes, {},
+                                             source_roots),
+                    limits)));
                 return JsonToPython(
                     flow::PlanToJsonValue(self.identity(), program)
                         .at("flows")
@@ -1401,20 +1469,30 @@ void BindFlow(py::module_& module) {
               },
               py::arg("name"),
               py::arg("modules") = std::map<std::string, std::string>{},
+              py::arg("source_roots") = std::vector<std::string>{},
+              py::arg("limits") = flow::CompilationLimits{},
               "Query the effective conjunction of compatible callable "
               "contributions.")
           .def(
               "check",
               [](const flow::ModuleDocument& self,
-                 const std::map<std::string, std::string>& modules) {
+                 const std::map<std::string, std::string>& modules,
+                 const std::vector<std::string>& source_roots,
+                 flow::CompilationLimits limits) {
                 flow::ModuleSources sources(modules.begin(), modules.end());
                 auto result = nlohmann::json::array();
-                for (const auto& diagnostic : self.Check(sources)) {
+                for (const auto& diagnostic :
+                     self.Check(sources,
+                                flow::FileModuleResolver(
+                                    limits.max_source_bytes, {}, source_roots),
+                                limits)) {
                   result.push_back(flow::DiagnosticToJsonValue(diagnostic));
                 }
                 return JsonToPython(result);
               },
               py::arg("modules") = std::map<std::string, std::string>{},
+              py::arg("source_roots") = std::vector<std::string>{},
+              py::arg("limits") = flow::CompilationLimits{},
               "Analyze this module and its supplied import graph.");
 
   py::class_<BoundFlow>(
@@ -1431,6 +1509,11 @@ handler taken from one still runs after the program variable has gone.
           "exported",
           [](const BoundFlow& self) { return self.plan().exported; },
           "Whether the flow is part of its module's public API.")
+      .def_property_readonly(
+          "registerable",
+          [](const BoundFlow& self) { return self.plan().registerable; },
+          "Whether bulk registration exposes this root or exported "
+          "implementation.")
       .def_property_readonly(
           "imported",
           [](const BoundFlow& self) { return self.plan().imported; },
@@ -1542,6 +1625,13 @@ a named flow from `names`.
             return BoundFlow{self.program, name};
           },
           py::arg("name"), "The flow of this name, or ``None``.")
+      .def(
+          "external_actions",
+          [](const BoundProgram& self) {
+            return self.program->ExternalActions();
+          },
+          "Runtime action identities reachable through external calls and "
+          "contracts.")
       .def("describe",
            [](const BoundProgram& self) {
              return JsonToPython(
@@ -1558,41 +1648,38 @@ a named flow from `names`.
         return absl::StrCat("<Program [", absl::StrJoin(names, ", "), "]>");
       });
 
-  document_class.def(
-      "compile",
-      [](const flow::ModuleDocument& self,
-         const std::map<std::string, std::string>& modules) {
+  const auto compile_snapshot =
+      [](std::string source, std::string identity,
+         const std::map<std::string, std::string>& modules,
+         const std::vector<std::string>& source_roots,
+         flow::CompilationLimits limits) {
         flow::ModuleSources sources(modules.begin(), modules.end());
         return BoundProgram{ValueOrThrow(flow::CompiledProgram::Compile(
-            self.source(), self.identity(), sources))};
-      },
-      py::arg("modules") = std::map<std::string, std::string>{},
-      "Build an immutable execution snapshot from supplied modules.");
-
-  flow.def(
+            std::move(source), std::move(identity), sources,
+            flow::FileModuleResolver(limits.max_source_bytes, {}, source_roots),
+            limits))};
+      };
+  document_class.def(
       "compile",
-      [](std::string source, std::string source_name,
-         const std::map<std::string, std::string>& modules,
-         bool resolve_files) {
-        flow::ModuleSources sources;
-        for (const auto& [name, text] : modules) {
-          sources.emplace(name, text);
-        }
-        return BoundProgram{ValueOrThrow(flow::CompiledProgram::Compile(
-            std::move(source), std::move(source_name), sources,
-            resolve_files ? flow::FileModuleResolver()
-                          : flow::ModuleResolver{}))};
+      [compile_snapshot](const flow::ModuleDocument& self,
+                         const std::map<std::string, std::string>& modules,
+                         const std::vector<std::string>& source_roots,
+                         flow::CompilationLimits limits) {
+        return compile_snapshot(self.source(), self.identity(), modules,
+                                source_roots, limits);
       },
-      py::arg("source"), py::arg("source_name") = "",
       py::arg("modules") = std::map<std::string, std::string>{},
-      py::arg("resolve_files") = false,
-      R"doc(Compile Flow source into a runnable program.
-
-The strict door onto the engine every other function here reads through: the
-parser and the resolver both recover and report everything, and this refuses on
-the first error with the line, the column and the message. ``a11.flow.loads``
-turns that into ``FlowSyntaxError``.
-)doc");
+      py::arg("source_roots") = std::vector<std::string>{},
+      py::arg("limits") = flow::CompilationLimits{},
+      "Compile an immutable snapshot with explicit source roots and "
+      "compilation limits.");
+  flow.def(
+      "compile", compile_snapshot, py::arg("source"),
+      py::arg("source_name") = "",
+      py::arg("modules") = std::map<std::string, std::string>{},
+      py::arg("source_roots") = std::vector<std::string>{},
+      py::arg("limits") = flow::CompilationLimits{},
+      "Compile Flow source with explicit source roots and compilation limits.");
 
   flow.def(
       "strformat",
@@ -1671,23 +1758,24 @@ column and message the Python compiler has always reported.
       "check",
       [](std::string_view source, std::string_view source_name,
          const std::map<std::string, std::string>& modules,
-         bool resolve_files) {
-        nlohmann::json request{
-            {"method", "check"},
-            {"source", source},
-            {"path", resolve_files ? flow::FileModuleIdentity(source_name)
-                                   : std::string(source_name)},
-            {"modules", modules}};
+         const std::vector<std::string>& source_roots,
+         flow::CompilationLimits limits) {
+        nlohmann::json request{{"method", "check"},
+                               {"source", source},
+                               {"path", source_name},
+                               {"modules", modules}};
         return JsonToPython(
-                   flow::Handle(request, resolve_files
-                                             ? flow::FileModuleResolver()
-                                             : flow::ModuleResolver{})
+                   flow::Handle(request,
+                                flow::FileModuleResolver(
+                                    limits.max_source_bytes, {}, source_roots),
+                                limits)
                        .at("result"))
             .cast<PyJsonObject>();
       },
       py::arg("source"), py::arg("source_name") = "-",
       py::arg("modules") = std::map<std::string, std::string>{},
-      py::arg("resolve_files") = false,
+      py::arg("source_roots") = std::vector<std::string>{},
+      py::arg("limits") = flow::CompilationLimits{},
       R"doc(Everything wrong with one flow file.
 
 Returns a ``flow.diagnostics/v1`` payload: the syntax and form problems the parser
@@ -1988,7 +2076,9 @@ write and process permissions, environment filtering, and limits still apply.
          const std::vector<std::string>& allow_env, bool unrestricted,
          std::optional<double> timeout_seconds, bool standard_streams,
          const py::object& registry, const py::object& session,
-         const py::object& dispatch_stream)
+         const py::object& dispatch_stream,
+         const std::vector<std::string>& source_roots,
+         flow::CompilationLimits limits)
           -> py::typing::Dict<py::str, py::object> {
         namespace sdk_flow = a11::sdk::flow;
 
@@ -2048,7 +2138,9 @@ write and process permissions, environment filtering, and limits still apply.
           how.timeout = absl::Seconds(*timeout_seconds);
         }
         const a11::flow::interpreter::Source what{.text = source,
-                                                  .name = source_name};
+                                                  .name = source_name,
+                                                  .source_roots = source_roots,
+                                                  .limits = limits};
 
         // Without the GIL: the program runs to completion here, and everything
         // it does -- reading a file, waiting on a clock, calling an action the
@@ -2081,6 +2173,8 @@ write and process permissions, environment filtering, and limits still apply.
       // None selects the interpreter's host registry and transport defaults.
       py::arg("registry") = py::none(), py::arg("session") = py::none(),
       py::arg("dispatch_stream") = py::none(),
+      py::arg("source_roots") = std::vector<std::string>{},
+      py::arg("limits") = flow::CompilationLimits{},
       R"doc(Run a Flow program's entry flow, and return what it did.
 
 The same interpreter ``a11-flow-run`` is -- one implementation, called two ways
@@ -2122,22 +2216,25 @@ Raises if the source will not compile or declares no ``flow { ... }``.
 
   flow.def(
       "request",
-      [](const PyJsonObject& request, bool resolve_files) {
+      [](const PyJsonObject& request,
+         const std::vector<std::string>& source_roots,
+         flow::CompilationLimits limits) {
         // Always an object: `{ok, result}` or `{ok, error}`, which is what
         // makes the answer safe to index rather than something to type-test.
         auto payload = PythonToJson(request);
-        if (resolve_files && payload.contains("path") &&
-            payload["path"].is_string()) {
+        if (payload.contains("path") && payload["path"].is_string()) {
           payload["path"] =
               flow::FileModuleIdentity(payload["path"].get<std::string>());
         }
         return JsonToPython(
-                   flow::Handle(payload, resolve_files
-                                             ? flow::FileModuleResolver()
-                                             : flow::ModuleResolver{}))
+                   flow::Handle(payload,
+                                flow::FileModuleResolver(
+                                    limits.max_source_bytes, {}, source_roots),
+                                limits))
             .cast<PyJsonObject>();
       },
-      py::arg("request"), py::arg("resolve_files") = false,
+      py::arg("request"), py::arg("source_roots") = std::vector<std::string>{},
+      py::arg("limits") = flow::CompilationLimits{},
       R"doc(One request to the language service, answered.
 
 The same method dispatch the standalone ``a11-flow serve`` speaks, reachable

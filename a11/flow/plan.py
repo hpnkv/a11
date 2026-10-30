@@ -28,7 +28,7 @@ Two rules make the compiled graph predictable:
 * **Steps run concurrently.** Order comes from the data, not from the order the
   statements were written in. A call is dispatched at once and its inputs stream
   in while it works. Where an order is genuinely needed, `after`, `wait` and
-  `drain` say so.
+  `close` say so.
 * **A stream read inside a loop or branch is materialised.** The runtime
   buffers it once, in the scope that owns it, and replays the buffer to each
   reader. Each loop pass sees the same outer value; this is the one case where
@@ -276,7 +276,7 @@ class _FlowPlanProtocol:
         dispatches it, another flow calls it, and a model can be offered it as a
         tool, without any of them knowing it is a composition.
         """
-        registry.register(name or self.name, self.schema, self.handler)
+        registry.register(name or self.schema.name, self.schema, self.handler)
         return self
 
     def action(self, **kwargs: Any) -> Action:
@@ -337,7 +337,7 @@ class _ProgramProtocol:
         """Register the root module's named implementations in ``registry``."""
         for name in self.names:
             selected = self[name]
-            if not selected.interface_only and not selected.imported:
+            if selected.registerable:
                 selected.register(registry)
         return self
 
@@ -353,7 +353,8 @@ def compile_source(
     source_name: str = "",
     *,
     modules: dict[str, str] | None = None,
-    resolve_files: bool = False,
+    source_roots: list[str] | None = None,
+    limits: _flow.CompilationLimits | None = None,
 ) -> Program:
     """Compile Flow source into a [Program][a11.flow.plan.Program].
 
@@ -361,51 +362,31 @@ def compile_source(
         FlowSyntaxError: On any lexical, grammatical or naming problem, with the
             line and column it was found at.
     """
+    from a11.status import StatusException
+
     try:
-        return _flow.compile(source, source_name, modules or {}, resolve_files)
-    except Exception as error:  # noqa: BLE001 - re-raised with its position
-        raise _syntax_error(
+        return _flow.compile(
             source,
             source_name,
-            error,
-            modules=modules,
-            resolve_files=resolve_files,
-        ) from None
-
-
-def _syntax_error(
-    source: str,
-    source_name: str,
-    raised: BaseException,
-    *,
-    modules: dict[str, str] | None = None,
-    resolve_files: bool = False,
-) -> FlowSyntaxError:
-    """The first error in ``source``, as the exception a compiler raises.
-
-    Uses the diagnostic matching the compiler error when several problems share
-    a source position.
-    """
-    errors = [
-        found
-        for found in _flow.check(
-            source, source_name, modules or {}, resolve_files
-        )["diagnostics"]
-        if found["severity"] == "error"
-    ]
-    if not errors:
-        return FlowSyntaxError(str(raised), 1, 1, source_name)
-    text = str(raised)
-    chosen = next(
-        (found for found in errors if found["message"] in text), errors[0]
-    )
-    start = chosen["range"]["start"]
-    return FlowSyntaxError(
-        chosen["message"],
-        start["line"],
-        start["column"],
-        chosen.get("source", source_name),
-    )
+            modules or {},
+            source_roots or [],
+            limits or _flow.CompilationLimits(),
+        )
+    except StatusException as error:
+        for detail in error.status.details or []:
+            if (
+                isinstance(detail, dict)
+                and detail.get("type") == "flow.diagnostic/v1"
+            ):
+                diagnostic = detail["diagnostic"]
+                start = diagnostic["range"]["start"]
+                raise FlowSyntaxError(
+                    diagnostic["message"],
+                    start["line"],
+                    start["column"],
+                    diagnostic.get("source", source_name),
+                ) from None
+        raise FlowSyntaxError(error.status.message, 1, 1, source_name) from None
 
 
 __all__ = [

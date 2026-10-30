@@ -21,6 +21,7 @@
 #include <gtest/gtest.h>
 
 #include "a11/flow/inspect.h"
+#include "a11/flow/module.h"
 #include "a11/flow/parser.h"
 #include "a11/flow/resolve.h"
 
@@ -28,9 +29,9 @@ namespace a11::flow {
 namespace {
 
 std::vector<Diagnostic> Findings(std::string_view source) {
-  const ParseResult parsed = Parse(source);
-  const ResolveResult resolved = Resolve(source, parsed);
-  return Inspect(source, parsed, resolved);
+  auto linked = LinkModules(std::string(source), "<test>");
+  const ResolveResult resolved = Resolve(linked.source, linked.parsed);
+  return Inspect(linked.source, linked.parsed, resolved);
 }
 
 std::vector<std::string> Codes(std::string_view source) {
@@ -142,7 +143,7 @@ TEST(FlowInspect, WorksOutWhatAStageCanPossiblyDo) {
   for (const std::string_view fine :
        {"a | first 3 | truncate 200 -> b", "a | collect | truncate 20 -> b",
         R"(a | where it != "" | map it | join "," -> b)",
-        "a | group it | map join(it, \" \") -> b",
+        "a | group it | map std::join(it, \" \") -> b",
         "a | batch 4 | collect -> b"}) {
     const std::string source = absl::StrCat(
         "flow f { in a: string stream\n out b: string\n ", fine, " }");
@@ -160,8 +161,8 @@ TEST(FlowInspect, SaysWhenACountIsNotANumberOfAnything) {
   EXPECT_EQ(Codes("flow f { in a: string stream\n out b: string\n"
                   " for word in a parallel 0 { word -> b } }"),
             (std::vector<std::string>{"flow.form.count-not-positive"}));
-  EXPECT_EQ(Codes("flow f { in a: string\n out b: string\n"
-                  " repeat max 0 { a -> b\n until a } }"),
+  EXPECT_EQ(Codes("flow f { in a: string\n out b: string\n repeat max 0 { a -> "
+                  "b\n  } until a }"),
             (std::vector<std::string>{"flow.form.count-not-positive"}));
 }
 
@@ -186,53 +187,52 @@ TEST(FlowInspect, SaysWhenABarrierCannotDoAnything) {
 TEST(FlowInspect, SaysWhenAClockIsReadAtAMomentNothingPinsDown) {
   // The mistake this is here for: written last, run first, so what it reports
   // is the flow starting rather than how long the call took.
-  EXPECT_EQ(Codes("flow f { in a: string\n out b: string\n"
-                  " started = node()\n now() -> started\n"
-                  " x = run act(p: a)\n wait x\n"
-                  " strformat(\"%s\", now() - started) -> b }"),
+  EXPECT_EQ(Codes("flow f { in a: string\n out b: string\n started = node()\n "
+                  "std::now() -> started\n x = run act(p: a)\n wait x\n "
+                  "std::strformat(\"%s\", std::now() - started) -> b }"),
             (std::vector<std::string>{"flow.barrier.unordered-clock"}));
   // The same statement, ordered: this is what the flow meant.
-  EXPECT_EQ(Codes("flow f { in a: string\n out b: string\n"
-                  " started = node()\n now() -> started\n"
-                  " x = run act(p: a)\n done = wait x\n"
-                  " strformat(\"%s\", now() - started) -> b after done }"),
-            (std::vector<std::string>{}));
+  EXPECT_EQ(
+      Codes("flow f { in a: string\n out b: string\n started = node()\n "
+            "std::now() -> started\n x = run act(p: a)\n done = wait x\n "
+            "std::strformat(\"%s\", std::now() - started) -> b after done }"),
+      (std::vector<std::string>{}));
   // An argument is part of its statement, so it is asked the same question.
-  EXPECT_EQ(Codes("flow f { in a: string\n out b: string\n"
-                  " started = node()\n now() -> started\n"
-                  " x = run act(p: strformat(\"%s\", now() - started))\n"
-                  " x.out -> b }"),
-            (std::vector<std::string>{"flow.barrier.unordered-clock"}));
+  EXPECT_EQ(
+      Codes("flow f { in a: string\n out b: string\n started = node()\n "
+            "std::now() -> started\n x = run act(p: std::strformat(\"%s\", "
+            "std::now() - started))\n x.out -> b }"),
+      (std::vector<std::string>{"flow.barrier.unordered-clock"}));
   // Stamping the start is the other half of the idiom, and needs no moment.
-  EXPECT_EQ(Codes("flow f { out b: string\n started = node()\n"
-                  " now() -> started\n started -> b }"),
+  EXPECT_EQ(Codes("flow f { out b: string\n started = node()\n std::now() -> "
+                  "started\n started -> b }"),
             (std::vector<std::string>{}));
   // A header is there before the first statement, so reading the clock against
   // one says nothing about when this ran.
-  EXPECT_EQ(Codes("flow f { out b: string\n header \"x-a11-deadline\" as by\n"
-                  " strformat(\"%s\", time(by) - now()) -> b }"),
+  EXPECT_EQ(Codes("flow f { out b: string\n header \"x-a11-deadline\" as by\n "
+                  "std::strformat(\"%s\", std::time(by) - std::now()) -> b }"),
             (std::vector<std::string>{}));
 }
 
 TEST(FlowInspect, SaysWhenOneStatementReadsOneStreamTwiceForAValue) {
   const std::vector<std::string> both{"flow.barrier.unordered-clock",
                                       "flow.barrier.value-read-twice"};
-  EXPECT_EQ(Codes("flow f { in a: string\n out b: string\n"
-                  " started = node()\n now() -> started\n"
-                  " x = run act(p: a)\n wait x\n"
-                  " strformat(\"%s %s\", started, now() - started) -> b }"),
-            both);
+  EXPECT_EQ(
+      Codes("flow f { in a: string\n out b: string\n started = node()\n "
+            "std::now() -> started\n x = run act(p: a)\n wait x\n "
+            "std::strformat(\"%s %s\", started, std::now() - started) -> b }"),
+      both);
   // Ordered, and still two reads: the `after` says when the statement runs and
   // cannot say which read inside it goes first.
-  EXPECT_EQ(Codes("flow f { in a: string\n out b: string\n"
-                  " started = node()\n now() -> started\n"
-                  " x = run act(p: a)\n done = wait x\n"
-                  " strformat(\"%s %s\", started, started) -> b after done }"),
-            (std::vector<std::string>{"flow.barrier.value-read-twice"}));
+  EXPECT_EQ(
+      Codes("flow f { in a: string\n out b: string\n started = node()\n "
+            "std::now() -> started\n x = run act(p: a)\n done = wait x\n "
+            "std::strformat(\"%s %s\", started, started) -> b after done }"),
+      (std::vector<std::string>{"flow.barrier.value-read-twice"}));
   // A port that did not say `stream` provably carries one value, so it is
   // shared rather than taken and reading it twice is reading one value twice.
-  EXPECT_EQ(Codes("flow f { in a: string\n out b: string\n"
-                  " strformat(\"%s %s\", a, a) -> b }"),
+  EXPECT_EQ(Codes("flow f { in a: string\n out b: string\n std::strformat(\"%s "
+                  "%s\", a, a) -> b }"),
             (std::vector<std::string>{}));
 }
 
@@ -246,7 +246,7 @@ TEST(FlowInspect, SaysWhenAWaitEndsANodeRatherThanWaitingForIt) {
   EXPECT_EQ(Codes("flow f { in a: string\n out b: string\n"
                   " seen = node()\n"
                   " w = run act(p: a) with \"x-a11-progress-node\": seen.id\n"
-                  " seen -> b\n drain seen after w }"),
+                  " seen -> b\n close seen after w }"),
             (std::vector<std::string>{}));
   // A node this flow writes is closed by its own last writer, so waiting for
   // it is a wait.

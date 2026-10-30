@@ -137,8 +137,6 @@ class Classifier {
     return At(index_ + 1).IsWord() && At(index_ + 2).kind == TokenKind::kColon;
   }
 
-  // Whether the word here is the start of a longer expression rather than a
-  // word standing alone: `error.message`, `levels[0]`, `info(x)`.
   /// Whether the word here is the start of a longer expression rather than a
   /// word standing alone: `error.message`, `levels[0]`, `info(x)`.
   ///
@@ -146,6 +144,7 @@ class Classifier {
   /// the level, so the colour and the meaning agree.
   [[nodiscard]] bool ExpressionContinues() const {
     switch (At(index_ + 1).kind) {
+      case TokenKind::kScope:
       case TokenKind::kDot:
       case TokenKind::kLeftBracket:
       case TokenKind::kLeftParen:
@@ -180,7 +179,7 @@ class Classifier {
     size_t index = index_;
     bool dotted = false;
     while (At(index).IsWord()) {
-      if (At(index + 1).kind != TokenKind::kDot) {
+      if (At(index + 1).kind != TokenKind::kScope) {
         break;
       }
       if (!At(index + 2).IsWord()) {
@@ -247,6 +246,7 @@ class Classifier {
       case TokenKind::kLeftBracket:
       case TokenKind::kRightBracket:
         return SemanticKind::kBracket;
+      case TokenKind::kScope:
       case TokenKind::kDot:
       case TokenKind::kColon:
       case TokenKind::kComma:
@@ -472,6 +472,7 @@ class Classifier {
         }
         state_ = State::kDefault;
         return;
+      case TokenKind::kScope:
       case TokenKind::kDot:
       case TokenKind::kComma:
       case TokenKind::kLeftBracket:

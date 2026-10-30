@@ -23,8 +23,10 @@
 
 #include <absl/strings/str_cat.h>
 #include <absl/strings/str_join.h>
+#include <absl/strings/str_replace.h>
 #include <nlohmann/json.hpp>
 
+#include "a11/flow/lexer.h"
 #include "a11/utf8.h"
 
 namespace a11::flow::syntax {
@@ -109,6 +111,52 @@ std::string_view ConstantKindName(Constant::Kind kind) {
   return "null";
 }
 
+std::string RuntimeActionName(std::string_view name) {
+  return absl::StrReplaceAll(name, {{"::", "#"}});
+}
+
+std::string ActionSource(std::string_view name) {
+  const auto lexed = Lex(name, LexOptions{.keep_comments = true});
+  bool word = true;
+  bool valid = !name.empty() && lexed.diagnostics.empty();
+  for (const auto& token : lexed.tokens) {
+    if (token.kind == TokenKind::kEnd) {
+      break;
+    }
+    valid &=
+        word ? token.kind == TokenKind::kWord : token.kind == TokenKind::kScope;
+    word = !word;
+  }
+  return valid && !word ? std::string(name) : nlohmann::json(name).dump();
+}
+
+std::string SourceFunctionName(std::string_view name) {
+  if (name.starts_with("std::")) {
+    name.remove_prefix(5);
+  }
+  return vocabulary::IsPrimitiveType(name) ? SourceTypeName(name)
+                                           : absl::StrCat("std::", name);
+}
+
+std::string SourceTypeName(std::string_view name) {
+  if (name == "integer") {
+    return "int";
+  }
+  if (name.find("::") != std::string_view::npos) {
+    return std::string(name);
+  }
+  if (name.find('/') != std::string_view::npos) {
+    return std::string(name);
+  }
+  if (vocabulary::IsPrimitiveType(name)) {
+    return std::string(name);
+  }
+  if (vocabulary::TypeNames().contains(name)) {
+    return absl::StrCat("std::", name);
+  }
+  return absl::StrReplaceAll(name, {{".", "::"}});
+}
+
 std::string TypeExpression::ToString() const {
   if (sugared && parameters.size() == 1) {
     return absl::StrCat(parameters.front().ToString(), "[]");
@@ -145,13 +193,14 @@ absl::StatusOr<std::string> TypeExpression::ToSource() const {
       return absl::StrCat(self(self, type.parameters.front()), "[]");
     }
     if (type.parameters.empty()) {
-      return type.name;
+      return SourceTypeName(type.name);
     }
     std::vector<std::string> parameters;
     for (const auto& parameter : type.parameters) {
       parameters.push_back(self(self, parameter));
     }
-    return absl::StrCat(type.name, "[", absl::StrJoin(parameters, ", "), "]");
+    return absl::StrCat(SourceTypeName(type.name), "[",
+                        absl::StrJoin(parameters, ", "), "]");
   };
   return emit(emit, *this);
 }
@@ -202,10 +251,6 @@ std::string_view NodeKindName(NodeKind kind) {
       return "call";
     case NodeKind::kBind:
       return "bind";
-    case NodeKind::kLet:
-      return "let";
-    case NodeKind::kAdvance:
-      return "advance";
     case NodeKind::kBlock:
       return "block";
     case NodeKind::kCallStatement:
@@ -216,8 +261,8 @@ std::string_view NodeKindName(NodeKind kind) {
       return "skip";
     case NodeKind::kWait:
       return "wait";
-    case NodeKind::kDrain:
-      return "drain";
+    case NodeKind::kClose:
+      return "close";
     case NodeKind::kCancel:
       return "cancel";
     case NodeKind::kAbort:
@@ -369,7 +414,7 @@ void VisitChildren(const Node& node,
   if (const auto* value = As<Wait>(&node); value != nullptr) {
     dependencies = &value->after;
   }
-  if (const auto* value = As<Drain>(&node); value != nullptr) {
+  if (const auto* value = As<Close>(&node); value != nullptr) {
     dependencies = &value->after;
   }
   if (const auto* value = As<Cancel>(&node); value != nullptr) {
@@ -408,8 +453,6 @@ void VisitChildren(const Node& node,
     case NodeKind::kDiscard:
     case NodeKind::kName:
     case NodeKind::kCancel:
-    // What an `advance` holds is the name of a `let`, which is a word.
-    case NodeKind::kAdvance:
       return;
     case NodeKind::kListLiteral:
       all(static_cast<const ListLiteral&>(node).items);
@@ -483,6 +526,8 @@ void VisitChildren(const Node& node,
         one(value);
       }
       one(modifiers.action_id);
+      one(modifiers.deadline);
+      one(modifiers.timeout_expression);
       return;
     }
     case NodeKind::kCallExpression: {
@@ -503,13 +548,7 @@ void VisitChildren(const Node& node,
     case NodeKind::kBind:
       one(static_cast<const Bind&>(node).value);
       return;
-    case NodeKind::kLet: {
-      const PipelinePtr& pipeline = static_cast<const Let&>(node).pipeline;
-      if (pipeline != nullptr) {
-        visit(*pipeline);
-      }
-      return;
-    }
+
     case NodeKind::kBlock:
       all(static_cast<const Block&>(node).body);
       return;
@@ -539,11 +578,13 @@ void VisitChildren(const Node& node,
     }
     case NodeKind::kWait:
       one(static_cast<const Wait&>(node).subject);
+      one(static_cast<const Wait&>(node).deadline);
+      one(static_cast<const Wait&>(node).timeout_expression);
       all(static_cast<const Wait&>(node).subjects);
       all(static_cast<const Wait&>(node).targets);
       return;
-    case NodeKind::kDrain:
-      one(static_cast<const Drain&>(node).target);
+    case NodeKind::kClose:
+      one(static_cast<const Close&>(node).target);
       return;
     case NodeKind::kAbort: {
       const auto& abort = static_cast<const Abort&>(node);
@@ -567,12 +608,14 @@ void VisitChildren(const Node& node,
         visit(*loop.pipeline);
       }
       all(loop.body);
+      one(loop.termination);
       return;
     }
     case NodeKind::kRepeat: {
       const auto& repeat = static_cast<const Repeat&>(node);
       one(repeat.start);
       all(repeat.body);
+      one(repeat.termination);
       return;
     }
     case NodeKind::kCarry: {

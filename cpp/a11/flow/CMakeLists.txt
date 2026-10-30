@@ -44,6 +44,7 @@ set(A11_FLOW_LANG_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/resolve.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/schema.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/service.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/temporal.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/syntax.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/vocabulary.cc
     PARENT_SCOPE)

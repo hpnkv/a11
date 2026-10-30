@@ -10,376 +10,172 @@ name: a11-flow
 ---
 # Compose tools into one flow
 
-A flow connects existing actions and dispatches the composition as one step. Use `flow_actions` to discover available actions, `flow_check` to validate the source, and `flow_run` to execute it.
+A flow connects existing actions and dispatches the composition as one step. Use
+`flow_actions` to discover available actions, `flow_check` to validate the
+source, and `flow_run` to execute it.
 
-For example, a flow can fetch several pages, stream each result into a summarizer, and return only the summary. Intermediate pages move directly between actions instead of entering your context.
+For example, a flow can fetch several pages, stream each result into a
+summarizer, and return only the summary. Intermediate pages move directly
+between actions instead of entering your context.
 
 ## When to use a flow
 
 Use a flow when:
 
-- **Data flows tool to tool.** The output of one call is the input of the next, and you do not otherwise need to see it.
-- **The same shape repeats.** The same two or three calls for each item in a list. `for` runs a block per value, `parallel n` runs several at a time.
-- **An intermediate is large.** A page, a transcript, a file listing, a recording. Trim it inside the flow with `| truncate`, `| first`, `| where`, and return what it reduces to.
-- **Steps should overlap.** Steps run concurrently and data dependencies establish their order. A summarizer can read pages as the fetches complete.
+- **Data flows tool to tool.** The output of one call is the input of the next,
+  and you do not otherwise need to see it.
+- **The same shape repeats.** The same two or three calls for each item in a
+  list. `for` runs a block per value, `parallel n` runs several at a time.
+- **An intermediate is large.** A page, a transcript, a file listing, a
+  recording. Trim it inside the flow with `| truncate`, `| first`, `| where`,
+  and return what it reduces to.
+- **Steps should overlap.** Steps run concurrently and data dependencies
+  establish their order. A summarizer can read pages as the fetches complete.
 
-A direct tool call is clearer for one action. Split the work into separate flows when you need to inspect a result or make a decision between calls.
+A direct tool call is clearer for one action. Split the work into separate flows
+when you need to inspect a result or make a decision between calls.
 
 ## Write and run a flow
 
-1. Call **`flow_actions`** to get action names, port names, and each action's    `runnable` flag.
+1. Call **`flow_actions`** to get action names, port names, and each action's
+   `runnable` flag.
 2. Write the flow with the inputs you will supply and the outputs you want back.
-3. Call **`flow_check`** with the source. It resolves the composition without    dispatching actions and reports diagnostics with line and column positions.
-4. Call **`flow_run`** with `source` and an `inputs` object keyed by input port.    Pass a list to a `stream` port and one value to any other port. The result is    an object keyed by the flow's output ports.
+3. Call **`flow_check`** with the source. It resolves the composition without
+   dispatching actions and reports diagnostics with line and column positions.
+4. Call **`flow_run`** with `source` and an `inputs` object keyed by input port.
+   Pass a list to a `stream` port and one value to any other port. The result is
+   an object keyed by the flow's output ports.
 
 ## Runtime choices
 
-- **Declare focused outputs.** Return the answer, count, or selected hits rather than large intermediate values you do not need to inspect.
-- **`run` what is `runnable`, `call` what is not.** The two verbs are two different things: `run` executes the action where the flow is running, `call` puts it on the stream the flow is attached to and lets the peer do it. `flow_actions` marks each one, and almost everything it offers you is `runnable: true` — so `run` is the usual verb, and a `run` of something without a handler is refused rather than quietly sent elsewhere.
-- **Use listed actions.** `flow_actions` is the set of names the flow may resolve.
-- **Every output port of every step is read.** The runtime drains outputs you do not bind. `skip 1 x.rows` drops a port's first value for *every* reader, which is how you throw away a header line, and several statements naming one port add up.
-- **A failing step ends the flow** unless you wrote `try`. When a failure is one the composition should handle, write `try run` (or `try call`) and then `wait` to find out how it went.
-- **Give a port the type it wants.** When an action's input is a real type rather than a bag of keys, write `a11.sdk.Interaction{role: "user", content: [...]}` (or `{...} as a11.sdk.Interaction`) and it is validated into that type, defaults and all. `to_chunk(value)` makes the `Chunk` such a type's content is made of. Which tags exist is the host's — ask `flow_actions` what the ports are and match them.
-- **A stream of fragments is not a stream of things.** `| group EXPR` gathers values until `EXPR` holds of the one just added, then hands over the list: `| group ends-with(trim(it), [".", "?"]) | map trim(join(it, " "))` is partial utterances becoming whole sentences. Reach for it whenever one value is only part of what you need.
-- **Order between two streams is `| then`.** Two statements writing to the same port interleave by arrival. When one lot has to come before another — a conversation's history before the new message — write `history | then asked -> port` and the flow reads them in that order.
-- **Keep computation in actions.** Flow expressions read, compare, transform, and assemble values; use an action for application-specific computation.
-- **Say when a loop stops.** A `repeat` needs an `until`/`while`, or a `max n`, or both. There is no default bound: a loop with neither is refused rather than quietly stopping after some number of passes and calling that success.
-- **`fail`, `cancel` and `log` go in an `if`.** They wait for nothing, so at the top of a flow's body they run at once and race every other statement. Put one in an `if` or a loop body, or write `fail internal "..." after x` to say what it waits for. A `fail` alone at the end of a body reads like a last resort and is refused, because it is the first thing that would happen.
-- **`log` needs no port.** `log "searching" after plan` and `logf "found %s" n after search` write to a log the flow already has: nothing declares or drains it, and it is not a model-facing output. As a stage, `| log` and `| logf "saw %s" it` say what is going past and pass every value on unchanged, which is the way to see into a pipeline without changing it.
+- **Declare focused outputs.** Return the answer, count, or selected hits rather
+  than large intermediate values you do not need to inspect.
+- **`run` what is `runnable`, `call` what is not.** The two verbs are two
+  different things: `run` executes the action where the flow is running, `call`
+  puts it on the stream the flow is attached to and lets the peer do it.
+  `flow_actions` marks each one, and almost everything it offers you is
+  `runnable: true` — so `run` is the usual verb, and a `run` of something
+  without a handler is refused rather than quietly sent elsewhere.
+- **Use listed actions.** `flow_actions` is the set of names the flow may
+  resolve.
+- **Every output port of every step is read.** The runtime drains outputs you do
+  not bind. `skip 1 x.rows` drops a port's first value for *every* reader, which
+  is how you throw away a header line, and several statements naming one port
+  add up.
+- **A failing step ends the flow** unless you wrote `try`. When a failure is one
+  the composition should handle, write `try run` (or `try call`) and then `wait`
+  to find out how it went.
+- **Give a port the type it wants.** When an action's input is a real type
+  rather than a bag of keys, write `a11::sdk::Interaction{role: "user",
+  content: [...]}` (or `{...} as a11::sdk::Interaction`) and it is validated
+  into that type, defaults and all. `std::to_chunk(value)` makes the `Chunk`
+  such a type's content is made of. Which tags exist is the host's — ask
+  `flow_actions` what the ports are and match them.
+- **A stream of fragments is not a stream of things.** `| group EXPR` gathers
+  values until `EXPR` holds of the one just added, then hands over the list: `|
+  group std::endswith(std::trim(it), [".", "?"]) | map std::trim(std::join(it, "
+  "))` is partial utterances becoming whole sentences. Reach for it whenever one
+  value is only part of what you need.
+- **Order between two streams is `| then`.** Two statements writing to the same
+  port interleave by arrival. When one lot has to come before another — a
+  conversation's history before the new message — write `history | then asked ->
+  port` and the flow reads them in that order.
+- **Keep computation in actions.** Flow expressions read, compare, transform,
+  and assemble values; use an action for application-specific computation.
+- **Say when a loop stops.** A `repeat` needs an `until`/`while`, or a `max n`,
+  or both. There is no default bound: a loop with neither is refused rather than
+  quietly stopping after some number of passes and calling that success.
+- **Gate side effects with data or `after`.** `log`, `fail`, `cancel`, and
+  `abort` evaluate their arguments and otherwise overlap other statements. An
+  `if` or loop body supplies a condition; `log "ready" after prepared` supplies
+  an ordering dependency.
+- **`log` needs no port.** `log "searching" after plan` and `logf "found %s" n
+  after search` write to a log the flow already has: nothing declares or drains
+  it, and it is not a model-facing output. As a stage, `| log` and `| logf "saw
+  %s" it` say what is going past and pass every value on unchanged, which is the
+  way to see into a pipeline without changing it.
 
 ## The language
 
 ```
-A11 Flow — a composition of actions that is itself an action.
-Every keyword may be written in lower case or UPPER CASE, but not Mixed.
+A11 Flow composes streaming actions into actions.
+Keywords are lower or UPPER
+case. Statements overlap; data and after dependencies determine execution.
 
-Root modules need no export attributes: their named implementations can be
-registered and their local types used directly. Imported modules are private by
-default. Write `flow NAME exported { ... }`, `declare flow NAME exported { ... }`,
-or `struct NAME exported { ... }` to expose a member to an importer.
-`import "library.flow" as lib` is allowed at module or implemented-flow scope;
-imports are lexical and hoisted. Use `run lib.NAME(...)` and `lib.TYPE`.
-`from "library.flow" import NAME, TYPE as LocalType` introduces direct local names.
-Same-name declarations constrain imported callables; compatible contracts merge.
-Implemented flows may contain `declare flow` and `struct` declarations, visible
-throughout that flow. Local declarations can bind module implementations,
-direct imports or registry actions. Local structs have distinct scoped identities.
-Move executable flow definitions to module scope; local symbols cannot be exported.
-Imported implementations retain access to their private dependencies.
-`declare flow NAME { describe "..."; in value: TYPE; out result: TYPE }`
-specifies an action interface, including ordinary header declarations, with no
-executable body. Compatible declarations conjoin their constraints. A bound
-implementation must refine all declarations. Used unresolved declarations,
-ambiguous implementations and incompatible schemas fail before any Flow work.
-
-Operations are expressions: `(run render(data: data)).text -> result`,
-`let outcome = wait try run check()`, and `let done = drain existing_node`.
-Use parentheses before selecting a result of a multi-part operation:
-`(run fetch(url: url)).metadata.title`; `run fetch(url: url).metadata` is an
-invalid action target. Prefix chains need no extra parentheses when used whole.
-Arguments, object fields, lists, indices and stage expressions accept operations.
-Written occurrences are distinct calls; bind a call to share several ports.
-Scalar reads take a value from a stream; `| consume` requires exactly one item
-and waits for end-of-stream, failing with FAILED_PRECONDITION for zero or many.
-Anonymous stream-to-scalar reads receive an optional informational consume tip.
-Demand and short-circuiting determine activation. Statement order does not.
-Activated work belongs to its execution scope. Dropped readers drain; they do
-not cancel producers. Races publish a winner before losers finish, while the
-owning scope joins all activated children. Failure/cancellation stops owned work;
-Flow retains the initiating status and details, and child Action::Cancel remains
-ordinary cancellation. Cleanup is structurally owned; a non-cooperative external
-action or a stream that never closes has no implicit termination deadline.
-
-
-flow NAME {
-  describe "what this does"
-  in  PORT: TYPE [stream] [required] "description"     # no `stream` = one value
-  out PORT: TYPE [stream] [required] "description"
-  header "x-header-name" as ALIAS default LITERAL
-
-  X = run some-action(port: SOURCE, ...) MODIFIERS   # a handler registered here
-  X = call some-action(port: SOURCE, ...) MODIFIERS  # on the attached stream
-  let V[, V...] = SOURCE                   # *one* value of that stream, named;
-           # several names take it apart, by field or by position
-  advance V                                # rebind V to the next value of it
-  N = node([ID]) [in MAP]                  # a stream of the flow's own
-  nodes MAP [{ ... }]                      # a node map; keeps traffic local
-  SOURCE | STAGE | STAGE -> DEST, DEST     # pipe a stream into node(s)
-  SOURCE | STAGE -> _                      # do the work, keep no result
-  skip N PORT                              # drop its first N, for all readers
-  S = wait SUBJECT [timeout 30s]           # finished; S is how it went
-  S = drain NODE                           # end a node, and say how it ended
-  abort NODE [CODE] [MESSAGE]              # end a node with a failure
-  cancel X                                 # ask X to stop
-  fail [CODE] [MESSAGE]                    # end the flow with a status
-  log [LEVEL] WHAT                         # write to the flow's own log
-  logf [LEVEL] "fmt" [ARG, ...]            # the same, formatted
-           # Data-dependent log/logf/fail/abort arguments synchronize the effect.
-           # Constant-only effects need an `if`, loop body, or `after`.
-           # `cancel` always needs a condition, loop body, or `after`.
-           # `drain NODE` and `abort NODE` are the two endings a stream can
-           # have: drain marks it final and closes it, which says it is over;
-           # abort says it went wrong. A reader cannot otherwise tell a stream
-           # that finished from one cut short.
-           # `cancel` aborts, and a cancelled run reports `cancelled`. Graceful
-           # completion uses the standard-library control-port convention:
-           # `{"command": "stop"} -> X.control_events`.
-           # The log needs no declared port or manual drain and is created
-           # only when used
-  for V[, V...] in SOURCE [parallel N] { ... }   # once per value; several
-                                           # names take a tuple apart
-  repeat S = START [max N] { ... S <- SOURCE ... until EXPR }
-           # a repeat needs an `until`/`while` or a `max`: there is no
-           # default bound, and nothing ending a loop is refused
-  if EXPR { ... } else { ... }
-  [S =] [try] { ... }                      # these statements as one step;
-           # S is how it went. A condition inside blocks only what is in
-           # the braces, which is what a block is for; without `try` a
-           # failure inside ends the flow, as a call's does
+flow NAME [exported] {
+  in input: string [stream] [required]
+  out output: string [stream]
+  job = run local_action(input: input) timeout 30s
+  job.output | map std::upper(it) -> output
 }
+call invokes a peer; run invokes a local handler. All outputs are read.
 
-struct NAME {                              # a shape a port may be typed with
-  describe "what these records are"
-  FIELD: TYPE [required] [unique] [A..B] [matching "re"] [one of [..]]
-         [default LITERAL] "description"
+x = expression or T x = expression initializes once per scope, eagerly.
+Reassignment follows source order, including child-scope updates. Parallel
+conflicting updates are rejected. Names and destructuring patterns are lvalues.
+x = take source consumes one successive item; EOF fails.
+x = try take source returns {present: bool, value: T when present}; errors fail.
+A real null item has present=true. Read the RHS of destructuring only once.
+
+for item in source [parallel N] { body }
+  [until EXPR | while EXPR] [after subject]
+repeat [state = INITIAL] [max N] {
+  body
+  state <- NEXT
+} [until EXPR | while EXPR]
+Postconditions run after the entire pass, in that pass's scope. Postconditions
+require sequential loops. A repeat needs a condition or an explicit bound.
+
+node() creates a node. close NODE ends it normally; abort NODE [CODE [MESSAGE]]
+ends it with an error. wait SUBJECT observes completion; status SUBJECT is its
+status. cancel ACTION cancels an action. fail [CODE [MESSAGE]] fails the scope.
+try run/call or try { body } exposes a failure through the operation's status.
+wait first of a, b chooses a completion; wait all of a, b waits for every one.
+after a, b { body } gates a scope. Bound blocks and loops expose completion.
+
+Call and wait modifiers: timeout DURATION_EXPRESSION, deadline TIME_EXPRESSION,
+after SUBJECTS. Deadlines evaluate once eagerly; an after clause delays the
+whole expression. deadline std::now() + 30s after action and the parenthesized
+form have identical meaning. timeout timeout and deadline deadline are valid
+when the names hold the corresponding values. The earlier bound applies when
+both modifiers are present. Expiry is DEADLINE_EXCEEDED.
+Other call modifiers: via MAP, tee, id EXPR, with "header": EXPR,
+forward headers "name". Local nodes stay off the wire.
+
+source | stage -> destination [, destination]; -> _ discards results.
+Stages include map EXPR, where EXPR, first N, drop N, collect, flatten,
+scan INITIAL as state, EXPR, fold INITIAL as state, EXPR, sum, count,
+take while EXPR, take until EXPR, as TYPE, json, packb, timeout DURATION.
+Stages stay unqualified. Functions are qualified: std::len, std::upper,
+std::join, std::match, std::strformat, std::now, std::duration, std::time.
+from std import now makes now() available without a prefix.
+std::parse_time(text) and std::parse_duration(text) fail on invalid text;
+std::time(text) and std::duration(text) retain permissive conversions.
+
+mod name [exported] { declarations }
+declare mod name [exported] { contracts, declared modules, full structs }
+declare flow company::search::find { interface }
+struct Row [exported] {
+  name: string required
+  count: int
 }
+import "path/library.flow" [as alias] loads a module; default name is library.
+from library import member [as alias], other; from library import *.
+export library::member [as alias] publishes an accessible existing symbol.
+Modules cannot be created inside flows or structs. std is reserved.
+:: qualifies static modules/types; . projects runtime fields/ports.
+Host type source a11::sdk::Interaction retains wire tag a11.sdk.Interaction.
 
-A description may use a "..." string or a dedented """...""" string with line
-breaks. Either form may appear alone below its declaration at any indentation.
-A string followed by another token is a value. Adjacent strings concatenate;
-`\"` inserts a quote. A keyword argument such as `matching` or `strformat`
-accepts one literal to distinguish it from a following description.
+Primitive prelude: int/integer, bool, number, string, bytes, object, null;
+literals true, false, null. Exposed types expose their conversions too.
+Other standard types: std::status, std::time, std::duration, std::list[T],
+std::option[T], std::stream[T]. object[V] has string keys and one value type;
+bare object is heterogeneous. Typed initialization uses existing coercions and
+checks the target invariant. Initializers may not be omitted.
 
-A `struct` declares a record with named, typed, constrained fields. A port may
-use the record as its type, and a value may be coerced into it. A declared shape
-takes precedence over a serialisation tag with the same name and may contain or
-be contained by another shape. `A..B` bounds a number, duration, instant, or the
-*length* of a
-string, a byte string or a list; either end may be left off (`1..`, `..200`).
-A shape holding `bytes` anywhere in it cannot go through `| json`, which has
-nothing to carry them in; `| packb` can.
-
-ONE VALUE: every source is a stream. `let` reads and names one value.
-      `let code = http.status_code` reads one value of that stream and
-      binds it, and the name then stands *where an expression does*:
-      `if code >= 200 and code < 300 { .. }`, `strformat("%d", code)`,
-      `code == other`. It also acts as a one-value stream wherever a SOURCE is
-      accepted: `let image = page.body` then
-      `image | chunk 65536 -> upload.parts` cuts that one value into 64 KiB
-      pieces. A `let` reads lazily on first use. The compiler reports unused
-      bindings. An empty stream binds nothing, which `if not code` tests. A
-      value is read-only.
-
-      Reading a stream where a value belongs consumes one value. Two value reads
-      from one stream receive different values from their shared view. Which
-      reader receives each value is undefined; `after` orders separate statements.
-      Within one statement there is no
-      `after` that could order two reads of one node against each other, and the
-      language reports it (`flow.barrier.value-read-twice`). A `let` is the fix:
-      it names a value, and a value is shared. A stream the language can *prove*
-      carries one value is
-      the exception and is shared: a port that did not say
-      `stream`, a header, a status, or a pipeline that reduced with `| collect`,
-      `| count` or `| first 1`. Those promise one value, so a second arriving
-      ends the flow with `invalid_argument`.
-
-      `advance V` rebinds a `let` value to the *next* value of the same stream,
-      which is how a flow reads several values of one stream one at a time and
-      knows which is which: `let word = words`, use it, `advance word`, use it
-      again. The guarantee is positional: the *k*th binding of a name is the
-      *k*th value of its stream however the flow is
-      scheduled — so it holds without a barrier. Statements written above an
-      `advance` keep the value they were resolved against, which is what makes
-      the name read top to bottom. Advancing past the end binds nothing.
-
-      Several names take one value apart: `let name, age = user` by field, and
-      `let first, second = pair` by position. The value determines the form:
-      each name is looked up as a field, then as a position when no such field
-      exists. For example:
-      `let name, age = match("name={name} age={age:int}", line)`
-      reads what a pattern named. A part has no stream of its own, so `advance`
-      reports an error on it.
-
-SOURCE is a port (in-port, X.out-port), a node, a loop variable, a `let` value,
-a header alias, a literal, `status SUBJECT`, `N.id`, `zip(SOURCE, ...)`,
-`interleave(SOURCE, ...)`, or any of those with `.field` / `[i]`.
-`interleave(a, b, ...)` reads several streams *at once* and gives one stream of
-their values in the order they arrive, so a fast stream is not held behind a
-slow one. `zip` is the other shape: one tuple per round, in step.
-`zip(a, b, ...)` reads several streams in step and gives one stream of tuples,
-read as `it[0]`, `it[1]`, or taken apart by `for x, y in zip(a, b)`. A source
-that ends *well* contributes a null to every tuple after it, so the longer
-stream is still read to its end; one that ends with an *error* ends the whole
-iteration with that status. It stops when every source has, and it is a stream
-like any other — `wait`, `drain`, `| first n`, `| drop n`, `| count` all work
-on one.
-DEST is an out-port, X.in-port, or a node.
-SUBJECT is a call, a node, a port, or a named wait/drain.
-`wait first of a, b` races calls, nodes/ports, and named block, loop or wait
-completions in any combination. Node observation is passive and leaves data
-available. It holds until one subject finishes and lets the rest carry on; `wait all of a, b` holds for every one of them.
-A race is a value too: which one won, from zero. `wait first of a, b -> n`,
-`let n = wait first of a, b` and `n = wait first of a, b` all name it.
-`wait all of` has no winner, so it is a barrier only.
-MODIFIERS: tee | via MAP | timeout 30s | after X, Y, ... (steps or ports/nodes
-           to wait for) |
-           id EXPR | with "header": EXPR, ... |
-           forward headers "x-name", "x-family-*" (send on the headers this
-           flow was called with, as they arrived; `*` matches a family, and an
-           explicit `with` of the same name wins. Every `x-a11-` header already
-           reaches a step, so this is for the others.)
-           ("try run"/"try call" tolerate
-           failure). `run` needs a handler registered where the flow runs and
-           keeps its nodes off the wire; `call` needs none and goes to the peer.
-           Either may name another flow of the same file, in any order, and
-           needs nothing registered for it: a composition can be factored into
-           several flows and still arrive as one text.
-STAGES: take while EXPR | take until EXPR | first N | last N | drop N | truncate N | batch N | window N | flatten |
-        chunk N | group EXPR | sort [by EXPR] [desc] | then SOURCE |
-        where EXPR | map EXPR | join "sep" | strformat "fmt" | mime "text/*" |
-        collect | consume | count | sum [EXPR] | min [EXPR] | max [EXPR] | avg [EXPR] |
-        fold LITERAL as NAME, EXPR | scan LITERAL as NAME, EXPR | distinct |
-        text | json | packb | timeout 30s | pace 100ms | log [LEVEL] [EXPR] |
-        logf [LEVEL] "fmt" [ARG, ...]
-      take while EXPR forwards items while its predicate is true; take until
-      EXPR forwards items until its predicate is true. Both exclude the boundary
-      item and stop this reader, leaving the producer running. Predicates use
-      `it`, evaluate in input order, and accept neither parallel nor unordered.
-      A try predicate stage drops a failed item and continues; source failures
-      still propagate. Empty sources produce nothing.
-      NAME = SOURCE | STAGE -> DEST names the completion of one pipeline,
-      equivalent to NAME = { SOURCE | STAGE -> DEST }. The name is a completion
-      subject for after/wait/status. All destinations and anonymous children
-      finish before the group completes. Use let NAME = SOURCE | STAGE to bind
-      a lazy stream value instead.
-      after X, Y { ... } waits for all named completion subjects before
-      activating any body statement or argument. The body is concurrent and
-      lexical: its local bindings stay inside. A named block exposes its
-      completion: cleanup = after done { ... }. try after tolerates body
-      failures and retains their status. Parent failure/cancellation stops the
-      group through ordinary scope propagation; this is not a finally handler.
-      try SOURCE -> DEST is the pipe's own form of the same word: a failure
-      arriving from the source, or refused by the destination, becomes a status
-      value. Bind it -- `p = try src -> dest` -- and
-      `status p` says how it went; unbound, a failure is silence and the
-      language says so. It differs from `try` on a *stage*: a stage fails once
-      per value and carries on, while a pipe fails once and stops.
-      A loop may be named too: `done = for x in s { .. }` reads as the loop's
-      own outcome, so `drain taken after done` is how a flow says "once the
-      loop is over, that node is over". `for`/`repeat` also take an `after`.
-      Any stage may be written `try STAGE` — a value the stage cannot do is
-      dropped and logged instead of ending the flow — and a `try` stage may say
-      `into DEST` to send those failures somewhere as status records:
-      `docs | try map it as Order into bad -> good`.
-      A per-value stage may say `parallel N` to work on N values at once, and
-      what follows still reads them in the order they arrived. `unordered`
-      gives that up for whatever it saves:
-      `urls | map fetch(it) parallel 8 -> bodies`. Use it for substantial
-      per-value work such as a host round trip or coercion.
-      chunk N cuts each value into pieces of at most N *bytes* — the sizes
-      people write are byte counts, because they are about a frame or a buffer.
-      Text chunks stop at character boundaries. A value
-      with nothing to cut goes through whole; `batch N` is the one that groups
-      several values into one.
-      then and where may drop the `|`: `history then asked`, `hits where
-      it.ok`. Every other stage keeps it.
-      strformat "fmt" is `map strformat(fmt, it)`, the one-value shorthand.
-      log and logf say what is going past and pass every value on unchanged,
-      so a stage may be dropped into a pipeline and taken out again without
-      touching what comes out of it. `| log` with nothing written logs the
-      value itself; otherwise `it` is the value in hand, as in a `map`.
-      then SOURCE reads this stream and then that one, in that order --
-      `history | then asked` is how a conversation keeps its turns straight,
-      which two writers to one node cannot.
-      sum/min/max/avg read the whole stream and give one value; with an
-      expression they read one field of each (`| sum it.price`). min/max/avg of
-      an *empty* stream give nothing, because the smallest of no values is not
-      a value; `| sum` of one is 0. fold is the general form:
-      `| fold 0 as total, total + it.price` binds `total` to what the last
-      value produced and `it` to the value in hand. `+` is arithmetic, not
-      concatenation -- `| join` is what puts strings together.
-      scan publishes each computed accumulator; fold publishes only the last.
-      It produces one value per input while carrying state forward, defining a
-      state machine over the stream. `repeat` carries state but reads its stream
-      from the start on every pass; `for` walks a stream without carrying state
-      between passes.
-      `| scan 0 as n, n + 1` numbers a stream, and the start may be a record
-      when the state has more than one part:
-      `| scan {"in": false} as s, {"in": starts-with(it, "BEGIN") or s.in}`.
-      window N is batch's overlapping form: one list of the last N values per
-      value, once N have arrived. It is what a question about *neighbours*
-      needs — a pattern spanning two lines is invisible to a `batch`, because a
-      boundary falls somewhere and half the matches fall on it. It holds N
-      values and no more, so a window over an endless stream costs nothing that
-      grows, and a stream shorter than N yields nothing.
-      sort reads the whole stream (nothing comes out until it ends), compares
-      the way `<` does, and is stable: values that tie stay in the order they
-      were written. `by` names what to compare and `desc` reverses it.
-      flatten is the inverse of batch: a stream of lists becomes a stream of
-      what they held. A value that is not a list goes through as itself.
-      timeout 30s fails the flow when the *gap* between two values exceeds it,
-      which is what a stalled producer looks like; a whole-step budget is
-      `wait ... timeout` instead. pace 100ms spaces values out and drops
-      nothing -- the producer is held behind the buffer.
-      group EXPR gathers values into a list and closes it when EXPR holds of
-      the one just added — `| group ends-with(it, [".", "?"]) | map join(it)`
-      is how partial pieces become whole sentences. packb writes a value as
-      application/x-msgpack.
-TYPES: string text number integer bool duration time object json list bytes any,
-      a shape this file declares, a quoted mimetype, or a registry tag written
-      unquoted: a11.sdk.AudioBuffer.
-      A container says what it holds: list[string], list[a11.NodeFragment],
-      and `T[]` is the same thing as `list[T]`.
-      A value is made into one with TYPE{field: expr, ...} or EXPR as TYPE --
-      partial in, valid value of that type out. Not `TYPE{` where a `{` would
-      open a block (an if/for header); put it in brackets there.
-EXPR: literals, it (the value a where/map sees), .field, [i], (pipe | count),
-      == != < <= > >= in, and/or/not, + and - (numbers, durations, instants;
-      `-` needs its spaces, since `text-upper` is one name), and the functions
-      len lower upper trim text number bool keys values get join split merge
-      contains starts-with ends-with replace slice default to_chunk from_chunk
-      strformat b64encode b64decode b64urlencode b64urldecode
-      utf8encode utf8decode
-      now duration time seconds
-      A list or object literal may spread another in: [...xs, y] and
-      {...it, "tags": [..]}, where a later key wins.
-      b64encode/b64urlencode give text and b64decode/b64urldecode give bytes;
-      the url pair uses the web-safe alphabet and does not insist on padding.
-      utf8encode gives bytes and utf8decode gives text; decoding rejects
-      malformed UTF-8 rather than replacing it.
-      starts-with/ends-with take one ending or a list of them; to_chunk(v[,
-      mime]) makes a Chunk, from_chunk(c) reads one back.
-      strformat("%s of %s", a, b) is printf: %s as text, %d %f %x as numbers,
-      printf's flags/width/precision (%-8s, %06.2f), %2$s to pick a value by
-      number, %% for a literal percent, and %(SPEC)s to apply a duration unit
-      or a strftime pattern first. Not a Python template: there is nothing for
-      a slot to read into, which is what makes one safe to accept from a model.
-TIME: durations are written 500ns, 250ms, 30s, 2m, 1h, compound as 1m30s500ms,
-      and are values like any other. now() is the clock; instant - instant is a
-      duration; instant +/- duration is an instant; duration +/- duration is a
-      duration, and a bare number on either side counts as seconds. A duration
-      the other way round is below zero and says so.
-      duration(x) and time(x) read a value in: a number of seconds, or the text
-      the language writes: duration("1m30s") or
-      time("2026-08-11T09:14:22Z")
-      — so a duration or an instant that arrived as a string is a value again.
-      seconds(d) is the number of seconds.
-      Formatting: %s gives `1m30s` and `2026-08-11T09:14:22Z`,
-      %(ns)d %(us)d %(ms)d %(s)d %(m)d %(h)d give a duration as one unit, and
-      %(%H:%M:%S)s or %(epoch)d formats an instant.
-STATUS: a record {"ok": bool, "code": "NOT_FOUND", "number": 5, "message": str}.
-      `try` keeps a failure from ending the flow; `wait`/`status` say what
-      happened; `fail CODE MSG`, `fail NUMBER MSG` or `fail STATUS` ends it.
-      Codes are Abseil's: ok cancelled unknown invalid_argument not_found
-      deadline_exceeded already_exists permission_denied resource_exhausted
-      failed_precondition aborted out_of_range unimplemented internal
-      unavailable data_loss unauthenticated.
-
-Steps run concurrently; order comes from the data. Every output of a step is
-read, whether the flow uses it or not. Stages that shrink a stream (first,
-truncate, where) do so before the next step ever sees it, `skip N PORT` does it
-for every reader at once, `-> _` performs a pipeline and keeps none of it, and
-`nodes` blocks keep a step's traffic off the wire.
+File imports require explicitly approved source_roots; none means filesystem
+imports are disallowed. Explicit in-memory modules remain available. Parsing
+and compilation have configurable depth, size, work and time limits.
 ```
 
 ## An example
@@ -409,4 +205,7 @@ flow answer-from-the-web {
 }
 ```
 
-Run that with `inputs` of `{"question": "..."}` and you get back `{"answer": "...", "sources": ["...", "..."]}` — two small values, out of three pages you never had to read. The `nodes fetched` block is what keeps the pages off the wire; without it they would be replicated to whoever dispatched the composition.
+Run that with `inputs` of `{"question": "..."}` and you get back `{"answer":
+"...", "sources": ["...", "..."]}` — two small values, out of three pages you
+never had to read. The `nodes fetched` block is what keeps the pages off the
+wire; without it they would be replicated to whoever dispatched the composition.

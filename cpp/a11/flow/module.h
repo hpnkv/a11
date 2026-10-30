@@ -24,6 +24,7 @@
 #include <absl/status/statusor.h>
 
 #include "a11/flow/catalogue.h"
+#include "a11/flow/limits.h"
 #include "a11/flow/parser.h"
 
 namespace a11::flow {
@@ -38,12 +39,7 @@ using ModuleResolver = std::function<absl::StatusOr<ModuleSource>(
     std::string_view reference, std::string_view importer)>;
 
 /// Limits applied before imported source is parsed or linked.
-struct ModuleLimits {
-  size_t max_modules = 256;
-  size_t max_source_bytes = 8 * 1024 * 1024;
-  size_t max_depth = 128;
-  size_t max_linked_name_bytes = 64 * 1024 * 1024;
-};
+using ModuleLimits = CompilationLimits;
 
 /// One original document's interval in linked analysis source.
 struct ModuleRange {
@@ -63,6 +59,8 @@ struct ModuleMember {
   bool scoped = false;
   bool type = false;
   bool selection = false;
+  std::string intrinsic = {};
+  bool module = false;
 };
 
 struct ImportSelection {
@@ -81,8 +79,10 @@ struct LinkedModule {
   bool SelectingImport(size_t offset) const;
 
   /// Public namespace members visible at an offset in the root document.
-  catalogue::Catalogue CatalogueAt(size_t offset,
-                                   bool import_selection = true) const;
+  catalogue::Catalogue CatalogueAt(
+      size_t offset, bool import_selection = true,
+      CompilationLimits limits = {},
+      CompilationBudget* absl_nullable budget = nullptr) const;
 
   /// Rebase linked diagnostics to their original source documents.
   void Locate(std::vector<Diagnostic>& diagnostics) const;
@@ -91,7 +91,7 @@ struct LinkedModule {
 /// Link lexical imports and private dependencies using host-supplied sources.
 LinkedModule LinkModules(std::string source, std::string identity,
                          const ModuleSources& sources = {},
-                         ModuleResolver resolver = {},
-                         ModuleLimits limits = {});
+                         ModuleResolver resolver = {}, ModuleLimits limits = {},
+                         CompilationBudget* absl_nullable budget = nullptr);
 }  // namespace a11::flow
 #endif  // A11_FLOW_MODULE_H_

@@ -122,6 +122,7 @@ file:
                      instance credentials.
   --allow-env <NAME> Let it read that environment variable. Repeatable.
   --unrestricted     No filesystem sandbox at all. For a file you wrote.
+  --source-root <dir> Approve a source import root. Repeatable; default none.
   --timeout <dur>    Give up after this long: 30s, 1m30s, 500ms.
   --check            Compile and report, run nothing.
   --print-plan       Say what the entry flow is, then run it.
@@ -142,6 +143,8 @@ struct Options {
   bool check_only = false;
   bool print_plan = false;
   std::optional<absl::Duration> timeout;
+  std::vector<std::string> source_roots;
+  CompilationLimits limits;
 };
 
 absl::StatusOr<Options> ParseCommandLine(int argc, char** argv) {
@@ -196,6 +199,11 @@ absl::StatusOr<Options> ParseCommandLine(int argc, char** argv) {
     }
     if (argument == "--unrestricted") {
       options.unrestricted = true;
+      continue;
+    }
+    if (argument == "--source-root") {
+      ABSL_ASSIGN_OR_RETURN(std::string root, value_for("--source-root"));
+      options.source_roots.push_back(std::move(root));
       continue;
     }
     if (argument == "--root") {
@@ -305,7 +313,10 @@ int Main(int argc, char** argv) {
     std::cerr << "a11-flow-run: " << text.status().message() << "\n";
     return 2;
   }
-  const Source source{.text = *std::move(text), .name = options->path};
+  const Source source{.text = *std::move(text),
+                      .name = options->path,
+                      .source_roots = options->source_roots,
+                      .limits = options->limits};
 
   if (options->print_plan || options->check_only) {
     absl::StatusOr<std::string> described = DescribeEntry(source);

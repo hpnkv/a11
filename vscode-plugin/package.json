@@ -144,6 +144,12 @@
           "default": "",
           "markdownDescription": "Where to find `a11-flow`. Empty looks in the extension's own `bin/<os>-<arch>/`, then on the `PATH`."
         },
+        "a11.flow.sourceRoots": {
+          "type": "array",
+          "items": {"type": "string"},
+          "default": [],
+          "markdownDescription": "Absolute directories approved for Flow source imports. Empty disables filesystem imports. Restart the Flow language server after changes."
+        },
         "a11.flow.scanWorkspace": {
           "type": "boolean",
           "default": true,

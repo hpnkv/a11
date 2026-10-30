@@ -54,7 +54,8 @@ namespace a11::flow {
 /// does
 /// not correlate need not invent one.
 nlohmann::json Handle(const nlohmann::json& request,
-                      ModuleResolver resolver = {});
+                      ModuleResolver resolver = {},
+                      CompilationLimits limits = {});
 
 /// Every method [Handle] knows, in the order `--help` lists them.
 absl::Span<const std::string_view> Methods();

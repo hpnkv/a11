@@ -4,10 +4,10 @@ flow repo_search {
   out native: string stream
   out docs:   string stream
 
-  step = run search_text(query: QUERY, path: "a11", limit: 25)
-  step.result.matches | flatten | first 25 | truncate 240 -> python
-  step2 = run search_text(query: QUERY, path: "cpp", limit: 25)
-  step2.result.matches | flatten | first 25 | truncate 240 -> native
-  step3 = run search_text(query: QUERY, path: "doc", limit: 15)
-  step3.result.matches | flatten | first 15 | truncate 240 -> docs
+  python_search = run search_text(query: QUERY, path: "a11", limit: 25)
+  python_search.result.matches | flatten | first 25 | truncate 240 -> python
+  native_search = run search_text(query: QUERY, path: "cpp", limit: 25)
+  native_search.result.matches | flatten | first 25 | truncate 240 -> native
+  docs_search = run search_text(query: QUERY, path: "doc", limit: 15)
+  docs_search.result.matches | flatten | first 15 | truncate 240 -> docs
 }

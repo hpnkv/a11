@@ -38,6 +38,7 @@
 #include <absl/strings/match.h>
 #include <absl/strings/str_cat.h>
 #include <absl/strings/str_join.h>
+#include <absl/strings/str_replace.h>
 #include <absl/strings/str_split.h>
 #include <absl/time/clock.h>
 #include <absl/time/time.h>
@@ -51,10 +52,12 @@
 #include "a11/data/serialization.h"
 #include "a11/data/types.h"
 #include "a11/flow/contract.h"
+#include "a11/flow/emit_json.h"
 #include "a11/flow/schema.h"
 #include "a11/flow/vocabulary.h"
 #include "a11/nodes/async_node.h"
 #include "a11/nodes/node_map.h"
+#include "a11/status.h"
 #include "a11/stores/chunk_store_writer.h"
 #include "a11/utf8.h"
 #include "thread/boost_primitives.h"
@@ -685,8 +688,6 @@ class Reader {
   /// A non-ok status is the producer's failure, relayed to every reader.
   virtual absl::StatusOr<ItemPtr> Next() = 0;
 
-  // Append up to `limit` currently available items, waiting only when none is
-  // ready.
   /// Append up to `limit` currently available items, waiting only when none is
   /// ready.
   ///
@@ -1206,6 +1207,32 @@ class ValueCursor {
 
   void Stop() { reader_->Stop(); }
 
+  absl::StatusOr<std::optional<Value>> Extract(Monitor& monitor) {
+    {
+      thread::MutexLock lock(&monitor.mu());
+      ABSL_RETURN_IF_ERROR(monitor.Wait([this] { return !busy_; }));
+      busy_ = true;
+    }
+    auto read = reader_->Next();
+    absl::StatusOr<std::optional<Value>> result = std::optional<Value>();
+    if (!read.ok()) {
+      result = read.status();
+    } else if (*read != nullptr) {
+      auto value = (*read)->Read(bridge_);
+      if (value.ok()) {
+        result = std::optional<Value>(std::move(*value));
+      } else {
+        result = value.status();
+      }
+    }
+    {
+      thread::MutexLock lock(&monitor.mu());
+      busy_ = false;
+    }
+    monitor.Wake();
+    return result;
+  }
+
   // Return the next value, or the cached value for a unary stream. Readers
   // reserve a turn under the monitor lock and perform the blocking read after
   // releasing it.
@@ -1450,7 +1477,7 @@ class Destination {
  public:
   /// Close the node now, whoever was writing it.
   ///
-  /// What `drain` does to a node the flow does not write itself: a callee given
+  /// What `close` does to a node the flow does not write itself: a callee given
   /// a node to write does not close it -- it does not own it -- so the flow
   /// that lent it the node is the one that says when it is over.
   absl::Status End() { return Finish(/*forced=*/true); }
@@ -1464,7 +1491,7 @@ class Destination {
 
   /// End the node with a failure, so its readers see the error and not an end.
   ///
-  /// `drain` reports an ordinary end; this reports a failure so readers can
+  /// `close` reports an ordinary end; this reports a failure so readers can
   /// distinguish completion from interruption.
   ///
   /// Forced, like End(): whoever was writing it, this is the last word. It also
@@ -1559,6 +1586,16 @@ class Destination {
 class CallHandle {
  public:
   explicit CallHandle(Monitor& monitor) : monitor_(&monitor) {}
+
+  void SetDeadline(absl::Time deadline) {
+    thread::MutexLock lock(&monitor_->mu());
+    deadline_ = deadline;
+  }
+
+  absl::Time deadline() {
+    thread::MutexLock lock(&monitor_->mu());
+    return deadline_;
+  }
 
   void Adopt(std::shared_ptr<actions::Action> action) {
     thread::MutexLock lock(&monitor_->mu());
@@ -1679,6 +1716,7 @@ class CallHandle {
  private:
   Monitor* absl_nonnull monitor_;
   std::shared_ptr<actions::Action> action_;
+  absl::Time deadline_ ABSL_GUARDED_BY(monitor_->mu()) = absl::InfiniteFuture();
   bool started_ = false;
   bool done_ = false;
   uint64_t completion_order_ = 0;
@@ -1724,8 +1762,13 @@ class Scope {
   absl::Status RunRepeat(StepId step);
   absl::StatusOr<bool> PassCondition(const graph::Step& one, const Scope& pass);
   void Record(StepId step, const absl::Status& outcome);
+  void PublishVariables(const graph::Step& step, const Scope& child);
+  void PresetVariables(
+      const graph::Step& step, BodyId body,
+      absl::flat_hash_map<RefId, std::vector<ItemPtr>>& presets);
   absl::StatusOr<absl::Status> ChosenStatus(StepId step);
   absl::Status AbortNode(StepId step);
+  absl::StatusOr<absl::Time> DeadlineAt(const graph::Step& step);
   absl::Status RunWait(StepId step);
   absl::Status RunWaitMany(StepId step);
   absl::Status Failure(StepId step);
@@ -1742,6 +1785,7 @@ class Scope {
   absl::StatusOr<Destination*> DestinationOf(RefId ref);
   absl::StatusOr<CallHandle*> Call(StepId step);
 
+  absl::StatusOr<ItemPtr> BoundItem(RefId ref);
   absl::Status Produce(RefId ref, const Sink& sink);
   absl::Status ProduceStage(RefId ref, const Sink& sink);
   absl::Status ProduceZip(RefId ref, const Sink& sink);
@@ -1767,7 +1811,8 @@ class Scope {
           body,
       bool reads_values);
 
-  absl::StatusOr<Value> ValueOf(RefId ref);
+  absl::StatusOr<Value> ValueOf(RefId ref, bool take = false,
+                                bool optional = false);
   absl::StatusOr<Value> Evaluate(ExprId expr);
   absl::StatusOr<Value> EvaluateWith(ExprId expr, const Value& it,
                                      bool join = true);
@@ -1995,8 +2040,6 @@ class Runner {
     return at->second.get();
   }
 
-  // Whether this body's call ports have already been checked against the
-  // schemas of what they call.
   /// Whether this body's call ports have already been checked against the
   /// schemas of what they call.
   ///
@@ -2190,6 +2233,12 @@ absl::Status Scope::Prepare() {
     // for -- and a pump waiting to be wanted is a flow that never ends.
     if (flow.refs[ref].kind == RefKind::kBound &&
         flow.refs[ref].role == "fold") {
+      continue;
+    }
+    if (flow.refs[ref].kind == RefKind::kBound) {
+      lazies_.emplace(ref, std::make_unique<Lazy>(monitor(), [this, ref] {
+                        return BoundItem(ref);
+                      }));
       continue;
     }
     if (flow.refs[ref].kind == RefKind::kStatus) {
@@ -2473,6 +2522,41 @@ absl::Status Scope::ReadNode(const NodePtr& node, bool tolerant,
 
 // --- Producing streams -------------------------------------------------------
 
+absl::StatusOr<ItemPtr> Scope::BoundItem(RefId ref) {
+  const auto& one = graph().refs[ref];
+  if (one.role == "initialized-value") {
+    ABSL_RETURN_IF_ERROR(StepDone(one.bound_by));
+    Value value;
+    {
+      thread::MutexLock lock(&monitor().mu());
+      const auto found = captures_.find(graph().steps[one.bound_by].slot);
+      if (found == captures_.end()) {
+        return Fail("An initialized value is unavailable.");
+      }
+      value = found->second;
+    }
+    return Item::Of(std::move(value));
+  }
+  if (one.role == "joined-value") {
+    ABSL_RETURN_IF_ERROR(StepDone(one.bound_by));
+    std::optional<Value> joined;
+    {
+      thread::MutexLock lock(&monitor().mu());
+      const auto found = captures_.find(absl::StrCat("merge:", ref));
+      if (found != captures_.end()) {
+        joined = found->second;
+      }
+    }
+    if (joined.has_value()) {
+      return Item::Of(std::move(*joined));
+    }
+  } else if (one.role != "scope-input") {
+    return Fail("A bound value is unavailable in this scope.");
+  }
+  ABSL_ASSIGN_OR_RETURN(Value value, ValueOf(one.source));
+  return Item::Of(std::move(value));
+}
+
 absl::Status Scope::Produce(RefId ref, const Sink& sink) {
   const graph::Ref& one = graph().refs[ref];
   // One place, upstream of the bus that fans the stream out, so the values
@@ -2489,6 +2573,10 @@ absl::Status Scope::Produce(RefId ref, const Sink& sink) {
   const Sink skipping(pass);
   const Sink& onward = skip > 0 ? skipping : sink;
   switch (one.kind) {
+    case RefKind::kBound: {
+      ABSL_ASSIGN_OR_RETURN(ItemPtr item, BoundItem(ref));
+      return onward.One(std::move(item));
+    }
     case RefKind::kDerived:
       return ProduceStage(ref, onward);
     case RefKind::kZip:
@@ -2766,25 +2854,11 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
   if (name == "at") {
     const Value key =
         stage.indexed ? Value::Integer(stage.index) : Value::String(stage.text);
-    if (stage.named_or_indexed) {
-      // A destructuring `let`: the field where the value has one, and the
-      // position where it is a list.
-      const Value position = Value::Integer(stage.index);
-      return per_value(
-          [&](const ItemPtr& item, std::vector<ItemPtr>& out) -> absl::Status {
-            ABSL_ASSIGN_OR_RETURN(const Value value, item->Read(&host));
-            Value found = Lookup(value, key);
-            if (found.IsNull()) {
-              found = Lookup(value, position);
-            }
-            out.push_back(Item::Of(std::move(found)));
-            return absl::OkStatus();
-          });
-    }
     return per_value(
         [&](const ItemPtr& item, std::vector<ItemPtr>& out) -> absl::Status {
           ABSL_ASSIGN_OR_RETURN(const Value value, item->Read(&host));
-          out.push_back(Item::Of(Lookup(value, key)));
+          ABSL_ASSIGN_OR_RETURN(Value selected, LookupChecked(value, key));
+          out.push_back(Item::Of(std::move(selected)));
           return absl::OkStatus();
         });
   }
@@ -2881,6 +2955,17 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
         });
   }
   if (name == "pace") {
+    absl::Duration duration = stage.duration;
+    if (stage.expr != graph::kNone) {
+      ABSL_ASSIGN_OR_RETURN(const Value value, Evaluate(stage.expr));
+      if (value.kind() != Value::Kind::kDuration) {
+        return Fail("Pace requires a std::duration value.");
+      }
+      duration = value.duration();
+    }
+    if (duration <= absl::ZeroDuration()) {
+      return Fail("Pace requires a positive duration.");
+    }
     // Spaced out, not sampled: every value goes on, later than it arrived. The
     // producer is held back behind the queue rather than being asked to stop,
     // which is what makes this a rate limit and not a drop.
@@ -2891,26 +2976,36 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
           if (now < next) {
             thread::SleepFor(next - now);
           }
-          next = std::max(now, next) + stage.duration;
+          next = std::max(now, next) + duration;
           out.push_back(item);
           return absl::OkStatus();
         },
         /*reads_values=*/false);
   }
   if (name == "timeout") {
+    absl::Duration duration = stage.duration;
+    if (stage.expr != graph::kNone) {
+      ABSL_ASSIGN_OR_RETURN(const Value value, Evaluate(stage.expr));
+      if (value.kind() != Value::Kind::kDuration) {
+        return Fail("A timeout requires a std::duration value.");
+      }
+      duration = value.duration();
+    }
+    if (duration <= absl::ZeroDuration()) {
+      return Fail("A timeout must be positive.");
+    }
     // The gap between values, not the total: a stream that keeps arriving runs
     // as long as it likes. Read one at a time, because a batch that waits for
     // the first value and then takes four more would be timing the batch.
     while (true) {
-      absl::StatusOr<ItemPtr> item =
-          source->NextUntil(absl::Now() + stage.duration);
+      absl::StatusOr<ItemPtr> item = source->NextUntil(absl::Now() + duration);
       if (!item.ok()) {
         if (!absl::IsDeadlineExceeded(item.status())) {
           return item.status();
         }
         return Fail(
             absl::StrCat("Nothing arrived on ", graph().refs[one.source].label,
-                         " for ", absl::FormatDuration(stage.duration), "."),
+                         " for ", absl::FormatDuration(duration), "."),
             absl::StatusCode::kDeadlineExceeded);
       }
       if (*item == nullptr) {
@@ -2970,6 +3065,54 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
         },
         /*reads_values=*/false);
   }
+  if (name == "destructure") {
+    return per_value([&](const ItemPtr& item,
+                         std::vector<ItemPtr>& out) -> absl::Status {
+      ABSL_ASSIGN_OR_RETURN(const Value value, item->Read(&host));
+      if (value.kind() != Value::Kind::kList &&
+          value.kind() != Value::Kind::kObject) {
+        return Fail("Destructuring requires an object or a list.");
+      }
+      if (value.kind() == Value::Kind::kList &&
+          value.items().size() < stage.destructured.size()) {
+        return Fail(
+            "The list has fewer values than the destructuring pattern.");
+      }
+      Value::Pairs fields;
+      for (size_t index = 0; index < stage.destructured.size(); ++index) {
+        const auto& name = stage.destructured[index];
+        const auto* selected = value.kind() == Value::Kind::kList
+                                   ? &value.items()[index]
+                                   : value.Get(name);
+        if (selected == nullptr) {
+          return Fail(absl::StrCat("Missing destructured field '", name, "'."));
+        }
+        Value converted = *selected;
+        if (index < stage.destructured_types.size() &&
+            stage.destructured_types[index].has_value()) {
+          ABSL_ASSIGN_OR_RETURN(
+              converted,
+              Coerce(converted, *stage.destructured_types[index],
+                     CoerceContext{.bridge = &host, .shapes = &shapes()}));
+        }
+        fields.emplace_back(name, std::move(converted));
+      }
+      out.push_back(Item::Of(Value::Object(std::move(fields))));
+      return absl::OkStatus();
+    });
+  }
+  if (name == "coerce" && stage.type.has_value()) {
+    return per_value(
+        [&](const ItemPtr& item, std::vector<ItemPtr>& out) -> absl::Status {
+          ABSL_ASSIGN_OR_RETURN(Value value, item->Read(&host));
+          ABSL_ASSIGN_OR_RETURN(
+              Value converted,
+              Coerce(value, *stage.type,
+                     CoerceContext{.bridge = &host, .shapes = &shapes()}));
+          out.push_back(Item::Of(std::move(converted)));
+          return absl::OkStatus();
+        });
+  }
   if (name == "truncate") {
     return per_value(
         [&](const ItemPtr& item, std::vector<ItemPtr>& out) -> absl::Status {
@@ -3023,7 +3166,7 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
     });
   }
   if (name == "chunk") {
-    // The other direction from `let`: one value, cut into pieces of a size
+    // The other direction from `value`: one value, cut into pieces of a size
     // somebody downstream cares about.
     if (stage.count <= 0) {
       return Fail(absl::StrCat("'chunk ", stage.count,
@@ -3362,7 +3505,7 @@ absl::Status Scope::NodeOutcome(RefId ref, absl::Status* absl_nonnull outcome) {
 
 // --- Expressions -------------------------------------------------------------
 
-absl::StatusOr<Value> Scope::ValueOf(RefId ref) {
+absl::StatusOr<Value> Scope::ValueOf(RefId ref, bool take, bool optional) {
   Scope* owner = Owner(ref);
   // A fold's accumulator is not read from a stream: the stage folding right now
   // put it there, and this is the name that reads it.
@@ -3413,6 +3556,17 @@ absl::StatusOr<Value> Scope::ValueOf(RefId ref) {
       return subscribed;
     }
   }
+  if (take) {
+    ABSL_ASSIGN_OR_RETURN(auto value, cursor->Extract(monitor()));
+    if (optional) {
+      return Value::Option(std::move(value));
+    }
+    if (!value.has_value()) {
+      return absl::FailedPreconditionError(
+          "Cannot take a value from an empty stream.");
+    }
+    return std::move(*value);
+  }
   return cursor->Next(monitor());
 }
 
@@ -3436,7 +3590,7 @@ absl::StatusOr<Value> Scope::EvaluateWith(ExprId expr, const Value& it,
     if (work_ == nullptr) {
       return Fail("Expression has no owning execution scope.");
     }
-    auto child = std::make_shared<Scope>(
+    auto child = std::make_unique<Scope>(
         *runner_, one.activation, this,
         absl::flat_hash_map<RefId, std::vector<ItemPtr>>{});
     child->resource_owner_ =
@@ -3452,13 +3606,15 @@ absl::StatusOr<Value> Scope::EvaluateWith(ExprId expr, const Value& it,
       expression_cleanups_.insert_or_assign(expr, done);
     }
     const bool pipeline_owned = one.pipeline_owned;
-    work_->Spawn([child, done, join, pipeline_owned]() -> absl::Status {
+    work_->Spawn([child = std::move(child), done, join,
+                  pipeline_owned]() mutable -> absl::Status {
       const absl::Status status = child->Run();
       if (!status.ok()) {
         child->expression_result_->SetStatus(status).IgnoreError();
       } else {
         child->expression_result_->SetValue(Value::Null()).IgnoreError();
       }
+      child.reset();
       done->SetResult(status.ok() ? absl::StatusOr<a11::Unit>(a11::Unit{})
                                   : absl::StatusOr<a11::Unit>(status))
           .IgnoreError();
@@ -3481,10 +3637,14 @@ absl::StatusOr<Value> Scope::EvaluateWith(ExprId expr, const Value& it,
       if (bound != &node) {
         continue;
       }
-      if (const auto cached = taken.find(ref); cached != taken.end()) {
+      const auto* extraction = syntax::As<syntax::PipelineValue>(&node);
+      const bool take =
+          extraction != nullptr && extraction->take && !one.materialized;
+      if (const auto cached = taken.find(ref); !take && cached != taken.end()) {
         return std::optional<Value>(cached->second);
       }
-      ABSL_ASSIGN_OR_RETURN(Value value, ValueOf(ref));
+      ABSL_ASSIGN_OR_RETURN(Value value,
+                            ValueOf(ref, take, take && extraction->optional));
       taken.emplace(ref, value);
       return std::optional<Value>(std::move(value));
     }
@@ -3930,6 +4090,26 @@ absl::Status Scope::Execute(StepId step) {
         ABSL_ASSIGN_OR_RETURN(value, item->Read(&bridge()));
       }
       reader->Stop();
+      if (one.slot.starts_with("deadline:") ||
+          one.slot.starts_with("timeout:")) {
+        const bool absolute = one.slot.starts_with("deadline:");
+        if (value.kind() !=
+            (absolute ? Value::Kind::kTime : Value::Kind::kDuration)) {
+          return Fail(absolute
+                          ? "A deadline expression must produce std::time."
+                          : "A timeout expression must produce std::duration.");
+        }
+        syntax::TypeExpression type;
+        type.name = absolute ? "time" : "duration";
+        ABSL_ASSIGN_OR_RETURN(
+            value,
+            Coerce(value, type,
+                   CoerceContext{.bridge = &bridge(), .shapes = &shapes()}));
+        if (type.name == "duration" &&
+            value.duration() <= absl::ZeroDuration()) {
+          return Fail("A timeout must be positive.");
+        }
+      }
       if (one.slot == "$result" && expression_result_ != nullptr) {
         expression_result_->SetValue(value).IgnoreError();
       }
@@ -3938,7 +4118,7 @@ absl::Status Scope::Execute(StepId step) {
       return absl::OkStatus();
     }
     case StepKind::kWait:
-    case StepKind::kDrain:
+    case StepKind::kClose:
       return RunWait(step);
     case StepKind::kCancel: {
       if (one.target == kNone) {
@@ -3962,8 +4142,11 @@ absl::Status Scope::Execute(StepId step) {
       if (one.bodies.empty()) {
         return absl::OkStatus();
       }
-      const absl::Status ran =
-          Scope(*runner_, one.bodies.front(), this, {}).Run();
+      Scope child(*runner_, one.bodies.front(), this, {});
+      const absl::Status ran = child.Run();
+      if (ran.ok()) {
+        PublishVariables(one, child);
+      }
       Record(step, ran);
       return one.tolerant ? absl::OkStatus() : ran;
     }
@@ -3974,7 +4157,10 @@ absl::Status Scope::Execute(StepId step) {
       if (graph().bodies[body].steps.empty()) {
         return absl::OkStatus();
       }
-      return Scope(*runner_, body, this, {}).Run();
+      Scope child(*runner_, body, this, {});
+      ABSL_RETURN_IF_ERROR(child.Run());
+      PublishVariables(one, child);
+      return absl::OkStatus();
     }
     case StepKind::kForEach:
     case StepKind::kRepeat: {
@@ -3993,6 +4179,7 @@ absl::Status Scope::Execute(StepId step) {
 
 absl::Status Scope::RunWaitMany(StepId step) {
   const graph::Step& one = graph().steps[step];
+  ABSL_ASSIGN_OR_RETURN(const absl::Time deadline, DeadlineAt(one));
   if (!one.race) {
     absl::Status first;
     for (size_t i = 0; i < one.subjects.size(); ++i) {
@@ -4145,9 +4332,8 @@ absl::Status Scope::RunWaitMany(StepId step) {
       initial = false;
       return found;
     };
-    if (one.timeout.has_value()) {
-      ABSL_RETURN_IF_ERROR(
-          monitor().WaitUntil(absl::Now() + *one.timeout, ready));
+    if (deadline < absl::InfiniteFuture()) {
+      ABSL_RETURN_IF_ERROR(monitor().WaitUntil(deadline, ready));
     } else {
       ABSL_RETURN_IF_ERROR(monitor().Wait(ready));
     }
@@ -4182,13 +4368,43 @@ absl::Status Scope::RunWaitMany(StepId step) {
 /// A subject a flow said it would handle -- a `try` step -- reports and the
 /// flow carries on. Anything else that finished badly ends the flow here, with
 /// the status it finished with rather than a new one.
+absl::StatusOr<absl::Time> Scope::DeadlineAt(const graph::Step& step) {
+  absl::Time deadline = step.timeout.has_value() ? absl::Now() + *step.timeout
+                                                 : absl::InfiniteFuture();
+  if (step.timeout_value != graph::kNone) {
+    const auto& capture = graph().steps[step.timeout_value];
+    thread::MutexLock lock(&monitor().mu());
+    const auto found = captures_.find(capture.slot);
+    if (found == captures_.end() ||
+        found->second.kind() != Value::Kind::kDuration) {
+      return Fail("A timeout requires a std::duration value.");
+    }
+    if (found->second.duration() <= absl::ZeroDuration()) {
+      return Fail("A timeout must be positive.");
+    }
+    deadline = absl::Now() + found->second.duration();
+  }
+  if (step.deadline != graph::kNone) {
+    const auto& capture = graph().steps[step.deadline];
+    thread::MutexLock lock(&monitor().mu());
+    const auto found = captures_.find(capture.slot);
+    if (found == captures_.end() ||
+        found->second.kind() != Value::Kind::kTime) {
+      return Fail("A deadline requires a std::time value.");
+    }
+    deadline = std::min(deadline, found->second.time());
+  }
+  return deadline;
+}
+
 absl::Status Scope::RunWait(StepId step) {
   const graph::Step& one = graph().steps[step];
+  ABSL_ASSIGN_OR_RETURN(const absl::Time deadline, DeadlineAt(one));
   if (!one.subjects.empty()) {
     return RunWaitMany(step);
   }
   Value record;
-  if (one.timeout.has_value() && *one.timeout < absl::InfiniteDuration()) {
+  if (deadline < absl::InfiniteFuture()) {
     // Reading the outcome blocks on whatever the subject is doing, so a timeout
     // is a race against that read rather than something the read itself knows
     // about.
@@ -4231,8 +4447,8 @@ absl::Status Scope::RunWait(StepId step) {
     absl::Status waited;
     {
       thread::MutexLock lock(&monitor.mu());
-      waited = monitor.WaitUntil(absl::Now() + *one.timeout,
-                                 [waiting] { return waiting->ready; });
+      waited =
+          monitor.WaitUntil(deadline, [waiting] { return waiting->ready; });
       if (waited.ok()) {
         ABSL_RETURN_IF_ERROR(waiting->status);
         record = waiting->value;
@@ -4241,9 +4457,8 @@ absl::Status Scope::RunWait(StepId step) {
     if (absl::IsDeadlineExceeded(waited)) {
       // The group's destructor ends the read on the way out.
       return Fail(absl::StrCat("Waiting for ", SubjectOf(one),
-                               " timed out "
-                               "after ",
-                               absl::FormatDuration(*one.timeout), "."),
+                               " exceeded its deadline at ",
+                               absl::FormatTime(deadline), "."),
                   absl::StatusCode::kDeadlineExceeded);
     }
     ABSL_RETURN_IF_ERROR(waited);
@@ -4439,6 +4654,34 @@ void Scope::Record(StepId step, const absl::Status& outcome) {
   monitor().Wake();
 }
 
+void Scope::PublishVariables(const graph::Step& step, const Scope& child) {
+  thread::MutexLock lock(&monitor().mu());
+  for (const auto& update : step.variable_updates) {
+    const auto slot = absl::StrCat("merge:", update.result);
+    const auto found = child.captures_.find(slot);
+    if (found != child.captures_.end()) {
+      captures_.insert_or_assign(slot, found->second);
+    }
+  }
+}
+
+void Scope::PresetVariables(
+    const graph::Step& step, BodyId body,
+    absl::flat_hash_map<RefId, std::vector<ItemPtr>>& presets) {
+  thread::MutexLock lock(&monitor().mu());
+  for (const auto& update : step.variable_updates) {
+    const auto found = captures_.find(absl::StrCat("merge:", update.result));
+    if (found == captures_.end()) {
+      continue;
+    }
+    for (const auto& [owner, input] : update.inputs) {
+      if (owner == body) {
+        presets[input] = {Item::Of(found->second)};
+      }
+    }
+  }
+}
+
 /// Whether a loop's `until`/`while` condition holds of the pass that just ran.
 ///
 /// One implementation for `repeat` and `for`, because the condition means the
@@ -4491,10 +4734,12 @@ absl::Status Scope::RunForEach(StepId step) {
     }
     ++index;
     if (parallel == 1) {
+      PresetVariables(one, body, presets);
       // Named rather than a temporary, because an `until` reads what the pass
       // captured and a temporary's captures are gone by the semicolon.
       Scope pass(*runner_, body, this, std::move(presets));
       ABSL_RETURN_IF_ERROR(pass.Run());
+      PublishVariables(one, pass);
       if (one.condition != kNone) {
         ABSL_ASSIGN_OR_RETURN(const bool holds, PassCondition(one, pass));
         if (holds == one.stop_when) {
@@ -4547,8 +4792,10 @@ absl::Status Scope::RunRepeat(StepId step) {
     if (one.index != kNone) {
       presets[one.index] = {Item::Of(Value::Integer(index))};
     }
+    PresetVariables(one, body, presets);
     Scope pass(*runner_, body, this, std::move(presets));
     ABSL_RETURN_IF_ERROR(pass.Run());
+    PublishVariables(one, pass);
     if (one.condition != kNone) {
       ABSL_ASSIGN_OR_RETURN(const bool holds, PassCondition(one, pass));
       if (holds == one.stop_when) {
@@ -4596,10 +4843,11 @@ absl::Status Runner::Resolve(const std::string& name,
     return absl::OkStatus();
   }
   const auto* declaration = program_->Flow(name);
-  const std::string wire_name =
+  const std::string wire_name = absl::StrReplaceAll(
       declaration != nullptr && !declaration->plan.binding_name.empty()
           ? declaration->plan.binding_name
-          : name;
+          : name,
+      {{"::", "#"}});
   if (const auto found = snapshot_->external.find(wire_name);
       found != snapshot_->external.end()) {
     *schema = found->second.first;
@@ -4847,6 +5095,12 @@ absl::Status Runner::RunCall(Scope& scope, StepId step) {
 absl::Status Runner::StartCall(Scope& scope, StepId step, CallHandle& handle) {
   ABSL_RETURN_IF_ERROR(scope.work_->CheckActive());
   const graph::Step& one = graph().steps[step];
+  ABSL_ASSIGN_OR_RETURN(const absl::Time deadline, scope.DeadlineAt(one));
+  handle.SetDeadline(deadline);
+  if (deadline <= absl::Now()) {
+    return absl::DeadlineExceededError(
+        "The call's deadline expired before activation.");
+  }
   if (thread::Cancelled() || action_->Cancelled()) {
     return absl::CancelledError("Flow stopped before action activation");
   }
@@ -4994,7 +5248,8 @@ absl::Status Runner::PumpCall(StepId step, CallHandle& handle) {
     const absl::Status status = group.Join();
     handle.Done();
     if (!status.ok()) {
-      return status;
+      const absl::Status error = handle.error();
+      return absl::IsDeadlineExceeded(error) && !one.tolerant ? error : status;
     }
   }
   if (const absl::Status error = handle.error(); !error.ok() && !one.tolerant) {
@@ -5009,7 +5264,9 @@ absl::Status Runner::AwaitCall(const graph::Step& step, CallHandle& handle) {
     return absl::OkStatus();
   }
   const absl::Status status =
-      action->Wait(step.timeout.value_or(absl::InfiniteDuration()))
+      action
+          ->Wait(std::min(step.timeout.value_or(absl::InfiniteDuration()),
+                          handle.deadline() - absl::Now()))
           .Await()
           .status();
   if (status.ok()) {
@@ -5024,6 +5281,11 @@ absl::Status Runner::AwaitCall(const graph::Step& step, CallHandle& handle) {
     return absl::OkStatus();
   }
   handle.SetError(status);
+  if (absl::IsDeadlineExceeded(status)) {
+    // End the producer before joining output drains that depend on its end.
+    // The saved timeout remains the call's cause through cancellation cleanup.
+    action->Cancel().IgnoreError();
+  }
   return absl::OkStatus();
 }
 
@@ -5033,29 +5295,60 @@ absl::Status Runner::AwaitCall(const graph::Step& step, CallHandle& handle) {
 
 absl::StatusOr<std::shared_ptr<CompiledProgram>> CompiledProgram::Compile(
     std::string source, std::string source_name, const ModuleSources& modules,
-    ModuleResolver resolver) {
+    ModuleResolver resolver, CompilationLimits limits) {
+  CompilationBudget budget(limits);
   auto compiled = std::shared_ptr<CompiledProgram>(new CompiledProgram());
   compiled->source_ = std::move(source);
   compiled->source_name_ = std::move(source_name);
-  LinkedModule linked = LinkModules(compiled->source_, compiled->source_name_,
-                                    modules, std::move(resolver));
+  LinkedModule linked =
+      LinkModules(compiled->source_, compiled->source_name_, modules,
+                  std::move(resolver), limits, &budget);
   compiled->linked_source_ = linked.source;
   compiled->members_ = linked.members;
   compiled->parsed_ = std::move(linked.parsed);
   compiled->resolved_ = Resolve(compiled->linked_source_, compiled->parsed_,
-                                /*build_graph=*/true);
+                                /*build_graph=*/true, nullptr, limits, &budget);
   linked.Locate(compiled->resolved_.diagnostics);
   compiled->resolved_.program.source_name = compiled->source_name_;
   if (const Diagnostic* first = compiled->resolved_.FirstError();
       first != nullptr) {
-    return Fail(absl::StrCat(!first->source.empty() ? first->source
-                             : compiled->source_name_.empty()
-                                 ? "<flow>"
-                                 : compiled->source_name_,
-                             ":", first->range.start.line, ":",
-                             first->range.start.column, ": ", first->message));
+    const auto message =
+        absl::StrCat(!first->source.empty()           ? first->source
+                     : compiled->source_name_.empty() ? "<flow>"
+                                                      : compiled->source_name_,
+                     ":", first->range.start.line, ":",
+                     first->range.start.column, ": ", first->message);
+    return a11::MakeStatus(
+        absl::StatusCode::kInvalidArgument, message,
+        nlohmann::json::array(
+            {{{"type", "flow.diagnostic/v1"},
+              {"diagnostic", DiagnosticToJsonValue(*first)}}}));
   }
   return compiled;
+}
+
+std::vector<std::string> CompiledProgram::ExternalActions() const {
+  std::vector<std::string> actions;
+  absl::flat_hash_set<std::string> seen;
+  for (const auto& flow : resolved_.flows) {
+    if (flow.plan.interface_only) {
+      continue;
+    }
+    for (const auto& step : flow.graph.steps) {
+      if (step.kind != graph::StepKind::kCall) {
+        continue;
+      }
+      const auto* implementation = Flow(step.action);
+      if (implementation != nullptr && !implementation->plan.interface_only) {
+        continue;
+      }
+      auto name = syntax::RuntimeActionName(step.action);
+      if (seen.insert(name).second) {
+        actions.push_back(std::move(name));
+      }
+    }
+  }
+  return actions;
 }
 
 const ResolvedFlow* absl_nullable CompiledProgram::Flow(
@@ -5114,8 +5407,9 @@ std::string SchemaType(std::string_view declared) {
           {"bytes", "bytes"},
           {"duration", "a11.Duration"},
           {"time", "a11.Time"},
+          {"status", "a11.Status"},
           {"any", "application/json"},
-      };
+  };
   const auto found = kNames->find(declared);
   return std::string(found == kNames->end() ? declared : found->second);
 }
@@ -5126,6 +5420,7 @@ absl::StatusOr<actions::ActionSchema> FlowSchema(const FlowPlan& plan,
                                                  const Program* shapes) {
   actions::ActionSchema schema;
   schema.name = plan.binding_name.empty() ? plan.name : plan.binding_name;
+  schema.name = syntax::RuntimeActionName(schema.name);
   schema.description = plan.description;
   for (const PortPlan& port : plan.ports) {
     actions::ActionPortSchema entry;

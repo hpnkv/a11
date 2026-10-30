@@ -51,7 +51,7 @@ constexpr std::array kOwnRule = {
 constexpr std::array kBindingVerbs = {
     std::string_view("run"),  std::string_view("call"),
     std::string_view("try"),  std::string_view("node"),
-    std::string_view("wait"), std::string_view("drain"),
+    std::string_view("wait"), std::string_view("close"),
 };
 
 /// `else` opens a block and so is written with the statements; `it` is a value
@@ -118,8 +118,6 @@ std::string Inline(absl::Span<const std::string_view> words) {
   return absl::StrJoin(WithShouted(words), "|");
 }
 
-// The same alternation wrapped over lines, each continuation starting with the
-// `|` -- which is how a long list of words stays readable in a YAML pattern.
 /// The same alternation wrapped over lines, each continuation starting with the
 /// `|` -- which is how a long list of words stays readable in a YAML pattern.
 ///
@@ -1516,22 +1514,29 @@ std::string VsCode() {
       });
 }
 
-std::string VsCodeInjection() {
+std::string FragmentPattern() {
   const auto keyword = [](std::string_view word) {
     return absl::StrCat("(?:", One(word), ")");
   };
   const std::string bare = "[A-Za-z_$][A-Za-z0-9_$-]*";
-  const std::string qualified = absl::StrCat(bare, "(?:\\.", bare, ")*");
+  const std::string qualified =
+      absl::StrCat(bare, R"((?:\s*::\s*)", bare, ")*");
   const std::string name =
       absl::StrCat("(?:", qualified, R"re(|"(?:\\.|[^"\\\n])+")re", ")");
   const std::string attribute = absl::StrCat(R"(\s+)", keyword("exported"));
-  const std::string fragment = absl::StrCat(
+  return absl::StrCat(
       "(?:(?:", keyword("declare"), R"(\s+)?(?:)", keyword("flow"), ")",
-      R"((?:\s+)", name, ")?(?:", attribute, R"()?\s*\{|)", keyword("struct"),
-      R"(\s+)", bare, "(?:", attribute, R"()?\s*\{|)", keyword("import"),
-      R"re(\s+"[^"\n]+"\s+)re", keyword("as"), R"(\s+)", bare, "|",
-      keyword("from"), R"re(\s+"[^"\n]+"\s+)re", keyword("import"), R"(\s+)",
+      R"((?:\s+)", name, ")?(?:", attribute, R"()?\s*\{|(?:)",
+      keyword("declare"), R"(\s+)?(?:)", keyword("mod"), "|", keyword("struct"),
+      R"()\s+)", qualified, "(?:", attribute, R"()?\s*\{|)", keyword("import"),
+      R"re(\s+"[^"\n]+"(?:\s+)re", keyword("as"), R"(\s+)", bare, ")?|",
+      keyword("from"), R"(\s+)", qualified, R"(\s+)", keyword("import"),
+      R"(\s+(?:)", qualified, R"(|\*)|)", keyword("export"), R"(\s+)",
       qualified, ")");
+}
+
+std::string VsCodeInjection() {
+  const std::string fragment = FragmentPattern();
   const std::string escaped = nlohmann::json(fragment).dump();
   return absl::StrReplaceAll(
       kVsCodeInjectionTemplate,
@@ -1579,6 +1584,11 @@ std::string BrowserVocabulary() {
                     "export const FLOW_", name,
                     ": readonly string[] = ", values.dump(2), ";\n\n");
   };
+  absl::StrAppend(
+      &source,
+      "/** Native pattern for a Flow document inside a host string. */\n",
+      "export const FLOW_FRAGMENT_PATTERN: string = ",
+      nlohmann::json(FragmentPattern()).dump(), ";\n\n");
   emit("KEYWORDS", keywords);
   emit("TYPES", vocabulary::OrderedTypeNames());
   emit("STAGES", vocabulary::Stages());
@@ -1594,6 +1604,10 @@ std::string BrowserVocabulary() {
 }
 
 }  // namespace
+
+std::string FragmentStartPattern() {
+  return FragmentPattern();
+}
 
 absl::Span<const SyntaxTarget> SyntaxTargets() {
   static constexpr std::array kTargets = {

@@ -182,9 +182,9 @@ contexts:
     - match: |-
         (?x) \b (
           string|text|number|integer|int|bool|boolean|duration|time
-          |object|json|list|array|bytes|any|STRING|TEXT|NUMBER|INTEGER
-          |INT|BOOL|BOOLEAN|DURATION|TIME|OBJECT|JSON|LIST|ARRAY|BYTES
-          |ANY
+          |object|json|list|array|bytes|any|status|null|option|stream
+          |STRING|TEXT|NUMBER|INTEGER|INT|BOOL|BOOLEAN|DURATION|TIME
+          |OBJECT|JSON|LIST|ARRAY|BYTES|ANY|STATUS|NULL|OPTION|STREAM
         ) {{kw_boundary}}
       scope: storage.type.a11flow
 
@@ -230,7 +230,7 @@ contexts:
 
   bindings:
     # `x = call ...`, `x = node ...`, `x = wait ...`: the name being bound.
-    - match: '({{name}})\s*(=)(?=\s*(?:run|call|try|node|wait|drain|RUN|CALL|TRY|NODE|WAIT|DRAIN){{kw_boundary}})'
+    - match: '({{name}})\s*(=)(?=\s*(?:run|call|try|node|wait|close|RUN|CALL|TRY|NODE|WAIT|CLOSE){{kw_boundary}})'
       captures:
         1: entity.name.constant.step.a11flow
         2: keyword.operator.assignment.a11flow
@@ -243,13 +243,12 @@ contexts:
   statement-keywords:
     - match: |-
         (?x) \b (
-          let|advance|skip|wait|drain|abort|cancel|fail|log|logf|if
-          |for|repeat|after|until|while|else|LET|ADVANCE|SKIP|WAIT
-          |DRAIN|ABORT|CANCEL|FAIL|LOG|LOGF|IF|FOR|REPEAT|AFTER|UNTIL
-          |WHILE|ELSE
+          skip|wait|close|abort|cancel|fail|log|logf|if|for|repeat
+          |after|else|SKIP|WAIT|CLOSE|ABORT|CANCEL|FAIL|LOG|LOGF|IF
+          |FOR|REPEAT|AFTER|ELSE
         ) {{kw_boundary}}
       scope: keyword.control.a11flow
-    - match: '\b(parallel|unordered|max|of|by|desc|into|PARALLEL|UNORDERED|MAX|OF|BY|DESC|INTO){{kw_boundary}}'
+    - match: '\b(parallel|unordered|max|of|by|desc|into|until|while|PARALLEL|UNORDERED|MAX|OF|BY|DESC|INTO|UNTIL|WHILE){{kw_boundary}}'
       scope: keyword.other.a11flow
 
   node-map:
@@ -292,8 +291,8 @@ contexts:
     # `headers` is only ever the second word of `forward headers "x-name"`.
     - match: |-
         (?x) \b (
-          tee|via|timeout|after|with|id|forward|headers|TEE|VIA
-          |TIMEOUT|AFTER|WITH|ID|FORWARD|HEADERS
+          tee|via|timeout|deadline|after|with|id|forward|headers|TEE
+          |VIA|TIMEOUT|DEADLINE|AFTER|WITH|ID|FORWARD|HEADERS
         ) {{kw_boundary}}
       scope: storage.modifier.a11flow
 
@@ -386,14 +385,18 @@ contexts:
     - match: |-
         (?x) \b (
           len|lower|upper|trim|text|number|bool|keys|values|get|join
-          |split|merge|contains|starts-with|ends-with|replace|match
+          |split|merge|contains|startswith|endswith|replace|match
           |slice|default|to_chunk|from_chunk|strformat|b64encode
           |b64decode|b64urlencode|b64urldecode|utf8encode|utf8decode
-          |now|duration|time|seconds|LEN|LOWER|UPPER|TRIM|TEXT|NUMBER
-          |BOOL|KEYS|VALUES|GET|JOIN|SPLIT|MERGE|CONTAINS|STARTS-WITH
-          |ENDS-WITH|REPLACE|MATCH|SLICE|DEFAULT|TO_CHUNK|FROM_CHUNK
-          |STRFORMAT|B64ENCODE|B64DECODE|B64URLENCODE|B64URLDECODE
-          |UTF8ENCODE|UTF8DECODE|NOW|DURATION|TIME|SECONDS
+          |now|duration|time|seconds|parse_time|parse_duration|integer
+          |int|string|bytes|object|list|boolean|array|any|json|option
+          |status|null|LEN|LOWER|UPPER|TRIM|TEXT|NUMBER|BOOL|KEYS
+          |VALUES|GET|JOIN|SPLIT|MERGE|CONTAINS|STARTSWITH|ENDSWITH
+          |REPLACE|MATCH|SLICE|DEFAULT|TO_CHUNK|FROM_CHUNK|STRFORMAT
+          |B64ENCODE|B64DECODE|B64URLENCODE|B64URLDECODE|UTF8ENCODE
+          |UTF8DECODE|NOW|DURATION|TIME|SECONDS|PARSE_TIME
+          |PARSE_DURATION|INTEGER|INT|STRING|BYTES|OBJECT|LIST|BOOLEAN
+          |ARRAY|ANY|JSON|OPTION|STATUS|NULL
         ) {{kw_boundary}} (?=\s*\()
       scope: support.function.builtin.a11flow
 

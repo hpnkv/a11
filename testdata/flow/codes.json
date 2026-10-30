@@ -28,7 +28,7 @@
       "code": "flow.barrier.duplicate",
       "family": "barrier",
       "severity": "weak-warning",
-      "summary": "A second 'wait' or 'drain' on something this body already holds for."
+      "summary": "A second 'wait' or 'close' on something this body already holds for."
     },
     {
       "code": "flow.barrier.duplicate-carry",
@@ -76,19 +76,13 @@
       "code": "flow.barrier.wait-lends-node",
       "family": "barrier",
       "severity": "warning",
-      "summary": "A 'wait' or 'drain' on a node nothing in the flow writes: it ends the node at once rather than waiting for it."
+      "summary": "A 'wait' or 'close' on a node nothing in the flow writes: it ends the node at once rather than waiting for it."
     },
     {
       "code": "flow.barrier.wrong-carry",
       "family": "barrier",
       "severity": "error",
       "summary": "A carry names something other than what its repeat carries."
-    },
-    {
-      "code": "flow.form.advance-in-loop",
-      "family": "form",
-      "severity": "error",
-      "summary": "An 'advance' names a value bound outside the loop, where its fixed step would bind the same value on every pass."
     },
     {
       "code": "flow.form.bad-number",
@@ -307,6 +301,12 @@
       "summary": "A modifier that says one thing is written twice."
     },
     {
+      "code": "flow.form.resource-limit",
+      "family": "form",
+      "severity": "error",
+      "summary": "A host-configured parsing or compilation limit was reached."
+    },
+    {
       "code": "flow.form.stage-argument",
       "family": "form",
       "severity": "error",
@@ -424,7 +424,7 @@
       "code": "flow.name.discard-read",
       "family": "name",
       "severity": "error",
-      "summary": "'_' read: as a pipeline source, as something to wait on, drain or abort, or inside an expression. It keeps nothing, so there is nothing there to read."
+      "summary": "'_' read: as a pipeline source, as something to wait on, close or abort, or inside an expression. It keeps nothing, so there is nothing there to read."
     },
     {
       "code": "flow.name.import-alias-conflict",
@@ -467,12 +467,6 @@
       "family": "name",
       "severity": "error",
       "summary": "Something that cannot be read is used as a pipeline source."
-    },
-    {
-      "code": "flow.name.not-advanceable",
-      "family": "name",
-      "severity": "error",
-      "summary": "'advance' names something other than a value a 'let' bound, which is the only thing with a next value."
     },
     {
       "code": "flow.name.not-writable",
@@ -529,10 +523,22 @@
       "summary": "A JSON Schema contains a constraint without a Flow spelling."
     },
     {
+      "code": "flow.sequence.conflicting-access",
+      "family": "sequence",
+      "severity": "error",
+      "summary": "Parallel accesses require a deterministic order."
+    },
+    {
       "code": "flow.sequence.impossible",
       "family": "sequence",
       "severity": "warning",
       "summary": "A sequence of stages that cannot produce what it appears to: dropping from one value, counting a reduced stream, 'first 0'."
+    },
+    {
+      "code": "flow.sequence.lossy-conversion",
+      "family": "sequence",
+      "severity": "warning",
+      "summary": "A constant conversion loses precision or falls back to zero."
     },
     {
       "code": "flow.sequence.redundant-declaration",
@@ -694,7 +700,7 @@
       "code": "flow.unused.value",
       "family": "unused",
       "severity": "warning",
-      "summary": "A `let` nothing reads: the stream behind it is never read either, so whatever produces it may be left waiting."
+      "summary": "An initialized value that no expression reads."
     }
   ],
   "format": "flow.codes/v1"

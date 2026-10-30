@@ -145,10 +145,12 @@ std::vector<Diagnostic> WarningsOf(const CompiledProgram& program) {
 
 absl::StatusOr<std::shared_ptr<CompiledProgram>> CompileWithEntry(
     const Source& source) {
-  ABSL_ASSIGN_OR_RETURN(
-      std::shared_ptr<CompiledProgram> program,
-      CompiledProgram::Compile(source.text, FileModuleIdentity(source.name), {},
-                               FileModuleResolver()));
+  ABSL_ASSIGN_OR_RETURN(std::shared_ptr<CompiledProgram> program,
+                        CompiledProgram::Compile(
+                            source.text, FileModuleIdentity(source.name), {},
+                            FileModuleResolver(source.limits.max_source_bytes,
+                                               {}, source.source_roots),
+                            source.limits));
   if (program->Entry() == nullptr) {
     return absl::NotFoundError(absl::StrCat(
         source.name.empty() ? "this program" : source.name,

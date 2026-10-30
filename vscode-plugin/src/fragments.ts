@@ -137,6 +137,8 @@ interface Envelope {
       type?: string;
       documentation?: string;
       caret?: number;
+      filter?: string;
+      replace_start?: number;
     }>;
     prefix_start?: number;
     found?: boolean;
@@ -210,7 +212,16 @@ export async function completeInFragment(
   const proposals = answer?.result?.proposals ?? [];
   return proposals.map((proposal, index) => {
     const item = new vscode.CompletionItem(proposal.name);
-    item.insertText = proposal.insert;
+    const caret = proposal.caret ?? proposal.insert.length;
+    const snippet = new vscode.SnippetString();
+    snippet.appendText(proposal.insert.slice(0, caret));
+    snippet.appendTabstop(0);
+    snippet.appendText(proposal.insert.slice(caret));
+    item.insertText = snippet;
+    item.filterText = proposal.filter || proposal.name;
+    item.range = rangeInHost(document, fragment,
+      proposal.replace_start ?? answer?.result?.prefix_start ?? offsetIn(document, fragment, position),
+      offsetIn(document, fragment, position));
     item.detail = proposal.type || proposal.tail?.trim();
     if (proposal.documentation) {
       item.documentation = new vscode.MarkdownString(proposal.documentation);

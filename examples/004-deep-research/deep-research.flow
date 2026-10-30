@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from std import strformat, zip
+
 struct DeepResearchSource {
   describe "A source an investigation cited, correlated to the prose by id."
 

@@ -83,30 +83,6 @@ def _compile(source: str) -> Program:
         raise error.to_status().to_exception() from error
 
 
-def _called_actions(program: Program) -> list[str]:
-    """Every action any flow in ``program`` calls, in the order first seen.
-
-    Every flow, not only the one about to run: a composition is submitted as
-    one text and refused as one text, which is easier to explain than a rule
-    that depends on which declaration is reachable from which.
-    """
-    found: list[str] = []
-
-    def walk(steps: list[dict]) -> None:
-        for step in steps:
-            action = step.get("action")
-            if action is not None and action not in found:
-                found.append(action)
-            for key in ("body", "then", "else"):
-                nested = step.get(key)
-                if nested:
-                    walk(nested)
-
-    for plan in program:
-        walk(plan.describe()["steps"])
-    return found
-
-
 def verify_calls(program: Program, patterns: list[str]) -> None:
     """Check every call in ``program`` against what the caller may call.
 
@@ -114,12 +90,7 @@ def verify_calls(program: Program, patterns: list[str]) -> None:
         StatusException: ``PERMISSION_DENIED``, naming the first action the
             caller is not allowed to reach, before any of them is dispatched.
     """
-    declared = set(program.flows)
-    for name in _called_actions(program):
-        if name in declared:
-            # A flow calling another flow in the same source reaches nothing the
-            # caller did not itself submit.
-            continue
+    for name in program.external_actions():
         if name in FLOW_TOOL_NAMES:
             raise Status(
                 code=StatusCode.PERMISSION_DENIED,
@@ -171,17 +142,19 @@ def describe_composable_actions(
         # `flow_run`.
         if name in FLOW_TOOL_NAMES:
             continue
-        described.append({
-            "action": name,
-            "description": entry.get("description", ""),
-            "runnable": entry.get("runnable", False),
-            "inputs": [
-                _describe_port(port) for port in entry.get("inputs", ())
-            ],
-            "outputs": [
-                _describe_port(port) for port in entry.get("outputs", ())
-            ],
-        })
+        described.append(
+            {
+                "action": name,
+                "description": entry.get("description", ""),
+                "runnable": entry.get("runnable", False),
+                "inputs": [
+                    _describe_port(port) for port in entry.get("inputs", ())
+                ],
+                "outputs": [
+                    _describe_port(port) for port in entry.get("outputs", ())
+                ],
+            }
+        )
     return described
 
 

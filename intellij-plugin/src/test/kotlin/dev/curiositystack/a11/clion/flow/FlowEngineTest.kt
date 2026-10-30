@@ -57,7 +57,7 @@ class FlowEngineTest {
             declare flow fetch exported { out text: string stream }
             flow render exported {
               out report: Report
-              let text = (run fetch()).text | consume
+              text = take ((run fetch()).text | consume)
               Report{title: text} -> report
             }
         """.trimIndent()

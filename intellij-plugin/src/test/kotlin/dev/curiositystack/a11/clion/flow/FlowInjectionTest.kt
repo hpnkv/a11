@@ -127,9 +127,13 @@ class FlowInjectionTest : BasePlatformTestCase() {
     fun testDeclarationAndStructFirstModulesAreInjected() {
         for (source in listOf(
             "declare flow render exported { out text: string }",
-            "declare flow package.render exported { out text: string }",
+            "declare flow package::render exported { out text: string }",
             "DECLARE FLOW render EXPORTED { OUT text: string }",
             "struct Row exported { title: string }",
+            "mod tools exported { flow work exported {} }",
+            "declare mod tools { declare flow work {} }",
+            "from std import now",
+            "export tools::work as work",
         )) {
             assertEquals(FlowLanguage, injectedLanguageIn("<root note=\"$source\"/>"))
         }

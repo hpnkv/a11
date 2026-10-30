@@ -24,6 +24,8 @@
 # gateway's, and `call` is the verb that says so. `run` would look for a handler
 # in this process and, finding none, say so rather than guess.
 
+from std import join, len, to_chunk, trim
+
 flow count-changes {
   describe "How many files the gateway's own working tree has changed."
 
@@ -68,7 +70,7 @@ flow explain-a-command {
   llm = call interact_with_llm(
     interactions: cmd.output_lines
       | collect
-      | map a11.sdk.Interaction{
+      | map a11::sdk::Interaction{
         role: "user",
         content: [to_chunk({
           role: "user",

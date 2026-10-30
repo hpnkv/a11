@@ -12,25 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# `wc -l`, as a data program.
-#
-#   a11-flow-run wc.flow < some-file
-#
-# Nothing here holds the input. `read_stdin` streams it, `count` reduces it, and
-# the only value that reaches the end is the number -- so this costs the same
-# memory for a ten-byte file and a ten-gigabyte one.
+# a11-flow-run wc.flow < some-file
+from std import strformat
 
 flow {
-  describe "Count the lines on standard input."
+  describe "Count lines without buffering the input."
 
-  nodes scratch
-  total = node() in scratch
-
-  input = run read_stdin() via scratch
-
-  input.lines | count -> total
-
-  out = run write_stdout(
-    content: total | map strformat("%d\n", it)
-  ) via scratch
+  input = run read_stdin()
+  int lines = take (input.lines | count)
+  run write_stdout(content: strformat("%d\n", lines))
 }

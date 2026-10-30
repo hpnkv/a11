@@ -71,7 +71,7 @@ function declaredArgs() {
   return found[1]
     .split(',')
     .map((one) => one.trim().replace(/^['"]|['"]$/g, ''))
-    .filter((one) => one.length > 0);
+    .filter((one) => one.length > 0 && one !== '...rootArgs');
 }
 
 /**
@@ -147,13 +147,13 @@ test('incomplete module targets offer exported symbols and diagnose private ones
   const uri = 'file:///probe/modules/root.flow';
   const nestedUri = 'file:///probe/modules/nested.flow';
   const completeText = 'declare flow test { out output: string stream }\n' +
-    'flow main {\n import "./nested.flow" as nested\n t = run nested.test()\n}\n';
-  const text = completeText.replace('nested.test()', 'nested.');
-  const at = text.indexOf('nested.\n') + 'nested.'.length;
+    'flow main {\n import "./nested.flow" as nested\n t = run nested::test()\n}\n';
+  const text = completeText.replace('nested::test()', 'nested::');
+  const at = text.indexOf('nested::\n') + 'nested::'.length;
   const before = text.slice(0, at).split('\n');
   const position = {line: before.length - 1, character: before.at(-1).length};
   for (const exported of [false, true]) {
-    const dependency = `flow test${exported ? ' exported' : ''} { out output: integer stream }`;
+    const dependency = `flow test${exported ? ' exported' : ''} { out output: int stream }`;
     const result = await handshake(executable, [...declaredArgs(), ...transportArgs()], [
       {jsonrpc: '2.0', id: 0, method: 'initialize', params: {capabilities: {}}},
       {jsonrpc: '2.0', method: 'initialized', params: {}},
@@ -291,7 +291,7 @@ const CALLING = {
   uri: 'file:///probe/call.flow',
   text:
     'flow inner {\n  in topic: string required "What to research."\n' +
-    '  in depth: integer "How many passes."\n' +
+    '  in depth: int "How many passes."\n' +
     '  out report: string\n  topic -> report\n}\n\n' +
     'flow outer {\n  in q: string\n  out r: string\n  x = run inner(REST)\n' +
     '  x.report -> r\n}\n',
@@ -353,7 +353,7 @@ test('a port is offered with what it is for, however the client renders', {skip:
   assert.equal(plain.items[0].labelDetails, undefined);
   // Both, in the one field this client reads, and with no doubled space.
   assert.equal(plain.items[0].detail, 'string (required) — What to research.');
-  assert.equal(plain.items[1].detail, 'integer How many passes.');
+  assert.equal(plain.items[1].detail, 'int How many passes.');
 
   // The whole description is in the popup either way.
   for (const one of [rich, plain]) {
@@ -432,14 +432,14 @@ test('direct imports complete and report flow-local contract conflicts', {skip: 
   const uri = 'file:///probe/direct/root.flow';
   const dependencyUri = 'file:///probe/direct/library.flow';
   const text = 'flow main {\n declare flow render { out value: string }\n' +
-    ' from "./library.flow" import render\n run render()\n}\n';
-  const selecting = 'flow main {\n from "./library.flow" import ';
+    ' import "./library.flow"\n from library import render\n run render()\n}\n';
+  const selecting = 'flow main {\n import "./library.flow"\n from library import ';
   const result = await handshake(executable, [...declaredArgs(), ...transportArgs()], [
     {jsonrpc: '2.0', id: 0, method: 'initialize', params: {capabilities: {}}},
     {jsonrpc: '2.0', method: 'initialized', params: {}},
     {jsonrpc: '2.0', method: 'textDocument/didOpen', params: {
       textDocument: {uri: dependencyUri, languageId: 'a11flow', version: 1,
-        text: 'flow render exported { out value: integer }\nflow hidden {}'},
+        text: 'flow render exported { out value: int }\nflow hidden {}'},
     }},
     {jsonrpc: '2.0', method: 'textDocument/didOpen', params: {
       textDocument: {uri, languageId: 'a11flow', version: 1, text},
@@ -448,7 +448,7 @@ test('direct imports complete and report flow-local contract conflicts', {skip: 
       textDocument: {uri, version: 2}, contentChanges: [{text: selecting}],
     }},
     {jsonrpc: '2.0', id: 1, method: 'textDocument/completion', params: {
-      textDocument: {uri}, position: {line: 1, character: selecting.split('\n')[1].length},
+      textDocument: {uri}, position: {line: 2, character: selecting.split('\n')[2].length},
     }},
   ]);
   const diagnostics = result.frames.find((one) =>

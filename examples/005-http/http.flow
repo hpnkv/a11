@@ -48,19 +48,20 @@ flow only-if-json {
   describe "Read the body only when the server says it is JSON."
 
   in  url:      string required
-  out decoded:  json   "The body, when it was JSON."
-  out declined: string "What the server sent instead, when it was not."
+  out decoded:  std::json "The body, when it was JSON."
+  out declined: string    "What the server sent instead, when it was not."
 
   http = run make_http_request(url: url)
       with "accept": "application/json"
 
-
-  # `headers` is one value and it is here already; the body is still in flight.
-  if http.headers["content-type"] == "application/json" {
-    http.body | collect | map join(it, "") | json -> decoded
+  # Headers arrive before the body and are captured once for both branches.
+  headers = take http.headers
+  string content_type = std::get(headers, "content-type", "")
+  if content_type == "application/json" {
+    http.body | collect | map std::join(it, "") | json -> decoded
     "" -> declined
   } else {
-    http.headers["content-type"] -> declined
+    content_type -> declined
   }
 }
 
@@ -72,12 +73,12 @@ flow inspect-a-url {
   describe "Everything the protocol said, on the port that carries it."
 
   in  url:     string required
-  out code:    number      "The final status."
-  out fields:  json stream "Every header field, in wire order."
-  out hops:    json stream "The redirects that were followed."
-  out digest:  json        "The trailer section, after the body."
-  out carried: json        "How the connection was carried."
-  out size:    number      "How many bytes of body arrived."
+  out code:    number           "The final status."
+  out fields:  std::json stream "Every header field, in wire order."
+  out hops:    std::json stream "The redirects that were followed."
+  out digest:  std::json        "The trailer section, after the body."
+  out carried: std::json        "How the connection was carried."
+  out size:    number           "How many bytes of body arrived."
 
   http = run make_http_request(url: url, options: {"accept_pushes": true})
 
@@ -89,11 +90,11 @@ flow inspect-a-url {
 
   # The body is counted rather than kept: nothing here wants the bytes, and a
   # stream that is read and dropped costs nothing to hold.
-  http.body | collect | map len(join(it, "")) -> size
+  http.body | collect | map std::len(std::join(it, "")) -> size
 
-  # Responses the server sent without being asked. Each record names a node its
-  # body was streamed into, because one port cannot interleave several bodies --
-  # which is exactly how HTTP/2 frames them too.
+# Responses the server sent without being asked. Each record names a node its
+# body was streamed into, because one port cannot interleave several bodies --
+# which is exactly how HTTP/2 frames them too.
 }
 
 # A streamed upload.
@@ -115,5 +116,5 @@ flow send-a-stream {
     options: {"request_body": "stream"}
   ) with "content-type": "text/plain"
 
-  http.body | collect | map join(it, "") -> answer
+  http.body | collect | map std::join(it, "") -> answer
 }

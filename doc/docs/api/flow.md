@@ -90,7 +90,7 @@ flow research {
 
 `brief` starts before pages arrive. The loop feeds its streaming `pages` port,
 which A11 closes after the loop's last writer finishes. Steps run concurrently;
-use `after`, `wait`, or `drain` to require an order.
+use `after`, `wait`, or `close` to require an order.
 
 A port carries one value unless declared `stream`, and is optional unless
 declared `required`. Keywords accept lower or upper case, such as `for` and
@@ -101,16 +101,17 @@ declared `required`. Keywords accept lower or upper case, such as `for` and
 
 ```a11flow
 in  question: string required
-in  frames:   list[a11.NodeFragment] stream
-out audio:    a11.sdk.AudioBuffer stream
+in  frames:   std::list[a11::NodeFragment] stream
+out audio:    a11::sdk::AudioBuffer stream
 out raw:      "application/x-msgpack"
 ```
 
-Besides the built-in names — `string`, `text`, `number`, `integer`, `bool`,
-`object`, `json`, `list`, `bytes`, and `any` — a type may use an unquoted
-serialisation tag such as `a11.sdk.AudioBuffer`. Dotted names are tags and are
+Besides the primitive names — `int`, `bool`, `number`, `string`,
+`object`, `bytes`, and `null` — a type may use an unquoted
+host type such as `a11::sdk::AudioBuffer`. Its wire tag remains
+`a11.sdk.AudioBuffer`; qualified host types are
 preserved without importing the module that defines the type. Brackets specify
-container contents, as in `list[string]` and `list[a11.NodeFragment]`. A quoted
+container contents, as in `std::list[string]` and `std::list[a11::NodeFragment]`. A quoted
 type is a media type that describes the representation.
 
 ## Descriptions
@@ -149,9 +150,9 @@ A flow can construct a registered type such as `Interaction` or `AudioBuffer`
 from fields with `TYPE{...}`:
 
 ```a11flow
-a11.sdk.Interaction{
+a11::sdk::Interaction{
   role: "user",
-  content: [to_chunk({"role": "user", "content": [{"type": "text", "text": said}]})]
+  content: [std::to_chunk({"role": "user", "content": [{"type": "text", "text": said}]})]
 }
 ```
 
@@ -241,7 +242,7 @@ pages | map summarise(it) | logf info "summarised %s" it.url -> _
 
 Every page is summarised and every line is logged, but the result is discarded.
 `_` is valid only as a destination; it cannot be bound or read. `_ = node()`,
-`_ | count -> n`, `drain _` and `in _: string` are each refused while the flow is
+`_ | count -> n`, `close _` and `in _: string` are each refused while the flow is
 compiled. It may stand beside a real destination (`a -> b, _`), where it adds a
 reader that discards its values.
 
@@ -252,7 +253,7 @@ a list, and the list closes when the expression holds of the value just added.
 For example, it can assemble partial utterances into sentences:
 
 ```a11flow
-pieces | group ends-with(trim(it), [".", "?", "!"]) | map trim(join(it, " "))
+pieces | group std::endswith(std::trim(it), [".", "?", "!"]) | map std::trim(std::join(it, " "))
 ```
 
 Any partial final group is emitted when the stream ends.
@@ -280,7 +281,7 @@ accepts a mixed stream.
 values per value, once `N` have arrived.
 
 ```a11flow
-lines | window 2 | where contains(join(it, "\n"), needle) -> hits
+lines | window 2 | where std::contains(std::join(it, "\n"), needle) -> hits
 ```
 
 Unlike `batch`, a window can detect patterns that span arbitrary batch
@@ -292,7 +293,7 @@ may emit a shorter final list.
 arrival. `zip` reads its sources in step and emits one tuple per round:
 
 ```a11flow
-interleave(llm.text_output, tool.progress) -> shown
+std::interleave(llm.text_output, tool.progress) -> shown
 ```
 
 Values retain their arrival order across sources. The combined stream ends when
@@ -343,9 +344,9 @@ The state may also be a record:
 ```a11flow
 lines
   | scan {"inside": false, "line": ""} as s,
-      {"inside": starts-with(it, "BEGIN") or (s.inside and not starts-with(it, "END")),
+      {"inside": std::startswith(it, "BEGIN") or (s.inside and not std::startswith(it, "END")),
        "line": it}
-  | where it.inside and not starts-with(it.line, "BEGIN")
+  | where it.inside and not std::startswith(it.line, "BEGIN")
   | map it.line
   -> body
 ```
@@ -421,11 +422,11 @@ clock, and the arithmetic is the arithmetic A11's own types allow:
 
 ```a11flow
 started = node()
-now() -> started
+std::now() -> started
 work = run slow-thing(input: pages)
 done = wait work
-let took = now() - started
-strformat("took %s", took) -> log after done
+took = take (std::now() - started)
+std::strformat("took %s", took) -> log after done
 ```
 
 Steps run concurrently, so source order alone does not delay a clock read.
@@ -450,9 +451,9 @@ instant.
 `duration(x)` and `time(x)` parse the formats described above:
 
 ```a11flow
-deadline = time(header-deadline)          # "2026-08-11T09:14:22Z"
-budget   = duration(header-budget)        # "1m30s", or a number of seconds
-if now() + budget > deadline { fail deadline_exceeded "not enough time left" }
+deadline = std::time(header-deadline)          # "2026-08-11T09:14:22Z"
+budget   = std::duration(header-budget)        # "1m30s", or a number of seconds
+if std::now() + budget > deadline { fail deadline_exceeded "not enough time left" }
 ```
 
 These functions accept text from headers, JSON fields, or model output without
@@ -521,10 +522,10 @@ passes its identifier to an action that writes to it:
 seen = node()
 reader = run take-notes(pages: page.text) with "x-a11-progress-node": seen.id
 seen -> progress
-drain seen after reader
+close seen after reader
 ```
 
-The final `after` delays `drain` until `reader` finishes writing through
+The final `after` delays `close` until `reader` finishes writing through
 `seen.id`. Without the dependency, the node would close immediately. The
 compiler reports `flow.barrier.wait-lends-node` for `wait seen` in this pattern.
 
@@ -546,7 +547,7 @@ if outcome.ok {
 
 `wait` holds until a call or flow-written node finishes. A bound `wait` also
 returns the outcome. `status x` returns the same value in an expression, and
-`drain node` reads the outcome while ending the named node.
+`close node` reads the outcome while ending the named node.
 
 A status is data:
 
@@ -565,14 +566,14 @@ Waiting on a failed step ends the flow with that status unless the step used
 
 `wait first of a, b` holds until the first call finishes and leaves the others
 running. `wait all of a, b` holds until every call finishes. These forms accept
-calls; node completion uses `wait` or `drain` on the node.
+calls; node completion uses `wait` or `close` on the node.
 
 A race also produces the zero-based index of the winning call:
 
 ```a11flow
 won = wait first of primary, backup
 wait first of primary, backup -> chosen
-let n = wait first of primary, backup
+n = take (wait first of primary, backup)
 ```
 
 `wait all of` has no single winner, so it is a barrier only.
@@ -603,12 +604,11 @@ stage failure ends the flow.
 repeat state = {"round": 0} max 6 {
   step = run triage-step(state: state)
   state <- step.next
-  until step.next.confidence >= 0.8
 
   if step.next.done {
     step.next.verdict -> verdict
   }
-}
+} until step.next.confidence >= 0.8
 ```
 
 `repeat` carries one value from each pass to the next: `state` starts at the
@@ -656,21 +656,21 @@ A named loop returns its outcome in the same shape as `s = try { .. }`:
 ```a11flow
 taken = node()
 done = for line in input.lines { line -> taken }
-drain taken after done
+close taken after done
 ```
 
 The loop counts as one writer of an outer node for its lifetime. Its final
-release closes `taken`; the explicit `drain` records that dependency in the
+release closes `taken`; the explicit `close` records that dependency in the
 source. `for` and `repeat` also accept `after`.
 
-A `for` can use `until` or `while`. The condition runs after each pass, so the
-body runs at least once and includes the value that ends the loop.
+A `for` can use `until` or `while`. The condition runs after each pass, so a nonempty
+source includes the stopping value and finishes its pass. An empty source
+evaluates no condition.
 
 ```a11flow
 for line in input.lines {
   line -> seen
-  until line == "quit"
-}
+} until line == "quit"
 ```
 
 The loop stops reading without cancelling the producer, matching `| first n`.
@@ -678,13 +678,31 @@ This condition cannot be combined with `parallel`, because several passes in
 flight would make the stopping point depend on scheduling. `<-` applies only to
 `repeat`; a `for` obtains each value from its source stream.
 
-`advance` reads successive values without creating a loop. Compilation assigns
-its offset, so three uses read the first, second, and third values. A name bound
-outside a loop cannot be advanced inside it.
+Read successive items without a loop by using the same stream view:
+
+```a11flow
+arguments = argv | drop 1
+string source_path = take arguments
+string target_path = take arguments
+```
+
+The reads reserve successive positions in source order. Stream aliases share
+that extraction cursor; independent pipeline subscriptions still see the whole
+stream. An empty `take` fails. Use `try take` when EOF is an expected outcome:
+
+```a11flow
+item = try take rows
+if item.present {
+  item.value -> selected
+}
+```
+
+A present null item remains distinguishable from EOF. Upstream failure and
+cancellation propagate through both forms.
 
 ### Stream completion and failure
 
-`drain node` writes both of the two facts that end a stream: the node is marked
+`close node` writes both of the two facts that end a stream: the node is marked
 **final**, so an ordered reader stops, and its writer is **closed**, so the store
 admits nothing more. Then it reads what is left, and its name binds the outcome.
 
@@ -700,7 +718,7 @@ Readers receive the failure status. `abort` accepts the same code and message as
 
 Only a node this flow **writes** can be aborted by it.
 
-Flow unifies node completion into full endings (`drain` or `abort`): marking a
+Flow unifies node completion into full endings (`close` or `abort`): marking a
 node final also closes its writer to keep reader semantics consistent.
 
 ### Ending a step early

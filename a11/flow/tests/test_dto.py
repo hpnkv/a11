@@ -78,11 +78,16 @@ def test_a_shape_is_in_the_plan_a_caller_reads():
     assert shape["binary"] is False
 
     # And a port typed with one carries it by name.
-    assert program["make-a-source"].describe()["outputs"]["source"]["type"] == "Source"
+    assert (
+        program["make-a-source"].describe()["outputs"]["source"]["type"]
+        == "Source"
+    )
 
 
 @pytest.mark.asyncio
-async def test_a_shape_typed_port_carries_a_pydantic_model(registry):  # noqa: F811
+async def test_a_shape_typed_port_carries_a_pydantic_model(
+    registry,
+):  # noqa: F811
     result = await run_flow(SOURCE, registry, id="a")
     source = result["source"]
 
@@ -103,7 +108,9 @@ def test_the_model_is_built_once_per_shape():
         "struct": "Cached",
         "description": "",
         "order": ["a"],
-        "fields": {"a": {"resolved": "string", "required": True, "description": ""}},
+        "fields": {
+            "a": {"resolved": "string", "required": True, "description": ""}
+        },
     }
     first = _model_for_dto(json.dumps(described))
     assert _model_for_dto(json.dumps(described)) is first
@@ -133,8 +140,10 @@ def test_a_shape_that_names_itself_gives_a_recursive_model():
 
 
 @pytest.mark.asyncio
-async def test_one_value_reads_as_a_value_and_cuts_into_pieces(registry):  # noqa: F811
-    """`let` both ways: a value to branch on, and a value to cut up."""
+async def test_one_value_reads_as_a_value_and_cuts_into_pieces(
+    registry,
+):  # noqa: F811
+    """Capture a value once for branching and destructuring."""
     result = await run_flow(
         """
         flow both {
@@ -143,10 +152,10 @@ async def test_one_value_reads_as_a_value_and_cuts_into_pieces(registry):  # noq
           out ok:     bool
           out frames: string stream
 
-          let code = codes
+          code = take (codes)
           code >= 200 and code < 300 -> ok
 
-          let image = body
+          image = take (body)
           image | chunk 4 -> frames
         }
         """,
@@ -159,7 +168,9 @@ async def test_one_value_reads_as_a_value_and_cuts_into_pieces(registry):  # noq
 
 
 def test_a_shape_and_a_json_schema_are_the_same_idea_both_ways():
-    schemas = flow.request({"method": "schema", "source": SOURCE, "struct": "Source"})
+    schemas = flow.request(
+        {"method": "schema", "source": SOURCE, "struct": "Source"}
+    )
     assert schemas["ok"], schemas
     schema = schemas["result"]["schemas"]["Source"]
     assert schema["type"] == "object"
@@ -180,8 +191,11 @@ def test_a_shape_and_a_json_schema_are_the_same_idea_both_ways():
     assert 'matching "^https?://"' in text
     assert "parent: Source" in text
     # And it compiles, which is the only proof that matters.
-    assert flow.loads(text + "\nflow f { in x: Source required\n out y: string\n"
-                      "  x.id -> y }\n", "back.flow")
+    assert flow.loads(
+        text
+        + "\nflow f { in x: Source required\n out y: string\n  x.id -> y }\n",
+        "back.flow",
+    )
 
 
 def test_a_schema_the_language_did_not_write_is_read_as_far_as_it_goes():

@@ -290,9 +290,9 @@ def test_a_port_says_what_it_is_after_it_says_what_it_holds():
 def test_a_port_type_may_be_generic_or_a_serialisation_tag():
     program = flow.loads("""
         flow typed {
-          in  names:  list[string]
-          in  frames: list[a11.NodeFragment] stream
-          out audio:  a11.sdk.AudioBuffer stream
+          in  names:  std::list[string]
+          in  frames: std::list[a11::NodeFragment] stream
+          out audio:  a11::sdk::AudioBuffer stream
           out raw:    "application/x-msgpack"
         }
         """)
@@ -314,11 +314,11 @@ def test_a_port_type_may_be_generic_or_a_serialisation_tag():
             "flow f { in a: stream string\n }",
             "'stream' follows the type: write 'a: TYPE stream'",
         ),
-        ("flow f { in a: list[string, object]\n }", "type parameter"),
+        ("flow f { in a: std::list[string, object]\n }", "type parameter"),
         ("flow f { in a: string[object]\n }", "type parameter"),
-        ("flow f { in a: list[wat]\n }", "Unknown type"),
-        ("flow f { in a: a11.sdk.AudioBuffer[string]\n }", "type parameter"),
-        ("flow f { in a: list[string\n }", "Expected ']'"),
+        ("flow f { in a: std::list[wat]\n }", "Unknown type"),
+        ("flow f { in a: a11::sdk::AudioBuffer[string]\n }", "type parameter"),
+        ("flow f { in a: std::list[string\n }", "Expected ']'"),
     ],
 )
 def test_a_badly_written_type_says_so(source: str, message: str):
@@ -468,11 +468,11 @@ async def test_stages_reshape_a_stream(registry):
           out numbered: object stream
           out joined:   string
           out counted:  number
-          out batched:  list stream
+          out batched:  std::list stream
           out clipped:  string stream
 
           words | where it != "no" -> kept
-          words | map {"word": it, "size": len(it)} -> numbered
+          words | map {"word": it, "size": std::len(it)} -> numbered
           words | join "," -> joined
           (words | count) -> counted
           words | batch 2 -> batched
@@ -558,7 +558,7 @@ async def test_several_writers_share_one_port_and_close_it_once(registry):
         flow both {
           in  words: string stream
           out total: number
-          add = run sum-numbers(numbers: words | map len(it))
+          add = run sum-numbers(numbers: words | map std::len(it))
           100 -> add.numbers
           add.total -> total
         }
@@ -620,7 +620,7 @@ async def test_a_loop_body_rereads_an_outer_stream_on_every_pass(registry):
           in  suffix: string
           out pairs:  string stream
           for word in words {
-            word | map text(it) -> pairs
+            word | map std::text(it) -> pairs
             suffix -> pairs
           }
         }
@@ -645,12 +645,12 @@ async def test_repeat_carries_a_value_until_a_condition_holds(registry):
           repeat state = {"turns": 0, "trace": ""} max 8 {
             step = run agent-step(state: state)
             state <- step.next
-            until step.next.done
+
             step.next.turns -> turns
             if step.next.done {
               step.next.trace -> trace
             }
-          }
+          } until step.next.done
         }
         """,
         registry,
@@ -806,13 +806,13 @@ async def test_an_after_holds_the_arguments_of_its_statement(registry):
         flow timed {
           out took: string
           started = node()
-          now() -> started
+          std::now() -> started
 
           slow = run slowly(text: "go")
           done = wait slow
 
           measured = run text-upper(
-            text: strformat("%(ms)d", now() - started)
+            text: std::strformat("%(ms)d", std::now() - started)
           ) after done
           measured.upper -> took
         }
@@ -878,7 +878,7 @@ async def test_a_named_drain_gates_a_later_step(registry):
           out out: string
           source = run slowly(text: "go")
           add = run sum-numbers(numbers: source.upper)
-          landed = drain add.numbers
+          landed = close add.numbers
           gated = run gate(text: "ok") after landed
           gated.upper -> out
         }
@@ -1024,8 +1024,7 @@ async def test_an_action_registered_for_its_schema_alone_is_called_away(
     """Schema here, work over there: how a flow composes a peer's actions.
 
     A client writing a flow against a gateway's actions has their schemas --
-    the SDK ships them -- and no handlers, which is exactly what says "this
-    one is not mine to run". Without a peer it still fails, but on the
+    the SDK ships them -- and no handlers. Without a peer it fails on the
     dispatch rather than on the name: reaching that message is the point.
     """
     registry.register("text-upper", UPPER)  # schema, no handler
@@ -1062,9 +1061,9 @@ async def test_while_and_else_if_read_the_way_they_look(registry):
           repeat state = {"turns": 0} max 5 {
             step = run agent-step(state: state)
             state <- step.next
-            while not step.next.done
+
             step.next.turns -> seen
-          }
+          } while not step.next.done
         }
         """,
         registry,
@@ -1082,7 +1081,7 @@ async def test_mime_and_distinct_and_json_filter_a_stream(registry):
           in  words:  string stream
           out kept:   string stream
           out unique: string stream
-          out parsed: list stream
+          out parsed: std::list stream
           words | mime "text/*" -> kept
           words | distinct -> unique
           "[1, 2]" | json -> parsed
@@ -1109,7 +1108,7 @@ async def test_then_reads_one_stream_after_another(registry):
           out sent:    string stream
 
           asked = node()
-          said | map upper(it) -> asked
+          said | map std::upper(it) -> asked
 
           history | then asked -> sent
         }
@@ -1147,8 +1146,8 @@ async def test_group_accumulates_until_a_value_closes_the_group(registry):
           in  pieces: string stream required
           out said:   string stream
           pieces
-            | group ends-with(trim(it), [".", "?", "!"])
-            | map trim(join(it, " "))
+            | group std::endswith(std::trim(it), [".", "?", "!"])
+            | map std::trim(std::join(it, " "))
             -> said
         }
         """,
@@ -1169,7 +1168,7 @@ async def test_a_group_still_open_at_the_end_is_given_up(registry):
         flow trailing {
           in  pieces: string stream required
           out said:   string stream
-          pieces | group ends-with(it, ".") | map join(it, " ") -> said
+          pieces | group std::endswith(it, ".") | map std::join(it, " ") -> said
         }
         """,
         registry,
@@ -1185,7 +1184,7 @@ async def test_ends_with_takes_any_of_several_endings(registry):
         flow enders {
           in  words: string stream required
           out kept:  string stream
-          words | where ends-with(it, ["?", "!"]) -> kept
+          words | where std::endswith(it, ["?", "!"]) -> kept
         }
         """,
         registry,
@@ -1212,18 +1211,18 @@ async def test_a_value_can_be_made_into_a_registered_type(registry):
           out plain: string
 
           spoken = node()
-          a11.sdk.Interaction{
+          a11::sdk::Interaction{
             role: "user",
-            content: [to_chunk({
+            content: [std::to_chunk({
               role: "user",
               content: [{type: "text", text: text}]
             })]
           } -> spoken
 
-          spoken | map text(it.role) -> role
-          spoken | map from_chunk(it.content[0]).content[0].text -> said
-          ({"role": "model"} as a11.sdk.Interaction)
-            | map text(it.role) -> plain
+          spoken | map std::text(it.role) -> role
+          spoken | map std::from_chunk(it.content[0]).content[0].text -> said
+          ({"role": "model"} as a11::sdk::Interaction)
+            | map std::text(it.role) -> plain
         }
         """,
         registry,
@@ -1245,10 +1244,10 @@ async def test_a_cast_to_a_built_in_type_coerces_the_way_the_builtin_does(
         flow coerced {
           out n:     number
           out t:     string
-          out items: list
+          out items: std::list
           "42" as number -> n
           7 as string -> t
-          ["1", "2"] as list[number] -> items
+          ["1", "2"] as std::list[number] -> items
         }
         """,
         registry,
@@ -1265,7 +1264,7 @@ async def test_a_type_nothing_here_knows_says_so(registry):
             """
             flow unknown {
               out out: string
-              {"a": 1} as not.a.Type | map text(it) -> out
+              {"a": 1} as not::a::Type | map std::text(it) -> out
             }
             """,
             registry,
@@ -1300,7 +1299,7 @@ def test_a_typed_value_is_still_reachable_in_a_condition():
     program = flow.loads("""
         flow guarded {
           out out: string
-          if (a11.sdk.Interaction{role: "user"}).role == "user" {
+          if (a11::sdk::Interaction{role: "user"}).role == "user" {
             "yes" -> out
           }
         }
@@ -1386,7 +1385,9 @@ async def test_wait_with_a_timeout_gives_up(registry):
             registry,
         )
     assert raised.value.status.code == StatusCode.DEADLINE_EXCEEDED
-    assert "Waiting for slow timed out" in raised.value.status.message
+    assert (
+        "Waiting for slow exceeded its deadline" in raised.value.status.message
+    )
 
 
 @pytest.mark.asyncio
@@ -1549,14 +1550,14 @@ def _node_names(node_map: NodeMap) -> list[str]:
 
 
 @pytest.mark.asyncio
-async def test_a_flow_may_be_written_entirely_in_upper_case(registry):
+async def test_flow_keywords_may_be_written_in_upper_case(registry):
     result = await run_flow(
         """
         FLOW shouted {
           DESCRIBE "Every keyword in upper case."
-          IN  words: STRING STREAM REQUIRED
-          OUT loud:  STRING STREAM
-          OUT total: NUMBER
+          IN  words: string STREAM REQUIRED
+          OUT loud:  string STREAM
+          OUT total: number
 
           say = RUN text-upper(text: words)
           say.upper | WHERE it != "SKIP" -> loud
@@ -1575,11 +1576,11 @@ async def test_upper_case_reaches_the_newer_statements_too(registry):
     result = await run_flow(
         """
         FLOW loud-recovery {
-          IN  words:   STRING STREAM
-          OUT outcome: STRING
-          OUT kept:    STRING STREAM
+          IN  words:   string STREAM
+          OUT outcome: string
+          OUT kept:    string STREAM
 
-          held = NODE()
+          held = node()
           risky = TRY RUN boom(text: words)
           check = WAIT risky
           IF NOT check.ok {
@@ -1924,7 +1925,7 @@ flow greet {
   in  name:  string
   out reply: string stream
   "Hello, " then name then "!" -> reply
-  drain reply
+  close reply
 }
 """
 
@@ -1962,7 +1963,7 @@ async def test_registering_a_flow_can_rename_it(registry):
         # An entry flow has no name, on purpose: nothing can `run` or `call` it,
         # so there is nothing to register it as.
         (
-            "flow {\n  out done: bool\n  true -> done\n  drain done\n}",
+            "flow {\n  out done: bool\n  true -> done\n  close done\n}",
             "no name",
         ),
         # Which of the two would it be? `register_all` is the answer to a file
@@ -2003,7 +2004,7 @@ async def test_then_and_where_read_without_their_pipe(registry):
           out long:  string stream
           shout = run text-upper(text: words)
           "first" then shout.upper then "last" -> all
-          words where len(it) > 1 -> long
+          words where std::len(it) > 1 -> long
         }
         """,
         registry,
@@ -2038,10 +2039,12 @@ async def test_strformat_fills_slots_in_order_and_by_number(registry):
           out both:    string
           out printfy: string
           out piped:   string stream
-          strformat("%s and %s", "a", "b") -> both
-          strformat("%2$s before %1$s", "a", "b") -> one
+          std::strformat("%s and %s", "a", "b") -> both
+          std::strformat("%2$s before %1$s", "a", "b") -> one
           words | strformat "<%s>" -> piped
-          strformat("%-4s|%06.2f|%d|%x", "ab", 3.14159, "42", 255) -> printfy
+          std::strformat(
+            "%-4s|%06.2f|%d|%x", "ab", 3.14159, "42", 255
+          ) -> printfy
         }
         """,
         registry,
@@ -2088,8 +2091,8 @@ async def test_durations_add_subtract_compare_and_format(registry):
           30s + 15s | text -> sum
           90s - 30s | text -> diff
           (90s > 30s)     -> longer
-          seconds(1500ms) -> secs
-          strformat("%(ms)dms", 1500ms) -> milli
+          std::seconds(1500ms) -> secs
+          std::strformat("%(ms)dms", 1500ms) -> milli
         }
         """,
         registry,
@@ -2103,16 +2106,16 @@ async def test_durations_add_subtract_compare_and_format(registry):
 
 @pytest.mark.asyncio
 async def test_an_instant_minus_an_instant_is_a_duration(registry):
-    """What a flow needs to time itself, and the only use of `now()`."""
+    """What a flow needs to time itself, and the only use of `std::now()`."""
     result = await run_flow(
         """
         flow clocked {
           out ahead:  bool
           out year:   string
           out gap:    number
-          (now() + 60s > now())            -> ahead
-          strformat("%(%Y)s", now())       -> year
-          seconds((now() + 90s) - now())   -> gap
+          (std::now() + 60s > std::now())            -> ahead
+          std::strformat("%(%Y)s", std::now())       -> year
+          std::seconds((std::now() + 90s) - std::now())   -> gap
         }
         """,
         registry,
@@ -2135,7 +2138,7 @@ async def test_forward_headers_sends_them_on_without_naming_a_value(registry):
     result = await run_flow(
         """
         flow forwarding {
-          out seen: json
+          out seen: std::json
           x = run header-peek(go: "now")
               forward headers "authorization", "x-tenant-*"
           x.seen -> seen
@@ -2162,7 +2165,7 @@ async def test_an_explicit_with_beats_a_forwarded_header(registry):
     result = await run_flow(
         """
         flow both-ways {
-          out seen: json
+          out seen: std::json
           x = run header-peek(go: "now")
               with "authorization": "computed"
               forward headers "authorization"
@@ -2203,11 +2206,11 @@ async def test_a_duration_is_written_and_read_back_in_the_same_units(registry):
           out tiny:    string
           out secs:    number
           out counted: number
-          duration(given)          | text -> compact
-          duration("1ms500us")     | text -> fine
+          std::duration(given)          | text -> compact
+          std::duration("1ms500us")     | text -> fine
           500ns + 1500ns           | text -> tiny
-          seconds("250ms")                -> secs
-          seconds(duration(90))           -> counted
+          std::seconds("250ms")                -> secs
+          std::seconds(std::duration(90))           -> counted
         }
         """,
         registry,
@@ -2231,11 +2234,12 @@ async def test_an_instant_can_be_read_from_text_and_compared(registry):
           out older:  bool
           out gap:    string
           out at:     string
-          time(stamp)                    | text -> same
-          (time(stamp) < now())                 -> older
-          (time("1970-01-01T00:01:00Z") - time("1970-01-01T00:00:00Z"))
-              | text -> gap
-          (time(stamp) + 1h) | strformat "%(%H:%M)s" -> at
+          std::time(stamp)                    | text -> same
+          (std::time(stamp) < std::now())                 -> older
+          start = std::time("1970-01-01T00:00:00Z")
+          end = std::time("1970-01-01T00:01:00Z")
+          (end - start) | text -> gap
+          (std::time(stamp) + 1h) | strformat "%(%H:%M)s" -> at
         }
         """,
         registry,
@@ -2264,7 +2268,7 @@ async def test_a_duration_below_zero_says_so_rather_than_meaning_forever(
           out number: number
           out under:  bool
           (30s - 1m)   | text -> behind
-          seconds(30s - 1m)   -> number
+          std::seconds(30s - 1m)   -> number
           (30s - 1m < 0s)     -> under
         }
         """,
@@ -2572,7 +2576,7 @@ async def test_a_flow_can_attach_to_a_node_its_caller_named(registry):
               with "x-a11-progress-node": seen.id
           worker.upper -> status
           seen -> log
-          drain seen after worker
+          close seen after worker
         }
         """,
         registry,
@@ -2806,7 +2810,7 @@ async def test_an_aggregation_may_read_one_field_of_each_value(registry):
     outputs = await run_flow(
         """
         flow revenue {
-          in  orders: json stream required
+          in  orders: std::json stream required
           out total:  number
           orders | sum it.price -> total
         }
@@ -2838,8 +2842,8 @@ async def test_sort_orders_the_stream_and_is_stable(registry):
     outputs = await run_flow(
         """
         flow ranked {
-          in  hits: json stream required
-          out best: json stream
+          in  hits: std::json stream required
+          out best: std::json stream
           hits | sort by it.score desc -> best
         }
         """,
@@ -2879,7 +2883,7 @@ async def test_interleave_reads_several_streams_as_one(registry):
           in  fast: string stream required
           in  slow: string stream required
           out all:  string stream
-          interleave(fast, slow) -> all
+          std::interleave(fast, slow) -> all
         }
         """,
         registry,
@@ -2919,9 +2923,9 @@ async def test_a_try_stage_routes_the_values_it_could_not_do(registry):
         }
 
         flow routed {
-          in  docs: json stream required
-          out good: json stream
-          out bad:  json stream
+          in  docs: std::json stream required
+          out good: std::json stream
+          out bad:  std::json stream
           docs | try map it as Order into bad -> good
         }
         """,
@@ -2932,7 +2936,7 @@ async def test_a_try_stage_routes_the_values_it_could_not_do(registry):
     # A failure arrives as a status record, so a failure stream is an ordinary
     # stream a caller reads like any other.
     assert len(outputs["bad"]) == 1
-    assert outputs["bad"][0]["ok"] is False
+    assert outputs["bad"][0].code != StatusCode.OK
 
 
 @pytest.mark.asyncio
@@ -2942,7 +2946,7 @@ async def test_a_parallel_stage_still_delivers_the_order_it_was_given(registry):
         flow wide {
           in  words: string stream required
           out out:   string stream
-          words | map upper(it) parallel 4 -> out
+          words | map std::upper(it) parallel 4 -> out
         }
         """,
         registry,

@@ -133,6 +133,7 @@ object FlowShape {
         "]" -> FlowTokens.RIGHT_BRACKET
         "." -> FlowTokens.DOT
         ":" -> FlowTokens.COLON
+        "::" -> FlowTokens.SCOPE
         "," -> FlowTokens.COMMA
         "->" -> FlowTokens.ARROW
         "<-" -> FlowTokens.CARRY

@@ -29,6 +29,7 @@
 #include <absl/base/thread_annotations.h>
 #include <absl/container/flat_hash_map.h>
 #include <absl/container/flat_hash_set.h>
+#include <absl/container/inlined_vector.h>
 #include <absl/functional/any_invocable.h>
 #include <absl/functional/function_ref.h>
 #include <absl/status/status.h>
@@ -345,6 +346,9 @@ class Monitor {
   /// REQUIRES: the lock is held.
   absl::Status Wait(Condition& condition, absl::FunctionRef<bool()> ready)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
+    if (ready()) {
+      return absl::OkStatus();
+    }
     condition.waiters_.fetch_add(1, std::memory_order_relaxed);
     const Counted counted(&condition.waiters_);
     while (!ready()) {
@@ -363,6 +367,9 @@ class Monitor {
   absl::Status WaitUntil(Condition& condition, absl::Time deadline,
                          absl::FunctionRef<bool()> ready)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
+    if (ready()) {
+      return absl::OkStatus();
+    }
     condition.waiters_.fetch_add(1, std::memory_order_relaxed);
     const Counted counted(&condition.waiters_);
     while (!ready()) {
@@ -384,6 +391,9 @@ class Monitor {
   /// REQUIRES: the lock is held.
   absl::Status Wait(absl::FunctionRef<bool()> ready)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
+    if (ready()) {
+      return absl::OkStatus();
+    }
     const Parked parked(this);
     while (!ready()) {
       if (!stop_.ok()) {
@@ -400,6 +410,9 @@ class Monitor {
   /// The same, up to a deadline: `DeadlineExceeded` when it passes first.
   absl::Status WaitUntil(absl::Time deadline, absl::FunctionRef<bool()> ready)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
+    if (ready()) {
+      return absl::OkStatus();
+    }
     const Parked parked(this);
     while (!ready()) {
       if (!stop_.ok()) {
@@ -444,6 +457,9 @@ class Monitor {
 
   void WaitComplete(Condition& condition, absl::FunctionRef<bool()> ready)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
+    if (ready()) {
+      return;
+    }
     condition.waiters_.fetch_add(1, std::memory_order_relaxed);
     const Counted counted(&condition.waiters_);
     while (!ready()) {
@@ -516,12 +532,14 @@ class Group {
     Join().IgnoreError();
   }
 
-  void Spawn(absl::AnyInvocable<absl::Status() &&> work) {
+  std::optional<a11::Task> Spawn(
+      absl::AnyInvocable<absl::Status() &&> work,
+      std::function<absl::Status(absl::Status)> complete = {}) {
     size_t id;
     {
       thread::MutexLock lock(&monitor_->mu());
       if (stopping_) {
-        return;
+        return std::nullopt;
       }
       id = spawned_++;
     }
@@ -533,8 +551,11 @@ class Group {
       thread::MutexLock lock(&monitor_->mu());
       tasks_.emplace(id, task);
     }
-    task.OnReady([this, id](const absl::StatusOr<a11::Unit>& result) {
-      Finish(id, result.status());
+    task.OnReady([this, id, complete = std::move(complete)](
+                     const absl::StatusOr<a11::Unit>& result) {
+      const auto status =
+          complete ? complete(result.status()) : result.status();
+      Finish(id, status);
     });
     bool stopping;
     {
@@ -545,15 +566,16 @@ class Group {
       task.Cancel().IgnoreError();
       monitor_->WakeAll();
     }
+    return task;
   }
 
-  absl::Status CheckActive() {
+  absl::Status CheckActive(bool check_task = true) {
     thread::MutexLock lock(&monitor_->mu());
     const auto cause = Cause();
     if (!cause.ok()) {
       return cause;
     }
-    if (stopping_ || thread::Cancelled()) {
+    if (stopping_ || (check_task && thread::Cancelled())) {
       return absl::CancelledError("Flow scope stopped");
     }
     return absl::OkStatus();
@@ -802,6 +824,195 @@ class Sink {
   std::optional<ManyFn> many_;
 };
 
+/// One item and an independent terminal state, shared by all subscriptions.
+class SingleSlot : public std::enable_shared_from_this<SingleSlot> {
+ public:
+  using Produce = std::function<absl::Status(const Sink&)>;
+
+  SingleSlot(Monitor& monitor, Produce produce, size_t readers, bool replay,
+             bool inline_producer, std::shared_ptr<TransportStats> stats)
+      : monitor_(&monitor),
+        changed_(monitor),
+        produce_(std::move(produce)),
+        expected_(readers),
+        replay_(replay),
+        inline_(inline_producer),
+        stats_(std::move(stats)) {}
+
+  absl::StatusOr<ReaderPtr> Take();
+
+  void Wanted() {
+    {
+      thread::MutexLock lock(&monitor_->mu());
+      wanted_ = true;
+    }
+    changed_.Wake();
+  }
+
+  bool Skip() {
+    thread::MutexLock lock(&monitor_->mu());
+    if (handed_out_ < expected_) {
+      ++handed_out_;
+      Retire();
+    }
+    changed_.Wake();
+    return !replay_ && retired_ == expected_ && !wanted_;
+  }
+
+  absl::Status Pump() {
+    {
+      thread::MutexLock lock(&monitor_->mu());
+      ABSL_RETURN_IF_ERROR(monitor_->Wait(
+          changed_, [this]() ABSL_EXCLUSIVE_LOCKS_REQUIRED(monitor_->mu()) {
+            return wanted_ || (!replay_ && retired_ == expected_);
+          }));
+      if (!wanted_) {
+        ended_ = true;
+        changed_.Wake();
+        return absl::OkStatus();
+      }
+    }
+    Start();
+    return absl::OkStatus();
+  }
+
+  bool inline_producer() const { return inline_; }
+
+  bool replay() const { return replay_; }
+
+ private:
+  class Subscription : public Reader {
+   public:
+    explicit Subscription(std::shared_ptr<SingleSlot> slot)
+        : slot_(std::move(slot)) {}
+
+    ~Subscription() override { Stop(); }
+
+    absl::StatusOr<ItemPtr> Next() override { return Read(std::nullopt); }
+
+    absl::StatusOr<ItemPtr> NextUntil(absl::Time deadline) override {
+      // ReplayReader retains the untimed Reader fallback.
+      return Read(slot_->replay_ ? std::nullopt
+                                 : std::optional<absl::Time>(deadline));
+    }
+
+    void Stop() override {
+      if (stopped_) {
+        return;
+      }
+      stopped_ = true;
+      {
+        thread::MutexLock lock(&slot_->monitor_->mu());
+        if (!consumed_) {
+          slot_->Retire();
+        }
+      }
+      slot_->Wanted();
+      // Teardown must not evaluate an initializer after its work has ended.
+      // Inline production starts only in Read; literals have no stop effects.
+    }
+
+   private:
+    absl::StatusOr<ItemPtr> Read(std::optional<absl::Time> deadline) {
+      if (stopped_) {
+        return ItemPtr{};
+      }
+      slot_->Wanted();
+      if (slot_->inline_) {
+        slot_->Start();
+      }
+      thread::MutexLock lock(&slot_->monitor_->mu());
+      const auto ready =
+          [this]() ABSL_EXCLUSIVE_LOCKS_REQUIRED(slot_->monitor_->mu()) {
+            return (!consumed_ && slot_->published_) || slot_->ended_;
+          };
+      if (deadline.has_value()) {
+        ABSL_RETURN_IF_ERROR(
+            slot_->monitor_->WaitUntil(slot_->changed_, *deadline, ready));
+      } else {
+        ABSL_RETURN_IF_ERROR(slot_->monitor_->Wait(slot_->changed_, ready));
+      }
+      if (!consumed_ && slot_->published_) {
+        ItemPtr item = slot_->item_;
+        consumed_ = true;
+        slot_->Retire();
+        return item;
+      }
+      ABSL_RETURN_IF_ERROR(slot_->error_);
+      return ItemPtr{};
+    }
+
+    std::shared_ptr<SingleSlot> slot_;
+    bool consumed_ = false;
+    bool stopped_ = false;
+  };
+
+  void Retire() ABSL_EXCLUSIVE_LOCKS_REQUIRED(monitor_->mu()) {
+    if (!replay_ && ++retired_ == expected_) {
+      item_.reset();
+    }
+  }
+
+  void Start() {
+    {
+      thread::MutexLock lock(&monitor_->mu());
+      if (started_) {
+        return;
+      }
+      started_ = true;
+    }
+    if (inline_ && stats_ != nullptr) {
+      stats_->inline_producers.fetch_add(1, std::memory_order_relaxed);
+    }
+    const auto publish = [this](ItemPtr item) -> absl::Status {
+      {
+        thread::MutexLock lock(&monitor_->mu());
+        if (published_) {
+          return absl::InternalError("Single-item transport proof violated.");
+        }
+        published_ = true;
+        if (replay_ || retired_ != expected_) {
+          item_ = std::move(item);
+        }
+      }
+      changed_.Wake();
+      return absl::OkStatus();
+    };
+    const auto terminal = produce_(Sink(publish));
+    {
+      thread::MutexLock lock(&monitor_->mu());
+      error_ = terminal;
+      ended_ = true;
+    }
+    changed_.Wake();
+  }
+
+  Monitor* absl_nonnull monitor_;
+  Monitor::Condition changed_;
+  Produce produce_;
+  size_t expected_;
+  bool replay_;
+  bool inline_;
+  std::shared_ptr<TransportStats> stats_;
+  size_t handed_out_ ABSL_GUARDED_BY(monitor_->mu()) = 0;
+  size_t retired_ ABSL_GUARDED_BY(monitor_->mu()) = 0;
+  bool wanted_ ABSL_GUARDED_BY(monitor_->mu()) = false;
+  bool started_ ABSL_GUARDED_BY(monitor_->mu()) = false;
+  bool published_ ABSL_GUARDED_BY(monitor_->mu()) = false;
+  bool ended_ ABSL_GUARDED_BY(monitor_->mu()) = false;
+  ItemPtr item_ ABSL_GUARDED_BY(monitor_->mu());
+  absl::Status error_ ABSL_GUARDED_BY(monitor_->mu());
+};
+
+absl::StatusOr<ReaderPtr> SingleSlot::Take() {
+  thread::MutexLock lock(&monitor_->mu());
+  if (!replay_ && handed_out_++ >= expected_) {
+    return absl::InternalError(
+        "Single-item transport has no subscription left.");
+  }
+  return ReaderPtr(new Subscription(shared_from_this()));
+}
+
 /// A stream with a fixed number of readers, fed by one producer.
 class Bus {
  public:
@@ -826,22 +1037,61 @@ class Bus {
   /// Read the stream once and fan it out until it ends.
   absl::Status Pump();
 
+  void TrackInputPump(const a11::Task& task) {
+    {
+      thread::MutexLock lock(&monitor_->mu());
+      if (!finished_) {
+        input_pump_ = task;
+      }
+    }
+    StopAbandonedInput();
+  }
+
+  void StopAbandonedInput() {
+    a11::Task task;
+    {
+      thread::MutexLock lock(&monitor_->mu());
+      if (Abandoned()) {
+        task = input_pump_;
+      }
+    }
+    if (task.valid()) {
+      task.Cancel().IgnoreError();
+      monitor_->WakeAll();
+    }
+  }
+
+  absl::Status CompletePump(absl::Status status) {
+    {
+      thread::MutexLock lock(&monitor_->mu());
+      const bool abandoned_input = input_pump_.valid() && Abandoned();
+      input_pump_ = {};
+      finished_ = true;
+      if (absl::IsCancelled(status) && abandoned_input) {
+        status = absl::OkStatus();
+      }
+    }
+    moved_.Wake();
+    return status;
+  }
+
   absl::Status WaitFinished() {
     thread::MutexLock lock(&monitor_->mu());
     return monitor_->Wait(moved_, [this] { return finished_; });
   }
 
   bool Skip() {
-    thread::MutexLock lock(&monitor_->mu());
-    if (handed_out_ < slots_.size()) {
-      slots_[handed_out_++]->dropped = true;
-    }
-    bool all = true;
-    for (const auto& slot : slots_) {
-      all = all && slot->dropped;
+    bool unused;
+    {
+      thread::MutexLock lock(&monitor_->mu());
+      if (handed_out_ < slots_.size()) {
+        slots_[handed_out_++]->dropped = true;
+      }
+      unused = Abandoned() && !wanted_;
     }
     moved_.Wake();
-    return all && !wanted_;
+    StopAbandonedInput();
+    return unused;
   }
 
   void Wanted() {
@@ -866,8 +1116,14 @@ class Bus {
 
  private:
   friend class BusReader;
-  absl::Status RunPump();
+
+  bool Abandoned() ABSL_EXCLUSIVE_LOCKS_REQUIRED(monitor_->mu()) {
+    return std::all_of(slots_.begin(), slots_.end(),
+                       [](const auto& slot) { return slot->dropped; });
+  }
+
   bool finished_ = false;
+  a11::Task input_pump_ ABSL_GUARDED_BY(monitor_->mu());
 
   Monitor* absl_nonnull monitor_;
   Monitor::Condition moved_;
@@ -960,6 +1216,7 @@ class BusReader : public Reader {
     // The producer may be waiting for room this reader will never make.
     bus_->Wanted();
     bus_->moved().Wake();
+    bus_->StopAbandonedInput();
   }
 
  private:
@@ -977,16 +1234,6 @@ absl::StatusOr<ReaderPtr> Bus::Take() {
 }
 
 absl::Status Bus::Pump() {
-  const auto result = RunPump();
-  {
-    thread::MutexLock lock(&monitor_->mu());
-    finished_ = true;
-  }
-  moved_.Wake();
-  return result;
-}
-
-absl::Status Bus::RunPump() {
   // Start production on the first read so effects respect `after` ordering.
   {
     thread::MutexLock lock(&monitor_->mu());
@@ -1392,6 +1639,79 @@ class Destination {
     return node;
   }
 
+  void Watch(const void* owner, StepId step, const a11::Task& task,
+             bool exclusive) {
+    bool cancel;
+    {
+      thread::MutexLock lock(&monitor_->mu());
+      cancel =
+          (!failure_.ok() && !feeds_stopped_) || (feeds_stopped_ && exclusive);
+      if (!cancel) {
+        feeding_.push_back(Feeding{owner, step, task, exclusive});
+      }
+    }
+    if (cancel) {
+      task.Cancel().IgnoreError();
+      monitor_->WakeAll();
+    }
+  }
+
+  void StopFeeding(const absl::Status& status) {
+    absl::InlinedVector<a11::Task, 1> tasks;
+    {
+      thread::MutexLock lock(&monitor_->mu());
+      if (failure_.ok()) {
+        feeds_stopped_ = status.ok() || tolerant_;
+        failure_ = status;
+      }
+      for (const auto& feed : feeding_) {
+        if (feed.exclusive) {
+          tasks.push_back(feed.task);
+        }
+      }
+    }
+    for (const auto& task : tasks) {
+      task.Cancel().IgnoreError();
+    }
+    monitor_->WakeAll();
+  }
+
+  bool AcceptStoppedFeed() {
+    thread::MutexLock lock(&monitor_->mu());
+    return feeds_stopped_;
+  }
+
+  void Unwatch(const void* owner, StepId step) {
+    thread::MutexLock lock(&monitor_->mu());
+    const auto found = std::find_if(
+        feeding_.begin(), feeding_.end(), [&](const Feeding& feeding) {
+          return feeding.owner == owner && feeding.step == step;
+        });
+    if (found != feeding_.end()) {
+      if (found != feeding_.end() - 1) {
+        *found = std::move(feeding_.back());
+      }
+      feeding_.pop_back();
+    }
+  }
+
+  absl::Status CheckWritable() {
+    thread::MutexLock lock(&monitor_->mu());
+    if (closed_) {
+      return absl::FailedPreconditionError("Cannot attach to a closed sink.");
+    }
+    if (feeds_stopped_) {
+      return absl::OkStatus();
+    }
+    ABSL_RETURN_IF_ERROR(failure_);
+    return absl::OkStatus();
+  }
+
+  absl::Status failure() {
+    thread::MutexLock lock(&monitor_->mu());
+    return failure_;
+  }
+
   /// Append one value, as the producer wrote it wherever possible.
   absl::Status Write(const ItemPtr& item, HostBridge* absl_nonnull bridge) {
     return WriteRange(absl::MakeConstSpan(&item, 1), bridge);
@@ -1401,6 +1721,11 @@ class Destination {
   ///
   /// Admission provides backpressure. Closing the destination drains pending
   /// confirmations and reports any store failure.
+  absl::Status WriteBatch(absl::Span<const ItemPtr> items,
+                          HostBridge* absl_nonnull bridge) {
+    return WriteRange(items, bridge);
+  }
+
   absl::Status WriteMany(std::vector<ItemPtr>& items,
                          HostBridge* absl_nonnull bridge) {
     const absl::Status written = WriteRange(items, bridge);
@@ -1411,7 +1736,7 @@ class Destination {
  private:
   absl::Status WriteRange(absl::Span<const ItemPtr> items,
                           HostBridge* absl_nonnull bridge) {
-    if (items.empty()) {
+    if (items.empty() || AcceptStoppedFeed()) {
       return absl::OkStatus();
     }
     ABSL_ASSIGN_OR_RETURN(const NodePtr node, Node());
@@ -1421,10 +1746,13 @@ class Destination {
     // Serialize writers so shared destinations append complete values. Encode
     // computed batches in one host crossing where supported.
     std::vector<absl::StatusOr<data::Chunk>> encoded;
-    if (items.size() > 1) {
+    const size_t computed_count = static_cast<size_t>(std::count_if(
+        items.begin(), items.end(),
+        [](const auto& item) { return !item->chunk().has_value(); }));
+    if (computed_count > 1) {
       std::vector<const Value*> values;
       std::vector<absl::StatusOr<Value>> read;
-      read.reserve(items.size());
+      read.reserve(computed_count);
       for (const ItemPtr& item : items) {
         if (item->chunk().has_value()) {
           continue;
@@ -1450,6 +1778,10 @@ class Destination {
       }
     }
     ABSL_RETURN_IF_ERROR(Enter());
+    if (AcceptStoppedFeed()) {
+      Leave();
+      return absl::OkStatus();
+    }
     absl::Status status;
     size_t computed = 0;
     for (const ItemPtr& item : items) {
@@ -1515,6 +1847,22 @@ class Destination {
   /// marks the node finished, so the ordinary Release() every step does on its
   /// way out finds nothing left to close.
   absl::Status Abort(absl::Status reason) {
+    std::vector<a11::Task> feeding;
+    {
+      thread::MutexLock lock(&monitor_->mu());
+      if (failure_.ok() || feeds_stopped_) {
+        failure_ = std::move(reason);
+      }
+      feeds_stopped_ = false;
+      reason = failure_;
+      for (const auto& entry : feeding_) {
+        feeding.push_back(entry.task);
+      }
+    }
+    for (const auto& task : feeding) {
+      task.Cancel().IgnoreError();
+    }
+    monitor_->WakeAll();
     return Finish(/*forced=*/true, std::move(reason));
   }
 
@@ -1524,9 +1872,19 @@ class Destination {
   }
 
  private:
-  absl::Status Enter() {
+  absl::Status Enter(bool cleanup = false) {
     thread::MutexLock lock(&monitor_->mu());
-    ABSL_RETURN_IF_ERROR(monitor_->Wait(turn_, [this] { return !writing_; }));
+    if (cleanup) {
+      monitor_->WaitComplete(turn_, [this] { return !writing_; });
+    } else {
+      ABSL_RETURN_IF_ERROR(monitor_->Wait(turn_, [this] { return !writing_; }));
+      if (!feeds_stopped_) {
+        ABSL_RETURN_IF_ERROR(failure_);
+      }
+      if (closed_) {
+        return absl::FailedPreconditionError("Cannot attach to a closed sink.");
+      }
+    }
     writing_ = true;
     return absl::OkStatus();
   }
@@ -1540,7 +1898,7 @@ class Destination {
   }
 
   absl::Status Finish(bool forced, absl::Status reason = absl::OkStatus()) {
-    ABSL_RETURN_IF_ERROR(Enter());
+    ABSL_RETURN_IF_ERROR(Enter(/*cleanup=*/true));
     bool close = false;
     {
       thread::MutexLock lock(&monitor_->mu());
@@ -1587,8 +1945,19 @@ class Destination {
   Monitor::Condition turn_;
   std::string label_;
   Open open_;
+
+  struct Feeding {
+    const void* owner;
+    StepId step;
+    a11::Task task;
+    bool exclusive;
+  };
+
+  absl::InlinedVector<Feeding, 1> feeding_ ABSL_GUARDED_BY(monitor_->mu());
+  absl::Status failure_ ABSL_GUARDED_BY(monitor_->mu());
   int writers_ = 0;
   bool tolerant_ = false;
+  bool feeds_stopped_ ABSL_GUARDED_BY(monitor_->mu()) = false;
   bool writing_ = false;
   bool closed_ = false;
   bool finished_ = false;
@@ -1773,6 +2142,14 @@ class Scope {
   absl::Status RunStep(StepId step);
   absl::Status Execute(StepId step);
   absl::Status StepDone(StepId step);
+  absl::Status OperationDone(StepId step);
+  absl::Status CompleteStep(StepId step, absl::Status status);
+  void CallFinished(StepId step, const absl::Status& status);
+  absl::Status ReleaseWriter(RefId ref, const absl::Status& status);
+  void WatchVirtual(StepId step, const a11::Task* task);
+  absl::Status AbortDestinations(StepId step, absl::Status reason);
+  absl::InlinedVector<Destination*, 1> PhysicalDestinations(
+      StepId step, bool include_reserved = false);
   void MarkDone(StepId step, const absl::Status& status);
 
   absl::Status RunForEach(StepId step);
@@ -1823,7 +2200,7 @@ class Scope {
   absl::StatusOr<NodePtr> MakeLocalNode(RefId ref);
 
   /// Read a node as items, each keeping the producer's own chunk.
-  absl::Status ReadNode(const NodePtr& node, bool tolerant, const Sink& sink);
+  absl::Status ReadNode(const NodePtr& node, const Sink& sink);
 
   /// Run a per-value stage with the requested fixed concurrency.
   ///
@@ -1867,11 +2244,24 @@ class Scope {
   /// body rather than of the pass. See [Runner::AnalysisOf].
   const graph::Analysis* absl_nonnull analysis_ = nullptr;
   absl::flat_hash_map<RefId, std::unique_ptr<Bus>> buses_;
+  absl::flat_hash_map<RefId, std::shared_ptr<SingleSlot>> single_slots_;
   absl::flat_hash_map<RefId, std::unique_ptr<Lazy>> lazies_;
   absl::flat_hash_map<RefId, std::unique_ptr<Buffer>> buffers_;
+
+  struct WriterGroup {
+    int remaining = 0;
+    absl::Status failure;
+    std::unique_ptr<
+        absl::flat_hash_map<std::pair<const void*, StepId>, a11::Task>>
+        feeds;
+  };
+
+  absl::flat_hash_map<RefId, WriterGroup> writer_groups_;
+  absl::flat_hash_set<RefId> direct_literals_;
   absl::flat_hash_map<RefId, std::unique_ptr<Destination>> destinations_;
   absl::flat_hash_map<StepId, std::unique_ptr<CallHandle>> calls_;
-  absl::flat_hash_map<StepId, bool> done_;
+  enum class StepState : uint8_t { kPending, kExecuting, kDone };
+  absl::flat_hash_map<StepId, StepState> step_state_;
   absl::flat_hash_map<StepId, absl::Status> completion_status_;
   absl::flat_hash_map<StepId, uint64_t> completion_order_;
   /// How a `[try] { ... }` step went, for the name bound to it to read.
@@ -1960,9 +2350,17 @@ class Runner {
 
   const Program& shapes() const { return program_->program(); }
 
+  const PreparedExpressions& prepared() const { return program_->prepared(); }
+
   const FlowGraph& graph() const { return flow_->graph; }
 
   const FlowPlan& plan() const { return flow_->plan; }
+
+  const SingleItemAnalysis* SingleItems() const {
+    return program_->SingleItems(graph().name);
+  }
+
+  std::shared_ptr<TransportStats> transport_stats;
 
   const std::shared_ptr<actions::Action>& action() const { return action_; }
 
@@ -2127,6 +2525,11 @@ class Runner {
 };
 
 Scope::~Scope() {
+  if (auto stats = runner_->transport_stats; stats != nullptr) {
+    stats->active_writer_groups.fetch_sub(writer_groups_.size(),
+                                          std::memory_order_relaxed);
+  }
+
   for (const auto& [step, handle] : calls_) {
     const auto action = handle->action_now();
     if (action == nullptr || action->IsDone()) {
@@ -2212,7 +2615,7 @@ absl::Status Scope::Prepare() {
 
   const bool check_ports = !runner_->PortsChecked(body_);
   for (const StepId step : flow.bodies[body_].steps) {
-    done_[step] = false;
+    step_state_[step] = StepState::kPending;
     if (flow.steps[step].kind != StepKind::kCall) {
       continue;
     }
@@ -2280,6 +2683,32 @@ absl::Status Scope::Prepare() {
                       }));
       continue;
     }
+    const auto* single_items = runner_->SingleItems();
+    if (single_items != nullptr && single_items->refs[ref].eligible) {
+      const auto& fact = single_items->refs[ref];
+      if (fact.direct_transfer && count == 1 &&
+          analysis_->materialise.find(ref) == analysis_->materialise.end()) {
+        direct_literals_.insert(ref);
+        continue;
+      }
+
+      const bool replay =
+          analysis_->materialise.find(ref) != analysis_->materialise.end();
+      single_slots_.emplace(
+          ref, std::make_shared<SingleSlot>(
+                   monitor(),
+                   [this, ref](const Sink& sink) { return Produce(ref, sink); },
+                   static_cast<size_t>(count), replay, fact.pump_free,
+                   runner_->transport_stats));
+      if (runner_->transport_stats != nullptr) {
+        runner_->transport_stats->slots.fetch_add(1, std::memory_order_relaxed);
+      }
+      continue;
+    }
+    if (runner_->transport_stats != nullptr) {
+      runner_->transport_stats->queue_readers.fetch_add(
+          static_cast<size_t>(count), std::memory_order_relaxed);
+    }
     auto bus = std::make_unique<Bus>(
         monitor(), flow.refs[ref].label,
         [this, ref](const Sink& sink) { return Produce(ref, sink); }, count);
@@ -2315,6 +2744,21 @@ absl::Status Scope::Prepare() {
     const auto writers = analysis_->writers.find(ref);
     const int count = writers == analysis_->writers.end() ? 0 : writers->second;
     const graph::Ref& one = flow.refs[ref];
+    if (one.kind == RefKind::kSink) {
+      writer_groups_.emplace(ref,
+                             WriterGroup{count, absl::OkStatus(), nullptr});
+      if (auto stats = runner_->transport_stats; stats != nullptr) {
+        stats->virtual_groups.fetch_add(1, std::memory_order_relaxed);
+        const auto active = stats->active_writer_groups.fetch_add(
+                                1, std::memory_order_relaxed) +
+                            1;
+        auto peak = stats->peak_writer_groups.load(std::memory_order_relaxed);
+        while (active > peak &&
+               !stats->peak_writer_groups.compare_exchange_weak(
+                   peak, active, std::memory_order_relaxed)) {}
+      }
+      continue;
+    }
     const bool tolerant = one.kind == RefKind::kCallPort && one.call != kNone &&
                           flow.steps[one.call].tolerant;
     destinations_.emplace(ref, std::make_unique<Destination>(
@@ -2365,6 +2809,13 @@ Destination* absl_nullable Scope::FindDestination(RefId ref) {
 }
 
 absl::StatusOr<Destination*> Scope::DestinationOf(RefId ref) {
+  if (graph().refs[ref].kind == RefKind::kSink) {
+    const auto& targets = graph().refs[ref].sources;
+    if (targets.size() != 1) {
+      return Fail("This operation requires one physical destination.");
+    }
+    ref = targets.front();
+  }
   Destination* found = FindDestination(ref);
   if (found != nullptr) {
     return found;
@@ -2396,6 +2847,10 @@ absl::StatusOr<ReaderPtr> Scope::Subscribe(RefId ref) {
   if (const auto found = owner->buffers_.find(ref);
       found != owner->buffers_.end()) {
     return found->second->Replay();
+  }
+  if (const auto found = owner->single_slots_.find(ref);
+      found != owner->single_slots_.end()) {
+    return found->second->Take();
   }
   const auto found = owner->buses_.find(ref);
   if (found == owner->buses_.end()) {
@@ -2504,8 +2959,7 @@ absl::StatusOr<NodePtr> Scope::ReadableNode(RefId ref) {
   }
 }
 
-absl::Status Scope::ReadNode(const NodePtr& node, bool tolerant,
-                             const Sink& sink) {
+absl::Status Scope::ReadNode(const NodePtr& node, const Sink& sink) {
   // Every value a flow reads enters here, so this is the one read worth
   // batching: `NextFragments` hands back what the store already had and waits
   // only when it had nothing, so a batch costs the same await as a value would.
@@ -2515,12 +2969,6 @@ absl::Status Scope::ReadNode(const NodePtr& node, bool tolerant,
     absl::StatusOr<std::vector<std::optional<data::NodeFragment>>> batch =
         node->NextFragments(kQueueDepth).Await();
     if (!batch.ok()) {
-      // The producer aborted the node. A `try call` says the composition
-      // expects that and the stream simply ends; otherwise the call step is the
-      // one that reports it, so there is no need to fail twice.
-      if (tolerant) {
-        return absl::OkStatus();
-      }
       return batch.status();
     }
     bool ended = false;
@@ -2607,6 +3055,8 @@ absl::Status Scope::Produce(RefId ref, const Sink& sink) {
   const Sink skipping(pass);
   const Sink& onward = skip > 0 ? skipping : sink;
   switch (one.kind) {
+    case RefKind::kSink:
+      return Fail("A continuation sink cannot be read as a stream.");
     case RefKind::kBound: {
       ABSL_ASSIGN_OR_RETURN(ItemPtr item, BoundItem(ref));
       return onward.One(std::move(item));
@@ -2636,21 +3086,22 @@ absl::Status Scope::Produce(RefId ref, const Sink& sink) {
     }
     case RefKind::kNode: {
       ABSL_ASSIGN_OR_RETURN(const NodePtr node, LocalNode(ref));
-      return ReadNode(node, /*tolerant=*/false, onward);
+      return ReadNode(node, onward);
     }
     case RefKind::kCallPort: {
       ABSL_ASSIGN_OR_RETURN(CallHandle * handle, Call(one.call));
       const auto node = handle->Node(one.name, one.direction);
       if (!node.ok()) {
-        return graph().steps[one.call].tolerant ? absl::OkStatus()
-                                                : node.status();
+        return node.status();
       }
-      return ReadNode(*node, graph().steps[one.call].tolerant, onward);
+      const auto status = ReadNode(*node, onward);
+      const auto cause = handle->error();
+      return absl::IsCancelled(status) && !cause.ok() ? cause : status;
     }
     case RefKind::kFlowPort: {
       ABSL_ASSIGN_OR_RETURN(const NodePtr node,
                             runner_->action()->GetInput(one.name));
-      return ReadNode(node, /*tolerant=*/false, onward);
+      return ReadNode(node, onward);
     }
     default:
       return Fail(
@@ -2955,17 +3406,24 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
         });
   }
   if (name == "match") {
-    // Compiled once: the pattern is written once in the source, and a bad one
-    // is the flow's own mistake rather than something a value could fix.
-    const pattern::Compiled compiled = pattern::Compile(stage.text);
-    if (!compiled.ok()) {
-      return Fail(absl::StrCat("The pattern '", stage.text,
-                               "' cannot be read: ", compiled.error));
+    const auto& patterns = runner_->prepared().patterns;
+    const auto cached = patterns.find(stage.text);
+    std::optional<pattern::Compiled> fallback;
+    const pattern::Pattern* compiled;
+    if (cached != patterns.end()) {
+      compiled = &cached->second;
+    } else {
+      fallback = pattern::Compile(stage.text);
+      if (!fallback->ok()) {
+        return Fail(absl::StrCat("The pattern '", stage.text,
+                                 "' cannot be read: ", fallback->error));
+      }
+      compiled = &fallback->pattern;
     }
     return per_value(
         [&](const ItemPtr& item, std::vector<ItemPtr>& out) -> absl::Status {
           ABSL_ASSIGN_OR_RETURN(const Value value, item->Read(&host));
-          Value found = MatchCompiled(compiled.pattern, AsText(value));
+          Value found = MatchCompiled(*compiled, AsText(value));
           // A value the pattern does not fit is dropped, which is what makes
           // this a combined `where` and `map` stage.
           if (!found.IsNull()) {
@@ -3412,8 +3870,13 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
     return each([&](const ItemPtr& item) -> absl::Status {
       ABSL_ASSIGN_OR_RETURN(const Value value, item->Read(&host));
       const Value arguments[] = {value};
-      return sink.One(Item::Of(
-          Value::String(Strformat(Value::String(stage.text), arguments))));
+      return sink.One(Item::Of(Value::String([&] {
+        const auto& formats = runner_->prepared().formats;
+        const auto format = formats.find(stage.text);
+        return format == formats.end()
+                   ? Strformat(Value::String(stage.text), arguments)
+                   : StrformatCompiled(format->second, arguments);
+      }())));
     });
   }
   if (name == "text") {
@@ -3510,6 +3973,10 @@ absl::StatusOr<ItemPtr> Scope::WinnerItem(RefId ref) {
 /// is finished when the stream ends, and the status is the reader's -- which is
 /// how an output cut off mid-stream gets noticed.
 absl::Status Scope::NodeOutcome(RefId ref, absl::Status* absl_nonnull outcome) {
+  if (graph().refs[ref].kind == RefKind::kSink) {
+    *outcome = StepDone(graph().refs[ref].subject_step);
+    return absl::OkStatus();
+  }
   if (Destination* written = FindDestination(ref); written != nullptr) {
     if (written->writers() <= 0) {
       // Nothing in this flow writes it, so nothing in this flow will close it
@@ -3668,6 +4135,7 @@ absl::StatusOr<Value> Scope::EvaluateWith(ExprId expr, const Value& it,
   }
   absl::flat_hash_map<RefId, Value> taken;
   EvalContext context;
+  context.prepared = &runner_->prepared();
   context.lookup =
       [&](const syntax::Node& node) -> absl::StatusOr<std::optional<Value>> {
     for (const auto& [bound, ref] : one.bound) {
@@ -3716,9 +4184,16 @@ void Scope::SkipRef(RefId initial) {
         owner->buffers_.find(ref) != owner->buffers_.end()) {
       continue;
     }
-    const auto bus = owner->buses_.find(ref);
-    if (bus == owner->buses_.end() || !bus->second->Skip()) {
-      continue;
+    const auto slot = owner->single_slots_.find(ref);
+    if (slot != owner->single_slots_.end()) {
+      if (slot->second->replay() || !slot->second->Skip()) {
+        continue;
+      }
+    } else {
+      const auto bus = owner->buses_.find(ref);
+      if (bus == owner->buses_.end() || !bus->second->Skip()) {
+        continue;
+      }
     }
     for (const RefId upstream : graph().Upstreams(ref)) {
       pending.push_back(upstream);
@@ -3763,7 +4238,35 @@ absl::Status Scope::EnsureStep(StepId step) {
       return absl::OkStatus();
     }
   }
-  work_->Spawn([this, step]() -> absl::Status { return RunStep(step); });
+  const auto task =
+      work_->Spawn([this, step]() -> absl::Status { return RunStep(step); },
+                   [this, step](absl::Status status) {
+                     return CompleteStep(step, std::move(status));
+                   });
+  if (task.has_value() && graph().steps[step].kind == StepKind::kPipe) {
+    WatchVirtual(step, &*task);
+    const auto destinations = PhysicalDestinations(step);
+    const auto& pipe = graph().steps[step];
+    const bool borrowed_input =
+        pipe.activation != kNone && pipe.transfer == nullptr &&
+        pipe.expression_cleanups.empty() && pipe.source != kNone &&
+        graph().refs[pipe.source].kind == RefKind::kFlowPort;
+    for (auto* destination : destinations) {
+      destination->Watch(this, step, *task,
+                         borrowed_input && destinations.size() == 1);
+    }
+    bool done;
+    {
+      thread::MutexLock lock(&monitor().mu());
+      done = step_state_.at(step) == StepState::kDone;
+    }
+    if (done) {
+      WatchVirtual(step, nullptr);
+      for (auto* destination : destinations) {
+        destination->Unwatch(this, step);
+      }
+    }
+  }
   if (graph().steps[step].kind == StepKind::kCall) {
     for (const StepId feed : graph().bodies[body_].steps) {
       if (graph().steps[feed].activation == step) {
@@ -3963,13 +4466,47 @@ absl::Status Scope::Run() {
       return absl::OkStatus();
     });
   }
+  for (const auto& [ref, slot] : single_slots_) {
+    if (slot->replay()) {
+      slot->Wanted();
+    }
+    if (!slot->inline_producer()) {
+      group.Spawn([this, slot]() -> absl::Status {
+        if (runner_->transport_stats != nullptr) {
+          runner_->transport_stats->slot_pumps.fetch_add(
+              1, std::memory_order_relaxed);
+        }
+        return slot->Pump();
+      });
+    }
+  }
   for (const auto& [ref, bus] : buses_) {
     Bus* one = bus.get();
-    group.Spawn([one]() -> absl::Status { return one->Pump(); });
+    const auto task = group.Spawn(
+        [this, one]() -> absl::Status {
+          if (runner_->transport_stats != nullptr) {
+            runner_->transport_stats->bus_pumps.fetch_add(
+                1, std::memory_order_relaxed);
+          }
+          return one->Pump();
+        },
+        [one](absl::Status status) {
+          return one->CompletePump(std::move(status));
+        });
+    if (task.has_value() && graph().refs[ref].kind == RefKind::kFlowPort &&
+        graph().refs[ref].direction == syntax::PortDirection::kInput) {
+      one->TrackInputPump(*task);
+    }
   }
   for (const auto& [ref, buffer] : buffers_) {
     Buffer* one = buffer.get();
-    group.Spawn([one]() -> absl::Status { return one->Fill(); });
+    group.Spawn([this, one]() -> absl::Status {
+      if (runner_->transport_stats != nullptr) {
+        runner_->transport_stats->buffer_pumps.fetch_add(
+            1, std::memory_order_relaxed);
+      }
+      return one->Fill();
+    });
   }
   for (const StepId step : graph().bodies[body_].steps) {
     if (!graph().steps[step].deferred) {
@@ -3978,6 +4515,11 @@ absl::Status Scope::Run() {
   }
   const absl::Status result = group.Join();
   if (!result.ok()) {
+    const auto owner_step = graph().bodies[body_].owner_step;
+    if (parent_ != nullptr && owner_step != kNone &&
+        graph().steps[owner_step].kind != StepKind::kCall) {
+      parent_->AbortDestinations(owner_step, result).IgnoreError();
+    }
     for (const auto& owned : owned_nodes_) {
       owned.node->AbortWithStatus(result).Await().IgnoreError();
     }
@@ -3995,23 +4537,169 @@ absl::Status Scope::Run() {
 void Scope::MarkDone(StepId step, const absl::Status& status) {
   {
     thread::MutexLock lock(&monitor().mu());
-    done_[step] = true;
+    step_state_[step] = StepState::kDone;
     completion_status_[step] = status;
     completion_order_[step] = monitor().CompletionOrder();
   }
   monitor().Wake();
 }
 
+absl::InlinedVector<Destination*, 1> Scope::PhysicalDestinations(
+    StepId step, bool include_reserved) {
+  absl::InlinedVector<Destination*, 1> result;
+  const auto add = [&](RefId ref) {
+    if (ref != kNone) {
+      if (auto* destination = FindDestination(ref); destination != nullptr) {
+        if (std::find(result.begin(), result.end(), destination) ==
+            result.end()) {
+          result.push_back(destination);
+        }
+      }
+    }
+  };
+  for (const auto target : graph::TransferTargets(graph().steps[step])) {
+    if (target != kNone && graph().refs[target].kind == RefKind::kSink) {
+      for (const auto physical : graph().refs[target].sources) {
+        add(physical);
+      }
+    } else {
+      add(target);
+    }
+  }
+  const auto held = analysis_->held.find(step);
+  if (include_reserved && held != analysis_->held.end()) {
+    for (const auto ref : held->second) {
+      if (graph().refs[ref].kind != RefKind::kSink) {
+        add(ref);
+      }
+    }
+  }
+  return result;
+}
+
+void Scope::WatchVirtual(StepId step, const a11::Task* task) {
+  bool cancelled = false;
+  for (const auto ref : graph().Destinations(step)) {
+    const auto& sink = graph().refs[ref];
+    if (sink.kind != RefKind::kSink ||
+        std::any_of(sink.sources.begin(), sink.sources.end(),
+                    [](auto id) { return id != kNone; })) {
+      continue;
+    }
+    auto* owner = Owner(ref);
+    thread::MutexLock lock(&monitor().mu());
+    auto& group = owner->writer_groups_.at(ref);
+    if (task == nullptr) {
+      if (group.feeds != nullptr) {
+        group.feeds->erase({this, step});
+      }
+    } else if (!group.failure.ok()) {
+      cancelled = true;
+    } else {
+      if (group.feeds == nullptr) {
+        group.feeds = std::make_unique<
+            absl::flat_hash_map<std::pair<const void*, StepId>, a11::Task>>();
+      }
+      group.feeds->insert_or_assign({this, step}, *task);
+    }
+  }
+  if (cancelled && task != nullptr) {
+    task->Cancel().IgnoreError();
+    monitor().WakeAll();
+  }
+}
+
+absl::Status Scope::AbortDestinations(StepId step, absl::Status reason) {
+  for (auto* destination : PhysicalDestinations(step, true)) {
+    destination->Abort(reason).IgnoreError();
+    reason = destination->failure();
+  }
+  auto refs = graph().Destinations(step);
+  const auto held = analysis_->held.find(step);
+  if (held != analysis_->held.end()) {
+    refs.insert(refs.end(), held->second.begin(), held->second.end());
+  }
+  absl::InlinedVector<a11::Task, 1> tasks;
+  for (auto ref : refs) {
+    if (graph().refs[ref].kind != RefKind::kSink ||
+        std::any_of(graph().refs[ref].sources.begin(),
+                    graph().refs[ref].sources.end(),
+                    [](auto id) { return id != kNone; })) {
+      continue;
+    }
+    while (graph().refs[ref].subject != kNone) {
+      ref = graph().refs[ref].subject;
+    }
+    auto* owner = Owner(ref);
+    thread::MutexLock lock(&monitor().mu());
+    auto& group = owner->writer_groups_.at(ref);
+    if (group.failure.ok()) {
+      group.failure = reason;
+    }
+    reason = group.failure;
+    if (group.feeds != nullptr) {
+      for (const auto& [identity, task] : *group.feeds) {
+        tasks.push_back(task);
+      }
+    }
+  }
+  for (const auto& task : tasks) {
+    task.Cancel().IgnoreError();
+  }
+  monitor().WakeAll();
+  return reason;
+}
+
+absl::Status Scope::ReleaseWriter(RefId ref, const absl::Status& status) {
+  if (graph().refs[ref].kind != RefKind::kSink) {
+    ABSL_ASSIGN_OR_RETURN(auto* destination, DestinationOf(ref));
+    return destination->Release();
+  }
+  auto* owner = Owner(ref);
+  {
+    thread::MutexLock lock(&monitor().mu());
+    auto& group = owner->writer_groups_.at(ref);
+    if (!status.ok() && group.failure.ok()) {
+      group.failure = status;
+    }
+    if (group.remaining > 0) {
+      --group.remaining;
+    }
+  }
+  monitor().Wake();
+  return absl::OkStatus();
+}
+
 absl::Status Scope::StepDone(StepId step) {
+  ABSL_RETURN_IF_ERROR(OperationDone(step));
+  const auto ref = graph().steps[step].sink;
+  if (ref != kNone) {
+    auto* owner = Owner(ref);
+    thread::MutexLock lock(&monitor().mu());
+    ABSL_RETURN_IF_ERROR(monitor().Wait(
+        [&] { return owner->writer_groups_.at(ref).remaining == 0; }));
+    ABSL_RETURN_IF_ERROR(owner->writer_groups_.at(ref).failure);
+  }
+  const auto& transfer = graph().steps[step].transfer;
+  if (transfer != nullptr) {
+    for (const auto called : transfer->destination_calls) {
+      ABSL_RETURN_IF_ERROR(StepDone(called));
+    }
+  }
+  return absl::OkStatus();
+}
+
+absl::Status Scope::OperationDone(StepId step) {
   for (Scope* at = this; at != nullptr; at = at->parent_) {
-    const auto found = at->done_.find(step);
-    if (found == at->done_.end()) {
+    const auto found = at->step_state_.find(step);
+    if (found == at->step_state_.end()) {
       continue;
     }
     ABSL_RETURN_IF_ERROR(at->EnsureStep(step));
     thread::MutexLock lock(&monitor().mu());
-    ABSL_RETURN_IF_ERROR(
-        monitor().Wait([at, step] { return at->done_.find(step)->second; }));
+    ABSL_RETURN_IF_ERROR(monitor().Wait([at, step] {
+      return at->step_state_.find(step)->second == StepState::kDone;
+    }));
     return at->completion_status_.at(step);
   }
   return Fail(absl::StrCat("Internal flow error: ", graph().steps[step].label,
@@ -4032,29 +4720,106 @@ absl::Status Scope::RunStep(StepId step) {
     }
   }
   if (status.ok()) {
+    {
+      thread::MutexLock lock(&monitor().mu());
+      step_state_[step] = StepState::kExecuting;
+    }
     status = Execute(step);
   }
-  if (absl::IsCancelled(status)) {
-    const auto cause = work_->CheckActive();
-    if (!cause.ok()) {
-      status = cause;
+  return status;
+}
+
+absl::Status Scope::CompleteStep(StepId step, absl::Status status) {
+  if (absl::IsCancelled(status) &&
+      graph().steps[step].kind == StepKind::kPipe) {
+    const auto destinations = PhysicalDestinations(step);
+    if (!destinations.empty() &&
+        std::all_of(destinations.begin(), destinations.end(),
+                    [](auto* dest) { return dest->AcceptStoppedFeed(); }) &&
+        work_->CheckActive(false).ok()) {
+      bool pending;
+      {
+        thread::MutexLock lock(&monitor().mu());
+        pending = step_state_.at(step) == StepState::kPending;
+      }
+      if (pending) {
+        for (const auto source : graph::TransferSources(graph().steps[step])) {
+          SkipRef(source);
+        }
+      }
+      status = absl::OkStatus();
     }
+  }
+  if (absl::IsCancelled(status)) {
+    for (auto* destination : PhysicalDestinations(step, true)) {
+      const auto failure = destination->failure();
+      if (!failure.ok()) {
+        status = failure;
+        break;
+      }
+    }
+    if (absl::IsCancelled(status)) {
+      for (const auto ref : graph().Destinations(step)) {
+        if (graph().refs[ref].kind != RefKind::kSink) {
+          continue;
+        }
+        auto* owner = Owner(ref);
+        thread::MutexLock lock(&monitor().mu());
+        const auto& failure = owner->writer_groups_.at(ref).failure;
+        if (!failure.ok()) {
+          status = failure;
+          break;
+        }
+      }
+    }
+    if (absl::IsCancelled(status)) {
+      const auto cause = work_->CheckActive();
+      if (!cause.ok()) {
+        status = cause;
+      }
+    }
+  }
+  if (!status.ok()) {
+    status = AbortDestinations(step, status);
   }
   const auto held = analysis_->held.find(step);
   if (held != analysis_->held.end()) {
-    for (const RefId ref : held->second) {
-      if (absl::StatusOr<Destination*> destination = DestinationOf(ref);
-          destination.ok()) {
-        (*destination)->Release().IgnoreError();
+    for (const auto ref : held->second) {
+      if (graph().refs[ref].kind == RefKind::kSink) {
+        continue;
+      }
+      const auto released = ReleaseWriter(ref, status);
+      if (status.ok() && !released.ok()) {
+        status = released;
       }
     }
+  }
+  for (auto* destination : PhysicalDestinations(step, true)) {
+    destination->Unwatch(this, step);
   }
   if (graph::RecordsOutcome(graph().steps[step].kind)) {
     thread::MutexLock lock(&monitor().mu());
     outcomes_.try_emplace(step, status);
   }
+  WatchVirtual(step, nullptr);
   MarkDone(step, status);
+  if (held != analysis_->held.end()) {
+    for (const auto ref : held->second) {
+      if (graph().refs[ref].kind == RefKind::kSink) {
+        ReleaseWriter(ref, status).IgnoreError();
+      }
+    }
+  }
   return status;
+}
+
+void Scope::CallFinished(StepId step, const absl::Status& status) {
+  for (const auto& [ref, destination] : destinations_) {
+    const auto& port = graph().refs[ref];
+    if (port.kind == RefKind::kCallPort && port.call == step) {
+      destination->StopFeeding(status);
+    }
+  }
 }
 
 absl::Status Scope::Execute(StepId step) {
@@ -4063,70 +4828,110 @@ absl::Status Scope::Execute(StepId step) {
     case StepKind::kCall:
       return runner_->RunCall(*this, step);
     case StepKind::kPipe: {
+      if (auto stats = runner_->transport_stats; stats != nullptr) {
+        stats->transfer_tasks.fetch_add(1, std::memory_order_relaxed);
+      }
+      const auto destinations = PhysicalDestinations(step);
+      const auto sources = graph::TransferSources(one);
+      size_t next = 0;
+      bool subscribed = false;
       const auto transfer = [&]() -> absl::Status {
-        if (one.discard) {
-          // `-> _`.
-          ABSL_ASSIGN_OR_RETURN(ReaderPtr reader, Subscribe(one.source));
-          std::vector<ItemPtr> dropped;
-          dropped.reserve(kQueueDepth);
-          while (true) {
-            dropped.clear();
-            if (absl::Status read = reader->NextMany(dropped, kQueueDepth);
-                !read.ok()) {
-              // The same reading of `try` the writing path takes: a source that
-              // gave way is this statement's outcome rather than the flow's.
-              if (!one.tolerant) {
-                return read;
-              }
-              Record(step, read);
-              return absl::OkStatus();
-            }
-            if (dropped.empty()) {
-              return absl::OkStatus();
-            }
-          }
+        for (auto* destination : destinations) {
+          ABSL_RETURN_IF_ERROR(destination->CheckWritable());
         }
-        ABSL_ASSIGN_OR_RETURN(Destination * destination,
-                              DestinationOf(one.destination));
-        ABSL_ASSIGN_OR_RETURN(ReaderPtr reader, Subscribe(one.source));
+        if (one.destination != kNone &&
+            graph().refs[one.destination].kind == RefKind::kSink) {
+          const auto parent = graph().refs[one.destination].subject_step;
+          ABSL_RETURN_IF_ERROR(OperationDone(parent));
+        }
         std::vector<ItemPtr> batch;
         batch.reserve(kQueueDepth);
-        while (true) {
+        size_t literal_bytes = 0;
+        const auto flush = [&]() -> absl::Status {
+          for (auto* destination : destinations) {
+            ABSL_RETURN_IF_ERROR(destination->WriteBatch(batch, &bridge()));
+          }
           batch.clear();
-          // Both halves under the same `try`, because the author cannot tell
-          // which gave way: a source that aborted and a destination that refused
-          // the write are one event from here -- "this pipe did not finish".
-          if (absl::Status read = reader->NextMany(batch, kQueueDepth);
-              !read.ok()) {
-            if (!one.tolerant) {
-              return read;
+          literal_bytes = 0;
+          return absl::OkStatus();
+        };
+        for (; next < sources.size(); ++next) {
+          subscribed = false;
+          if (direct_literals_.find(sources[next]) != direct_literals_.end()) {
+            const auto& ref = graph().refs[sources[next]];
+            if (ref.phase_gate != kNone) {
+              ABSL_RETURN_IF_ERROR(StepDone(ref.phase_gate));
             }
-            Record(step, read);
-            return absl::OkStatus();
-          }
-          if (batch.empty()) {
-            return absl::OkStatus();
-          }
-          if (absl::Status wrote = destination->WriteMany(batch, &bridge());
-              !wrote.ok()) {
-            if (!one.tolerant) {
-              return wrote;
+            if (ref.skip == 0) {
+              ABSL_ASSIGN_OR_RETURN(auto value, Evaluate(ref.expr));
+              const auto& expression = graph().exprs[ref.expr];
+              const size_t bytes =
+                  expression.node->extent.end - expression.node->extent.start;
+              if (literal_bytes + bytes > 65536) {
+                ABSL_RETURN_IF_ERROR(flush());
+              }
+              batch.push_back(Item::Of(std::move(value)));
+              literal_bytes += bytes;
+              if (batch.size() >= kQueueDepth || literal_bytes >= 65536) {
+                ABSL_RETURN_IF_ERROR(flush());
+              }
             }
-            Record(step, wrote);
-            return absl::OkStatus();
+            if (auto stats = runner_->transport_stats; stats != nullptr) {
+              stats->literal_transfers.fetch_add(1, std::memory_order_relaxed);
+            }
+          } else {
+            ABSL_RETURN_IF_ERROR(flush());
+            ABSL_ASSIGN_OR_RETURN(auto reader, Subscribe(sources[next]));
+            subscribed = true;
+            while (true) {
+              batch.clear();
+              ABSL_RETURN_IF_ERROR(reader->NextMany(batch, kQueueDepth));
+              if (batch.empty()) {
+                break;
+              }
+              for (auto* destination : destinations) {
+                ABSL_RETURN_IF_ERROR(destination->WriteBatch(batch, &bridge()));
+              }
+            }
+          }
+          if (one.transfer != nullptr) {
+            for (const auto& join : one.transfer->joins) {
+              if (join.source != sources[next]) {
+                continue;
+              }
+              if (join.expression) {
+                auto cleanup = ExpressionCleanup(join.target);
+                if (cleanup != nullptr) {
+                  ABSL_RETURN_IF_ERROR(cleanup->future().Await().status());
+                }
+              } else {
+                ABSL_RETURN_IF_ERROR(StepDone(join.target));
+              }
+            }
           }
         }
+        return flush();
       };
-      absl::Status result = transfer();
-      for (const ExprId expr : one.expression_cleanups) {
+      auto result = transfer();
+      // Unvisited sources still own reader reservations on lazy transports.
+      if (!subscribed && next < sources.size()) {
+        SkipRef(sources[next]);
+      }
+      for (size_t id = next + 1; id < sources.size(); ++id) {
+        SkipRef(sources[id]);
+      }
+      for (const auto expr : one.expression_cleanups) {
         auto cleanup = ExpressionCleanup(expr);
-        if (cleanup == nullptr) {
-          continue;
+        if (cleanup != nullptr) {
+          const auto status = cleanup->future().Await().status();
+          if (!status.ok()) {
+            Record(step, status);
+          }
         }
-        const auto status = cleanup->future().Await().status();
-        if (!status.ok()) {
-          Record(step, status);
-        }
+      }
+      if (!result.ok() && one.tolerant) {
+        Record(step, result);
+        return absl::OkStatus();
       }
       return result;
     }
@@ -4228,6 +5033,21 @@ absl::Status Scope::Execute(StepId step) {
       if (one.target == kNone) {
         return absl::OkStatus();
       }
+      if (graph().steps[one.target].kind == StepKind::kPipe) {
+        auto* owner = this;
+        while (owner != nullptr &&
+               owner->body_ != graph().steps[one.target].body) {
+          owner = owner->parent_;
+        }
+        if (owner == nullptr) {
+          return Fail("The continuation has no active owning scope.");
+        }
+        owner
+            ->AbortDestinations(
+                one.target, absl::CancelledError("Continuation sink cancelled"))
+            .IgnoreError();
+        return absl::OkStatus();
+      }
       ABSL_ASSIGN_OR_RETURN(CallHandle * handle, Call(one.target));
       ABSL_ASSIGN_OR_RETURN(const std::shared_ptr<actions::Action> action,
                             handle->Action());
@@ -4255,13 +5075,41 @@ absl::Status Scope::Execute(StepId step) {
       return one.tolerant ? absl::OkStatus() : ran;
     }
     case StepKind::kIf: {
-      ABSL_ASSIGN_OR_RETURN(const Value taken, Evaluate(one.condition));
-      const BodyId body =
-          Truthy(taken) ? one.bodies.front() : one.bodies.back();
+      ABSL_ASSIGN_OR_RETURN(Value taken, Evaluate(one.condition));
+      bool selected;
+      absl::flat_hash_map<RefId, std::vector<ItemPtr>> presets;
+      if (one.item != kNone) {
+        if (!taken.is_option()) {
+          const auto& type = graph().refs[one.item].stage.type;
+          if (!type.has_value()) {
+            return Fail("An optional binding requires an option.");
+          }
+          ABSL_ASSIGN_OR_RETURN(taken,
+                                Coerce(taken, *type, {&bridge(), &shapes()}));
+        }
+        const auto* flag = taken.Get("has_value");
+        if (flag == nullptr || flag->kind() != Value::Kind::kBool) {
+          return Fail("An option requires a boolean has_value field.");
+        }
+        selected = flag->boolean();
+        if (selected) {
+          const auto* payload = taken.Get("value");
+          if (payload == nullptr) {
+            return Fail("A present option requires a value.");
+          }
+          if (!graph().bodies[one.bodies.front()].steps.empty()) {
+            presets[one.item] = {Item::Of(*payload)};
+          }
+        }
+      } else {
+        selected = Truthy(taken);
+      }
+      taken = Value::Null();
+      const BodyId body = selected ? one.bodies.front() : one.bodies.back();
       if (graph().bodies[body].steps.empty()) {
         return absl::OkStatus();
       }
-      Scope child(*runner_, body, this, {});
+      Scope child(*runner_, body, this, std::move(presets));
       ABSL_RETURN_IF_ERROR(child.Run());
       PublishVariables(one, child);
       return absl::OkStatus();
@@ -4411,11 +5259,12 @@ absl::Status Scope::RunWaitMany(StepId step) {
       bool found = false;
       for (size_t i = 0; i < candidates.size(); ++i) {
         const Candidate& candidate = candidates[i];
-        const bool terminal = candidate.call != nullptr
-                                  ? candidate.call->finished()
-                              : candidate.scope != nullptr
-                                  ? candidate.scope->done_.at(candidate.step)
-                                  : observed->status[i].has_value();
+        const bool terminal =
+            candidate.call != nullptr ? candidate.call->finished()
+            : candidate.scope != nullptr
+                ? candidate.scope->step_state_.at(candidate.step) ==
+                      StepState::kDone
+                : observed->status[i].has_value();
         if (!terminal) {
           continue;
         }
@@ -4684,7 +5533,14 @@ absl::Status Scope::WriteLog(const graph::LogTail& tail,
       arguments.push_back(std::move(value));
     }
     return Logged(runner_->action()->Log(
-        Strformat(Value::String(tail.format), arguments), options));
+        [&] {
+          const auto& formats = runner_->prepared().formats;
+          const auto format = formats.find(tail.format);
+          return format == formats.end()
+                     ? Strformat(Value::String(tail.format), arguments)
+                     : StrformatCompiled(format->second, arguments);
+        }(),
+        options));
   }
 
   if (!tail.arguments.empty()) {
@@ -4804,6 +5660,7 @@ absl::StatusOr<bool> Scope::PassCondition(const graph::Step& one,
         found == pass.captures().end() ? Value::Null() : found->second;
   }
   EvalContext context;
+  context.prepared = &runner_->prepared();
   context.bound = &bound;
   context.bridge = &bridge();
   context.shapes = &shapes();
@@ -4940,7 +5797,8 @@ absl::Status Runner::Resolve(const std::string& name,
     // its own `call` steps belong on the same stream.
     ABSL_ASSIGN_OR_RETURN(
         *handler, MakeHandler(program_, name,
-                              RunOptions{.snapshot = snapshot_,
+                              RunOptions{.transport_stats = transport_stats,
+                                         .snapshot = snapshot_,
                                          .bridge = bridge_,
                                          .dispatch_stream = dispatch_stream_}));
     bindings_.emplace(name, std::make_pair(*schema, *handler));
@@ -5191,9 +6049,13 @@ absl::Status Runner::RunCall(Scope& scope, StepId step) {
     if (const auto action = handle->action_now(); action != nullptr) {
       action->Cancel().IgnoreError();
     }
+    scope.CallFinished(step, started);
     return graph().steps[step].tolerant ? absl::OkStatus() : started;
   }
-  return PumpCall(step, *handle);
+  const auto status = PumpCall(step, *handle);
+  const auto cause = handle->error();
+  scope.CallFinished(step, cause.ok() ? status : cause);
+  return status;
 }
 
 absl::Status Runner::StartCall(Scope& scope, StepId step, CallHandle& handle) {
@@ -5399,7 +6261,7 @@ absl::Status Runner::AwaitCall(const graph::Step& step, CallHandle& handle) {
 
 absl::StatusOr<std::shared_ptr<CompiledProgram>> CompiledProgram::Compile(
     std::string source, std::string source_name, const ModuleSources& modules,
-    ModuleResolver resolver, CompilationLimits limits) {
+    ModuleResolver resolver, CompilationLimits limits, bool single_item_slots) {
   CompilationBudget budget(limits);
   auto compiled = std::shared_ptr<CompiledProgram>(new CompiledProgram());
   compiled->source_ = std::move(source);
@@ -5428,7 +6290,114 @@ absl::StatusOr<std::shared_ptr<CompiledProgram>> CompiledProgram::Compile(
             {{{"type", "flow.diagnostic/v1"},
               {"diagnostic", DiagnosticToJsonValue(*first)}}}));
   }
+  compiled->single_item_slots_ = single_item_slots;
+  size_t preparation_bytes = 0;
+  const auto prepare_text = [&](std::string_view kind, std::string_view text) {
+    if (text.size() > 4096 || preparation_bytes + text.size() > 65536 ||
+        !budget.TryOptional(text.size() + 1)) {
+      return;
+    }
+    if (kind == "match" && compiled->prepared_.patterns.find(text) ==
+                               compiled->prepared_.patterns.end()) {
+      auto pattern = pattern::Compile(text);
+      if (pattern.ok()) {
+        const auto cost =
+            text.size() * 4 +
+            pattern.pattern.pieces.capacity() *
+                sizeof(pattern::Pattern::Piece) +
+            pattern.pattern.holes.capacity() * sizeof(pattern::Hole);
+        if (cost <= 65536 - preparation_bytes) {
+          compiled->prepared_.patterns.emplace(std::string(text),
+                                               std::move(pattern.pattern));
+          preparation_bytes += cost;
+        }
+      }
+    } else if (kind == "strformat" && compiled->prepared_.formats.find(text) ==
+                                          compiled->prepared_.formats.end()) {
+      auto format = CompileStrformat(text);
+      const auto cost =
+          text.size() * 4 + format.capacity() * sizeof(FormatPart);
+      if (cost <= 65536 - preparation_bytes) {
+        compiled->prepared_.formats.emplace(std::string(text),
+                                            std::move(format));
+        preparation_bytes += cost;
+      }
+    }
+  };
+  for (const auto& declaration : compiled->parsed_.flows) {
+    syntax::VisitSubtree(*declaration, [&](const syntax::Node& node) {
+      if (!budget.TryOptional()) {
+        return;
+      }
+      if (const auto* builtin = syntax::As<syntax::Builtin>(&node);
+          builtin != nullptr && !builtin->args.empty()) {
+        if (const auto* literal =
+                syntax::As<syntax::Literal>(builtin->args[0].get());
+            literal != nullptr &&
+            literal->value.kind == syntax::Constant::Kind::kString) {
+          prepare_text(builtin->name, literal->value.text);
+        }
+      }
+      if ((node.kind == syntax::NodeKind::kUnary ||
+           node.kind == syntax::NodeKind::kBinary) &&
+          node.extent.end - node.extent.start <= 4096 &&
+          compiled->prepared_.folded.size() < 256 &&
+          syntax::IsPureLiteralExpression(node)) {
+        auto value = flow::Evaluate(node, {});
+        if (value.ok() && value->kind() == Value::Kind::kBool) {
+          compiled->prepared_.folded.emplace(&node, *std::move(value));
+        }
+      }
+    });
+  }
+  for (const auto& flow : compiled->flows()) {
+    for (const auto& ref : flow.graph.refs) {
+      if (ref.kind == graph::RefKind::kDerived) {
+        prepare_text(ref.stage.name, ref.stage.text);
+        if (ref.stage.log.has_format) {
+          prepare_text("strformat", ref.stage.log.format);
+        }
+      }
+    }
+    for (const auto& step : flow.graph.steps) {
+      if (step.log.has_format) {
+        prepare_text("strformat", step.log.format);
+      }
+    }
+  }
+  if (single_item_slots) {
+    for (const auto& flow : compiled->flows()) {
+      if (flow.plan.interface_only) {
+        continue;
+      }
+      compiled->single_items_.emplace(flow.graph.name,
+                                      AnalyseSingleItems(flow.graph, &budget));
+    }
+  }
   return compiled;
+}
+
+const SingleItemAnalysis* CompiledProgram::SingleItems(
+    std::string_view flow) const {
+  const auto found = single_items_.find(flow);
+  return found == single_items_.end() ? nullptr : &found->second;
+}
+
+nlohmann::json CompiledProgram::Optimizations() const {
+  nlohmann::json flows = nlohmann::json::array();
+  for (const auto& flow : this->flows()) {
+    if (flow.plan.interface_only) {
+      continue;
+    }
+    const auto* analysis = SingleItems(flow.graph.name);
+    flows.push_back(SingleItemsToJson(
+        flow.graph,
+        analysis == nullptr ? AnalyseSingleItems(flow.graph) : *analysis,
+        single_item_slots_));
+  }
+  return {{"format", "flow.optimizations/v1"},
+          {"single_item_slots", single_item_slots_},
+          {"flows", flows}};
 }
 
 std::vector<std::string> CompiledProgram::ExternalActions() const {
@@ -5917,7 +6886,8 @@ absl::StatusOr<actions::ActionHandler> MakeHandler(
   return actions::MakeAsyncActionHandler(
       [program = std::move(program), name = std::string(flow),
        bridge = std::move(bridge), stream = std::move(options.dispatch_stream),
-       snapshot = std::move(options.snapshot)](
+       snapshot = std::move(options.snapshot),
+       stats = std::move(options.transport_stats)](
           std::shared_ptr<actions::Action> action) -> absl::Status {
         const ResolvedFlow* one = program->Flow(name);
         if (one == nullptr) {
@@ -5926,6 +6896,7 @@ absl::StatusOr<actions::ActionHandler> MakeHandler(
         }
         Runner runner(program, *one, std::move(action), bridge, stream,
                       snapshot);
+        runner.transport_stats = stats;
         return runner.Run();
       });
 }
@@ -5952,7 +6923,8 @@ absl::StatusOr<actions::ActionHandler> MakeEntryHandler(
   return actions::MakeAsyncActionHandler(
       [program = std::move(program), bridge = std::move(bridge),
        stream = std::move(options.dispatch_stream),
-       snapshot = std::move(options.snapshot)](
+       snapshot = std::move(options.snapshot),
+       stats = std::move(options.transport_stats)](
           std::shared_ptr<actions::Action> action) -> absl::Status {
         // Looked up again rather than captured: the handler outlives this call
         // and the program is what owns the flow.
@@ -5963,6 +6935,7 @@ absl::StatusOr<actions::ActionHandler> MakeEntryHandler(
         }
         Runner runner(program, *one, std::move(action), bridge, stream,
                       snapshot);
+        runner.transport_stats = stats;
         return runner.Run();
       });
 }

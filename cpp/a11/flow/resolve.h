@@ -34,6 +34,8 @@ namespace a11::flow {
 
 /// What a name means inside a flow.
 enum class SymbolKind {
+  /// A transfer handle: writable continuation, never payload or a source.
+  kSink,
   /// An `in` port: read, never written.
   kInputPort,
   /// An `out` port: written, never read... except by this flow, which may read
@@ -74,6 +76,14 @@ struct Symbol {
   /// Whether the language bound it rather than the author: the `index` every
   /// loop provides. Nothing is said about one of these going unread.
   bool implicit = false;
+  /// A branch-local binding's visibility, absent for unrestricted symbols.
+  syntax::Location visibility;
+
+  [[nodiscard]] bool VisibleAt(size_t offset) const {
+    return visibility.end <= visibility.start ||
+           (offset >= visibility.start && offset < visibility.end);
+  }
+
   /// Whether a pipeline may read it.
   bool readable = true;
   /// Whether a pipe may write it.
@@ -115,6 +125,7 @@ struct Symbol {
 
 /// Native result categories used by resolution and editor queries.
 enum class ExpressionCategory {
+  kSink,
   kUnknown,
   kValue,
   kStream,
@@ -125,6 +136,8 @@ enum class ExpressionCategory {
 
 /// The statically known interface of one expression, borrowing its program.
 struct ExpressionInfo {
+  /// The lexical binding of a Name, when resolution establishes one.
+  size_t symbol = graph::kNone;
   ExpressionCategory category = ExpressionCategory::kUnknown;
   std::string type;
   std::string action;

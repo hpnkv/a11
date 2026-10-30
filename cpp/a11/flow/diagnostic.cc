@@ -45,6 +45,9 @@ constexpr std::array kCodes = {
              Severity::kError,
              "A '<-' carries a value where there is no 'repeat' to carry it "
              "into."},
+    CodeInfo{"flow.barrier.continuation-cycle", Family::kBarrier,
+             Severity::kError,
+             "A continuation completion depends on a writer it prevents."},
     CodeInfo{"flow.barrier.duplicate", Family::kBarrier, Severity::kWeakWarning,
              "A second 'wait' or 'close' on something this body already holds "
              "for."},
@@ -82,9 +85,8 @@ constexpr std::array kCodes = {
     CodeInfo{"flow.form.bad-pattern", Family::kForm, Severity::kError,
              "A 'match' pattern the language cannot read: an unclosed hole, an "
              "unknown kind, or two holes with one name."},
-    CodeInfo{"flow.form.bind-many-targets", Family::kForm, Severity::kError,
-             "A name is given to a pipe that writes several destinations, "
-             "which is several steps."},
+    CodeInfo{"flow.form.continuation-grouping", Family::kForm, Severity::kError,
+             "A transfer and broadcast need explicit unambiguous grouping."},
     CodeInfo{"flow.form.count-not-positive", Family::kForm, Severity::kWarning,
              "A count that is not a number of anything: 'parallel 0', "
              "'skip -1'."},
@@ -156,6 +158,9 @@ constexpr std::array kCodes = {
              "'one of []' allows nothing, so nothing would validate."},
     CodeInfo{"flow.form.one-of-not-a-list", Family::kForm, Severity::kError,
              "'one of' is given something other than a list of constants."},
+    CodeInfo{
+        "flow.form.optional-binding", Family::kForm, Severity::kError,
+        "An optional binding requires an option with validated provenance."},
     CodeInfo{"flow.form.pipeline-call", Family::kForm, Severity::kError,
              "A pipeline invocation has an unknown or incompatible interface."},
     CodeInfo{"flow.form.port-modifier-order", Family::kForm, Severity::kError,
@@ -169,6 +174,8 @@ constexpr std::array kCodes = {
              "A host-configured parsing or compilation limit was reached."},
     CodeInfo{"flow.form.scope-barrier", Family::kForm, Severity::kError,
              "A bare scope barrier cannot be modified or used as a value."},
+    CodeInfo{"flow.form.sink-as-source", Family::kForm, Severity::kError,
+             "A continuation sink cannot be read or carried as payload."},
     CodeInfo{"flow.form.stage-argument", Family::kForm, Severity::kError,
              "A stage is missing the argument it takes, or was given one of "
              "the wrong kind."},

@@ -26,6 +26,7 @@
 #include "a11/flow/module.h"
 #include "a11/flow/parser.h"
 #include "a11/flow/resolve.h"
+#include "a11/flow/single_item.h"
 
 namespace a11::flow {
 namespace {
@@ -879,6 +880,126 @@ TEST(FlowResolve, CountsWhatReadsAndWritesEachName) {
   EXPECT_EQ(find("x")->status_reads, 0);
 }
 
+TEST(FlowResolve, OptionalBindingRequiresProvenanceAndFreshLocalNames) {
+  for (const auto body :
+       {"if item = {has_value: true, value: 1} { item -> _ }",
+        "if item = {present: true, value: 1} { item -> _ }",
+        "if item = 1 { item -> _ }",
+        "item = 1\nif item = std::option({has_value: false}) { item -> _ }",
+        "if item = std::option({has_value: false}) {} else { item -> _ }",
+        "if item = std::option({has_value: false}) {}\nitem -> _"}) {
+    const auto result = Check(absl::StrCat("flow main {\n", body, "\n}"));
+    EXPECT_TRUE(result.HasErrors()) << body << ": " << Messages(result);
+  }
+  const auto good = Check(R"(
+flow main {
+ record = {present: true, has_value: false}
+ if record.present == true { record.has_value -> _ }
+ if item = std::option({has_value: true, value: 0}) { item -> _ }
+}
+)");
+  EXPECT_FALSE(good.HasErrors()) << Messages(good);
+}
+
+TEST(FlowResolve, OptionalBindingInfersPayloadTypeInItsSuccessBranch) {
+  const auto result = Check(R"(
+struct Row { name: string required }
+flow main { in rows: Row stream
+ out names: string stream
+ if row = try take rows { row.name -> names }
+}
+)");
+  ASSERT_FALSE(result.HasErrors()) << Messages(result);
+  auto found = std::find_if(
+      result.flows.front().symbols.begin(), result.flows.front().symbols.end(),
+      [](const auto& symbol) { return symbol.name == "row"; });
+  ASSERT_NE(found, result.flows.front().symbols.end());
+  ASSERT_TRUE(found->value_type.has_value());
+  EXPECT_EQ(found->value_type->name, "Row");
+  EXPECT_GT(found->visibility.end, found->visibility.start);
+  EXPECT_EQ(result.flows.front().plan.steps.back().optional_binding, "row");
+}
+
+TEST(FlowResolve, ExplicitOptionFieldsRetainTheirTypes) {
+  const auto result = Check(R"(
+struct Row { name: string required }
+flow main { in rows: Row stream
+ candidate = try take rows
+ flag = candidate.has_value
+ payload = candidate.value
+ if nested = std::option({has_value: true, value: candidate}) {
+   if row = nested { row.name -> _ }
+ }
+}
+)");
+  ASSERT_FALSE(result.HasErrors()) << Messages(result);
+  for (const auto& symbol : result.flows.front().symbols) {
+    if (symbol.name == "flag" || symbol.name == "payload") {
+      ASSERT_TRUE(symbol.value_type.has_value());
+      EXPECT_EQ(symbol.value_type->name,
+                symbol.name == "flag" ? "bool" : "Row");
+    }
+  }
+}
+
+TEST(FlowResolve, ContinuationChainsFlattenWithoutIntermediateNodes) {
+  const std::string source = R"(
+flow main {
+  out result: int stream
+  tail = 3 -> 2 -> 1 -> result
+  alias = tail
+  4 -> alias
+}
+)";
+  const auto result = Resolve(source, Parse(source), true);
+  ASSERT_FALSE(result.HasErrors()) << Messages(result);
+  const auto& graph = result.flows.front().graph;
+  EXPECT_EQ(
+      std::count_if(graph.steps.begin(), graph.steps.end(),
+                    [](auto& s) { return s.kind == graph::StepKind::kPipe; }),
+      2);
+  EXPECT_EQ(
+      std::count_if(graph.refs.begin(), graph.refs.end(),
+                    [](auto& r) { return r.kind == graph::RefKind::kSink; }),
+      1);
+  EXPECT_EQ(
+      std::count_if(graph.refs.begin(), graph.refs.end(),
+                    [](auto& r) { return r.kind == graph::RefKind::kNode; }),
+      0);
+  EXPECT_EQ(result.flows.front().plan.steps.front().serial_sources,
+            (std::vector<std::string>{"1", "2", "3"}));
+}
+
+TEST(FlowResolve, ContinuationsRejectSourcesPayloadsAndAmbiguousBroadcasts) {
+  for (const auto text :
+       {"tail -> result", "(tail) | count -> result", "(1 -> result) -> result",
+        "{handle: tail} -> result", "std::len(tail) -> result",
+        "1 -> result, other -> result"}) {
+    const auto result = Check(absl::StrCat(
+        "flow main { out result: int stream\n out other: int stream\n"
+        " tail = 0 -> result\n",
+        text, "\n}"));
+    EXPECT_TRUE(result.HasErrors()) << text << ": " << Messages(result);
+  }
+}
+
+TEST(FlowResolve, ContinuationCompletionCyclesHaveRelatedLocations) {
+  for (const auto body : {"tail = 0 -> result\nwait all\n1 -> tail",
+                          "tail = 0 -> result\n1 -> tail after tail",
+                          "tail = 0 -> result\nfor x in [1] | flatten {\nwait "
+                          "tail\nx -> tail\n}"}) {
+    const auto result = Check(
+        absl::StrCat("flow main { out result: int stream\n", body, "\n}"));
+    auto found =
+        std::find_if(result.diagnostics.begin(), result.diagnostics.end(),
+                     [](const auto& d) {
+                       return d.code == "flow.barrier.continuation-cycle";
+                     });
+    ASSERT_NE(found, result.diagnostics.end()) << Messages(result);
+    EXPECT_GE(found->related.size(), 2);
+  }
+}
+
 }  // namespace
 
 TEST(FlowResolve, RejectsAnInvocationDeadlineDependingOnItsOwnResult) {
@@ -998,6 +1119,83 @@ TEST(FlowResolve, ScopeBarriersRejectValuesModifiersAndStreamingCycles) {
                      "of a, b\n if true "
                      "{ log \"free\" } }")
                    .HasErrors());
+}
+
+TEST(FlowResolve, SingleItemEvidenceUsesWritesAndActivationOwnership) {
+  const auto parsed = Parse(R"(
+flow main {
+ out result: int stream
+ nodes private {
+  n = node()
+  if true { 1 -> n } else { 2 -> n }
+  n -> result
+ }
+}
+)");
+  const auto resolved = Resolve("", parsed, true);
+  ASSERT_FALSE(resolved.HasErrors());
+  const auto& graph = resolved.flows[0].graph;
+  ASSERT_TRUE(CheckSingleItemStructure(graph));
+  auto analysis = AnalyseSingleItems(graph);
+  const auto node = std::find_if(
+      graph.refs.begin(), graph.refs.end(),
+      [](const auto& ref) { return ref.kind == graph::RefKind::kNode; });
+  ASSERT_NE(node, graph.refs.end());
+  const auto id = static_cast<size_t>(node - graph.refs.begin());
+  EXPECT_FALSE(node->unary);
+  EXPECT_TRUE(analysis.refs[id].eligible);
+  EXPECT_EQ(analysis.refs[id].upper, 1);
+  EXPECT_EQ(analysis.refs[id].writers.size(), 2u);
+  EXPECT_FALSE(analysis.refs[id].pump_free);
+  EXPECT_FALSE(AnalyseSingleItems(graph, nullptr, 0).refs[id].eligible);
+}
+
+TEST(FlowResolve, SingleItemEvidenceRejectsUnknownAndCompetingProducers) {
+  for (const auto* body :
+       {"1 -> n\n 2 -> n", "1 -> n\n 2 -> n\n 3 -> n",
+        "for x in [1, 2] | flatten { x -> n }", "run writer(id: n.id)",
+        "other = node(\"unknown\")\n 1 -> n", "run external()\n 1 -> n",
+        "input -> n"}) {
+    SCOPED_TRACE(body);
+    const auto parsed = Parse(
+        absl::StrCat("flow main { in input: int\n nodes private { n = node()\n",
+                     body, "\n n -> _\n} }"));
+    const auto resolved = Resolve("", parsed, true);
+    const auto& graph = resolved.flows[0].graph;
+    const auto facts = AnalyseSingleItems(graph);
+    for (size_t id = 0; id < graph.refs.size(); ++id) {
+      if (graph.refs[id].kind == graph::RefKind::kNode) {
+        EXPECT_FALSE(facts.refs[id].eligible);
+      }
+    }
+  }
+}
+
+TEST(FlowResolve, SingleItemVerifierRejectsBrokenStructuralPremises) {
+  const auto parsed = Parse("flow main { n = node()\n 1 -> n\n n -> _ }");
+  const auto resolved = Resolve("", parsed, true);
+  auto graph = resolved.flows[0].graph;
+  ASSERT_TRUE(CheckSingleItemStructure(graph));
+  graph.bodies[graph.root].steps.push_back(
+      graph.bodies[graph.root].steps.front());
+  EXPECT_FALSE(CheckSingleItemStructure(graph));
+  const auto facts = AnalyseSingleItems(graph);
+  EXPECT_FALSE(facts.complete);
+  EXPECT_TRUE(std::none_of(facts.refs.begin(), facts.refs.end(),
+                           [](const auto& fact) { return fact.eligible; }));
+}
+
+TEST(FlowResolve, SingleItemOptionalBudgetKeepsTheBaselineValid) {
+  const auto parsed = Parse("flow main { 42 -> _ }");
+  const auto resolved = Resolve("", parsed, true);
+  CompilationLimits limits;
+  limits.max_work = 0;
+  CompilationBudget budget(limits);
+  const auto facts = AnalyseSingleItems(resolved.flows[0].graph, &budget);
+  EXPECT_FALSE(facts.complete);
+  EXPECT_FALSE(budget.exhausted());
+  EXPECT_FALSE(budget.Check());
+  EXPECT_TRUE(budget.exhausted());
 }
 
 }  // namespace a11::flow

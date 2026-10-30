@@ -444,7 +444,7 @@ const absl::flat_hash_map<std::string_view, WordDoc>& BuiltinDocs() {
       {"option",
        {"Validate an explicit presence and payload record.", "one value",
         "Validate an explicit presence and payload record.",
-        "std::option({present: true, value: 42})"}},
+        "std::option({has_value: true, value: 42})"}},
       {"len",
        {"How long a value is.", "one value",
         "Characters of a string, bytes of a byte string, items of a list, keys "
@@ -673,7 +673,7 @@ constexpr WordDoc kRequiredDoc = {
     "a `struct` field, a record that leaves it out is not a value of that "
     "shape. A port that is not required and receives nothing is simply an "
     "empty "
-    "stream. Use try take and inspect its present flag to detect EOF.",
+    "stream. Use try take and inspect its has_value flag to detect EOF.",
     "in topic: string required \"What to research.\""};
 
 // The two forms written as two words. Each is documented under its full
@@ -819,15 +819,16 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StatementDocs() {
         "need an `if`, a loop body, or an `after`.",
         "logf \"found %s results\" count after search"}},
       {"if",
-       {"Runs a block when a condition holds, and another when it does not.",
-        "a condition, a block, and optionally `else`",
-        "The condition is asked the question `bool()` asks: null, `false`, 0, "
-        "an empty string, an empty list and an empty record are false, and "
-        "everything else is true. A initializer that bound nothing is false "
-        "too, "
-        "which is how `if not code` asks whether a stream was empty. A "
-        "condition here blocks only what is in the braces.",
-        "if code >= 200 and code < 300 { page.text -> body }"}},
+       {"Runs a conditional scope, or binds a present option payload.",
+        "a condition or name = option, a block, and optionally else",
+        "Boolean conditions use ordinary truthiness. Optional binding "
+        "evaluates "
+        "its option once and binds the payload only in the success branch. "
+        "Presence includes null, false, zero and empty values. EOF is absence; "
+        "upstream errors and cancellation remain failures. The binding is "
+        "branch-local and cannot shadow an enclosing name. Else-if "
+        "initializers run only when earlier branches were not selected.",
+        "if row = try take rows { row.name -> names }"}},
       {"for",
        {"Runs a block once per value of a stream.",
         "one or more names, a stream, and optionally `parallel`",
@@ -1219,7 +1220,7 @@ const absl::flat_hash_map<std::string_view, WordDoc>& TypeDocs() {
         "std::status outcome = status work"}},
       {"option",
        {"An optional value with explicit presence.", "a payload type",
-        "The present flag distinguishes EOF from a present null. "
+        "The has_value flag distinguishes EOF from a present null. "
         "Upstream errors remain failures when using try take.",
         "std::option[string] next = try take words"}},
       {"stream",
@@ -1566,7 +1567,10 @@ const absl::flat_hash_map<std::string_view, WordDoc>& SymbolDocs() {
         "drop the `|` where they have an operand; every other stage keeps it.",
         "page.text | truncate 2000 -> brief.pages"}},
       {"->",
-       {"Writes a stream into one or more destinations.",
+       {"Writes to a destination and returns a continuation sink. Arrows "
+        "associate right: a -> b -> out forwards b, then a. Independent "
+        "attachments interleave after their prefix; completion includes all "
+        "attached writers.",
         "a pipeline on the left, ports or nodes on the right",
         "Several destinations are written the same values. Two statements "
         "writing to one destination interleave by arrival, which is what "
@@ -2310,7 +2314,7 @@ absl::Span<const std::string_view> OrderedModifiers() {
 const absl::flat_hash_set<std::string_view>& SourceWords() {
   // `status x` reads an outcome, `zip(a, b)` reads several streams in step, and
   // `interleave(a, b)` reads several as one, in the order values arrive.
-  static const auto* words = MakeSet({"status", "zip", "interleave"});
+  static const auto* words = MakeSet({"take", "status", "zip", "interleave"});
   return *words;
 }
 

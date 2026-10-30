@@ -102,7 +102,9 @@ class FlowColorSettingsPage : ColorSettingsPage {
             AttributesDescriptor("Keyword//Literal", FlowColors.CONSTANT),
             AttributesDescriptor("Pipeline stage", FlowColors.STAGE),
             AttributesDescriptor("Built-in function", FlowColors.BUILTIN),
-            AttributesDescriptor("Port type", FlowColors.TYPE),
+            AttributesDescriptor("Type//Standard type", FlowColors.BUILTIN_TYPE),
+            AttributesDescriptor("Type//Struct or registered type", FlowColors.TYPE),
+            AttributesDescriptor("Name//Module or namespace", FlowColors.NAMESPACE_NAME),
             AttributesDescriptor("Status code", FlowColors.STATUS_CODE),
             AttributesDescriptor("Name//Flow", FlowColors.FLOW_NAME),
             AttributesDescriptor("Name//Action called", FlowColors.ACTION_NAME),
@@ -125,10 +127,10 @@ class FlowColorSettingsPage : ColorSettingsPage {
               describe "Search, read the best hits, and answer from them."
 
               in  question: string required "What to find out."
-              in  clips:    a11.sdk.AudioBuffer stream
+              in  clips:    a11::sdk::AudioBuffer stream
               out answer:   string
               out sources:  string stream
-              out heard:    list[string]
+              out heard:    std::list[string]
 
               header "x-a11-deadline" as deadline
 
@@ -146,7 +148,7 @@ class FlowColorSettingsPage : ColorSettingsPage {
 
                   hit.url -> sources
                   page.text | truncate 200 -> brief.pages
-                  skip page.bytes
+                  page.bytes -> _
 
                   if not outcome.ok {
                     fail unavailable outcome.message
@@ -155,7 +157,7 @@ class FlowColorSettingsPage : ColorSettingsPage {
               }
 
               brief.summary -> answer
-              skip search.debug
+              search.debug -> _
             }
         """.trimIndent()
     }

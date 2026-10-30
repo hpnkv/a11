@@ -328,6 +328,13 @@ class Expression:
         Extract the next item, optionally representing EOF as absence.
         """
 
+    def transfer(
+        self, destination: Expression, tolerant: bool = False
+    ) -> Expression:
+        """
+        Construct a grouped transfer returning a continuation sink.
+        """
+
     @property
     def source(self) -> str:
         """
@@ -601,6 +608,7 @@ class ModuleDocument:
         modules: collections.abc.Mapping[str, str] = {},
         source_roots: collections.abc.Sequence[str] = [],
         limits: CompilationLimits = ...,
+        single_item_slots: bool = True,
     ) -> Program:
         """
         Compile an immutable snapshot with explicit source roots and compilation limits.
@@ -774,6 +782,11 @@ class Program:
         The flow of this name, or ``None``.
         """
 
+    def optimizations(self) -> dict[str, typing.Any]:
+        """
+        Explain verified single-item transport choices for this compilation.
+        """
+
     def register_all(self, registry: ActionRegistry) -> Program:
         """
         Register the root module's named implementations in ``registry``.
@@ -895,6 +908,17 @@ class Statement:
     ) -> Statement:
         """
         Construct conditional statement bodies.
+        """
+
+    @staticmethod
+    def if_some(
+        name: str,
+        option: Expression,
+        then_body: collections.abc.Sequence[Statement],
+        else_body: collections.abc.Sequence[Statement] = [],
+    ) -> Statement:
+        """
+        Bind an option payload only in its success branch; evaluate once.
         """
 
     @staticmethod
@@ -1024,6 +1048,7 @@ def compile(
     modules: collections.abc.Mapping[str, str] = {},
     source_roots: collections.abc.Sequence[str] = [],
     limits: CompilationLimits = ...,
+    single_item_slots: bool = True,
 ) -> Program:
     """
     Compile Flow source with explicit source roots and compilation limits.
@@ -1145,6 +1170,7 @@ def run_program(
     dispatch_stream: typing.Any | None = None,
     source_roots: collections.abc.Sequence[str] = [],
     limits: CompilationLimits = ...,
+    single_item_slots: bool = True,
 ) -> dict[str, typing.Any]:
     """
     Run a Flow program's entry flow, and return what it did.

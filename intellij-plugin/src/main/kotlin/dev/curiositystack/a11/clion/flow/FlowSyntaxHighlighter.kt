@@ -52,6 +52,8 @@ object FlowColors {
     val BUILTIN =
         key("A11FLOW_BUILTIN", DefaultLanguageHighlighterColors.STATIC_METHOD)
     val TYPE = key("A11FLOW_TYPE", DefaultLanguageHighlighterColors.CLASS_NAME)
+    val BUILTIN_TYPE = key("A11FLOW_BUILTIN_TYPE", DefaultLanguageHighlighterColors.KEYWORD)
+    val NAMESPACE_NAME = key("A11FLOW_NAMESPACE_NAME", DefaultLanguageHighlighterColors.CLASS_REFERENCE)
     val STATUS_CODE =
         key("A11FLOW_STATUS_CODE", DefaultLanguageHighlighterColors.CONSTANT)
     val CONSTANT =
@@ -126,6 +128,9 @@ class FlowSyntaxHighlighter : SyntaxHighlighterBase() {
             FlowTokens.STAGE to FlowColors.STAGE,
             FlowTokens.BUILTIN to FlowColors.BUILTIN,
             FlowTokens.TYPE to FlowColors.TYPE,
+            FlowTokens.BUILTIN_TYPE to FlowColors.BUILTIN_TYPE,
+            FlowTokens.BUILTIN_TYPE_QUALIFIER to FlowColors.BUILTIN_TYPE,
+            FlowTokens.NAMESPACE_NAME to FlowColors.NAMESPACE_NAME,
             FlowTokens.STATUS_CODE to FlowColors.STATUS_CODE,
             FlowTokens.CONSTANT to FlowColors.CONSTANT,
             FlowTokens.FLOW_NAME to FlowColors.FLOW_NAME,
@@ -142,6 +147,7 @@ class FlowSyntaxHighlighter : SyntaxHighlighterBase() {
             FlowTokens.ARITHMETIC to FlowColors.OPERATOR,
             FlowTokens.DOT to FlowColors.PUNCTUATION,
             FlowTokens.COLON to FlowColors.PUNCTUATION,
+            FlowTokens.SCOPE to FlowColors.PUNCTUATION,
             FlowTokens.COMMA to FlowColors.PUNCTUATION,
             FlowTokens.LEFT_BRACE to FlowColors.BRACES,
             FlowTokens.RIGHT_BRACE to FlowColors.BRACES,

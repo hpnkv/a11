@@ -150,7 +150,7 @@ absl::StatusOr<std::shared_ptr<CompiledProgram>> CompileWithEntry(
                             source.text, FileModuleIdentity(source.name), {},
                             FileModuleResolver(source.limits.max_source_bytes,
                                                {}, source.source_roots),
-                            source.limits));
+                            source.limits, source.single_item_slots));
   if (program->Entry() == nullptr) {
     return absl::NotFoundError(absl::StrCat(
         source.name.empty() ? "this program" : source.name,

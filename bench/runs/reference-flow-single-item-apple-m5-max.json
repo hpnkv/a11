@@ -1,0 +1,774 @@
+{
+  "base_revision": "50610c7c4e03f85353a2b21d745a7ce2f0adcbdb",
+  "source_state": "working tree implementing single-item transport",
+  "source_files": [
+    "cpp/a11/flow/single_item.h",
+    "cpp/a11/flow/single_item.cc",
+    "cpp/a11/flow/runtime.h",
+    "cpp/a11/flow/runtime.cc",
+    "cpp/a11/flow/limits.h",
+    "cpp/bench/bench_main.cc",
+    "cpp/a11/flow/resolve.h",
+    "cpp/a11/flow/resolve.cc"
+  ],
+  "source_sha256": "327f07bdfb8e96e2e291cb49ceb5cad3fe83f91f06584c19d06717bc4857f90e",
+  "machine": "Apple M5 Max, arm64, macOS, 18 logical CPUs",
+  "compiler": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+  "build": "release preset (RelWithDebInfo), A11_ALLOCATOR=system",
+  "host_bridge": "native",
+  "worker_configuration": "default executor, no worker override",
+  "conditions": "three fresh processes per mode; off/on order alternated; serial runs without concurrent builds or tests; desktop machine not isolated",
+  "iterations_per_row": 1000,
+  "warmup_per_row": 100,
+  "proof_samples_per_row": 100,
+  "compile_samples_per_row": 30,
+  "counter_policy": "latency counters disabled; separate counted run after samples",
+  "memory_policy": "OS peak RSS spans four sequential workloads per process; RSS after each row includes allocator and runtime retention",
+  "runs": [
+    {
+      "mode": "off",
+      "repeat": 0,
+      "recorded_at": 1793397354,
+      "peak_rss_bytes": 18497536,
+      "results": [
+        {
+          "metrics": {
+            "bus_pumps": 1.0,
+            "compile_p50_us": 5.583,
+            "compile_p99_us": 15.959,
+            "inline_producers": 0.0,
+            "max_us": 197.583,
+            "mean_us": 67.40933100000001,
+            "ops_per_s": 14834.741498918005,
+            "p50_us": 64.542,
+            "p90_us": 85.291,
+            "p99_us": 132.0,
+            "proof_p50_us": 0.209,
+            "proof_p99_us": 0.333,
+            "queue_readers": 1.0,
+            "replay_fill_pumps": 0.0,
+            "rss_after_bytes": 12189696.0,
+            "rss_before_bytes": 8929280.0,
+            "shared_slots": 0.0,
+            "slot_pumps": 0.0
+          },
+          "name": "single_item_off",
+          "note": "Latency has counters disabled; counts use a separate run. RSS is process resident memory, not per-slot allocation size.",
+          "params": {
+            "bytes": "64",
+            "workload": "literal"
+          },
+          "suite": "flow"
+        },
+        {
+          "metrics": {
+            "bus_pumps": 1.0,
+            "compile_p50_us": 249.916,
+            "compile_p99_us": 257.75,
+            "inline_producers": 0.0,
+            "max_us": 826.083,
+            "mean_us": 237.03807,
+            "ops_per_s": 4218.731615558631,
+            "p50_us": 243.459,
+            "p90_us": 278.5,
+            "p99_us": 373.708,
+            "proof_p50_us": 0.208,
+            "proof_p99_us": 0.209,
+            "queue_readers": 1.0,
+            "replay_fill_pumps": 0.0,
+            "rss_after_bytes": 15728640.0,
+            "rss_before_bytes": 14106624.0,
+            "shared_slots": 0.0,
+            "slot_pumps": 0.0
+          },
+          "name": "single_item_off",
+          "note": "Latency has counters disabled; counts use a separate run. RSS is process resident memory, not per-slot allocation size.",
+          "params": {
+            "bytes": "65536",
+            "workload": "literal"
+          },
+          "suite": "flow"
+        },
+        {
+          "metrics": {
+            "bus_pumps": 4.0,
+            "compile_p50_us": 7.625,
+            "compile_p99_us": 9.5,
+            "inline_producers": 0.0,
+            "max_us": 280.708,
+            "mean_us": 121.28413400000001,
+            "ops_per_s": 8245.10153982713,
+            "p50_us": 118.417,
+            "p90_us": 144.083,
+            "p99_us": 178.625,
+            "proof_p50_us": 0.625,
+            "proof_p99_us": 0.666,
+            "queue_readers": 4.0,
+            "replay_fill_pumps": 0.0,
+            "rss_after_bytes": 16334848.0,
+            "rss_before_bytes": 15843328.0,
+            "shared_slots": 0.0,
+            "slot_pumps": 0.0
+          },
+          "name": "single_item_off",
+          "note": "Latency has counters disabled; counts use a separate run. RSS is process resident memory, not per-slot allocation size.",
+          "params": {
+            "bytes": "64",
+            "workload": "scalar_parameter"
+          },
+          "suite": "flow"
+        },
+        {
+          "metrics": {
+            "bus_pumps": 4.0,
+            "compile_p50_us": 7.542,
+            "compile_p99_us": 9.375,
+            "inline_producers": 0.0,
+            "max_us": 717.667,
+            "mean_us": 294.29588,
+            "ops_per_s": 3397.940875013269,
+            "p50_us": 294.291,
+            "p90_us": 335.584,
+            "p99_us": 520.709,
+            "proof_p50_us": 0.625,
+            "proof_p99_us": 0.875,
+            "queue_readers": 4.0,
+            "replay_fill_pumps": 0.0,
+            "rss_after_bytes": 18350080.0,
+            "rss_before_bytes": 16334848.0,
+            "shared_slots": 0.0,
+            "slot_pumps": 0.0
+          },
+          "name": "single_item_off",
+          "note": "Latency has counters disabled; counts use a separate run. RSS is process resident memory, not per-slot allocation size.",
+          "params": {
+            "bytes": "65536",
+            "workload": "scalar_parameter"
+          },
+          "suite": "flow"
+        }
+      ]
+    },
+    {
+      "mode": "on",
+      "repeat": 0,
+      "recorded_at": 1793397354,
+      "peak_rss_bytes": 17022976,
+      "results": [
+        {
+          "metrics": {
+            "bus_pumps": 0.0,
+            "compile_p50_us": 5.959,
+            "compile_p99_us": 33.875,
+            "inline_producers": 1.0,
+            "max_us": 2232.416,
+            "mean_us": 60.067668,
+            "ops_per_s": 16647.891174999502,
+            "p50_us": 52.583,
+            "p90_us": 68.167,
+            "p99_us": 193.459,
+            "proof_p50_us": 0.209,
+            "proof_p99_us": 1.208,
+            "queue_readers": 0.0,
+            "replay_fill_pumps": 0.0,
+            "rss_after_bytes": 12107776.0,
+            "rss_before_bytes": 8978432.0,
+            "shared_slots": 1.0,
+            "slot_pumps": 0.0
+          },
+          "name": "single_item_on",
+          "note": "Latency has counters disabled; counts use a separate run. RSS is process resident memory, not per-slot allocation size.",
+          "params": {
+            "bytes": "64",
+            "workload": "literal"
+          },
+          "suite": "flow"
+        },
+        {
+          "metrics": {
+            "bus_pumps": 0.0,
+            "compile_p50_us": 254.042,
+            "compile_p99_us": 266.25,
+            "inline_producers": 1.0,
+            "max_us": 348.208,
+            "mean_us": 205.19466699999998,
+            "ops_per_s": 4873.4210036755,
+            "p50_us": 220.125,
+            "p90_us": 238.917,
+            "p99_us": 266.917,
+            "proof_p50_us": 0.208,
+            "proof_p99_us": 0.25,
+            "queue_readers": 0.0,
+            "replay_fill_pumps": 0.0,
+            "rss_after_bytes": 14843904.0,
+            "rss_before_bytes": 14008320.0,
+            "shared_slots": 1.0,
+            "slot_pumps": 0.0
+          },
+          "name": "single_item_on",
+          "note": "Latency has counters disabled; counts use a separate run. RSS is process resident memory, not per-slot allocation size.",
+          "params": {
+            "bytes": "65536",
+            "workload": "literal"
+          },
+          "suite": "flow"
+        },
+        {
+          "metrics": {
+            "bus_pumps": 1.0,
+            "compile_p50_us": 8.708,
+            "compile_p99_us": 9.791,
+            "inline_producers": 1.0,
+            "max_us": 296.125,
+            "mean_us": 116.763385,
+            "ops_per_s": 8564.328620654498,
+            "p50_us": 113.084,
+            "p90_us": 141.375,
+            "p99_us": 197.667,
+            "proof_p50_us": 0.583,
+            "proof_p99_us": 0.667,
+            "queue_readers": 1.0,
+            "replay_fill_pumps": 0.0,
+            "rss_after_bytes": 15499264.0,
+            "rss_before_bytes": 14974976.0,
+            "shared_slots": 3.0,
+            "slot_pumps": 2.0
+          },
+          "name": "single_item_on",
+          "note": "Latency has counters disabled; counts use a separate run. RSS is process resident memory, not per-slot allocation size.",
+          "params": {
+            "bytes": "64",
+            "workload": "scalar_parameter"
+          },
+          "suite": "flow"
+        },
+        {
+          "metrics": {
+            "bus_pumps": 1.0,
+            "compile_p50_us": 8.958,
+            "compile_p99_us": 9.916,
+            "inline_producers": 1.0,
+            "max_us": 468.583,
+            "mean_us": 272.23909299999997,
+            "ops_per_s": 3673.2417412219343,
+            "p50_us": 268.166,
+            "p90_us": 319.458,
+            "p99_us": 370.958,
+            "proof_p50_us": 0.583,
+            "proof_p99_us": 0.75,
+            "queue_readers": 1.0,
+            "replay_fill_pumps": 0.0,
+            "rss_after_bytes": 16875520.0,
+            "rss_before_bytes": 15499264.0,
+            "shared_slots": 3.0,
+            "slot_pumps": 2.0
+          },
+          "name": "single_item_on",
+          "note": "Latency has counters disabled; counts use a separate run. RSS is process resident memory, not per-slot allocation size.",
+          "params": {
+            "bytes": "65536",
+            "workload": "scalar_parameter"
+          },
+          "suite": "flow"
+        }
+      ]
+    },
+    {
+      "mode": "on",
+      "repeat": 1,
+      "recorded_at": 1793397355,
+      "peak_rss_bytes": 17874944,
+      "results": [
+        {
+          "metrics": {
+            "bus_pumps": 0.0,
+            "compile_p50_us": 6.041,
+            "compile_p99_us": 17.458,
+            "inline_producers": 1.0,
+            "max_us": 139.208,
+            "mean_us": 54.743415,
+            "ops_per_s": 18267.03723178395,
+            "p50_us": 53.75,
+            "p90_us": 66.666,
+            "p99_us": 83.792,
+            "proof_p50_us": 0.209,
+            "proof_p99_us": 1.375,
+            "queue_readers": 0.0,
+            "replay_fill_pumps": 0.0,
+            "rss_after_bytes": 12156928.0,
+            "rss_before_bytes": 9011200.0,
+            "shared_slots": 1.0,
+            "slot_pumps": 0.0
+          },
+          "name": "single_item_on",
+          "note": "Latency has counters disabled; counts use a separate run. RSS is process resident memory, not per-slot allocation size.",
+          "params": {
+            "bytes": "64",
+            "workload": "literal"
+          },
+          "suite": "flow"
+        },
+        {
+          "metrics": {
+            "bus_pumps": 0.0,
+            "compile_p50_us": 254.541,
+            "compile_p99_us": 268.292,
+            "inline_producers": 1.0,
+            "max_us": 376.125,
+            "mean_us": 218.70929500000003,
+            "ops_per_s": 4572.279381175821,
+            "p50_us": 229.792,
+            "p90_us": 248.209,
+            "p99_us": 276.666,
+            "proof_p50_us": 0.208,
+            "proof_p99_us": 0.333,
+            "queue_readers": 0.0,
+            "replay_fill_pumps": 0.0,
+            "rss_after_bytes": 14794752.0,
+            "rss_before_bytes": 14041088.0,
+            "shared_slots": 1.0,
+            "slot_pumps": 0.0
+          },
+          "name": "single_item_on",
+          "note": "Latency has counters disabled; counts use a separate run. RSS is process resident memory, not per-slot allocation size.",
+          "params": {
+            "bytes": "65536",
+            "workload": "literal"
+          },
+          "suite": "flow"
+        },
+        {
+          "metrics": {
+            "bus_pumps": 1.0,
+            "compile_p50_us": 9.084,
+            "compile_p99_us": 10.0,
+            "inline_producers": 1.0,
+            "max_us": 2057.833,
+            "mean_us": 130.068932,
+            "ops_per_s": 7688.231037370247,
+            "p50_us": 115.667,
+            "p90_us": 162.875,
+            "p99_us": 371.0,
+            "proof_p50_us": 0.666,
+            "proof_p99_us": 0.792,
+            "queue_readers": 1.0,
+            "replay_fill_pumps": 0.0,
+            "rss_after_bytes": 15532032.0,
+            "rss_before_bytes": 14876672.0,
+            "shared_slots": 3.0,
+            "slot_pumps": 2.0
+          },
+          "name": "single_item_on",
+          "note": "Latency has counters disabled; counts use a separate run. RSS is process resident memory, not per-slot allocation size.",
+          "params": {
+            "bytes": "64",
+            "workload": "scalar_parameter"
+          },
+          "suite": "flow"
+        },
+        {
+          "metrics": {
+            "bus_pumps": 1.0,
+            "compile_p50_us": 9.166,
+            "compile_p99_us": 9.75,
+            "inline_producers": 1.0,
+            "max_us": 812.042,
+            "mean_us": 295.31768,
+            "ops_per_s": 3386.1839900679156,
+            "p50_us": 299.958,
+            "p90_us": 335.417,
+            "p99_us": 433.208,
+            "proof_p50_us": 0.625,
+            "proof_p99_us": 0.667,
+            "queue_readers": 1.0,
+            "replay_fill_pumps": 0.0,
+            "rss_after_bytes": 17727488.0,
+            "rss_before_bytes": 15532032.0,
+            "shared_slots": 3.0,
+            "slot_pumps": 2.0
+          },
+          "name": "single_item_on",
+          "note": "Latency has counters disabled; counts use a separate run. RSS is process resident memory, not per-slot allocation size.",
+          "params": {
+            "bytes": "65536",
+            "workload": "scalar_parameter"
+          },
+          "suite": "flow"
+        }
+      ]
+    },
+    {
+      "mode": "off",
+      "repeat": 1,
+      "recorded_at": 1793397356,
+      "peak_rss_bytes": 16531456,
+      "results": [
+        {
+          "metrics": {
+            "bus_pumps": 1.0,
+            "compile_p50_us": 4.875,
+            "compile_p99_us": 20.375,
+            "inline_producers": 0.0,
+            "max_us": 123.291,
+            "mean_us": 62.628864,
+            "ops_per_s": 15967.078693938947,
+            "p50_us": 61.541,
+            "p90_us": 75.541,
+            "p99_us": 94.0,
+            "proof_p50_us": 0.208,
+            "proof_p99_us": 1.125,
+            "queue_readers": 1.0,
+            "replay_fill_pumps": 0.0,
+            "rss_after_bytes": 12042240.0,
+            "rss_before_bytes": 8978432.0,
+            "shared_slots": 0.0,
+            "slot_pumps": 0.0
+          },
+          "name": "single_item_off",
+          "note": "Latency has counters disabled; counts use a separate run. RSS is process resident memory, not per-slot allocation size.",
+          "params": {
+            "bytes": "64",
+            "workload": "literal"
+          },
+          "suite": "flow"
+        },
+        {
+          "metrics": {
+            "bus_pumps": 1.0,
+            "compile_p50_us": 250.083,
+            "compile_p99_us": 255.167,
+            "inline_producers": 0.0,
+            "max_us": 341.416,
+            "mean_us": 236.950743,
+            "ops_per_s": 4220.286407795734,
+            "p50_us": 238.083,
+            "p90_us": 267.375,
+            "p99_us": 284.75,
+            "proof_p50_us": 0.208,
+            "proof_p99_us": 0.25,
+            "queue_readers": 1.0,
+            "replay_fill_pumps": 0.0,
+            "rss_after_bytes": 14663680.0,
+            "rss_before_bytes": 13959168.0,
+            "shared_slots": 0.0,
+            "slot_pumps": 0.0
+          },
+          "name": "single_item_off",
+          "note": "Latency has counters disabled; counts use a separate run. RSS is process resident memory, not per-slot allocation size.",
+          "params": {
+            "bytes": "65536",
+            "workload": "literal"
+          },
+          "suite": "flow"
+        },
+        {
+          "metrics": {
+            "bus_pumps": 4.0,
+            "compile_p50_us": 7.583,
+            "compile_p99_us": 9.583,
+            "inline_producers": 0.0,
+            "max_us": 288.5,
+            "mean_us": 119.799293,
+            "ops_per_s": 8347.294670595427,
+            "p50_us": 117.125,
+            "p90_us": 142.542,
+            "p99_us": 184.042,
+            "proof_p50_us": 0.625,
+            "proof_p99_us": 0.667,
+            "queue_readers": 4.0,
+            "replay_fill_pumps": 0.0,
+            "rss_after_bytes": 15433728.0,
+            "rss_before_bytes": 14761984.0,
+            "shared_slots": 0.0,
+            "slot_pumps": 0.0
+          },
+          "name": "single_item_off",
+          "note": "Latency has counters disabled; counts use a separate run. RSS is process resident memory, not per-slot allocation size.",
+          "params": {
+            "bytes": "64",
+            "workload": "scalar_parameter"
+          },
+          "suite": "flow"
+        },
+        {
+          "metrics": {
+            "bus_pumps": 4.0,
+            "compile_p50_us": 7.625,
+            "compile_p99_us": 8.375,
+            "inline_producers": 0.0,
+            "max_us": 503.916,
+            "mean_us": 298.44858,
+            "ops_per_s": 3350.6609413253027,
+            "p50_us": 308.709,
+            "p90_us": 338.708,
+            "p99_us": 389.417,
+            "proof_p50_us": 0.625,
+            "proof_p99_us": 0.667,
+            "queue_readers": 4.0,
+            "replay_fill_pumps": 0.0,
+            "rss_after_bytes": 16384000.0,
+            "rss_before_bytes": 15433728.0,
+            "shared_slots": 0.0,
+            "slot_pumps": 0.0
+          },
+          "name": "single_item_off",
+          "note": "Latency has counters disabled; counts use a separate run. RSS is process resident memory, not per-slot allocation size.",
+          "params": {
+            "bytes": "65536",
+            "workload": "scalar_parameter"
+          },
+          "suite": "flow"
+        }
+      ]
+    },
+    {
+      "mode": "off",
+      "repeat": 2,
+      "recorded_at": 1793397357,
+      "peak_rss_bytes": 19185664,
+      "results": [
+        {
+          "metrics": {
+            "bus_pumps": 1.0,
+            "compile_p50_us": 5.75,
+            "compile_p99_us": 29.5,
+            "inline_producers": 0.0,
+            "max_us": 199.166,
+            "mean_us": 64.777784,
+            "ops_per_s": 15437.391313046459,
+            "p50_us": 63.292,
+            "p90_us": 77.416,
+            "p99_us": 124.542,
+            "proof_p50_us": 0.25,
+            "proof_p99_us": 1.458,
+            "queue_readers": 1.0,
+            "replay_fill_pumps": 0.0,
+            "rss_after_bytes": 12156928.0,
+            "rss_before_bytes": 8880128.0,
+            "shared_slots": 0.0,
+            "slot_pumps": 0.0
+          },
+          "name": "single_item_off",
+          "note": "Latency has counters disabled; counts use a separate run. RSS is process resident memory, not per-slot allocation size.",
+          "params": {
+            "bytes": "64",
+            "workload": "literal"
+          },
+          "suite": "flow"
+        },
+        {
+          "metrics": {
+            "bus_pumps": 1.0,
+            "compile_p50_us": 264.125,
+            "compile_p99_us": 305.5,
+            "inline_producers": 0.0,
+            "max_us": 602.958,
+            "mean_us": 206.903432,
+            "ops_per_s": 4833.172607789319,
+            "p50_us": 187.542,
+            "p90_us": 256.667,
+            "p99_us": 309.041,
+            "proof_p50_us": 0.208,
+            "proof_p99_us": 0.25,
+            "queue_readers": 1.0,
+            "replay_fill_pumps": 0.0,
+            "rss_after_bytes": 15843328.0,
+            "rss_before_bytes": 14123008.0,
+            "shared_slots": 0.0,
+            "slot_pumps": 0.0
+          },
+          "name": "single_item_off",
+          "note": "Latency has counters disabled; counts use a separate run. RSS is process resident memory, not per-slot allocation size.",
+          "params": {
+            "bytes": "65536",
+            "workload": "literal"
+          },
+          "suite": "flow"
+        },
+        {
+          "metrics": {
+            "bus_pumps": 4.0,
+            "compile_p50_us": 7.709,
+            "compile_p99_us": 10.167,
+            "inline_producers": 0.0,
+            "max_us": 222.125,
+            "mean_us": 119.21074499999999,
+            "ops_per_s": 8388.50558311669,
+            "p50_us": 117.417,
+            "p90_us": 141.209,
+            "p99_us": 167.0,
+            "proof_p50_us": 0.625,
+            "proof_p99_us": 0.75,
+            "queue_readers": 4.0,
+            "replay_fill_pumps": 0.0,
+            "rss_after_bytes": 16433152.0,
+            "rss_before_bytes": 15990784.0,
+            "shared_slots": 0.0,
+            "slot_pumps": 0.0
+          },
+          "name": "single_item_off",
+          "note": "Latency has counters disabled; counts use a separate run. RSS is process resident memory, not per-slot allocation size.",
+          "params": {
+            "bytes": "64",
+            "workload": "scalar_parameter"
+          },
+          "suite": "flow"
+        },
+        {
+          "metrics": {
+            "bus_pumps": 4.0,
+            "compile_p50_us": 7.5,
+            "compile_p99_us": 8.166,
+            "inline_producers": 0.0,
+            "max_us": 1014.167,
+            "mean_us": 290.592425,
+            "ops_per_s": 3441.245930619148,
+            "p50_us": 275.916,
+            "p90_us": 345.792,
+            "p99_us": 577.958,
+            "proof_p50_us": 0.583,
+            "proof_p99_us": 0.625,
+            "queue_readers": 4.0,
+            "replay_fill_pumps": 0.0,
+            "rss_after_bytes": 19038208.0,
+            "rss_before_bytes": 16433152.0,
+            "shared_slots": 0.0,
+            "slot_pumps": 0.0
+          },
+          "name": "single_item_off",
+          "note": "Latency has counters disabled; counts use a separate run. RSS is process resident memory, not per-slot allocation size.",
+          "params": {
+            "bytes": "65536",
+            "workload": "scalar_parameter"
+          },
+          "suite": "flow"
+        }
+      ]
+    },
+    {
+      "mode": "on",
+      "repeat": 2,
+      "recorded_at": 1793397358,
+      "peak_rss_bytes": 18857984,
+      "results": [
+        {
+          "metrics": {
+            "bus_pumps": 0.0,
+            "compile_p50_us": 5.75,
+            "compile_p99_us": 13.75,
+            "inline_producers": 1.0,
+            "max_us": 254.833,
+            "mean_us": 59.214331,
+            "ops_per_s": 16887.80373116096,
+            "p50_us": 55.291,
+            "p90_us": 78.542,
+            "p99_us": 134.083,
+            "proof_p50_us": 0.209,
+            "proof_p99_us": 1.333,
+            "queue_readers": 0.0,
+            "replay_fill_pumps": 0.0,
+            "rss_after_bytes": 12238848.0,
+            "rss_before_bytes": 8929280.0,
+            "shared_slots": 1.0,
+            "slot_pumps": 0.0
+          },
+          "name": "single_item_on",
+          "note": "Latency has counters disabled; counts use a separate run. RSS is process resident memory, not per-slot allocation size.",
+          "params": {
+            "bytes": "64",
+            "workload": "literal"
+          },
+          "suite": "flow"
+        },
+        {
+          "metrics": {
+            "bus_pumps": 0.0,
+            "compile_p50_us": 262.208,
+            "compile_p99_us": 318.584,
+            "inline_producers": 1.0,
+            "max_us": 859.166,
+            "mean_us": 226.635211,
+            "ops_per_s": 4412.377033505178,
+            "p50_us": 238.875,
+            "p90_us": 269.375,
+            "p99_us": 376.916,
+            "proof_p50_us": 0.208,
+            "proof_p99_us": 0.292,
+            "queue_readers": 0.0,
+            "replay_fill_pumps": 0.0,
+            "rss_after_bytes": 15597568.0,
+            "rss_before_bytes": 14123008.0,
+            "shared_slots": 1.0,
+            "slot_pumps": 0.0
+          },
+          "name": "single_item_on",
+          "note": "Latency has counters disabled; counts use a separate run. RSS is process resident memory, not per-slot allocation size.",
+          "params": {
+            "bytes": "65536",
+            "workload": "literal"
+          },
+          "suite": "flow"
+        },
+        {
+          "metrics": {
+            "bus_pumps": 1.0,
+            "compile_p50_us": 8.917,
+            "compile_p99_us": 10.5,
+            "inline_producers": 1.0,
+            "max_us": 457.375,
+            "mean_us": 123.512716,
+            "ops_per_s": 8096.332364677334,
+            "p50_us": 113.875,
+            "p90_us": 150.75,
+            "p99_us": 330.333,
+            "proof_p50_us": 0.625,
+            "proof_p99_us": 0.916,
+            "queue_readers": 1.0,
+            "replay_fill_pumps": 0.0,
+            "rss_after_bytes": 16302080.0,
+            "rss_before_bytes": 15679488.0,
+            "shared_slots": 3.0,
+            "slot_pumps": 2.0
+          },
+          "name": "single_item_on",
+          "note": "Latency has counters disabled; counts use a separate run. RSS is process resident memory, not per-slot allocation size.",
+          "params": {
+            "bytes": "64",
+            "workload": "scalar_parameter"
+          },
+          "suite": "flow"
+        },
+        {
+          "metrics": {
+            "bus_pumps": 1.0,
+            "compile_p50_us": 9.208,
+            "compile_p99_us": 11.334,
+            "inline_producers": 1.0,
+            "max_us": 791.875,
+            "mean_us": 276.893412,
+            "ops_per_s": 3611.4979868137852,
+            "p50_us": 254.875,
+            "p90_us": 334.625,
+            "p99_us": 540.958,
+            "proof_p50_us": 0.625,
+            "proof_p99_us": 0.75,
+            "queue_readers": 1.0,
+            "replay_fill_pumps": 0.0,
+            "rss_after_bytes": 18710528.0,
+            "rss_before_bytes": 16302080.0,
+            "shared_slots": 3.0,
+            "slot_pumps": 2.0
+          },
+          "name": "single_item_on",
+          "note": "Latency has counters disabled; counts use a separate run. RSS is process resident memory, not per-slot allocation size.",
+          "params": {
+            "bytes": "65536",
+            "workload": "scalar_parameter"
+          },
+          "suite": "flow"
+        }
+      ]
+    }
+  ],
+  "source_fingerprint": "SHA-256 of each listed UTF-8 path + NUL + file bytes + NUL, in order"
+}

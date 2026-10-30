@@ -377,7 +377,7 @@ def test_highlight_labels_every_token_with_what_it_means(capsys):
     assert "flow-name            research" in printed
     # A word is a stage after a `|` and a type past a port's `:`.
     assert "stage                truncate" in printed
-    assert "type                 string" in printed
+    assert "builtin-type         string" in printed
 
 
 def test_highlight_as_json_is_the_tokens_envelope(capsys):

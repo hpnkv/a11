@@ -70,25 +70,22 @@ fragment = "shout.upper | first 1 -> loudest"
 `@Language("A11Flow")` does the same for a Java or Kotlin host, and Alt+Enter →
 *Inject language or reference* → **A11 Flow** for anything else.
 
-What a word means depends on the tokens around it, which the lexer tracks: a
-word is a stage after a `|`, a function only where it is called, and whatever
-follows a `.` is a member however it is spelled — so `page.text` reads as a port
-and `| truncate 200` as a stage. The two stages that may drop the pipe are read
-from what follows instead: `then` and `where` are stages with an operand after
-them (`history then asked`), and names without one, which is what keeps a port
-really called `then` highlighted as the port it is. `node` is the same kind of
-rule — the keyword only where its parentheses open, as in `said = node()`. A port declaration is a context of
-its own, from `in`/`out` to the end of the line, which is what lets a type be
-written as the tag a serialisation registry knows it by:
+The native service classifies stages, expressions, types and resolved bindings.
+Standard types such as `int`, `string` and `std::duration` inherit IDEA's keyword
+colour, including the complete `std::` prefix. Custom types use the class palette;
+module qualifiers use the namespace palette. Expression `take` and both words of `wait all` use keyword colours.
 
-```
-in  frames: std::list[a11::NodeFragment] stream
-out audio:  a11::sdk::AudioBuffer stream required
+Ports are italic by default: declarations, references, call argument labels and
+called output ports. A local variable that shadows a port keeps ordinary variable
+styling. Object fields remain members. Type positions support qualified tags and
+nested parameters:
+
+```a11flow
+in frames: std::list[a11::NodeFragment] stream
+out audio: a11::sdk::AudioBuffer stream required
 ```
 
-Everything up to `stream`/`required` is the type, `::` and brackets included —
-there is no list of tags to fall behind, because the position says it is one.
-Colours are all customisable under
+Colours and font styles are customisable under
 Settings | Editor | Color Scheme | **A11 Flow**.
 
 ### Where the language actually is

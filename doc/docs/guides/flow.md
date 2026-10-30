@@ -442,17 +442,42 @@ on normal EOF; upstream errors still fail. `consume` waits for the stream to
 end and requires exactly one item. `collect` returns a list of all items.
 
 ```a11flow
-first = try take candidates
-if first.present {
-  chosen = run inspect(candidate: first.value)
+if first = try take candidates {
+  chosen = run inspect(candidate: first)
   chosen.report -> reports
 }
 ```
+
+Optional binding evaluates its option once and binds the payload only inside
+the success branch. It tests presence, so null, false, zero and empty payloads
+enter that branch. Bind a computed option with `if value = candidate` to reuse
+it. The name must be fresh and cannot shadow an enclosing variable. Else-if
+initializers run only after preceding branches were not selected. Explicit
+`candidate.has_value` and `candidate.value` access remains available; an absent
+option's `.value` raises an error. Ordinary records need a validated
+`std::option(...)` conversion before optional binding.
 
 An operation activates when its containing expression is demanded. `and` and
 `or` short-circuit, and skipped branches do not start their operations.
 Independent statements and argument feeds remain concurrent. Bind a call when
 several consumers need its identity or several outputs.
+
+## Order transfers through continuation sinks
+
+`a -> b -> out` associates to the right and forwards all of b, then all of a.
+Pipelines bind more tightly than arrows; a terminal comma list broadcasts.
+Bind a transfer to share its continuation without repeating it:
+
+```a11flow
+tail = asked -> turn
+interact.new_interactions -> tail
+```
+
+Independent attachments interleave after the prefix. Handle completion includes
+all registered attachments. A handle is a destination or completion capability,
+never ordinary payload or a source. Virtual sinks add no intermediate node or
+queue. [Continuation sinks](flow-continuation-sinks.md) describes grouping,
+reservations, failure and cancellation.
 
 ## Own work through scopes
 
@@ -837,3 +862,9 @@ completion show the adapter interface; both dispatch verbs are available, with
 
 An unresolved qualified call such as `run missing::work()` is a compiler error
 at the target name. Declare or import the callable contract before using it.
+
+
+Single-item transport is enabled by default. Use
+`flow.loads(source, single_item_slots=False)` for baseline execution. See
+[single-item transport](flow-single-item-slots.md) for proofs, eligibility,
+explanation output, baseline comparison and measurements.

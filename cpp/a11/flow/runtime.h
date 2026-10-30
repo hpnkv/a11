@@ -17,6 +17,7 @@
 #ifndef A11_FLOW_RUNTIME_H_
 #define A11_FLOW_RUNTIME_H_
 
+#include <atomic>
 #include <cstddef>
 #include <memory>
 #include <string>
@@ -34,6 +35,7 @@
 #include "a11/flow/parser.h"
 #include "a11/flow/plan.h"
 #include "a11/flow/resolve.h"
+#include "a11/flow/single_item.h"
 #include "a11/flow/values.h"
 
 namespace a11::net {
@@ -68,7 +70,7 @@ class CompiledProgram {
   static absl::StatusOr<std::shared_ptr<CompiledProgram>> Compile(
       std::string source, std::string source_name = {},
       const ModuleSources& modules = {}, ModuleResolver resolver = {},
-      CompilationLimits limits = {});
+      CompilationLimits limits = {}, bool single_item_slots = true);
 
   [[nodiscard]] const Program& program() const { return resolved_.program; }
 
@@ -85,6 +87,12 @@ class CompiledProgram {
     return resolved_.flows;
   }
 
+  /// Verified transport evidence for an enabled compilation, or nullptr.
+  const SingleItemAnalysis* absl_nullable SingleItems(
+      std::string_view flow) const;
+  /// Explain this compilation's transport choices using the native envelope.
+  nlohmann::json Optimizations() const;
+
   /// Runtime identities of external actions called by this composition.
   std::vector<std::string> ExternalActions() const;
 
@@ -95,6 +103,8 @@ class CompiledProgram {
   /// The file's entry point -- `flow { ... }` -- or `nullptr`.
   [[nodiscard]] const ResolvedFlow* absl_nullable Entry() const;
 
+  const PreparedExpressions& prepared() const { return prepared_; }
+
  private:
   CompiledProgram() = default;
 
@@ -104,6 +114,9 @@ class CompiledProgram {
   ParseResult parsed_;
   std::vector<ModuleMember> members_;
   ResolveResult resolved_;
+  PreparedExpressions prepared_;
+  bool single_item_slots_ = false;
+  absl::flat_hash_map<std::string, SingleItemAnalysis> single_items_;
 };
 
 /// The [actions::ActionSchema] a flow presents.
@@ -125,7 +138,24 @@ ActionDeclaration DeclareAction(const actions::ActionSchema& schema);
 /// What a run needs besides the program.
 struct ExecutionSnapshot;
 
+/// Optional per-run counters; transport pumps count actual fiber entry.
+struct TransportStats {
+  std::atomic<size_t> bus_pumps{0};
+  std::atomic<size_t> slot_pumps{0};
+  std::atomic<size_t> buffer_pumps{0};
+  std::atomic<size_t> inline_producers{0};
+  std::atomic<size_t> queue_readers{0};
+  std::atomic<size_t> slots{0};
+  std::atomic<size_t> transfer_tasks{0};
+  std::atomic<size_t> virtual_groups{0};
+  std::atomic<size_t> literal_transfers{0};
+  std::atomic<size_t> active_writer_groups{0};
+  std::atomic<size_t> peak_writer_groups{0};
+};
+
 struct RunOptions {
+  std::shared_ptr<TransportStats> transport_stats;
+
   /// Execution-local pinned registry bindings, shared by transitive flows.
   std::shared_ptr<ExecutionSnapshot> snapshot;
   /// Who answers the questions only the host can: coercion into a registered

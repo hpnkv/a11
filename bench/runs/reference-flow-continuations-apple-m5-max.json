@@ -1,0 +1,1813 @@
+{
+  "base_revision": "50610c7c4e03f85353a2b21d745a7ce2f0adcbdb",
+  "source_state": "working tree implementing continuation sinks and optional binding",
+  "source_files": [
+    "cpp/a11/flow/boundary.cc",
+    "cpp/a11/flow/catalogue.cc",
+    "cpp/a11/flow/catalogue.h",
+    "cpp/a11/flow/catalogue_data.h",
+    "cpp/a11/flow/complete.cc",
+    "cpp/a11/flow/complete.h",
+    "cpp/a11/flow/contract.cc",
+    "cpp/a11/flow/contract.h",
+    "cpp/a11/flow/diagnostic.cc",
+    "cpp/a11/flow/diagnostic.h",
+    "cpp/a11/flow/discover.cc",
+    "cpp/a11/flow/discover.h",
+    "cpp/a11/flow/document.cc",
+    "cpp/a11/flow/document.h",
+    "cpp/a11/flow/emit_json.cc",
+    "cpp/a11/flow/emit_json.h",
+    "cpp/a11/flow/file_modules.h",
+    "cpp/a11/flow/format.cc",
+    "cpp/a11/flow/format.h",
+    "cpp/a11/flow/generate.cc",
+    "cpp/a11/flow/generate.h",
+    "cpp/a11/flow/graph.cc",
+    "cpp/a11/flow/graph.h",
+    "cpp/a11/flow/highlight.cc",
+    "cpp/a11/flow/highlight.h",
+    "cpp/a11/flow/inspect.cc",
+    "cpp/a11/flow/inspect.h",
+    "cpp/a11/flow/internal/pattern.h",
+    "cpp/a11/flow/interpreter/interpreter.cc",
+    "cpp/a11/flow/interpreter/interpreter.h",
+    "cpp/a11/flow/interpreter/main.cc",
+    "cpp/a11/flow/lexer.cc",
+    "cpp/a11/flow/lexer.h",
+    "cpp/a11/flow/limits.h",
+    "cpp/a11/flow/module.cc",
+    "cpp/a11/flow/module.h",
+    "cpp/a11/flow/navigate.cc",
+    "cpp/a11/flow/navigate.h",
+    "cpp/a11/flow/offsets.cc",
+    "cpp/a11/flow/offsets.h",
+    "cpp/a11/flow/parser.cc",
+    "cpp/a11/flow/parser.h",
+    "cpp/a11/flow/pattern.cc",
+    "cpp/a11/flow/pattern.h",
+    "cpp/a11/flow/plan.h",
+    "cpp/a11/flow/resolve.cc",
+    "cpp/a11/flow/resolve.h",
+    "cpp/a11/flow/runtime.cc",
+    "cpp/a11/flow/runtime.h",
+    "cpp/a11/flow/schema.cc",
+    "cpp/a11/flow/schema.h",
+    "cpp/a11/flow/service.cc",
+    "cpp/a11/flow/service.h",
+    "cpp/a11/flow/single_item.cc",
+    "cpp/a11/flow/single_item.h",
+    "cpp/a11/flow/syntax.cc",
+    "cpp/a11/flow/syntax.h",
+    "cpp/a11/flow/temporal.cc",
+    "cpp/a11/flow/temporal.h",
+    "cpp/a11/flow/token.h",
+    "cpp/a11/flow/tool/lsp.cc",
+    "cpp/a11/flow/tool/lsp.h",
+    "cpp/a11/flow/tool/main.cc",
+    "cpp/a11/flow/values.cc",
+    "cpp/a11/flow/values.h",
+    "cpp/a11/flow/vocabulary.cc",
+    "cpp/a11/flow/vocabulary.h",
+    "cpp/bench/bench_main.cc",
+    "cpp/bench/allocation_counter.cc",
+    "cpp/bench/allocation_counter.h"
+  ],
+  "source_sha256": "cf5aaec8be3141dab480c72ec3458de5851b9c210532289b115c9acfa1c75944",
+  "machine": "Apple M5 Max, arm64, macOS, 18 logical CPUs",
+  "compiler": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+  "build": "release preset (RelWithDebInfo), A11_ALLOCATOR=system",
+  "host_bridge": "native",
+  "conditions": "three fresh processes per workload/mode; alternating mode order; serial measurements without concurrent builds or tests; desktop not isolated",
+  "sampling": "100 timed iterations plus 10 warmups for chain/fanin; 10 plus 3 for loops; one separate counted invocation per row. C++ new counts exclude direct malloc/mmap. OS peak RSS includes both row sizes and the whole process. Heap samples include stores, worker stacks and allocator retention. Compiling occurs outside timed/counted execution.",
+  "runs": [
+    {
+      "repeat": 1,
+      "workload": "chain",
+      "mode": "explicit",
+      "peak_rss_bytes": 14041088,
+      "results": [
+        {
+          "metrics": {
+            "cpp_new_calls": 1311.0,
+            "cpp_new_requested_bytes": 290808.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 0.0,
+            "heap_live_blocks_after": 1448.0,
+            "heap_live_blocks_before": 1082.0,
+            "heap_live_bytes_after": 4947264.0,
+            "heap_live_bytes_before": 303760.0,
+            "max_us": 513.959,
+            "mean_us": 374.97834,
+            "ops_per_s": 2666.8207022304273,
+            "p50_us": 376.291,
+            "p90_us": 453.667,
+            "p99_us": 507.667,
+            "reader_queues": 15.0,
+            "rss_after_bytes": 11878400.0,
+            "rss_before_bytes": 8798208.0,
+            "slots": 16.0,
+            "transfer_tasks": 1.0,
+            "virtual_groups_peak": 0.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 0.0
+          },
+          "name": "continuation_chain_explicit",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "16"
+          },
+          "suite": "flow"
+        },
+        {
+          "metrics": {
+            "cpp_new_calls": 3808.0,
+            "cpp_new_requested_bytes": 992016.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 0.0,
+            "heap_live_blocks_after": 5200.0,
+            "heap_live_blocks_before": 1665.0,
+            "heap_live_bytes_after": 5236064.0,
+            "heap_live_bytes_before": 4870288.0,
+            "max_us": 2273.375,
+            "mean_us": 1366.05542,
+            "ops_per_s": 732.0347222808867,
+            "p50_us": 1382.959,
+            "p90_us": 1547.792,
+            "p99_us": 1789.334,
+            "reader_queues": 63.0,
+            "rss_after_bytes": 13877248.0,
+            "rss_before_bytes": 12140544.0,
+            "slots": 64.0,
+            "transfer_tasks": 1.0,
+            "virtual_groups_peak": 0.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 0.0
+          },
+          "name": "continuation_chain_explicit",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "64"
+          },
+          "suite": "flow"
+        }
+      ]
+    },
+    {
+      "repeat": 1,
+      "workload": "chain",
+      "mode": "native",
+      "peak_rss_bytes": 12255232,
+      "results": [
+        {
+          "metrics": {
+            "cpp_new_calls": 757.0,
+            "cpp_new_requested_bytes": 173664.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 16.0,
+            "heap_live_blocks_after": 1382.0,
+            "heap_live_blocks_before": 1075.0,
+            "heap_live_bytes_after": 5191392.0,
+            "heap_live_bytes_before": 294224.0,
+            "max_us": 153.917,
+            "mean_us": 109.2192,
+            "ops_per_s": 9155.899329055697,
+            "p50_us": 109.417,
+            "p90_us": 128.084,
+            "p99_us": 139.958,
+            "reader_queues": 0.0,
+            "rss_after_bytes": 11534336.0,
+            "rss_before_bytes": 8749056.0,
+            "slots": 0.0,
+            "transfer_tasks": 1.0,
+            "virtual_groups_peak": 0.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 0.0
+          },
+          "name": "continuation_chain_native",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "16"
+          },
+          "suite": "flow"
+        },
+        {
+          "metrics": {
+            "cpp_new_calls": 1790.0,
+            "cpp_new_requested_bytes": 507272.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 64.0,
+            "heap_live_blocks_after": 2858.0,
+            "heap_live_blocks_before": 1615.0,
+            "heap_live_bytes_after": 5397264.0,
+            "heap_live_bytes_before": 5341888.0,
+            "max_us": 445.542,
+            "mean_us": 250.65084,
+            "ops_per_s": 3989.6135995395025,
+            "p50_us": 248.458,
+            "p90_us": 292.958,
+            "p99_us": 372.625,
+            "reader_queues": 0.0,
+            "rss_after_bytes": 12075008.0,
+            "rss_before_bytes": 11829248.0,
+            "slots": 0.0,
+            "transfer_tasks": 1.0,
+            "virtual_groups_peak": 0.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 0.0
+          },
+          "name": "continuation_chain_native",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "64"
+          },
+          "suite": "flow"
+        }
+      ]
+    },
+    {
+      "repeat": 1,
+      "workload": "fanin",
+      "mode": "explicit",
+      "peak_rss_bytes": 14991360,
+      "results": [
+        {
+          "metrics": {
+            "cpp_new_calls": 1363.0,
+            "cpp_new_requested_bytes": 259208.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 0.0,
+            "heap_live_blocks_after": 1794.0,
+            "heap_live_blocks_before": 1052.0,
+            "heap_live_bytes_after": 4950560.0,
+            "heap_live_bytes_before": 290304.0,
+            "max_us": 487.584,
+            "mean_us": 324.83790000000005,
+            "ops_per_s": 3078.4585173097107,
+            "p50_us": 322.25,
+            "p90_us": 379.417,
+            "p99_us": 449.916,
+            "reader_queues": 2.0,
+            "rss_after_bytes": 12468224.0,
+            "rss_before_bytes": 8765440.0,
+            "slots": 17.0,
+            "transfer_tasks": 1.0,
+            "virtual_groups_peak": 0.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 0.0
+          },
+          "name": "continuation_fanin_explicit",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "16"
+          },
+          "suite": "flow"
+        },
+        {
+          "metrics": {
+            "cpp_new_calls": 3847.0,
+            "cpp_new_requested_bytes": 769152.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 0.0,
+            "heap_live_blocks_after": 3461.0,
+            "heap_live_blocks_before": 1731.0,
+            "heap_live_bytes_after": 5140304.0,
+            "heap_live_bytes_before": 4801568.0,
+            "max_us": 2609.5,
+            "mean_us": 1201.76504,
+            "ops_per_s": 832.1094113371778,
+            "p50_us": 1150.75,
+            "p90_us": 1371.042,
+            "p99_us": 2022.875,
+            "reader_queues": 2.0,
+            "rss_after_bytes": 14811136.0,
+            "rss_before_bytes": 12713984.0,
+            "slots": 65.0,
+            "transfer_tasks": 1.0,
+            "virtual_groups_peak": 0.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 0.0
+          },
+          "name": "continuation_fanin_explicit",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "64"
+          },
+          "suite": "flow"
+        }
+      ]
+    },
+    {
+      "repeat": 1,
+      "workload": "fanin",
+      "mode": "native",
+      "peak_rss_bytes": 14254080,
+      "results": [
+        {
+          "metrics": {
+            "cpp_new_calls": 1506.0,
+            "cpp_new_requested_bytes": 238416.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 0.0,
+            "heap_live_blocks_after": 1610.0,
+            "heap_live_blocks_before": 1159.0,
+            "heap_live_bytes_after": 4730416.0,
+            "heap_live_bytes_before": 349216.0,
+            "max_us": 401.833,
+            "mean_us": 255.53245,
+            "ops_per_s": 3913.3973004211402,
+            "p50_us": 245.625,
+            "p90_us": 324.167,
+            "p99_us": 397.291,
+            "reader_queues": 0.0,
+            "rss_after_bytes": 11993088.0,
+            "rss_before_bytes": 8929280.0,
+            "slots": 17.0,
+            "transfer_tasks": 17.0,
+            "virtual_groups_peak": 1.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 1.0
+          },
+          "name": "continuation_fanin_native",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "16"
+          },
+          "suite": "flow"
+        },
+        {
+          "metrics": {
+            "cpp_new_calls": 4386.0,
+            "cpp_new_requested_bytes": 722328.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 0.0,
+            "heap_live_blocks_after": 5519.0,
+            "heap_live_blocks_before": 2089.0,
+            "heap_live_bytes_after": 5133168.0,
+            "heap_live_bytes_before": 5052992.0,
+            "max_us": 1931.0,
+            "mean_us": 1188.23332,
+            "ops_per_s": 841.5855566144198,
+            "p50_us": 1154.25,
+            "p90_us": 1446.958,
+            "p99_us": 1829.333,
+            "reader_queues": 0.0,
+            "rss_after_bytes": 14073856.0,
+            "rss_before_bytes": 12386304.0,
+            "slots": 65.0,
+            "transfer_tasks": 65.0,
+            "virtual_groups_peak": 1.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 1.0
+          },
+          "name": "continuation_fanin_native",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "64"
+          },
+          "suite": "flow"
+        }
+      ]
+    },
+    {
+      "repeat": 1,
+      "workload": "loop",
+      "mode": "explicit",
+      "peak_rss_bytes": 21086208,
+      "results": [
+        {
+          "metrics": {
+            "cpp_new_calls": 33551.0,
+            "cpp_new_requested_bytes": 6645126.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 0.0,
+            "heap_live_blocks_after": 4669.0,
+            "heap_live_blocks_before": 1289.0,
+            "heap_live_bytes_after": 4874928.0,
+            "heap_live_bytes_before": 422064.0,
+            "max_us": 13783.334,
+            "mean_us": 9781.7543,
+            "ops_per_s": 102.23115090919836,
+            "p50_us": 9691.833,
+            "p90_us": 12603.375,
+            "p99_us": 13783.334,
+            "reader_queues": 257.0,
+            "rss_after_bytes": 15826944.0,
+            "rss_before_bytes": 9207808.0,
+            "slots": 257.0,
+            "transfer_tasks": 256.0,
+            "virtual_groups_peak": 0.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 0.0
+          },
+          "name": "continuation_loop_explicit",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "256"
+          },
+          "suite": "flow"
+        },
+        {
+          "metrics": {
+            "cpp_new_calls": 132943.0,
+            "cpp_new_requested_bytes": 26336134.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 0.0,
+            "heap_live_blocks_after": 7090.0,
+            "heap_live_blocks_before": 4754.0,
+            "heap_live_bytes_after": 5476832.0,
+            "heap_live_bytes_before": 5318528.0,
+            "max_us": 29181.0,
+            "mean_us": 27335.941600000002,
+            "ops_per_s": 36.58187505053786,
+            "p50_us": 26910.875,
+            "p90_us": 28876.125,
+            "p99_us": 29181.0,
+            "reader_queues": 1025.0,
+            "rss_after_bytes": 20889600.0,
+            "rss_before_bytes": 16433152.0,
+            "slots": 1025.0,
+            "transfer_tasks": 1024.0,
+            "virtual_groups_peak": 0.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 0.0
+          },
+          "name": "continuation_loop_explicit",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "1024"
+          },
+          "suite": "flow"
+        }
+      ]
+    },
+    {
+      "repeat": 1,
+      "workload": "loop",
+      "mode": "native",
+      "peak_rss_bytes": 19038208,
+      "results": [
+        {
+          "metrics": {
+            "cpp_new_calls": 42404.0,
+            "cpp_new_requested_bytes": 6793958.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 0.0,
+            "heap_live_blocks_after": 4477.0,
+            "heap_live_blocks_before": 1297.0,
+            "heap_live_bytes_after": 4886432.0,
+            "heap_live_bytes_before": 427072.0,
+            "max_us": 9620.042,
+            "mean_us": 8704.3125,
+            "ops_per_s": 114.88558114153186,
+            "p50_us": 8553.042,
+            "p90_us": 8767.083,
+            "p99_us": 9620.042,
+            "reader_queues": 1.0,
+            "rss_after_bytes": 13746176.0,
+            "rss_before_bytes": 9240576.0,
+            "slots": 257.0,
+            "transfer_tasks": 512.0,
+            "virtual_groups_peak": 1.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 256.0
+          },
+          "name": "continuation_loop_native",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "256"
+          },
+          "suite": "flow"
+        },
+        {
+          "metrics": {
+            "cpp_new_calls": 167341.0,
+            "cpp_new_requested_bytes": 26874958.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 0.0,
+            "heap_live_blocks_after": 7000.0,
+            "heap_live_blocks_before": 4732.0,
+            "heap_live_bytes_after": 5517808.0,
+            "heap_live_bytes_before": 5329520.0,
+            "max_us": 49436.5,
+            "mean_us": 38913.4666,
+            "ops_per_s": 25.698044594156,
+            "p50_us": 36540.833,
+            "p90_us": 43923.709,
+            "p99_us": 49436.5,
+            "reader_queues": 1.0,
+            "rss_after_bytes": 18628608.0,
+            "rss_before_bytes": 14548992.0,
+            "slots": 1025.0,
+            "transfer_tasks": 2048.0,
+            "virtual_groups_peak": 1.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 1024.0
+          },
+          "name": "continuation_loop_native",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "1024"
+          },
+          "suite": "flow"
+        }
+      ]
+    },
+    {
+      "repeat": 1,
+      "workload": "parallel_loop",
+      "mode": "explicit",
+      "peak_rss_bytes": 20070400,
+      "results": [
+        {
+          "metrics": {
+            "cpp_new_calls": 33631.0,
+            "cpp_new_requested_bytes": 6648734.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 0.0,
+            "heap_live_blocks_after": 3664.0,
+            "heap_live_blocks_before": 1294.0,
+            "heap_live_bytes_after": 4860720.0,
+            "heap_live_bytes_before": 422576.0,
+            "max_us": 7466.5,
+            "mean_us": 7128.7458,
+            "ops_per_s": 140.27712981433564,
+            "p50_us": 7087.125,
+            "p90_us": 7231.0,
+            "p99_us": 7466.5,
+            "reader_queues": 257.0,
+            "rss_after_bytes": 13942784.0,
+            "rss_before_bytes": 9191424.0,
+            "slots": 257.0,
+            "transfer_tasks": 256.0,
+            "virtual_groups_peak": 0.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 0.0
+          },
+          "name": "continuation_parallel_loop_explicit",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "256"
+          },
+          "suite": "flow"
+        },
+        {
+          "metrics": {
+            "cpp_new_calls": 132502.0,
+            "cpp_new_requested_bytes": 26283678.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 0.0,
+            "heap_live_blocks_after": 7762.0,
+            "heap_live_blocks_before": 4743.0,
+            "heap_live_bytes_after": 5511632.0,
+            "heap_live_bytes_before": 5313744.0,
+            "max_us": 32164.958,
+            "mean_us": 27964.8998,
+            "ops_per_s": 35.7591125715387,
+            "p50_us": 27121.791,
+            "p90_us": 29082.708,
+            "p99_us": 32164.958,
+            "reader_queues": 1025.0,
+            "rss_after_bytes": 18530304.0,
+            "rss_before_bytes": 14532608.0,
+            "slots": 1025.0,
+            "transfer_tasks": 1024.0,
+            "virtual_groups_peak": 0.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 0.0
+          },
+          "name": "continuation_parallel_loop_explicit",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "1024"
+          },
+          "suite": "flow"
+        }
+      ]
+    },
+    {
+      "repeat": 1,
+      "workload": "parallel_loop",
+      "mode": "native",
+      "peak_rss_bytes": 19120128,
+      "results": [
+        {
+          "metrics": {
+            "cpp_new_calls": 42435.0,
+            "cpp_new_requested_bytes": 6787246.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 0.0,
+            "heap_live_blocks_after": 4664.0,
+            "heap_live_blocks_before": 1302.0,
+            "heap_live_bytes_after": 4894832.0,
+            "heap_live_bytes_before": 427840.0,
+            "max_us": 11033.667,
+            "mean_us": 9363.587599999999,
+            "ops_per_s": 106.796672677041,
+            "p50_us": 9095.458,
+            "p90_us": 10898.875,
+            "p99_us": 11033.667,
+            "reader_queues": 1.0,
+            "rss_after_bytes": 13860864.0,
+            "rss_before_bytes": 9256960.0,
+            "slots": 257.0,
+            "transfer_tasks": 512.0,
+            "virtual_groups_peak": 1.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 256.0
+          },
+          "name": "continuation_parallel_loop_native",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "256"
+          },
+          "suite": "flow"
+        },
+        {
+          "metrics": {
+            "cpp_new_calls": 167945.0,
+            "cpp_new_requested_bytes": 26890774.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 0.0,
+            "heap_live_blocks_after": 7496.0,
+            "heap_live_blocks_before": 5091.0,
+            "heap_live_bytes_after": 5510656.0,
+            "heap_live_bytes_before": 5341776.0,
+            "max_us": 48769.458,
+            "mean_us": 37101.1624,
+            "ops_per_s": 26.953333408227664,
+            "p50_us": 35505.708,
+            "p90_us": 40178.625,
+            "p99_us": 48769.458,
+            "reader_queues": 1.0,
+            "rss_after_bytes": 18956288.0,
+            "rss_before_bytes": 14745600.0,
+            "slots": 1025.0,
+            "transfer_tasks": 2048.0,
+            "virtual_groups_peak": 1.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 1024.0
+          },
+          "name": "continuation_parallel_loop_native",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "1024"
+          },
+          "suite": "flow"
+        }
+      ]
+    },
+    {
+      "repeat": 2,
+      "workload": "chain",
+      "mode": "native",
+      "peak_rss_bytes": 12222464,
+      "results": [
+        {
+          "metrics": {
+            "cpp_new_calls": 770.0,
+            "cpp_new_requested_bytes": 173688.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 16.0,
+            "heap_live_blocks_after": 1624.0,
+            "heap_live_blocks_before": 1075.0,
+            "heap_live_bytes_after": 4677488.0,
+            "heap_live_bytes_before": 294224.0,
+            "max_us": 182.958,
+            "mean_us": 109.01747999999999,
+            "ops_per_s": 9172.840905880415,
+            "p50_us": 109.0,
+            "p90_us": 124.917,
+            "p99_us": 150.083,
+            "reader_queues": 0.0,
+            "rss_after_bytes": 11534336.0,
+            "rss_before_bytes": 8749056.0,
+            "slots": 0.0,
+            "transfer_tasks": 1.0,
+            "virtual_groups_peak": 0.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 0.0
+          },
+          "name": "continuation_chain_native",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "16"
+          },
+          "suite": "flow"
+        },
+        {
+          "metrics": {
+            "cpp_new_calls": 1786.0,
+            "cpp_new_requested_bytes": 505216.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 64.0,
+            "heap_live_blocks_after": 2265.0,
+            "heap_live_blocks_before": 1859.0,
+            "heap_live_bytes_after": 4848368.0,
+            "heap_live_bytes_before": 4829360.0,
+            "max_us": 306.625,
+            "mean_us": 249.84624,
+            "ops_per_s": 4002.461674027994,
+            "p50_us": 253.625,
+            "p90_us": 278.333,
+            "p99_us": 301.042,
+            "reader_queues": 0.0,
+            "rss_after_bytes": 12042240.0,
+            "rss_before_bytes": 11829248.0,
+            "slots": 0.0,
+            "transfer_tasks": 1.0,
+            "virtual_groups_peak": 0.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 0.0
+          },
+          "name": "continuation_chain_native",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "64"
+          },
+          "suite": "flow"
+        }
+      ]
+    },
+    {
+      "repeat": 2,
+      "workload": "chain",
+      "mode": "explicit",
+      "peak_rss_bytes": 14106624,
+      "results": [
+        {
+          "metrics": {
+            "cpp_new_calls": 1322.0,
+            "cpp_new_requested_bytes": 293376.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 0.0,
+            "heap_live_blocks_after": 1593.0,
+            "heap_live_blocks_before": 1082.0,
+            "heap_live_bytes_after": 4690208.0,
+            "heap_live_bytes_before": 303760.0,
+            "max_us": 379.667,
+            "mean_us": 285.12791999999996,
+            "ops_per_s": 3507.1977518020685,
+            "p50_us": 287.875,
+            "p90_us": 353.916,
+            "p99_us": 378.333,
+            "reader_queues": 15.0,
+            "rss_after_bytes": 11927552.0,
+            "rss_before_bytes": 8798208.0,
+            "slots": 16.0,
+            "transfer_tasks": 1.0,
+            "virtual_groups_peak": 0.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 0.0
+          },
+          "name": "continuation_chain_explicit",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "16"
+          },
+          "suite": "flow"
+        },
+        {
+          "metrics": {
+            "cpp_new_calls": 3820.0,
+            "cpp_new_requested_bytes": 995896.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 0.0,
+            "heap_live_blocks_after": 5820.0,
+            "heap_live_blocks_before": 1822.0,
+            "heap_live_bytes_after": 4977632.0,
+            "heap_live_bytes_before": 4877824.0,
+            "max_us": 1716.833,
+            "mean_us": 1337.2270600000002,
+            "ops_per_s": 747.8161562180771,
+            "p50_us": 1332.458,
+            "p90_us": 1497.916,
+            "p99_us": 1676.916,
+            "reader_queues": 63.0,
+            "rss_after_bytes": 13893632.0,
+            "rss_before_bytes": 12189696.0,
+            "slots": 64.0,
+            "transfer_tasks": 1.0,
+            "virtual_groups_peak": 0.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 0.0
+          },
+          "name": "continuation_chain_explicit",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "64"
+          },
+          "suite": "flow"
+        }
+      ]
+    },
+    {
+      "repeat": 2,
+      "workload": "fanin",
+      "mode": "native",
+      "peak_rss_bytes": 16498688,
+      "results": [
+        {
+          "metrics": {
+            "cpp_new_calls": 1506.0,
+            "cpp_new_requested_bytes": 238248.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 0.0,
+            "heap_live_blocks_after": 1861.0,
+            "heap_live_blocks_before": 1159.0,
+            "heap_live_bytes_after": 4738640.0,
+            "heap_live_bytes_before": 349216.0,
+            "max_us": 440.834,
+            "mean_us": 268.61293,
+            "ops_per_s": 3722.8289792304486,
+            "p50_us": 256.208,
+            "p90_us": 345.584,
+            "p99_us": 412.25,
+            "reader_queues": 0.0,
+            "rss_after_bytes": 11927552.0,
+            "rss_before_bytes": 8912896.0,
+            "slots": 17.0,
+            "transfer_tasks": 17.0,
+            "virtual_groups_peak": 1.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 1.0
+          },
+          "name": "continuation_fanin_native",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "16"
+          },
+          "suite": "flow"
+        },
+        {
+          "metrics": {
+            "cpp_new_calls": 4153.0,
+            "cpp_new_requested_bytes": 697656.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 0.0,
+            "heap_live_blocks_after": 4580.0,
+            "heap_live_blocks_before": 2889.0,
+            "heap_live_bytes_after": 5118336.0,
+            "heap_live_bytes_before": 5083248.0,
+            "max_us": 2726.917,
+            "mean_us": 1375.52665,
+            "ops_per_s": 726.9942752472299,
+            "p50_us": 1285.542,
+            "p90_us": 1851.75,
+            "p99_us": 2656.167,
+            "reader_queues": 0.0,
+            "rss_after_bytes": 16318464.0,
+            "rss_before_bytes": 12386304.0,
+            "slots": 65.0,
+            "transfer_tasks": 65.0,
+            "virtual_groups_peak": 1.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 1.0
+          },
+          "name": "continuation_fanin_native",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "64"
+          },
+          "suite": "flow"
+        }
+      ]
+    },
+    {
+      "repeat": 2,
+      "workload": "fanin",
+      "mode": "explicit",
+      "peak_rss_bytes": 15990784,
+      "results": [
+        {
+          "metrics": {
+            "cpp_new_calls": 1384.0,
+            "cpp_new_requested_bytes": 258176.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 0.0,
+            "heap_live_blocks_after": 1804.0,
+            "heap_live_blocks_before": 1052.0,
+            "heap_live_bytes_after": 4683104.0,
+            "heap_live_bytes_before": 290304.0,
+            "max_us": 828.541,
+            "mean_us": 405.36043,
+            "ops_per_s": 2466.9403473841785,
+            "p50_us": 340.833,
+            "p90_us": 626.625,
+            "p99_us": 815.375,
+            "reader_queues": 2.0,
+            "rss_after_bytes": 13336576.0,
+            "rss_before_bytes": 8765440.0,
+            "slots": 17.0,
+            "transfer_tasks": 1.0,
+            "virtual_groups_peak": 0.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 0.0
+          },
+          "name": "continuation_fanin_explicit",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "16"
+          },
+          "suite": "flow"
+        },
+        {
+          "metrics": {
+            "cpp_new_calls": 3923.0,
+            "cpp_new_requested_bytes": 772128.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 0.0,
+            "heap_live_blocks_after": 3138.0,
+            "heap_live_blocks_before": 1748.0,
+            "heap_live_bytes_after": 4867968.0,
+            "heap_live_bytes_before": 4797824.0,
+            "max_us": 1511.166,
+            "mean_us": 1101.68919,
+            "ops_per_s": 907.6970247842769,
+            "p50_us": 1096.291,
+            "p90_us": 1201.875,
+            "p99_us": 1241.792,
+            "reader_queues": 2.0,
+            "rss_after_bytes": 15826944.0,
+            "rss_before_bytes": 13582336.0,
+            "slots": 65.0,
+            "transfer_tasks": 1.0,
+            "virtual_groups_peak": 0.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 0.0
+          },
+          "name": "continuation_fanin_explicit",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "64"
+          },
+          "suite": "flow"
+        }
+      ]
+    },
+    {
+      "repeat": 2,
+      "workload": "loop",
+      "mode": "native",
+      "peak_rss_bytes": 19021824,
+      "results": [
+        {
+          "metrics": {
+            "cpp_new_calls": 42412.0,
+            "cpp_new_requested_bytes": 6790582.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 0.0,
+            "heap_live_blocks_after": 4529.0,
+            "heap_live_blocks_before": 1297.0,
+            "heap_live_bytes_after": 4888928.0,
+            "heap_live_bytes_before": 427072.0,
+            "max_us": 19800.791,
+            "mean_us": 10616.3875,
+            "ops_per_s": 94.19399960674005,
+            "p50_us": 8975.417,
+            "p90_us": 14261.75,
+            "p99_us": 19800.791,
+            "reader_queues": 1.0,
+            "rss_after_bytes": 14876672.0,
+            "rss_before_bytes": 9289728.0,
+            "slots": 257.0,
+            "transfer_tasks": 512.0,
+            "virtual_groups_peak": 1.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 256.0
+          },
+          "name": "continuation_loop_native",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "256"
+          },
+          "suite": "flow"
+        },
+        {
+          "metrics": {
+            "cpp_new_calls": 167700.0,
+            "cpp_new_requested_bytes": 26867414.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 0.0,
+            "heap_live_blocks_after": 7756.0,
+            "heap_live_blocks_before": 5026.0,
+            "heap_live_bytes_after": 5530624.0,
+            "heap_live_bytes_before": 5339280.0,
+            "max_us": 36301.334,
+            "mean_us": 35683.937600000005,
+            "ops_per_s": 28.023813156763286,
+            "p50_us": 35509.667,
+            "p90_us": 36277.0,
+            "p99_us": 36301.334,
+            "reader_queues": 1.0,
+            "rss_after_bytes": 18841600.0,
+            "rss_before_bytes": 15679488.0,
+            "slots": 1025.0,
+            "transfer_tasks": 2048.0,
+            "virtual_groups_peak": 1.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 1024.0
+          },
+          "name": "continuation_loop_native",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "1024"
+          },
+          "suite": "flow"
+        }
+      ]
+    },
+    {
+      "repeat": 2,
+      "workload": "loop",
+      "mode": "explicit",
+      "peak_rss_bytes": 19611648,
+      "results": [
+        {
+          "metrics": {
+            "cpp_new_calls": 33502.0,
+            "cpp_new_requested_bytes": 6641758.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 0.0,
+            "heap_live_blocks_after": 4434.0,
+            "heap_live_blocks_before": 1289.0,
+            "heap_live_bytes_after": 4869888.0,
+            "heap_live_bytes_before": 422064.0,
+            "max_us": 9423.625,
+            "mean_us": 7669.6,
+            "ops_per_s": 130.38489621362262,
+            "p50_us": 7460.458,
+            "p90_us": 7925.459,
+            "p99_us": 9423.625,
+            "reader_queues": 257.0,
+            "rss_after_bytes": 14057472.0,
+            "rss_before_bytes": 9207808.0,
+            "slots": 257.0,
+            "transfer_tasks": 256.0,
+            "virtual_groups_peak": 0.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 0.0
+          },
+          "name": "continuation_loop_explicit",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "256"
+          },
+          "suite": "flow"
+        },
+        {
+          "metrics": {
+            "cpp_new_calls": 132619.0,
+            "cpp_new_requested_bytes": 26307502.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 0.0,
+            "heap_live_blocks_after": 6285.0,
+            "heap_live_blocks_before": 5463.0,
+            "heap_live_bytes_after": 5475552.0,
+            "heap_live_bytes_before": 5346144.0,
+            "max_us": 36714.667,
+            "mean_us": 29331.5625,
+            "ops_per_s": 34.092967260097375,
+            "p50_us": 27326.375,
+            "p90_us": 33439.875,
+            "p99_us": 36714.667,
+            "reader_queues": 1025.0,
+            "rss_after_bytes": 19169280.0,
+            "rss_before_bytes": 14581760.0,
+            "slots": 1025.0,
+            "transfer_tasks": 1024.0,
+            "virtual_groups_peak": 0.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 0.0
+          },
+          "name": "continuation_loop_explicit",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "1024"
+          },
+          "suite": "flow"
+        }
+      ]
+    },
+    {
+      "repeat": 2,
+      "workload": "parallel_loop",
+      "mode": "native",
+      "peak_rss_bytes": 18317312,
+      "results": [
+        {
+          "metrics": {
+            "cpp_new_calls": 42433.0,
+            "cpp_new_requested_bytes": 6793598.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 0.0,
+            "heap_live_blocks_after": 5153.0,
+            "heap_live_blocks_before": 1302.0,
+            "heap_live_bytes_after": 4905712.0,
+            "heap_live_bytes_before": 427840.0,
+            "max_us": 8948.541,
+            "mean_us": 8664.6791,
+            "ops_per_s": 115.41108314097865,
+            "p50_us": 8652.375,
+            "p90_us": 8903.625,
+            "p99_us": 8948.541,
+            "reader_queues": 1.0,
+            "rss_after_bytes": 13926400.0,
+            "rss_before_bytes": 9256960.0,
+            "slots": 257.0,
+            "transfer_tasks": 512.0,
+            "virtual_groups_peak": 1.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 256.0
+          },
+          "name": "continuation_parallel_loop_native",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "256"
+          },
+          "suite": "flow"
+        },
+        {
+          "metrics": {
+            "cpp_new_calls": 167981.0,
+            "cpp_new_requested_bytes": 26890790.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 0.0,
+            "heap_live_blocks_after": 7563.0,
+            "heap_live_blocks_before": 5161.0,
+            "heap_live_bytes_after": 5536192.0,
+            "heap_live_bytes_before": 5344336.0,
+            "max_us": 37453.791,
+            "mean_us": 35987.954,
+            "ops_per_s": 27.78707564203289,
+            "p50_us": 35686.833,
+            "p90_us": 37166.5,
+            "p99_us": 37453.791,
+            "reader_queues": 1.0,
+            "rss_after_bytes": 18120704.0,
+            "rss_before_bytes": 15007744.0,
+            "slots": 1025.0,
+            "transfer_tasks": 2048.0,
+            "virtual_groups_peak": 1.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 1024.0
+          },
+          "name": "continuation_parallel_loop_native",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "1024"
+          },
+          "suite": "flow"
+        }
+      ]
+    },
+    {
+      "repeat": 2,
+      "workload": "parallel_loop",
+      "mode": "explicit",
+      "peak_rss_bytes": 20152320,
+      "results": [
+        {
+          "metrics": {
+            "cpp_new_calls": 33701.0,
+            "cpp_new_requested_bytes": 6661886.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 0.0,
+            "heap_live_blocks_after": 4542.0,
+            "heap_live_blocks_before": 1294.0,
+            "heap_live_bytes_after": 4874528.0,
+            "heap_live_bytes_before": 422576.0,
+            "max_us": 7561.666,
+            "mean_us": 7232.7792,
+            "ops_per_s": 138.25943974620432,
+            "p50_us": 7164.167,
+            "p90_us": 7420.708,
+            "p99_us": 7561.666,
+            "reader_queues": 257.0,
+            "rss_after_bytes": 13254656.0,
+            "rss_before_bytes": 9207808.0,
+            "slots": 257.0,
+            "transfer_tasks": 256.0,
+            "virtual_groups_peak": 0.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 0.0
+          },
+          "name": "continuation_parallel_loop_explicit",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "256"
+          },
+          "suite": "flow"
+        },
+        {
+          "metrics": {
+            "cpp_new_calls": 133024.0,
+            "cpp_new_requested_bytes": 26342174.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 0.0,
+            "heap_live_blocks_after": 7573.0,
+            "heap_live_blocks_before": 5452.0,
+            "heap_live_bytes_after": 5497424.0,
+            "heap_live_bytes_before": 5347216.0,
+            "max_us": 37366.5,
+            "mean_us": 27847.037600000003,
+            "ops_per_s": 35.91046251900058,
+            "p50_us": 26764.833,
+            "p90_us": 28011.167,
+            "p99_us": 37366.5,
+            "reader_queues": 1025.0,
+            "rss_after_bytes": 19955712.0,
+            "rss_before_bytes": 13959168.0,
+            "slots": 1025.0,
+            "transfer_tasks": 1024.0,
+            "virtual_groups_peak": 0.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 0.0
+          },
+          "name": "continuation_parallel_loop_explicit",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "1024"
+          },
+          "suite": "flow"
+        }
+      ]
+    },
+    {
+      "repeat": 3,
+      "workload": "chain",
+      "mode": "explicit",
+      "peak_rss_bytes": 14270464,
+      "results": [
+        {
+          "metrics": {
+            "cpp_new_calls": 1293.0,
+            "cpp_new_requested_bytes": 289192.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 0.0,
+            "heap_live_blocks_after": 1612.0,
+            "heap_live_blocks_before": 1082.0,
+            "heap_live_bytes_after": 4955136.0,
+            "heap_live_bytes_before": 303760.0,
+            "max_us": 434.208,
+            "mean_us": 283.84375,
+            "ops_per_s": 3523.065066607949,
+            "p50_us": 277.583,
+            "p90_us": 342.0,
+            "p99_us": 401.916,
+            "reader_queues": 15.0,
+            "rss_after_bytes": 11927552.0,
+            "rss_before_bytes": 8798208.0,
+            "slots": 16.0,
+            "transfer_tasks": 1.0,
+            "virtual_groups_peak": 0.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 0.0
+          },
+          "name": "continuation_chain_explicit",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "16"
+          },
+          "suite": "flow"
+        },
+        {
+          "metrics": {
+            "cpp_new_calls": 3873.0,
+            "cpp_new_requested_bytes": 997120.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 0.0,
+            "heap_live_blocks_after": 6175.0,
+            "heap_live_blocks_before": 1835.0,
+            "heap_live_bytes_after": 4989920.0,
+            "heap_live_bytes_before": 4878448.0,
+            "max_us": 2327.25,
+            "mean_us": 1332.77791,
+            "ops_per_s": 750.3125558255988,
+            "p50_us": 1307.75,
+            "p90_us": 1529.334,
+            "p99_us": 2253.875,
+            "reader_queues": 63.0,
+            "rss_after_bytes": 14106624.0,
+            "rss_before_bytes": 12189696.0,
+            "slots": 64.0,
+            "transfer_tasks": 1.0,
+            "virtual_groups_peak": 0.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 0.0
+          },
+          "name": "continuation_chain_explicit",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "64"
+          },
+          "suite": "flow"
+        }
+      ]
+    },
+    {
+      "repeat": 3,
+      "workload": "chain",
+      "mode": "native",
+      "peak_rss_bytes": 12337152,
+      "results": [
+        {
+          "metrics": {
+            "cpp_new_calls": 762.0,
+            "cpp_new_requested_bytes": 173464.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 16.0,
+            "heap_live_blocks_after": 1831.0,
+            "heap_live_blocks_before": 1075.0,
+            "heap_live_bytes_after": 5203776.0,
+            "heap_live_bytes_before": 294224.0,
+            "max_us": 212.25,
+            "mean_us": 113.55494999999999,
+            "ops_per_s": 8806.309192157629,
+            "p50_us": 107.708,
+            "p90_us": 135.625,
+            "p99_us": 208.208,
+            "reader_queues": 0.0,
+            "rss_after_bytes": 11616256.0,
+            "rss_before_bytes": 8749056.0,
+            "slots": 0.0,
+            "transfer_tasks": 1.0,
+            "virtual_groups_peak": 0.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 0.0
+          },
+          "name": "continuation_chain_native",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "16"
+          },
+          "suite": "flow"
+        },
+        {
+          "metrics": {
+            "cpp_new_calls": 1658.0,
+            "cpp_new_requested_bytes": 493616.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 64.0,
+            "heap_live_blocks_after": 2338.0,
+            "heap_live_blocks_before": 2265.0,
+            "heap_live_bytes_after": 5378112.0,
+            "heap_live_bytes_before": 5367088.0,
+            "max_us": 324.792,
+            "mean_us": 241.6129,
+            "ops_per_s": 4138.851857661573,
+            "p50_us": 247.375,
+            "p90_us": 282.75,
+            "p99_us": 324.583,
+            "reader_queues": 0.0,
+            "rss_after_bytes": 12156928.0,
+            "rss_before_bytes": 11911168.0,
+            "slots": 0.0,
+            "transfer_tasks": 1.0,
+            "virtual_groups_peak": 0.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 0.0
+          },
+          "name": "continuation_chain_native",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "64"
+          },
+          "suite": "flow"
+        }
+      ]
+    },
+    {
+      "repeat": 3,
+      "workload": "fanin",
+      "mode": "explicit",
+      "peak_rss_bytes": 14434304,
+      "results": [
+        {
+          "metrics": {
+            "cpp_new_calls": 1411.0,
+            "cpp_new_requested_bytes": 261632.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 0.0,
+            "heap_live_blocks_after": 1469.0,
+            "heap_live_blocks_before": 1052.0,
+            "heap_live_bytes_after": 4671280.0,
+            "heap_live_bytes_before": 290304.0,
+            "max_us": 504.541,
+            "mean_us": 332.25295,
+            "ops_per_s": 3009.755067637473,
+            "p50_us": 323.667,
+            "p90_us": 395.458,
+            "p99_us": 493.875,
+            "reader_queues": 2.0,
+            "rss_after_bytes": 12271616.0,
+            "rss_before_bytes": 8765440.0,
+            "slots": 17.0,
+            "transfer_tasks": 1.0,
+            "virtual_groups_peak": 0.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 0.0
+          },
+          "name": "continuation_fanin_explicit",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "16"
+          },
+          "suite": "flow"
+        },
+        {
+          "metrics": {
+            "cpp_new_calls": 3965.0,
+            "cpp_new_requested_bytes": 774480.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 0.0,
+            "heap_live_blocks_after": 3196.0,
+            "heap_live_blocks_before": 2172.0,
+            "heap_live_bytes_after": 4863328.0,
+            "heap_live_bytes_before": 4816144.0,
+            "max_us": 1738.459,
+            "mean_us": 1145.46374,
+            "ops_per_s": 873.0088653875678,
+            "p50_us": 1106.584,
+            "p90_us": 1335.875,
+            "p99_us": 1432.667,
+            "reader_queues": 2.0,
+            "rss_after_bytes": 14270464.0,
+            "rss_before_bytes": 12517376.0,
+            "slots": 65.0,
+            "transfer_tasks": 1.0,
+            "virtual_groups_peak": 0.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 0.0
+          },
+          "name": "continuation_fanin_explicit",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "64"
+          },
+          "suite": "flow"
+        }
+      ]
+    },
+    {
+      "repeat": 3,
+      "workload": "fanin",
+      "mode": "native",
+      "peak_rss_bytes": 14319616,
+      "results": [
+        {
+          "metrics": {
+            "cpp_new_calls": 1486.0,
+            "cpp_new_requested_bytes": 235816.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 0.0,
+            "heap_live_blocks_after": 2054.0,
+            "heap_live_blocks_before": 1159.0,
+            "heap_live_bytes_after": 4747424.0,
+            "heap_live_bytes_before": 349216.0,
+            "max_us": 505.583,
+            "mean_us": 287.91295,
+            "ops_per_s": 3473.2720428171083,
+            "p50_us": 282.834,
+            "p90_us": 347.5,
+            "p99_us": 420.375,
+            "reader_queues": 0.0,
+            "rss_after_bytes": 11960320.0,
+            "rss_before_bytes": 8945664.0,
+            "slots": 17.0,
+            "transfer_tasks": 17.0,
+            "virtual_groups_peak": 1.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 1.0
+          },
+          "name": "continuation_fanin_native",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "16"
+          },
+          "suite": "flow"
+        },
+        {
+          "metrics": {
+            "cpp_new_calls": 4508.0,
+            "cpp_new_requested_bytes": 728680.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 0.0,
+            "heap_live_blocks_after": 5491.0,
+            "heap_live_blocks_before": 2070.0,
+            "heap_live_bytes_after": 5141712.0,
+            "heap_live_bytes_before": 5053872.0,
+            "max_us": 2167.375,
+            "mean_us": 1247.3716499999998,
+            "ops_per_s": 801.6856884634183,
+            "p50_us": 1201.166,
+            "p90_us": 1587.458,
+            "p99_us": 1966.667,
+            "reader_queues": 0.0,
+            "rss_after_bytes": 14139392.0,
+            "rss_before_bytes": 12386304.0,
+            "slots": 65.0,
+            "transfer_tasks": 65.0,
+            "virtual_groups_peak": 1.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 1.0
+          },
+          "name": "continuation_fanin_native",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "64"
+          },
+          "suite": "flow"
+        }
+      ]
+    },
+    {
+      "repeat": 3,
+      "workload": "loop",
+      "mode": "explicit",
+      "peak_rss_bytes": 18513920,
+      "results": [
+        {
+          "metrics": {
+            "cpp_new_calls": 33657.0,
+            "cpp_new_requested_bytes": 6649838.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 0.0,
+            "heap_live_blocks_after": 5219.0,
+            "heap_live_blocks_before": 1289.0,
+            "heap_live_bytes_after": 4899248.0,
+            "heap_live_bytes_before": 422064.0,
+            "max_us": 9100.958,
+            "mean_us": 7557.2915,
+            "ops_per_s": 132.32253910015248,
+            "p50_us": 7295.792,
+            "p90_us": 8638.875,
+            "p99_us": 9100.958,
+            "reader_queues": 257.0,
+            "rss_after_bytes": 13647872.0,
+            "rss_before_bytes": 9224192.0,
+            "slots": 257.0,
+            "transfer_tasks": 256.0,
+            "virtual_groups_peak": 0.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 0.0
+          },
+          "name": "continuation_loop_explicit",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "256"
+          },
+          "suite": "flow"
+        },
+        {
+          "metrics": {
+            "cpp_new_calls": 132860.0,
+            "cpp_new_requested_bytes": 26314894.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 0.0,
+            "heap_live_blocks_after": 6414.0,
+            "heap_live_blocks_before": 4747.0,
+            "heap_live_bytes_after": 5460192.0,
+            "heap_live_bytes_before": 5313632.0,
+            "max_us": 29494.209,
+            "mean_us": 27275.1333,
+            "ops_per_s": 36.66343218201614,
+            "p50_us": 26604.833,
+            "p90_us": 29243.542,
+            "p99_us": 29494.209,
+            "reader_queues": 1025.0,
+            "rss_after_bytes": 18300928.0,
+            "rss_before_bytes": 14532608.0,
+            "slots": 1025.0,
+            "transfer_tasks": 1024.0,
+            "virtual_groups_peak": 0.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 0.0
+          },
+          "name": "continuation_loop_explicit",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "1024"
+          },
+          "suite": "flow"
+        }
+      ]
+    },
+    {
+      "repeat": 3,
+      "workload": "loop",
+      "mode": "native",
+      "peak_rss_bytes": 18890752,
+      "results": [
+        {
+          "metrics": {
+            "cpp_new_calls": 42393.0,
+            "cpp_new_requested_bytes": 6790406.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 0.0,
+            "heap_live_blocks_after": 4371.0,
+            "heap_live_blocks_before": 1297.0,
+            "heap_live_bytes_after": 4883456.0,
+            "heap_live_bytes_before": 427072.0,
+            "max_us": 10759.0,
+            "mean_us": 9452.783300000001,
+            "ops_per_s": 105.78894789643596,
+            "p50_us": 9171.959,
+            "p90_us": 10625.833,
+            "p99_us": 10759.0,
+            "reader_queues": 1.0,
+            "rss_after_bytes": 13549568.0,
+            "rss_before_bytes": 9289728.0,
+            "slots": 257.0,
+            "transfer_tasks": 512.0,
+            "virtual_groups_peak": 1.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 256.0
+          },
+          "name": "continuation_loop_native",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "256"
+          },
+          "suite": "flow"
+        },
+        {
+          "metrics": {
+            "cpp_new_calls": 167825.0,
+            "cpp_new_requested_bytes": 26883606.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 0.0,
+            "heap_live_blocks_after": 7053.0,
+            "heap_live_blocks_before": 4599.0,
+            "heap_live_bytes_after": 5524320.0,
+            "heap_live_bytes_before": 5324448.0,
+            "max_us": 44985.875,
+            "mean_us": 37712.4957,
+            "ops_per_s": 26.516410050263527,
+            "p50_us": 35268.125,
+            "p90_us": 44323.375,
+            "p99_us": 44985.875,
+            "reader_queues": 1.0,
+            "rss_after_bytes": 18726912.0,
+            "rss_before_bytes": 14270464.0,
+            "slots": 1025.0,
+            "transfer_tasks": 2048.0,
+            "virtual_groups_peak": 1.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 1024.0
+          },
+          "name": "continuation_loop_native",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "1024"
+          },
+          "suite": "flow"
+        }
+      ]
+    },
+    {
+      "repeat": 3,
+      "workload": "parallel_loop",
+      "mode": "explicit",
+      "peak_rss_bytes": 21397504,
+      "results": [
+        {
+          "metrics": {
+            "cpp_new_calls": 33651.0,
+            "cpp_new_requested_bytes": 6650662.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 0.0,
+            "heap_live_blocks_after": 4587.0,
+            "heap_live_blocks_before": 1294.0,
+            "heap_live_bytes_after": 4872928.0,
+            "heap_live_bytes_before": 422576.0,
+            "max_us": 7804.458,
+            "mean_us": 7374.129099999999,
+            "ops_per_s": 135.60923418061665,
+            "p50_us": 7364.708,
+            "p90_us": 7598.25,
+            "p99_us": 7804.458,
+            "reader_queues": 257.0,
+            "rss_after_bytes": 13352960.0,
+            "rss_before_bytes": 9191424.0,
+            "slots": 257.0,
+            "transfer_tasks": 256.0,
+            "virtual_groups_peak": 0.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 0.0
+          },
+          "name": "continuation_parallel_loop_explicit",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "256"
+          },
+          "suite": "flow"
+        },
+        {
+          "metrics": {
+            "cpp_new_calls": 131129.0,
+            "cpp_new_requested_bytes": 26128398.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 0.0,
+            "heap_live_blocks_after": 7937.0,
+            "heap_live_blocks_before": 5348.0,
+            "heap_live_bytes_after": 5514416.0,
+            "heap_live_bytes_before": 5337824.0,
+            "max_us": 45017.208,
+            "mean_us": 29708.7167,
+            "ops_per_s": 33.66015469796446,
+            "p50_us": 27519.459,
+            "p90_us": 33477.708,
+            "p99_us": 45017.208,
+            "reader_queues": 1025.0,
+            "rss_after_bytes": 20217856.0,
+            "rss_before_bytes": 14106624.0,
+            "slots": 1025.0,
+            "transfer_tasks": 1024.0,
+            "virtual_groups_peak": 0.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 0.0
+          },
+          "name": "continuation_parallel_loop_explicit",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "1024"
+          },
+          "suite": "flow"
+        }
+      ]
+    },
+    {
+      "repeat": 3,
+      "workload": "parallel_loop",
+      "mode": "native",
+      "peak_rss_bytes": 20185088,
+      "results": [
+        {
+          "metrics": {
+            "cpp_new_calls": 42330.0,
+            "cpp_new_requested_bytes": 6788358.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 0.0,
+            "heap_live_blocks_after": 4105.0,
+            "heap_live_blocks_before": 1302.0,
+            "heap_live_bytes_after": 4872528.0,
+            "heap_live_bytes_before": 427840.0,
+            "max_us": 15440.417,
+            "mean_us": 10713.4291,
+            "ops_per_s": 93.3407959922001,
+            "p50_us": 9308.791,
+            "p90_us": 13432.0,
+            "p99_us": 15440.417,
+            "reader_queues": 1.0,
+            "rss_after_bytes": 15745024.0,
+            "rss_before_bytes": 9240576.0,
+            "slots": 257.0,
+            "transfer_tasks": 512.0,
+            "virtual_groups_peak": 1.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 256.0
+          },
+          "name": "continuation_parallel_loop_native",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "256"
+          },
+          "suite": "flow"
+        },
+        {
+          "metrics": {
+            "cpp_new_calls": 168099.0,
+            "cpp_new_requested_bytes": 26896910.0,
+            "cpp_new_sample_available": 1.0,
+            "direct_literals": 0.0,
+            "heap_live_blocks_after": 6982.0,
+            "heap_live_blocks_before": 5023.0,
+            "heap_live_bytes_after": 5509936.0,
+            "heap_live_bytes_before": 5335984.0,
+            "max_us": 39964.75,
+            "mean_us": 36831.2,
+            "ops_per_s": 27.150893807424143,
+            "p50_us": 36374.542,
+            "p90_us": 37249.583,
+            "p99_us": 39964.75,
+            "reader_queues": 1.0,
+            "rss_after_bytes": 20004864.0,
+            "rss_before_bytes": 16515072.0,
+            "slots": 1025.0,
+            "transfer_tasks": 2048.0,
+            "virtual_groups_peak": 1.0,
+            "virtual_groups_retained": 0.0,
+            "virtual_groups_total": 1024.0
+          },
+          "name": "continuation_parallel_loop_native",
+          "note": "All optimisations use defaults. C++ new sampling is separate from timing and excludes direct malloc/mmap. Heap and RSS include native stores and allocator retention.",
+          "params": {
+            "size": "1024"
+          },
+          "suite": "flow"
+        }
+      ]
+    }
+  ]
+}

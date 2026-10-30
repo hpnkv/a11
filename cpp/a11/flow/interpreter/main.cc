@@ -124,6 +124,7 @@ file:
   --unrestricted     No filesystem sandbox at all. For a file you wrote.
   --source-root <dir> Approve a source import root. Repeatable; default none.
   --timeout <dur>    Give up after this long: 30s, 1m30s, 500ms.
+  --no-single-item-slots Use baseline transport instead of verified slots.
   --check            Compile and report, run nothing.
   --print-plan       Say what the entry flow is, then run it.
   --help             This.
@@ -145,6 +146,7 @@ struct Options {
   std::optional<absl::Duration> timeout;
   std::vector<std::string> source_roots;
   CompilationLimits limits;
+  bool single_item_slots = true;
 };
 
 absl::StatusOr<Options> ParseCommandLine(int argc, char** argv) {
@@ -171,6 +173,14 @@ absl::StatusOr<Options> ParseCommandLine(int argc, char** argv) {
     if (argument == "--help" || argument == "-h") {
       std::cout << kUsage;
       std::exit(0);
+    }
+    if (argument == "--no-single-item-slots") {
+      options.single_item_slots = false;
+      continue;
+    }
+    if (argument == "--single-item-slots") {
+      options.single_item_slots = true;
+      continue;
     }
     if (argument == "--check") {
       options.check_only = true;
@@ -316,7 +326,8 @@ int Main(int argc, char** argv) {
   const Source source{.text = *std::move(text),
                       .name = options->path,
                       .source_roots = options->source_roots,
-                      .limits = options->limits};
+                      .limits = options->limits,
+                      .single_item_slots = options->single_item_slots};
 
   if (options->print_plan || options->check_only) {
     absl::StatusOr<std::string> described = DescribeEntry(source);

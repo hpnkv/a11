@@ -20,6 +20,7 @@
 #include <string_view>
 #include <vector>
 
+#include <absl/container/flat_hash_map.h>
 #include <absl/container/flat_hash_set.h>
 #include <absl/strings/str_cat.h>
 #include <absl/types/span.h>
@@ -31,6 +32,18 @@
 
 namespace a11::flow {
 namespace {
+
+template <typename TextAt>
+void StyleStandardTypePrefixes(std::vector<SemanticToken>& tokens,
+                               const TextAt& text) {
+  for (size_t index = 2; index < tokens.size(); ++index) {
+    if (tokens[index].kind == SemanticKind::kBuiltinType &&
+        text(index - 1) == "::" && text(index - 2) == "std") {
+      tokens[index - 2].kind = SemanticKind::kBuiltinType;
+      tokens[index - 1].kind = SemanticKind::kBuiltinType;
+    }
+  }
+}
 
 /// Where in a declaration the classifier is, which is all the state it needs.
 ///
@@ -49,6 +62,7 @@ enum class State {
   kAfterCall,
   /// Straight after `nodes` or `via`: a node map.
   kAfterNodeMap,
+  kAfterModule,
   /// Between a port's `in`/`out` and its `:`.
   kInPortName,
   /// Past a port's `:`: its type, then what the port is like.
@@ -90,6 +104,8 @@ class Classifier {
                                   token.column});
       Advance(token, kind);
     }
+    StyleStandardTypePrefixes(
+        out, [&](size_t index) { return tokens_[index].text; });
     return out;
   }
 
@@ -260,6 +276,23 @@ class Classifier {
     }
   }
 
+  SemanticKind TypeKind(std::string_view word) const {
+    if (At(index_ + 1).kind == TokenKind::kScope) {
+      return SemanticKind::kNamespaceName;
+    }
+    const bool qualified =
+        index_ > 0 && At(index_ - 1).kind == TokenKind::kScope;
+    const bool standard =
+        !qualified ||
+        (index_ >= 2 && At(index_ - 2).text == "std" &&
+         (index_ < 3 || At(index_ - 3).kind != TokenKind::kScope));
+    return standard && At(index_ + 1).kind != TokenKind::kScope &&
+                   vocabulary::TypeNames().find(word) !=
+                       vocabulary::TypeNames().end()
+               ? SemanticKind::kBuiltinType
+               : SemanticKind::kType;
+  }
+
   SemanticKind ClassifyWord(const Token& token) {
     const std::string word = vocabulary::Canonical(token.text);
 
@@ -277,21 +310,27 @@ class Classifier {
     }
     switch (state_) {
       case State::kInTypeTag:
-        return SemanticKind::kType;
+        return TypeKind(word);
       case State::kAfterFlow:
-        return SemanticKind::kFlowName;
+        return At(index_ + 1).kind == TokenKind::kScope
+                   ? SemanticKind::kNamespaceName
+                   : SemanticKind::kFlowName;
       case State::kAfterDto:
         return SemanticKind::kType;
       case State::kAfterCall:
-        return SemanticKind::kActionName;
+        return At(index_ + 1).kind == TokenKind::kScope
+                   ? SemanticKind::kNamespaceName
+                   : SemanticKind::kActionName;
       case State::kAfterNodeMap:
         return SemanticKind::kNodeMapName;
+      case State::kAfterModule:
+        return SemanticKind::kNamespaceName;
       case State::kInPortName:
         // The word between `in`/`out` and the `:` is the port's own name,
         // whatever else it might mean elsewhere.
         return SemanticKind::kIdentifier;
       case State::kAfterCast:
-        return SemanticKind::kType;
+        return TypeKind(word);
       case State::kInHeader:
         // `as` and `default` are the declaration's own words; the alias and a
         // written-out constant are what they take.
@@ -310,11 +349,24 @@ class Classifier {
             vocabulary::FieldModifierWords().contains(word)) {
           return SemanticKind::kDeclarationKeyword;
         }
-        return SemanticKind::kType;
+        if (vocabulary::ConstantWords().find(word) !=
+            vocabulary::ConstantWords().end()) {
+          return SemanticKind::kConstant;
+        }
+        return TypeKind(word);
       case State::kDefault:
         break;
     }
 
+    if (AssignmentFollows()) {
+      return SemanticKind::kIdentifier;
+    }
+    if (At(index_ + 1).kind == TokenKind::kScope) {
+      return SemanticKind::kNamespaceName;
+    }
+    if (after_wait_ && (word == "all" || word == "first")) {
+      return SemanticKind::kStatementKeyword;
+    }
     if (!stage_head_.empty()) {
       const std::string phrase = absl::StrCat(stage_head_, " ", word);
       stage_head_.clear();
@@ -337,7 +389,7 @@ class Classifier {
     // `a11.sdk.Interaction{...}`: a tag naming a type where no list could know
     // it, so position decides.
     if (TypeLiteralFollows()) {
-      return SemanticKind::kType;
+      return TypeKind(word);
     }
     // `then` and `where` are stages without their `|` too -- but only with an
     // operand, since a bare one is a port that happens to share the name.
@@ -351,8 +403,15 @@ class Classifier {
     }
     // A function is only a function where it is called, which is what tells
     // `text(it)` from the port type and the stage of the same name.
-    if (vocabulary::Builtins().contains(word) && CallFollows()) {
+    if (vocabulary::Builtins().contains(word) && CallFollows() &&
+        (index_ == 0 || At(index_ - 1).kind != TokenKind::kScope ||
+         (index_ >= 2 && At(index_ - 2).text == "std"))) {
       return SemanticKind::kBuiltin;
+    }
+    if (index_ > 0 && At(index_ - 1).kind == TokenKind::kScope) {
+      return TypeKind(word) == SemanticKind::kBuiltinType
+                 ? SemanticKind::kBuiltinType
+                 : SemanticKind::kIdentifier;
     }
     if (vocabulary::ConstantWords().contains(word)) {
       return SemanticKind::kConstant;
@@ -381,7 +440,7 @@ class Classifier {
       return SemanticKind::kModifierKeyword;
     }
     if (vocabulary::TypeNames().contains(word)) {
-      return SemanticKind::kType;
+      return TypeKind(word);
     }
     if (vocabulary::IsStatusCode(word)) {
       return SemanticKind::kStatusCode;
@@ -402,6 +461,11 @@ class Classifier {
       // A comment interrupts nothing.
       after_dot_ = was_after_dot;
       return;
+    }
+    if (token.kind != TokenKind::kNewline) {
+      after_wait_ = token.IsWord() &&
+                    vocabulary::Canonical(token.text) == "wait" &&
+                    produced == SemanticKind::kStatementKeyword;
     }
     if (token.kind != TokenKind::kWord && token.kind != TokenKind::kNewline) {
       stage_head_.clear();
@@ -488,6 +552,10 @@ class Classifier {
     }
 
     const std::string word = vocabulary::Canonical(token.text);
+    if ((state_ == State::kAfterFlow || state_ == State::kAfterCall) &&
+        At(index_ + 1).kind == TokenKind::kScope) {
+      return;
+    }
     if (state_ == State::kInPortName || state_ == State::kInPortType) {
       return;
     }
@@ -498,7 +566,9 @@ class Classifier {
       state_ = State::kInHeader;
       return;
     }
-    if (produced == SemanticKind::kType && TypeLiteralFollows()) {
+    if ((produced == SemanticKind::kType ||
+         produced == SemanticKind::kBuiltinType) &&
+        TypeLiteralFollows()) {
       state_ = State::kInTypeTag;
       return;
     }
@@ -508,6 +578,11 @@ class Classifier {
     }
     if (word == "as" && produced == SemanticKind::kDeclarationKeyword) {
       state_ = State::kAfterCast;
+      return;
+    }
+    if ((word == "mod" || word == "from") &&
+        produced == SemanticKind::kDeclarationKeyword) {
+      state_ = State::kAfterModule;
       return;
     }
     if ((word == "in" || word == "out") &&
@@ -553,6 +628,7 @@ class Classifier {
   State state_ = State::kDefault;
   bool after_dot_ = false;
   bool after_pipe_ = false;
+  bool after_wait_ = false;
   std::string stage_head_;
   /// Whether the word just seen was a `log`/`logf` keyword, which is the one
   /// position a level word means a level. See [WordKind].
@@ -590,6 +666,8 @@ std::string_view SemanticKindName(SemanticKind kind) {
       return "builtin";
     case SemanticKind::kType:
       return "type";
+    case SemanticKind::kBuiltinType:
+      return "builtin-type";
     case SemanticKind::kStatusCode:
       return "status-code";
     case SemanticKind::kLogLevel:
@@ -604,6 +682,8 @@ std::string_view SemanticKindName(SemanticKind kind) {
       return "action-name";
     case SemanticKind::kNodeMapName:
       return "node-map-name";
+    case SemanticKind::kNamespaceName:
+      return "namespace-name";
     case SemanticKind::kMember:
       return "member";
     case SemanticKind::kPortName:
@@ -640,6 +720,7 @@ SemanticKind SemanticKindFromName(std::string_view name) {
       SemanticKind::kStage,
       SemanticKind::kBuiltin,
       SemanticKind::kType,
+      SemanticKind::kBuiltinType,
       SemanticKind::kStatusCode,
       SemanticKind::kLogLevel,
       SemanticKind::kConstant,
@@ -647,6 +728,7 @@ SemanticKind SemanticKindFromName(std::string_view name) {
       SemanticKind::kFlowName,
       SemanticKind::kActionName,
       SemanticKind::kNodeMapName,
+      SemanticKind::kNamespaceName,
       SemanticKind::kMember,
       SemanticKind::kPortName,
       SemanticKind::kIdentifier,
@@ -674,71 +756,179 @@ void RefinePorts(std::string_view source,
                  std::vector<SemanticToken>& semantic) {
   const ParseResult parsed = Parse(source);
   const ResolveResult resolved = Resolve(source, parsed);
-  if (resolved.flows.empty()) {
-    return;
-  }
-
-  // Where each top-level declaration begins.
-  std::vector<size_t> boundaries;
-  boundaries.reserve(parsed.flows.size());
-  for (const syntax::FlowDeclarationPtr& flow : parsed.flows) {
-    boundaries.push_back(flow->location.start);
-  }
-  for (const syntax::DtoDeclarationPtr& dto : parsed.dtos) {
-    boundaries.push_back(dto->location.start);
-  }
-  std::sort(boundaries.begin(), boundaries.end());
-
-  /// One flow's span, and the names its ports have.
-  struct Span {
-    size_t start = 0;
-    size_t end = 0;
-    absl::flat_hash_set<std::string> ports;
+  const auto at = [&](size_t start) {
+    return std::lower_bound(semantic.begin(), semantic.end(), start,
+                            [](const SemanticToken& token, size_t offset) {
+                              return token.start < offset;
+                            });
   };
-
-  std::vector<Span> spans;
-  for (const ResolvedFlow& flow : resolved.flows) {
+  const auto word = [&](syntax::Location location, SemanticKind kind) {
+    if (location.end <= location.start) {
+      return;
+    }
+    auto found = at(location.start);
+    if (found != semantic.end() && found->start == location.start &&
+        found->kind != SemanticKind::kString) {
+      found->kind = kind;
+    }
+  };
+  const auto type = [&](const syntax::TypeExpression& root) {
+    std::vector<const syntax::TypeExpression*> pending{&root};
+    while (!pending.empty()) {
+      const auto* current = pending.back();
+      pending.pop_back();
+      if (!current->quoted) {
+        auto name = std::string_view(current->name);
+        if (name.starts_with("std::")) {
+          name.remove_prefix(5);
+        }
+        const auto canonical = vocabulary::Canonical(name);
+        const bool standard = vocabulary::TypeNames().find(canonical) !=
+                              vocabulary::TypeNames().end();
+        for (auto token = at(current->location.start);
+             token != semantic.end() && token->start < current->location.end;
+             ++token) {
+          if (token->kind == SemanticKind::kPunctuation ||
+              token->kind == SemanticKind::kString) {
+            continue;
+          }
+          token->kind = token->end == current->location.end
+                            ? (standard ? SemanticKind::kBuiltinType
+                                        : SemanticKind::kType)
+                            : SemanticKind::kNamespaceName;
+        }
+      }
+      for (const auto& parameter : current->parameters) {
+        pending.push_back(&parameter);
+      }
+    }
+  };
+  const auto imports = [&](const std::vector<syntax::Import>& list) {
+    for (const auto& imported : list) {
+      if (imported.namespace_source) {
+        for (auto token = at(imported.source_location.start);
+             token != semantic.end() &&
+             token->start < imported.source_location.end;
+             ++token) {
+          if (token->kind != SemanticKind::kPunctuation) {
+            token->kind = SemanticKind::kNamespaceName;
+          }
+        }
+      }
+      if (imported.explicit_alias) {
+        word(imported.alias.location, SemanticKind::kNamespaceName);
+      }
+      for (const auto& selected : imported.symbols) {
+        SemanticKind kind = SemanticKind::kIdentifier;
+        if (imported.source == "std") {
+          const auto name = vocabulary::Canonical(selected.name.text);
+          if (vocabulary::TypeNames().find(name) !=
+              vocabulary::TypeNames().end()) {
+            kind = SemanticKind::kBuiltinType;
+          } else if (vocabulary::Builtins().find(name) !=
+                     vocabulary::Builtins().end()) {
+            kind = SemanticKind::kBuiltin;
+          }
+        }
+        word(selected.name.location, kind);
+        if (selected.explicit_alias) {
+          word(selected.alias.location, kind);
+        }
+      }
+    }
+  };
+  imports(parsed.imports);
+  for (const auto& module : parsed.modules) {
+    word(module.name.location, SemanticKind::kNamespaceName);
+  }
+  for (const auto& exported : parsed.exports) {
+    word(exported.alias.location, SemanticKind::kIdentifier);
+  }
+  for (const auto& flow : resolved.flows) {
     if (flow.declaration == nullptr) {
       continue;
     }
-    Span span;
-    span.start = flow.declaration->location.start;
-    span.end = source.size();
-    for (const size_t boundary : boundaries) {
-      if (boundary > span.start) {
-        span.end = boundary;
-        break;
+    const auto port = [&](const Symbol& symbol) {
+      return std::any_of(
+          flow.declaration->ports.begin(), flow.declaration->ports.end(),
+          [&](const auto& declared) {
+            return declared->location.start == symbol.location.start;
+          });
+    };
+    for (const auto& symbol : flow.symbols) {
+      if (!symbol.implicit && symbol.kind != SymbolKind::kCall &&
+          symbol.kind != SymbolKind::kBarrier &&
+          source.substr(symbol.location.start,
+                        symbol.location.end - symbol.location.start) ==
+              symbol.name) {
+        word(symbol.location, port(symbol) ? SemanticKind::kPortName
+                              : symbol.kind == SymbolKind::kNodeMap
+                                  ? SemanticKind::kNodeMapName
+                                  : SemanticKind::kIdentifier);
       }
     }
-    for (const PortPlan& port : flow.plan.ports) {
-      span.ports.insert(port.name);
-    }
-    if (!span.ports.empty()) {
-      spans.push_back(std::move(span));
-    }
-  }
-  if (spans.empty()) {
-    return;
-  }
-
-  for (SemanticToken& token : semantic) {
-    // Only a plain identifier: a member after a `.`, a keyword and a string
-    // that happens to spell a port's name are all already what they are.
-    if (token.kind != SemanticKind::kIdentifier) {
-      continue;
-    }
-    const std::string_view text =
-        source.substr(token.start, token.end - token.start);
-    for (const Span& span : spans) {
-      if (token.start < span.start || token.start >= span.end) {
-        continue;
+    for (const auto& [expression, info] : flow.expressions) {
+      if (syntax::As<syntax::Name>(expression) != nullptr &&
+          info.symbol < flow.symbols.size()) {
+        word(expression->location, port(flow.symbols[info.symbol])
+                                       ? SemanticKind::kPortName
+                                       : SemanticKind::kIdentifier);
       }
-      if (span.ports.contains(text)) {
-        token.kind = SemanticKind::kPortName;
+      if (const auto* member = syntax::As<syntax::Attr>(expression);
+          member != nullptr && !info.port.empty()) {
+        auto token = at(member->location.end);
+        while (token != semantic.end() &&
+               token->kind == SemanticKind::kPunctuation) {
+          ++token;
+        }
+        if (token != semantic.end() &&
+            source.substr(token->start, token->end - token->start) ==
+                member->name) {
+          token->kind = SemanticKind::kPortName;
+        }
       }
-      break;
     }
   }
+  const auto declarations = [&](const syntax::Node& root) {
+    syntax::VisitSubtree(root, [&](const syntax::Node& node) {
+      if (const auto* port = syntax::As<syntax::PortDeclaration>(&node);
+          port != nullptr) {
+        word(port->name.location, SemanticKind::kPortName);
+        type(port->type);
+      } else if (const auto* field =
+                     syntax::As<syntax::FieldDeclaration>(&node);
+                 field != nullptr) {
+        word(field->name.location, SemanticKind::kIdentifier);
+        type(field->type);
+      } else if (const auto* bind = syntax::As<syntax::Bind>(&node);
+                 bind != nullptr) {
+        if (bind->type.has_value()) {
+          type(*bind->type);
+        }
+      } else if (const auto* cast = syntax::As<syntax::TypedValue>(&node);
+                 cast != nullptr) {
+        type(cast->type);
+      } else if (const auto* call = syntax::As<syntax::CallExpression>(&node);
+                 call != nullptr) {
+        for (const auto& argument : call->args) {
+          word(argument.port.location, SemanticKind::kPortName);
+        }
+      } else if (const auto* flow = syntax::As<syntax::FlowDeclaration>(&node);
+                 flow != nullptr) {
+        imports(flow->imports);
+      }
+    });
+  };
+  for (const auto& flow : parsed.flows) {
+    declarations(*flow);
+  }
+  for (const auto& dto : parsed.dtos) {
+    declarations(*dto);
+  }
+  StyleStandardTypePrefixes(semantic, [&](size_t index) {
+    const auto& token = semantic[index];
+    return source.substr(token.start, token.end - token.start);
+  });
 }
 
 }  // namespace a11::flow

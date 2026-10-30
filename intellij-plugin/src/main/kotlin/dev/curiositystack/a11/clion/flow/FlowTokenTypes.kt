@@ -55,6 +55,9 @@ object FlowTokens {
 
     /** A port type: `string`, `object`, `bytes`. */
     val TYPE = FlowTokenType("TYPE")
+    val BUILTIN_TYPE = FlowTokenType("BUILTIN_TYPE")
+    val BUILTIN_TYPE_QUALIFIER = FlowTokenType("BUILTIN_TYPE_QUALIFIER")
+    val NAMESPACE_NAME = FlowTokenType("NAMESPACE_NAME")
 
     /** A canonical status code: `not_found`, `NOT_FOUND`. */
     val STATUS_CODE = FlowTokenType("STATUS_CODE")
@@ -105,6 +108,7 @@ object FlowTokens {
     val ARITHMETIC = FlowTokenType("ARITHMETIC")
     val DOT = FlowTokenType("DOT")
     val COLON = FlowTokenType("COLON")
+    val SCOPE = FlowTokenType("SCOPE")
     val COMMA = FlowTokenType("COMMA")
 
     val LEFT_BRACE = FlowTokenType("LEFT_BRACE")

@@ -100,6 +100,7 @@ int TokenTypeOf(SemanticKind kind) {
     case SemanticKind::kNumber:
     case SemanticKind::kDuration:
       return 2;
+    case SemanticKind::kBuiltinType:
     case SemanticKind::kDeclarationKeyword:
     case SemanticKind::kStatementKeyword:
     case SemanticKind::kModifierKeyword:
@@ -119,6 +120,7 @@ int TokenTypeOf(SemanticKind kind) {
     case SemanticKind::kFlowOperator:
     case SemanticKind::kOperator:
       return 7;
+    case SemanticKind::kNamespaceName:
     case SemanticKind::kNodeMapName:
       return 8;
     case SemanticKind::kMember:

@@ -25,6 +25,12 @@
       "summary": "A '<-' carries a value where there is no 'repeat' to carry it into."
     },
     {
+      "code": "flow.barrier.continuation-cycle",
+      "family": "barrier",
+      "severity": "error",
+      "summary": "A continuation completion depends on a writer it prevents."
+    },
+    {
       "code": "flow.barrier.duplicate",
       "family": "barrier",
       "severity": "weak-warning",
@@ -103,10 +109,10 @@
       "summary": "A 'match' pattern the language cannot read: an unclosed hole, an unknown kind, or two holes with one name."
     },
     {
-      "code": "flow.form.bind-many-targets",
+      "code": "flow.form.continuation-grouping",
       "family": "form",
       "severity": "error",
-      "summary": "A name is given to a pipe that writes several destinations, which is several steps."
+      "summary": "A transfer and broadcast need explicit unambiguous grouping."
     },
     {
       "code": "flow.form.count-not-positive",
@@ -289,6 +295,12 @@
       "summary": "'one of' is given something other than a list of constants."
     },
     {
+      "code": "flow.form.optional-binding",
+      "family": "form",
+      "severity": "error",
+      "summary": "An optional binding requires an option with validated provenance."
+    },
+    {
       "code": "flow.form.pipeline-call",
       "family": "form",
       "severity": "error",
@@ -323,6 +335,12 @@
       "family": "form",
       "severity": "error",
       "summary": "A bare scope barrier cannot be modified or used as a value."
+    },
+    {
+      "code": "flow.form.sink-as-source",
+      "family": "form",
+      "severity": "error",
+      "summary": "A continuation sink cannot be read or carried as payload."
     },
     {
       "code": "flow.form.stage-argument",

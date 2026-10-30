@@ -629,6 +629,7 @@ async def _run_program(args: argparse.Namespace, source: str, name: str) -> int:
             arguments=[name, *(args.arguments or ())],
             roots=args.root or (),
             source_roots=args.source_root,
+            single_item_slots=args.single_item_slots,
             allow_write=args.allow_write,
             allow_run=args.allow_run,
             allow_net=args.allow_net,
@@ -742,6 +743,7 @@ async def _run_run(args: argparse.Namespace) -> int:
             source,
             "" if name == _STDIN else str(pathlib.Path(name).absolute()),
             source_roots=args.source_root,
+            single_item_slots=args.single_item_slots,
         )
     except FlowSyntaxError as error:
         diagnostic = next(
@@ -1083,6 +1085,12 @@ def _configure(parser: argparse.ArgumentParser) -> None:
             " and registered for their schemas, so a composition can be written"
             " here and run against a gateway."
         ),
+    )
+    run.add_argument(
+        "--single-item-slots",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use verified single-item transport (default on).",
     )
     run.add_argument(
         "file",

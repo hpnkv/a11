@@ -136,6 +136,10 @@ std::vector<RefId> FlowGraph::Sources(StepId step) const {
   const Step& one = steps[step];
   switch (one.kind) {
     case StepKind::kPipe:
+      for (const auto ref : TransferSources(one)) {
+        Push(found, ref);
+      }
+      break;
     case StepKind::kCapture:
       Push(found, one.source);
       break;
@@ -195,7 +199,24 @@ std::vector<RefId> FlowGraph::Destinations(StepId step) const {
   std::vector<RefId> found;
   const Step& one = steps[step];
   if (one.kind == StepKind::kPipe) {
-    Push(found, one.destination);
+    const auto targets = TransferTargets(one);
+    std::vector<RefId> pending(targets.begin(), targets.end());
+    Push(pending, one.sink);
+    while (!pending.empty()) {
+      const auto ref = pending.back();
+      pending.pop_back();
+      if (ref == kNone ||
+          std::find(found.begin(), found.end(), ref) != found.end()) {
+        continue;
+      }
+      Push(found, ref);
+      if (refs[ref].kind == RefKind::kSink) {
+        Push(pending, refs[ref].subject);
+        for (const auto destination : refs[ref].sources) {
+          Push(pending, destination);
+        }
+      }
+    }
   }
   return found;
 }

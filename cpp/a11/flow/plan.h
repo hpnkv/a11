@@ -126,6 +126,10 @@ struct HeaderPlan {
 /// them.
 struct StepPlan {
   bool scope_barrier = false;
+  std::string optional_binding;
+  std::vector<std::string> serial_sources;
+  std::vector<std::string> destinations;
+  std::string continuation_parent;
   /// The kind of statement, as `a11.flow.plan`'s `Step.kind` spells it: `call`,
   /// `pipe`, `skip`, `wait`, `close`, `cancel`, `fail`, `for`, `repeat`, `if`,
   /// `capture`.

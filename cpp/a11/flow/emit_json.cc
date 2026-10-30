@@ -389,6 +389,8 @@ nlohmann::json NodeJson(const syntax::Node* node) {
       const auto* pipe = syntax::As<syntax::Pipe>(node);
       value["pipeline"] = NodeJson(pipe->pipeline.get());
       value["targets"] = NodeList(pipe->targets);
+      value["result_category"] = "continuation-sink";
+      value["associativity"] = "right";
       value["after"] = WordList(pipe->after);
       break;
     }
@@ -501,6 +503,11 @@ nlohmann::json NodeJson(const syntax::Node* node) {
     case syntax::NodeKind::kIf: {
       const auto* branch = syntax::As<syntax::If>(node);
       value["condition"] = NodeJson(branch->condition.get());
+      if (!branch->binding.Empty()) {
+        value["optional_binding"] = branch->binding.text;
+        value["binding_scope"] = "success-branch";
+        value["condition_evaluation"] = "once";
+      }
       value["then_body"] = NodeList(branch->then_body);
       value["else_body"] = NodeList(branch->else_body);
       break;
@@ -1238,6 +1245,24 @@ nlohmann::json StepToJson(const StepPlan& step) {
   // words `a11.flow.plan` describes them with.
   if (!step.source.empty()) {
     written[step.destination.empty() ? "of" : "from"] = step.source;
+  }
+  if (!step.optional_binding.empty()) {
+    written["optional_binding"] = step.optional_binding;
+    written["binding_scope"] = "success-branch";
+    written["condition_evaluation"] = "once";
+  }
+  if (!step.serial_sources.empty()) {
+    written["serial_sources"] = step.serial_sources;
+    written["selected_destinations"] = step.destinations;
+    written["grouping"] = {{"segments", "serial"},
+                           {"attachments", "interleaved"}};
+    if (!step.continuation_parent.empty()) {
+      written["continuation_parent"] = step.continuation_parent;
+    }
+    written["destination_close"] = "all-registered-writers";
+    written["result_category"] = "continuation-sink";
+    written["attachment_order"] = "interleaved-after-operation";
+    written["completion"] = "operation-and-attached-writers";
   }
   if (!step.destination.empty()) {
     written["to"] = step.destination;

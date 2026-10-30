@@ -50,6 +50,18 @@ std::string Messages(std::string_view source) {
   return absl::StrJoin(messages, "; ");
 }
 
+TEST(FlowInspect, NestedOptionPayloadTypesCountAsUsed) {
+  const auto findings = Findings(R"(
+struct Row { name: string required }
+flow main { in candidates: std::list[std::option[Row]]
+ candidates -> _
+}
+)");
+  for (const auto& finding : findings) {
+    EXPECT_NE(finding.code, "flow.unused.struct") << finding.message;
+  }
+}
+
 TEST(FlowInspect, SaysWhenNothingUsesSomethingTheFlowDeclared) {
   struct Case {
     std::string_view source;

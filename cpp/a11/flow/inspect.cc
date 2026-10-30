@@ -128,6 +128,9 @@ class Inspector {
     absl::flat_hash_set<std::string> named;
     for (const DtoPlan& dto : resolved.program.dtos) {
       for (const FieldPlan& field : dto.fields) {
+        if (field.syntax_type.has_value()) {
+          NamedType(*field.syntax_type, named);
+        }
         if (!field.dto_name.empty()) {
           named.insert(field.dto_name);
         }
@@ -139,6 +142,9 @@ class Inspector {
     for (const ResolvedFlow& flow : resolved.flows) {
       for (const PortPlan& port : flow.plan.ports) {
         named.insert(port.type);
+        if (port.syntax_type.has_value()) {
+          NamedType(*port.syntax_type, named);
+        }
       }
       if (flow.declaration != nullptr) {
         NamedTypes(flow.declaration->body, named);
@@ -179,6 +185,19 @@ class Inspector {
     }
   }
 
+  static void NamedType(const syntax::TypeExpression& type,
+                        absl::flat_hash_set<std::string>& named) {
+    std::vector<const syntax::TypeExpression*> pending{&type};
+    while (!pending.empty()) {
+      const auto* current = pending.back();
+      pending.pop_back();
+      named.insert(current->name);
+      for (const auto& parameter : current->parameters) {
+        pending.push_back(&parameter);
+      }
+    }
+  }
+
   static void NamedTypes(const syntax::Node* absl_nullable node,
                          absl::flat_hash_set<std::string>& named) {
     if (node == nullptr) {
@@ -187,7 +206,10 @@ class Inspector {
     syntax::VisitSubtree(*node, [&named](const syntax::Node& one) {
       if (const auto* typed = syntax::As<syntax::TypedValue>(&one);
           typed != nullptr) {
-        named.insert(typed->type.name);
+        NamedType(typed->type, named);
+      } else if (const auto* bind = syntax::As<syntax::Bind>(&one);
+                 bind != nullptr && bind->type.has_value()) {
+        NamedType(*bind->type, named);
       }
     });
   }
@@ -539,6 +561,11 @@ class Inspector {
         const std::vector<const Node*> read = Sources(*pipe->pipeline);
         ClockRace(read, pipe->after);
         ValueReadTwice(read);
+        for (const auto& target : pipe->targets) {
+          if (target->kind == NodeKind::kPipe) {
+            Statement(target.get());
+          }
+        }
         return;
       }
       case NodeKind::kSkip:

@@ -267,8 +267,7 @@ TEST(FlowNavigate, EveryFormOfTheLanguageHoversAsWhatItDoes) {
 
   const Case kCases[] = {
       {"| join", "flow operator", "Puts a stream through a stage."},
-      {"-> found", "flow operator",
-       "Writes a stream into one or more destinations."},
+      {"-> found", "flow operator", "continuation sink"},
       {"= node()", "operator", "Binds a name to a step, a node, or a value."},
       {"in  question", "a declaration",
        "Declares an input port: what a caller sends."},

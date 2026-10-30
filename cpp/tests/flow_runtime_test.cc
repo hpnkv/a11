@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdlib>
 #include <map>
 #include <memory>
 #include <optional>
@@ -160,10 +161,15 @@ Outcome RunFlow(std::string_view source, std::string_view name,
                 const PortValues& inputs = {},
                 const std::map<std::string, std::string>& headers = {},
                 bool close_inputs = true, const ModuleSources& modules = {},
-                std::shared_ptr<actions::ActionRegistry> registry = nullptr) {
+                std::shared_ptr<actions::ActionRegistry> registry = nullptr,
+                std::optional<bool> single_item_slots = std::nullopt,
+                std::shared_ptr<TransportStats> stats = nullptr) {
   Outcome outcome;
   absl::StatusOr<std::shared_ptr<CompiledProgram>> program =
-      CompiledProgram::Compile(std::string(source), "test.flow", modules);
+      CompiledProgram::Compile(
+          std::string(source), "test.flow", modules, {}, {},
+          single_item_slots.value_or(
+              std::getenv("A11_TEST_SINGLE_ITEM_SLOTS") != nullptr));
   if (!program.ok()) {
     outcome.status = program.status();
     return outcome;
@@ -178,7 +184,8 @@ Outcome RunFlow(std::string_view source, std::string_view name,
     outcome.status = schema.status();
     return outcome;
   }
-  absl::StatusOr<actions::ActionHandler> handler = MakeHandler(*program, name);
+  absl::StatusOr<actions::ActionHandler> handler =
+      MakeHandler(*program, name, {.transport_stats = std::move(stats)});
   if (!handler.ok()) {
     outcome.status = handler.status();
     return outcome;
@@ -1233,7 +1240,7 @@ flow absent {
   in  words: string stream
   out said:  string
   word = try take words
-  if not word.present {
+  if not word.has_value {
     "nothing arrived" -> said
   } else {
     word.value -> said
@@ -2935,15 +2942,15 @@ flow main {
   out results: object stream
   first = try take items
   second = try take items
-  first -> results
-  second -> results after first
+  published = first -> results
+  second -> results after published
 }
 )",
                                "main", {{"items", {"null"}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
-  EXPECT_EQ(
-      outcome.outputs.at("results"),
-      Values({"{\"present\": true, \"value\": null}", "{\"present\": false}"}));
+  EXPECT_EQ(outcome.outputs.at("results"),
+            Values({"{\"has_value\": true, \"value\": null}",
+                    "{\"has_value\": false}"}));
 }
 
 TEST(FlowRuntimeTest, TrailingLoopConditionRunsTheEntireStoppingPass) {
@@ -3075,6 +3082,529 @@ flow main {
   EXPECT_EQ(stage.outputs.at("result"), Values({"1"}));
 }
 
+TEST(FlowRuntimeTest, OptionalBindingDoesNotTurnUpstreamFailureIntoAbsence) {
+  auto registry = TestRegistry();
+  auto schema = BoomSchema();
+  schema.name = "badstream";
+  auto cause = absl::UnavailableError("stream failed");
+  cause.SetPayload("test.upstream", absl::Cord("detail"));
+  ASSERT_TRUE(
+      registry
+          ->Register(
+              schema.name, schema,
+              actions::MakeAsyncActionHandler(
+                  [cause](const auto& action) -> absl::Status {
+                    ABSL_ASSIGN_OR_RETURN(auto output,
+                                          action->GetOutput("out"));
+                    return output->AbortWithStatus(cause).Await().status();
+                  }))
+          .ok());
+  const auto got = RunFlow(R"(
+flow main { out absent: bool
+ source = run badstream()
+ if row = try take source.out { row -> _ }
+ else { true -> absent }
+}
+)",
+                           "main", {}, {}, true, {}, registry);
+  EXPECT_EQ(got.status.code(), absl::StatusCode::kUnavailable) << got.status;
+  EXPECT_EQ(got.status.GetPayload("test.upstream"),
+            cause.GetPayload("test.upstream"));
+  EXPECT_TRUE(got.outputs.at("absent").empty());
+}
+
+TEST(FlowRuntimeTest, OptionalBindingKeepsFalseLikePayloadsPresent) {
+  const auto got = RunFlow(R"(
+flow main { out values: std::any stream
+ for payload in [null, false, 0, "", [], {}] | flatten {
+   if item = std::option({has_value: true, value: payload}) {
+     item -> values
+   }
+ }
+}
+)",
+                           "main");
+  ASSERT_TRUE(got.status.ok()) << got.status;
+  EXPECT_EQ(got.outputs.at("values"),
+            (Values{"null", "false", "0", "\"\"", "[]", "{}"}));
+}
+
+TEST(FlowRuntimeTest, OptionalBindingExtractsOnceAndSkipsElseIfInitializers) {
+  const auto got = RunFlow(R"(
+flow main { in rows: int stream
+ out values: int stream
+ if row = try take rows { row -> values }
+ else if fallback = try take rows { fallback -> values }
+ wait all
+ value = take rows
+ value -> values
+}
+)",
+                           "main", {{"rows", {"1", "2"}}});
+  ASSERT_TRUE(got.status.ok()) << got.status;
+  EXPECT_EQ(got.outputs.at("values"), (Values{"1", "2"}));
+}
+
+TEST(FlowRuntimeTest, OptionalBindingReusesStoredOptionsAndHandlesAbsence) {
+  const auto got = RunFlow(R"(
+flow main { out values: int stream
+ out absent: bool
+ candidate = std::option({has_value: true, value: 7})
+ if row = candidate { row -> values }
+ if again = candidate { again -> values }
+ if missing = std::option({has_value: false}) { missing -> _ }
+ else { true -> absent }
+}
+)",
+                           "main");
+  ASSERT_TRUE(got.status.ok()) << got.status;
+  EXPECT_EQ(got.outputs.at("values"), (Values{"7", "7"}));
+  EXPECT_EQ(got.outputs.at("absent"), (Values{"true"}));
+}
+
+TEST(FlowRuntimeTest, OptionalBindingPreservesOuterVariableUpdatesAndBarriers) {
+  const auto got = RunFlow(R"(
+flow main { in rows: int stream
+ out total: int
+ int sum = 0
+ for unused in [0, 0, 0] | flatten {
+   if row = try take rows { sum = sum + row }
+ }
+ wait all
+ sum -> total
+}
+)",
+                           "main", {{"rows", {"2", "3"}}});
+  ASSERT_TRUE(got.status.ok()) << got.status;
+  EXPECT_EQ(got.outputs.at("total"), (Values{"5"}));
+}
+
+TEST(FlowRuntimeTest, OptionalBindingValidatesDeclaredOptions) {
+  const auto good =
+      RunFlow(R"(
+flow main { in option: std::option[int]
+ out result: int
+ if value = take option { value -> result }
+}
+)",
+              "main", {{"option", {"{\"has_value\":true,\"value\":0}"}}});
+  ASSERT_TRUE(good.status.ok()) << good.status;
+  EXPECT_EQ(good.outputs.at("result"), (Values{"0"}));
+  for (const auto* option : {"{has_value: 1}", "{has_value: true}",
+                             "{has_value: false, value: 1}"}) {
+    const auto bad = RunFlow(absl::StrCat("flow main { if item = std::option(",
+                                          option, ") { item -> _ } }"),
+                             "main");
+    EXPECT_FALSE(bad.status.ok()) << option;
+  }
+}
+
+TEST(FlowRuntimeTest, OptionalBindingElseIfRunsAfterAbsenceOnly) {
+  const auto got = RunFlow(R"(
+flow main { in empty: int stream
+ in rows: int stream
+ out result: int
+ if first = try take empty { first -> result }
+ else if second = try take rows { second -> result }
+}
+)",
+                           "main", {{"rows", {"0"}}});
+  ASSERT_TRUE(got.status.ok()) << got.status;
+  EXPECT_EQ(got.outputs.at("result"), (Values{"0"}));
+}
+
+TEST(FlowRuntimeTest, OptionalBindingRecognisesTypedLoopPayloads) {
+  const auto got = RunFlow(
+      R"(
+flow main { in candidates: std::option[object] stream
+ out values: int stream
+ for candidate in candidates | where true parallel 2 {
+   if row = candidate { row.n -> values }
+ }
+}
+)",
+      "main",
+      {{"candidates",
+        {"{\"has_value\":true,\"value\":{\"n\":0}}", "{\"has_value\":false}",
+         "{\"has_value\":true,\"value\":{\"n\":2}}"}}});
+  ASSERT_TRUE(got.status.ok()) << got.status;
+  auto values = got.outputs.at("values");
+  std::sort(values.begin(), values.end());
+  EXPECT_EQ(values, (Values{"0", "2"}));
+}
+
+TEST(FlowRuntimeTest, ContinuationChainsAreRightAssociativeAndFlattened) {
+  for (bool slots : {false, true}) {
+    const auto got = RunFlow(R"(
+flow main {
+  out values: int stream
+  3 -> (2 -> 1 -> values)
+}
+)",
+                             "main", {}, {}, true, {}, nullptr, slots);
+    ASSERT_TRUE(got.status.ok()) << got.status;
+    EXPECT_EQ(got.outputs.at("values"), (Values{"1", "2", "3"}));
+  }
+}
+
+TEST(FlowRuntimeTest, ContinuationSharedAliasesInterleaveAfterTheirPrefix) {
+  const auto got = RunFlow(R"(
+flow main {
+  out values: int stream
+  out complete: bool
+  tail = 0 -> values
+  alias = tail
+  [1, 2] | flatten -> alias
+  [3, 4] | flatten -> tail
+  (status tail).ok -> complete
+}
+)",
+                           "main");
+  ASSERT_TRUE(got.status.ok()) << got.status;
+  auto values = got.outputs.at("values");
+  ASSERT_EQ(values.size(), 5);
+  EXPECT_EQ(values.front(), "0");
+  std::sort(values.begin() + 1, values.end());
+  EXPECT_EQ(values, (Values{"0", "1", "2", "3", "4"}));
+  EXPECT_EQ(got.outputs.at("complete"), (Values{"true"}));
+}
+
+TEST(FlowRuntimeTest, ContinuationNestedGroupsAndTerminalBroadcast) {
+  const auto got = RunFlow(R"(
+flow main {
+  out left: int stream
+  out right: int stream
+  tail = 0 -> left, right
+  middle = 1 -> tail
+  2 -> middle
+  wait tail
+}
+)",
+                           "main");
+  ASSERT_TRUE(got.status.ok()) << got.status;
+  EXPECT_EQ(got.outputs.at("left"), (Values{"0", "1", "2"}));
+  EXPECT_EQ(got.outputs.at("right"), got.outputs.at("left"));
+}
+
+TEST(FlowRuntimeTest, ContinuationReservationsCoverSkippedAndRepeatedWriters) {
+  for (const auto parallel : {1, 4}) {
+    const auto got = RunFlow(absl::StrCat(R"(
+flow main {
+  out values: int stream
+  tail = 0 -> values
+  if false { 99 -> tail }
+  for x in [] | flatten { x -> tail }
+  for x in [1, 2, 3] | flatten parallel )",
+                                          parallel, R"( {
+    if x > 1 { x -> tail }
+  }
+  wait tail
+}
+)"),
+                             "main");
+    ASSERT_TRUE(got.status.ok()) << got.status;
+    auto values = got.outputs.at("values");
+    ASSERT_EQ(values.size(), 3);
+    EXPECT_EQ(values.front(), "0");
+    std::sort(values.begin() + 1, values.end());
+    EXPECT_EQ(values, (Values{"0", "2", "3"}));
+  }
+}
+
+TEST(FlowRuntimeTest, ContinuationGatesAndCompletedBarrierKeepReservations) {
+  const auto got = RunFlow(R"(
+flow main {
+  out values: int stream
+  tail = 0 -> values
+  ready = {}
+  1 -> tail after ready
+  wait all
+  2 -> values
+}
+)",
+                           "main");
+  ASSERT_TRUE(got.status.ok()) << got.status;
+  EXPECT_EQ(got.outputs.at("values"), (Values{"0", "1", "2"}));
+}
+
+TEST(FlowRuntimeTest, ContinuationFlatLiteralsAvoidTransportAllocations) {
+  auto stats = std::make_shared<TransportStats>();
+  const auto got = RunFlow(R"(
+flow main { out result: int stream
+  4 -> 3 -> 2 -> 1 -> result
+}
+)",
+                           "main", {}, {}, true, {}, nullptr, true, stats);
+  ASSERT_TRUE(got.status.ok()) << got.status;
+  EXPECT_EQ(got.outputs.at("result"), (Values{"1", "2", "3", "4"}));
+  EXPECT_EQ(stats->transfer_tasks.load(), 1);
+  EXPECT_EQ(stats->literal_transfers.load(), 4);
+  EXPECT_EQ(stats->slots.load(), 0);
+  EXPECT_EQ(stats->queue_readers.load(), 0);
+  EXPECT_EQ(stats->virtual_groups.load(), 0);
+}
+
+TEST(FlowRuntimeTest, ContinuationIterationGroupsRetainOnlyActiveState) {
+  auto stats = std::make_shared<TransportStats>();
+  const auto got = RunFlow(R"(
+flow main { out values: int stream
+ for x in [1, 2, 3, 4, 5, 6] | flatten {
+   tail = x -> values
+   x + 10 -> tail
+   wait tail
+ }
+}
+)",
+                           "main", {}, {}, true, {}, nullptr, true, stats);
+  ASSERT_TRUE(got.status.ok()) << got.status;
+  EXPECT_EQ(got.outputs.at("values").size(), 12);
+  EXPECT_EQ(stats->virtual_groups.load(), 6);
+  EXPECT_EQ(stats->active_writer_groups.load(), 0);
+  EXPECT_EQ(stats->peak_writer_groups.load(), 1);
+}
+
+TEST(FlowRuntimeTest, ContinuationCancellationStopsAnOrderedFeeder) {
+  const auto got = RunFlow(R"(
+flow main { in input: int stream
+ out result: int stream
+ tail = input -> result
+ ready = {}
+ cancel tail after ready
+}
+)",
+                           "main", {}, {}, false);
+  EXPECT_EQ(got.status.code(), absl::StatusCode::kCancelled) << got.status;
+}
+
+TEST(FlowRuntimeTest, ContinuationWaitLimitsJoinCancelledCleanup) {
+  for (const auto* limit : {"timeout 2ms", "deadline std::now() + 2ms"}) {
+    const auto got = RunFlow(absl::StrCat(R"(
+flow main { in input: int stream
+ out result: int stream
+ tail = input -> result
+ wait tail )",
+                                          limit, "\n}"),
+                             "main", {}, {}, false);
+    EXPECT_EQ(got.status.code(), absl::StatusCode::kDeadlineExceeded)
+        << got.status;
+  }
+}
+
+TEST(FlowRuntimeTest, ContinuationChainsPreserveUnaryDestinationValidation) {
+  for (bool slots : {false, true}) {
+    const auto got = RunFlow(R"(
+flow scalar { in input: int
+ out result: int
+ int(input) -> result
+}
+flow main { out result: int
+ consume = run scalar()
+ 2 -> 1 -> consume.input
+ consume.result -> result
+}
+)",
+                             "main", {}, {}, true, {}, nullptr, slots);
+    EXPECT_EQ(got.status.code(), absl::StatusCode::kInvalidArgument)
+        << got.status;
+  }
+}
+
+TEST(FlowRuntimeTest, ContinuationCancellationAlsoStopsDiscardGroups) {
+  const auto got = RunFlow(R"(
+flow main { in input: int stream
+ tail = 0 -> _
+ input -> tail
+ ready = {}
+ cancel tail after ready
+}
+)",
+                           "main", {}, {}, false);
+  EXPECT_EQ(got.status.code(), absl::StatusCode::kCancelled) << got.status;
+}
+
+TEST(FlowRuntimeTest, OptionalReadCancellationDoesNotSelectElse) {
+  for (bool tolerant : {false, true}) {
+    LogCapture logs;
+    const auto got = RunFlow(
+        absl::StrCat(R"(
+flow waiting { in input: int stream
+ if value = try take input { value -> _ }
+ else { log "absent" }
+}
+flow main { in input: int stream
+ reader = )",
+                     tolerant ? "try " : "", R"(run waiting(input: input)
+ ready = {}
+ cancel reader after ready
+}
+)"),
+        "main", {}, {}, false);
+    EXPECT_EQ(got.status.code(),
+              tolerant ? absl::StatusCode::kOk : absl::StatusCode::kCancelled)
+        << got.status;
+    EXPECT_TRUE(logs.texts().empty());
+  }
+}
+
+TEST(FlowRuntimeTest, AbandonedFlowInputsDoNotKeepTheirPumpsAlive) {
+  const auto got = RunFlow(R"(
+flow main { in input: int stream
+ out result: int stream
+ input | first 1 -> result
+}
+)",
+                           "main", {{"input", {"1"}}}, {}, false);
+  ASSERT_TRUE(got.status.ok()) << got.status;
+  EXPECT_EQ(got.outputs.at("result"), (Values{"1"}));
+}
+
+TEST(FlowRuntimeTest, FinishedToleratedCallsKeepOtherBroadcastFeedsAlive) {
+  const auto got = RunFlow(R"(
+flow broken { in input: int stream
+ if true { fail unavailable "done" }
+}
+flow echo { in input: int stream
+ out output: int stream
+ input -> output
+}
+flow main { in source: int stream
+ out result: int stream
+ a = try run broken()
+ b = run echo()
+ source -> a.input, b.input
+ b.output -> result
+}
+)",
+                           "main", {{"source", {"1", "2"}}});
+  ASSERT_TRUE(got.status.ok()) << got.status;
+  EXPECT_EQ(got.outputs.at("result"), (Values{"1", "2"}));
+}
+
+TEST(FlowRuntimeTest, ContinuationTryRetainsPartialOutputAndSkipsRest) {
+  const auto got = RunFlow(R"(
+flow main { out values: int stream
+ out code: string
+ tail = try 9 -> (["eA==", "!"] | flatten | map std::len(std::b64decode(it))) -> values
+ 7 -> tail
+ (status tail).code -> code
+}
+)",
+                           "main");
+  ASSERT_TRUE(got.status.ok()) << got.status;
+  EXPECT_EQ(got.outputs.at("values"), (Values{"1", "7"}));
+  EXPECT_EQ(got.outputs.at("code"), (Values{"\"INVALID_ARGUMENT\""}));
+}
+
+TEST(FlowRuntimeTest, ContinuationHandledBranchFailureStillAbortsSharedSink) {
+  const auto got = RunFlow(R"(
+flow main { in input: int stream
+ out result: int stream
+ tail = 0 -> result
+ branch = try {
+   1 -> tail
+   wait all
+   fail unavailable "shared sink failed"
+ }
+ input -> tail
+}
+)",
+                           "main", {}, {}, false);
+  EXPECT_EQ(got.status.code(), absl::StatusCode::kUnavailable) << got.status;
+  EXPECT_EQ(got.status.message(), "shared sink failed");
+}
+
+TEST(FlowRuntimeTest, ContinuationSeparatelyDeclaredActionsRemainConcurrent) {
+  auto arrived = std::make_shared<std::atomic<int>>(0);
+  auto ready = std::make_shared<thread::PermanentEvent>();
+  auto registry = TestRegistry();
+  actions::ActionSchema schema;
+  schema.name = "meet_then_emit";
+  schema.outputs.emplace(
+      "out", actions::ActionPortSchema{.name = "out", .type = "int"});
+  ASSERT_TRUE(
+      registry
+          ->Register(
+              schema.name, schema,
+              actions::MakeAsyncActionHandler(
+                  [arrived, ready](const auto& action) -> absl::Status {
+                    if (++*arrived == 2) {
+                      ready->Notify();
+                    }
+                    thread::Select({thread::OnCancel(), ready->OnEvent()});
+                    if (thread::Cancelled()) {
+                      return absl::CancelledError("cancelled");
+                    }
+                    ABSL_ASSIGN_OR_RETURN(auto output,
+                                          action->GetOutput("out"));
+                    return output->PutChunk(JsonChunk("1")).Await().status();
+                  }))
+          .ok());
+  const auto got = RunFlow(R"(
+flow main { out result: int stream
+ a = run meet_then_emit()
+ b = run meet_then_emit()
+ a.out -> b.out -> result
+}
+)",
+                           "main", {}, {}, true, {}, registry);
+  ASSERT_TRUE(got.status.ok()) << got.status;
+  EXPECT_EQ(got.outputs.at("result"), (Values{"1", "1"}));
+  EXPECT_EQ(arrived->load(), 2);
+}
+
+TEST(FlowRuntimeTest, ContinuationOwnsAnonymousLateCleanupBeforeNextSegment) {
+  auto finished = std::make_shared<std::atomic<bool>>(false);
+  auto registry = TestRegistry();
+  actions::ActionSchema schema;
+  schema.name = "late";
+  schema.outputs.emplace(
+      "out", actions::ActionPortSchema{.name = "out", .type = "int"});
+  ASSERT_TRUE(
+      registry
+          ->Register(
+              schema.name, schema,
+              actions::MakeAsyncActionHandler(
+                  [finished](const auto& action) -> absl::Status {
+                    ABSL_ASSIGN_OR_RETURN(auto output,
+                                          action->GetOutput("out"));
+                    ABSL_RETURN_IF_ERROR(
+                        output->PutChunk(JsonChunk("1")).Await().status());
+                    ABSL_RETURN_IF_ERROR(
+                        output->Finalize({.wait = true}).Await().status());
+                    thread::SleepFor(absl::Milliseconds(10));
+                    finished->store(true);
+                    return absl::UnavailableError("late source failure");
+                  }))
+          .ok());
+  const auto got = RunFlow(R"(
+flow main { out result: int stream
+ 2 -> (run late()).out -> result
+}
+)",
+                           "main", {}, {}, true, {}, registry);
+  EXPECT_EQ(got.status.code(), absl::StatusCode::kUnavailable) << got.status;
+  EXPECT_TRUE(finished->load());
+  EXPECT_TRUE(std::find(got.outputs.at("result").begin(),
+                        got.outputs.at("result").end(),
+                        "2") == got.outputs.at("result").end());
+}
+
+TEST(FlowRuntimeTest, ContinuationEmptyNullAndTryKeepTheirBoundaries) {
+  const auto got = RunFlow(R"(
+flow main {
+  out values: object stream
+  out handled: bool
+  tail = try null -> (std::parse_time("bad") -> values)
+  7 -> tail
+  (status tail).ok -> handled
+}
+)",
+                           "main");
+  ASSERT_TRUE(got.status.ok()) << got.status;
+  EXPECT_EQ(got.outputs.at("handled"), (Values{"false"}));
+  EXPECT_EQ(got.outputs.at("values"), (Values{"7"}));
+}
+
 }  // namespace
 
 TEST(FlowRuntimeTest, ExtractionOrderAlsoAppliesToPipelineSourcesAndAliases) {
@@ -3126,7 +3656,7 @@ struct Row { id: string required }
 flow main {
   out present: bool
   row = try take ([{}] | flatten | map it as Row)
-  row.present -> present
+  row.has_value -> present
 }
 )",
                                "main");
@@ -3634,6 +4164,272 @@ flow main {
                                              statement, "\n wait all\n}"),
                                 "main");
     EXPECT_TRUE(result.status.ok()) << result.status;
+  }
+}
+
+TEST(FlowRuntimeTest, SingleItemSlotsMatchBaselineAndRemoveTransportPumps) {
+  for (const auto* source :
+       {"flow main { out result: int\n x = 42\n x -> result }",
+        "flow main { in input: int\n out result: int\n x = take input\n x -> "
+        "result }",
+        "flow main { out result: int stream\n nodes private { n = node()\n 42 "
+        "-> n\n n -> result } }",
+        "flow main { out result: int stream\n nodes private { n = node()\n n "
+        "-> result } }",
+        "flow main { out result: int stream\n n = node()\n if true { 1 -> n } "
+        "else { 2 -> n }\n n -> result }",
+        "flow main { out result: int stream\n for x in [1, 2, 3] | flatten "
+        "parallel 3 { n = node()\n x -> n\n n -> result } }",
+        "flow main { out result: int stream\n n = node()\n 1 -> n\n for x in "
+        "[1, 2, 3] | flatten { n -> result } }"}) {
+    SCOPED_TRACE(source);
+    const auto baseline = RunFlow(source, "main", {{"input", {"7"}}});
+    auto stats = std::make_shared<TransportStats>();
+    const auto optimized = RunFlow(source, "main", {{"input", {"7"}}}, {}, true,
+                                   {}, nullptr, true, stats);
+    EXPECT_EQ(optimized.status, baseline.status);
+    auto actual = optimized.outputs;
+    auto expected = baseline.outputs;
+    for (auto& [port, values] : actual) {
+      std::sort(values.begin(), values.end());
+    }
+    for (auto& [port, values] : expected) {
+      std::sort(values.begin(), values.end());
+    }
+    EXPECT_EQ(actual, expected);
+    EXPECT_GT(stats->slots.load(), 0u);
+  }
+  for (const auto* source : {"flow main { out result: int\n 42 -> result }",
+                             "flow main { in input: int\n out result: int\n x "
+                             "= take input\n x -> result }"}) {
+    auto baseline = std::make_shared<TransportStats>();
+    auto optimized = std::make_shared<TransportStats>();
+    ASSERT_TRUE(RunFlow(source, "main", {{"input", {"7"}}}, {}, true, {},
+                        nullptr, false, baseline)
+                    .status.ok());
+    ASSERT_TRUE(RunFlow(source, "main", {{"input", {"7"}}}, {}, true, {},
+                        nullptr, true, optimized)
+                    .status.ok());
+    EXPECT_GT(optimized->inline_producers.load(), 0u);
+    EXPECT_LT(optimized->bus_pumps.load() + optimized->slot_pumps.load(),
+              baseline->bus_pumps.load());
+    EXPECT_LT(optimized->queue_readers.load(), baseline->queue_readers.load());
+  }
+}
+
+TEST(FlowRuntimeTest, SingleItemSlotsSeparateAvailabilityCompletionAndErrors) {
+  for (bool enabled : {false, true}) {
+    for (bool fail : {false, true}) {
+      SCOPED_TRACE(absl::StrCat("enabled=", enabled, " fail=", fail));
+      LogCapture logs;
+      const auto result = RunFlow(
+          absl::StrCat(
+              R"(
+flow main {
+ out result: string stream
+ nodes private {
+ n = node()
+ gate = node()
+ finish = node()
+ producer = {
+  "item" -> n
+  gate -> _
+  finish -> _
+ }
+ released = n | first 1 | log it -> gate
+ n | consume -> result
+)",
+              fail ? "aborted = { abort n data_loss \"late\" after released }\n"
+                     "\"done\" -> finish after aborted\n} }"
+                   : "\"done\" -> finish after released\n} }"),
+          "main", {}, {}, true, {}, nullptr, enabled);
+      EXPECT_EQ(result.status.code(),
+                fail ? absl::StatusCode::kDataLoss : absl::StatusCode::kOk)
+          << result.status;
+      EXPECT_EQ(logs.texts(), Values({"item"}));
+      if (!fail) {
+        EXPECT_EQ(result.outputs.at("result"), Values({"\"item\""}));
+      }
+    }
+  }
+}
+
+TEST(FlowRuntimeTest, SingleItemSlotsKeepNullCursorFanoutAndAbandonment) {
+  const std::vector<std::string> sources{
+      R"(flow main { out result: object
+ nodes private {
+ n = node()
+ null -> n
+ a = try take n
+ b = try take n
+ {a: a, b: b} -> result
+} })",
+      R"(flow main { out a: string stream
+ out b: string stream
+ nodes private {
+ n = node()
+ "x" -> n
+ n -> a
+ n -> b
+ n | first 0 -> _
+} })",
+      R"(flow main { out result: int stream
+ nodes private {
+ n = node()
+ 7 -> n
+ for i in [1, 2, 3] | flatten {
+  if i > 0 { n -> result }
+ }
+} })",
+      R"(flow main { out result: int stream
+ nodes private {
+ for i in [1, 2, 3] | flatten {
+  n = node()
+  i -> n
+  a = take n
+  b = try take n
+  a -> result
+ }
+} })"};
+  for (const auto& source : sources) {
+    SCOPED_TRACE(source);
+    const auto baseline = RunFlow(source, "main");
+    const auto optimized =
+        RunFlow(source, "main", {}, {}, true, {}, nullptr, true);
+    ASSERT_TRUE(baseline.status.ok()) << baseline.status;
+    EXPECT_EQ(optimized.status, baseline.status);
+    EXPECT_EQ(optimized.outputs, baseline.outputs);
+  }
+}
+
+TEST(FlowRuntimeTest, SingleItemSlotsKeepInitializersGatesAndSiblingProgress) {
+  for (bool enabled : {false, true}) {
+    LogCapture logs;
+    const auto result = RunFlow(R"(
+flow marker { out value: int
+ if true { log "marker" }
+ 1 -> value
+}
+flow main { out result: int
+ if false { unused = take ((run boom()).out) }
+ unused = take ((run marker()).value)
+ before = "before" | log it -> _
+ wait all
+ after = take ((run marker()).value)
+ after -> result
+}
+)",
+                                "main", {}, {}, true, {}, nullptr, enabled);
+    ASSERT_TRUE(result.status.ok()) << result.status;
+    const auto text = logs.texts();
+    EXPECT_EQ(std::count(text.begin(), text.end(), "marker"), 2);
+    EXPECT_EQ(text.back(), "marker");
+    EXPECT_EQ(result.outputs.at("result"), Values({"1"}));
+  }
+}
+
+TEST(FlowRuntimeTest, SingleItemSlotsKeepCancellationAndAutomaticDraining) {
+  for (bool enabled : {false, true}) {
+    const auto timeout = RunFlow(R"(
+flow main { in input: string stream
+ out result: string stream
+ input | first 1 | timeout 2ms -> result
+}
+)",
+                                 "main", {}, {}, false, {}, nullptr, enabled);
+    EXPECT_EQ(timeout.status.code(), absl::StatusCode::kDeadlineExceeded);
+    const auto drained = RunFlow(R"(
+flow main { out result: string stream
+ call = run twice(text: "value")
+ call.out | first 1 -> result
+}
+)",
+                                 "main", {}, {}, true, {}, nullptr, enabled);
+    EXPECT_TRUE(drained.status.ok()) << drained.status;
+    EXPECT_EQ(drained.outputs.at("result"), Values({"\"VALUE\""}));
+  }
+}
+
+TEST(FlowRuntimeTest, SingleItemInlineInitializerDoesNotSerializeSiblings) {
+  for (bool enabled : {false, true}) {
+    auto release = std::make_shared<thread::PermanentEvent>();
+    auto registry = TestRegistry();
+    actions::ActionSchema awaiting;
+    awaiting.name = "await_value";
+    awaiting.outputs.emplace(
+        "out", actions::ActionPortSchema{.name = "out", .type = "string"});
+    ASSERT_TRUE(
+        registry
+            ->Register(
+                "await_value", awaiting,
+                actions::MakeAsyncActionHandler(
+                    [release](const auto& action) -> absl::Status {
+                      thread::Select({thread::OnCancel(), release->OnEvent()});
+                      if (thread::Cancelled()) {
+                        return absl::CancelledError("cancelled");
+                      }
+                      ABSL_ASSIGN_OR_RETURN(auto output,
+                                            action->GetOutput("out"));
+                      return output
+                          ->Finalize(JsonChunk("\"ready\""), {.wait = true})
+                          .Await()
+                          .status();
+                    }))
+            .ok());
+    actions::ActionSchema signal;
+    signal.name = "signal";
+    ASSERT_TRUE(
+        registry
+            ->Register("signal", signal,
+                       actions::MakeAsyncActionHandler([release](const auto&) {
+                         release->Notify();
+                         return absl::OkStatus();
+                       }))
+            .ok());
+    auto stats = std::make_shared<TransportStats>();
+    const auto result =
+        RunFlow(R"(
+flow main { out result: string
+ value = take ((run await_value()).out)
+ run signal()
+ value -> result
+}
+)",
+                "main", {}, {}, true, {}, registry, enabled, stats);
+    EXPECT_TRUE(result.status.ok()) << result.status;
+    EXPECT_EQ(result.outputs.at("result"), Values({"\"ready\""}));
+    if (enabled) {
+      EXPECT_GT(stats->inline_producers.load(), 0u);
+    }
+  }
+}
+
+TEST(FlowRuntimeTest, SingleItemReplayRetainsExistingTimedReadBehavior) {
+  for (bool enabled : {false, true}) {
+    auto registry = TestRegistry();
+    actions::ActionSchema pause;
+    pause.name = "pause";
+    ASSERT_TRUE(registry
+                    ->Register("pause", pause,
+                               actions::MakeAsyncActionHandler([](const auto&) {
+                                 thread::SleepFor(absl::Milliseconds(20));
+                                 return absl::OkStatus();
+                               }))
+                    .ok());
+    const auto result = RunFlow(R"(
+flow main { out result: int stream
+ nodes waiting {}
+ slow = run pause() via waiting
+ nodes scratch {
+  n = node()
+  42 -> n after slow
+  for i in [1] | flatten { n | timeout 1ms -> result }
+ }
+}
+)",
+                                "main", {}, {}, true, {}, registry, enabled);
+    EXPECT_TRUE(result.status.ok()) << result.status;
+    EXPECT_EQ(result.outputs.at("result"), Values({"42"}));
   }
 }
 

@@ -15,7 +15,10 @@
 # The native benchmark binary. Its own executable rather than a mode of a test:
 # a benchmark links the whole runtime and runs for minutes, and neither belongs
 # in a target CI runs on every commit.
-add_executable(a11_bench harness.cc bench_main.cc)
+add_executable(a11_bench harness.cc bench_main.cc allocation_counter.cc)
+if(A11_ALLOCATOR STREQUAL "system")
+  target_compile_definitions(a11_bench PRIVATE A11_BENCH_ALLOCATION_SAMPLES=1)
+endif()
 add_executable(a11::bench ALIAS a11_bench)
 target_link_libraries(
   a11_bench PRIVATE a11::concurrency a11::data a11::net a11::nodes a11::stores

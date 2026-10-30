@@ -59,6 +59,8 @@ constexpr std::array kBindingVerbs = {
 /// *out* of a table below.
 constexpr std::string_view kElse = "else";
 constexpr std::string_view kIt = "it";
+constexpr std::array kWaitModes{std::string_view("all"),
+                                std::string_view("first")};
 
 /// A word in upper case, which is the other spelling of every keyword.
 std::string Shout(std::string_view word) {
@@ -430,7 +432,7 @@ contexts:
     # A type a serialisation registry knows by tag, written unquoted and dotted
     # exactly as it was registered: `a11.sdk.AudioBuffer`. First, so a tag whose
     # first part happens to be a built-in name is still read as one tag.
-    - match: '{{name}}(?:\.{{name}})+'
+    - match: '{{name}}(?:::{{name}})+'
       scope: storage.type.tag.a11flow
     - match: |-
         (?x) \b (
@@ -491,6 +493,10 @@ contexts:
         2: keyword.operator.assignment.carry.a11flow
 
   statement-keywords:
+    - match: '\b(@WAIT@)\s+(@WAIT_MODES@){{kw_boundary}}'
+      captures:
+        1: keyword.control.a11flow
+        2: keyword.control.a11flow
     - match: |-
         (?x) \b (
           @STATEMENTS@
@@ -521,7 +527,7 @@ contexts:
     - match: '\b(@VERBS@){{kw_boundary}}'
       scope: keyword.other.call.a11flow
       push:
-        - match: '({{name}})(?:(\.)({{name}}))*'
+        - match: '({{name}})(?:(::)({{name}}))*'
           scope: entity.name.function.action.a11flow
           pop: true
         - match: '"'
@@ -603,14 +609,14 @@ contexts:
     - match: '\b(@AS@){{kw_boundary}}'
       scope: keyword.operator.cast.a11flow
       push:
-        - match: '{{name}}(?:\.{{name}})*(?:\s*\[[^\]\n]*\])?'
+        - match: '{{name}}(?:::{{name}})*(?:\s*\[[^\]\n]*\])?'
           scope: storage.type.a11flow
           pop: true
         - include: strings
         - match: '(?=\S)'
           pop: true
     # `a11.sdk.Interaction{...}`: a value of a named type.
-    - match: '{{name}}(?:\.{{name}})+(?=\s*\{)'
+    - match: '{{name}}(?:::{{name}})+(?=\s*\{)'
       scope: storage.type.a11flow
     - match: '\b(@SOURCE_WORDS@){{kw_boundary}}'
       scope: keyword.other.status.a11flow
@@ -779,6 +785,8 @@ std::string Sublime() {
           {"@DESCRIBE@", One("describe")},
           {"@BINDING_VERBS@", Inline(absl::MakeConstSpan(
                                   kBindingVerbs.data(), kBindingVerbs.size()))},
+          {"@WAIT@", One("wait")},
+          {"@WAIT_MODES@", Inline(kWaitModes)},
           {"@STATEMENTS@", Wrapped(statements, "          ")},
           {"@CLAUSES@", Inline(clauses)},
           {"@NODES@", One("nodes")},
@@ -867,7 +875,7 @@ BOUNDARY = r"(?![A-Za-z0-9_$-])"
 
 #: A dotted name -- a tag a serialisation registry knows a type by, or the type
 #: of a value being built: ``a11.sdk.AudioBuffer``.
-DOTTED = NAME + r"(?:\." + NAME + r")"
+DOTTED = NAME + r"(?:::" + NAME + r")"
 
 
 def _keywords(*names):
@@ -1010,6 +1018,10 @@ class A11FlowLexer(RegexLexer):
                 bygroups(Keyword.Reserved, Whitespace, Name.Namespace),
             ),
             (_group(MODIFIERS), Keyword.Reserved),
+            (
+                _word(@WAIT@) + r"(\s+)(" + _keywords(@WAIT_MODES@) + r")" + BOUNDARY,
+                bygroups(Keyword, Whitespace, Keyword),
+            ),
             (_group(STATEMENTS), Keyword),
             (_group(CLAUSES), Keyword),
             # A stage, which is what a word after a `|` is. The gap may hold a
@@ -1225,6 +1237,8 @@ std::string Pygments() {
           {"@BINDING_VERBS@",
            Call(absl::MakeConstSpan(kBindingVerbs.data(), kBindingVerbs.size()),
                 "BINDING_VERBS = ")},
+          {"@WAIT@", QuotedOne("wait")},
+          {"@WAIT_MODES@", Quoted(kWaitModes, "")},
           {"@STATEMENTS@", Call(statements, "STATEMENTS = ")},
           {"@CLAUSES@", Call(clauses, "CLAUSES = ")},
           {"@NODES@", QuotedOne("nodes")},
@@ -1271,6 +1285,7 @@ constexpr std::string_view kVsCodeTemplate = R"JSON({
         {"include": "#builtin"},
         {"include": "#port-type"},
         {"include": "#declaration"},
+        {"include": "#wait-mode"},
         {"include": "#statement"},
         {"include": "#modifier"},
         {"include": "#status-code"},
@@ -1358,6 +1373,13 @@ constexpr std::string_view kVsCodeTemplate = R"JSON({
     "declaration": {
       "match": "\\b(@DECLARATIONS@)\\b",
       "name": "keyword.declaration.a11flow"
+    },
+    "wait-mode": {
+      "match": "\\b(@WAIT@)\\b(\\s+)(@WAIT_MODES@)\\b",
+      "captures": {
+        "1": {"name": "keyword.control.a11flow"},
+        "3": {"name": "keyword.control.a11flow"}
+      }
     },
     "statement": {
       "match": "\\b(@STATEMENTS@)\\b",
@@ -1505,6 +1527,8 @@ std::string VsCode() {
           {"@BUILTINS@", Inline(vocabulary::OrderedBuiltins())},
           {"@PORT_AND_FIELD_MODIFIERS@", Inline(port_and_field)},
           {"@DECLARATIONS@", Inline(declarations)},
+          {"@WAIT@", One("wait")},
+          {"@WAIT_MODES@", Inline(kWaitModes)},
           {"@STATEMENTS@", Inline(statements)},
           {"@MODIFIERS@", Inline(modifiers)},
           {"@STATUS_CODES@", Inline(vocabulary::StatusCodes())},

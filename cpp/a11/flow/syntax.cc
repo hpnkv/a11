@@ -328,6 +328,50 @@ void SetPair(Constant& object, std::string_view key, Constant value) {
 
 }  // namespace
 
+bool IsPureLiteralExpression(const Node& node) {
+  std::vector<const Node*> pending{&node};
+  size_t visited = 0;
+  size_t bytes = 0;
+  while (!pending.empty()) {
+    if (++visited > 512) {
+      return false;
+    }
+    const auto* item = pending.back();
+    pending.pop_back();
+    switch (item->kind) {
+      case NodeKind::kLiteral:
+        bytes += As<Literal>(item)->value.text.size() + 16;
+        if (bytes > 4096) {
+          return false;
+        }
+        break;
+      case NodeKind::kListLiteral:
+      case NodeKind::kObjectLiteral:
+      case NodeKind::kSpread:
+        break;
+      case NodeKind::kUnary:
+        if (As<Unary>(item)->op != "not") {
+          return false;
+        }
+        break;
+      case NodeKind::kBinary: {
+        const auto& op = As<Binary>(item)->op;
+        if (op == "+" || op == "-" || op == "*" || op == "/" || op == "%") {
+          return false;
+        }
+        break;
+      }
+      case NodeKind::kAttr:
+      case NodeKind::kIndex:
+        break;
+      default:
+        return false;
+    }
+    VisitChildren(*item, [&](const Node& child) { pending.push_back(&child); });
+  }
+  return true;
+}
+
 std::optional<Constant> ConstantValue(const Node* node) {
   if (const auto* literal = As<Literal>(node); literal != nullptr) {
     return literal->value;

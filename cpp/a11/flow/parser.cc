@@ -1504,11 +1504,8 @@ class ParserImpl {
           const Token source = Current();
           auto pipeline = ParsePipeline();
           if (ContinuesWith(TokenKind::kArrow)) {
-            auto block = Make<syntax::Block>(source);
-            block->body.push_back(
-                ParsePipeStatement(source, false, std::move(pipeline)));
-            block->extent.end = tokens_[position_ - 1].end;
-            bind->value = std::move(block);
+            bind->value =
+                ParsePipeStatement(source, false, std::move(pipeline));
           } else {
             if (const auto* name =
                     syntax::As<syntax::Name>(pipeline->source.get());
@@ -1562,7 +1559,12 @@ class ParserImpl {
   /// One routine so the plain and the tolerated form cannot drift: `try` in
   /// front changes what a failure *means* and nothing about the grammar.
   NodePtr ParsePipeStatement(const Token& keyword, bool tolerant,
-                             syntax::PipelinePtr pipeline = nullptr) {
+                             syntax::PipelinePtr pipeline = nullptr,
+                             bool modifiers = true) {
+    const Descent descent(*this);
+    if (TooDeep()) {
+      return MakeError(Current(), "a continuation destination");
+    }
     auto pipe = Make<syntax::Pipe>(keyword);
     pipe->tolerant = tolerant;
     pipe->pipeline =
@@ -1573,12 +1575,34 @@ class ParserImpl {
     if (!Expect(TokenKind::kArrow, "'->' and a destination port")) {
       return pipe;
     }
-    pipe->targets.push_back(ParseReference());
-    while (AcceptToken(TokenKind::kComma)) {
-      SkipNewlines();
-      pipe->targets.push_back(ParseReference());
+    const Token destination = Current();
+    auto right = ParsePipeline();
+    if (ContinuesWith(TokenKind::kArrow)) {
+      pipe->targets.push_back(
+          ParsePipeStatement(destination, false, std::move(right), false));
+    } else {
+      if (!right->stages.empty()) {
+        Report("flow.form.continuation-grouping",
+               "A destination cannot be a pipeline. Group a source pipeline "
+               "before its arrow.",
+               destination, Severity::kError, Family::kForm);
+      }
+      pipe->targets.push_back(std::move(right->source));
+      while (AcceptToken(TokenKind::kComma)) {
+        SkipNewlines();
+        pipe->targets.push_back(ParseReference());
+      }
+      if (At(TokenKind::kArrow)) {
+        ReportHere("flow.form.continuation-grouping",
+                   "An arrow after a broadcast is ambiguous. Group the "
+                   "serial transfer and put the broadcast at its end.",
+                   Family::kForm);
+      }
     }
-    pipe->after = ParseAfter();
+    if (modifiers) {
+      pipe->after = ParseAfter();
+    }
+    pipe->extent.end = tokens_[position_ - 1].end;
     return pipe;
   }
 
@@ -1928,11 +1952,22 @@ class ParserImpl {
     const Token& keyword = Current();
     ExpectWord("if");
     auto branch = Make<syntax::If>(keyword);
+    if (Current().IsWord() && Peek().kind == TokenKind::kEqual) {
+      branch->binding = ExpectName("an optional binding name");
+      Advance();
+    }
     {
       const BlockHeader header(this);
       branch->condition = ParseExpression();
     }
+    branch->binding_scope = syntax::LocationOf(Current());
     branch->then_body = ParseBlock();
+    const bool incomplete =
+        At(TokenKind::kEnd) && (position_ == 0 || tokens_[position_ - 1].kind !=
+                                                      TokenKind::kRightBrace);
+    branch->binding_scope.end = incomplete      ? tokens_.back().end + 1
+                                : position_ > 0 ? tokens_[position_ - 1].end
+                                                : tokens_.back().end;
     if (ContinuesWith(TokenKind::kWord) && NextWordIs("else")) {
       SkipNewlines();
     }
@@ -2605,13 +2640,13 @@ class ParserImpl {
     // `_` is reference-shaped and only a pipe's target may be one, so it is let
     // through here and refused by the resolver -- which knows which of the
     // several statements that read a reference this is.
-    if (syntax::IsAnyOf(
-            node.get(),
-            {syntax::NodeKind::kName, syntax::NodeKind::kAttr,
-             syntax::NodeKind::kOutcome, syntax::NodeKind::kDiscard,
-             syntax::NodeKind::kCallExpression,
-             syntax::NodeKind::kNodeExpression, syntax::NodeKind::kWait,
-             syntax::NodeKind::kClose, syntax::NodeKind::kError})) {
+    if (syntax::IsAnyOf(node.get(),
+                        {syntax::NodeKind::kName, syntax::NodeKind::kAttr,
+                         syntax::NodeKind::kOutcome, syntax::NodeKind::kDiscard,
+                         syntax::NodeKind::kCallExpression,
+                         syntax::NodeKind::kNodeExpression,
+                         syntax::NodeKind::kWait, syntax::NodeKind::kClose,
+                         syntax::NodeKind::kPipe, syntax::NodeKind::kError})) {
       return node;
     }
     Report("flow.syntax.unexpected",
@@ -3008,16 +3043,23 @@ class ParserImpl {
       Advance();
       const Bracketed brackets(this);
       SkipNewlines();
-      NodePtr node = ParseExpression();
-      if (ContinuesWith(TokenKind::kPipe) || AtBareStage() ||
-          ContinuesWithBareStage()) {
-        auto pipeline = Make<syntax::Pipeline>(token);
-        pipeline->source = std::move(node);
-        ParsePipelineTail(*pipeline);
-        pipeline->extent.end = tokens_[position_ - 1].end;
+      const bool tolerant_transfer =
+          AtWord("try") && Peek().kind != TokenKind::kLeftBrace &&
+          !NextWordIsCallVerb() && Keyword(1) != "take";
+      if (tolerant_transfer) {
+        Advance();
+      }
+      auto pipeline = ParsePipeline();
+      NodePtr node;
+      if (ContinuesWith(TokenKind::kArrow)) {
+        node =
+            ParsePipeStatement(token, tolerant_transfer, std::move(pipeline));
+      } else if (!pipeline->stages.empty()) {
         auto value = Make<syntax::PipelineValue>(token);
         value->pipeline = std::move(pipeline);
         node = std::move(value);
+      } else {
+        node = std::move(pipeline->source);
       }
       SkipNewlines();
       const Token close = Current();

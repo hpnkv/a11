@@ -832,6 +832,14 @@ void BindFlow(py::module_& module) {
                     flow::Expression::Reference(std::move(name)));
               },
               py::arg("name"), "Refer to a name or a qualified field.")
+          .def(
+              "transfer",
+              [](const flow::Expression& source,
+                 const flow::Expression& destination, bool tolerant) {
+                return ValueOrThrow(source.Transfer(destination, tolerant));
+              },
+              py::arg("destination"), py::arg("tolerant") = false,
+              "Construct a grouped transfer returning a continuation sink.")
           .def_static(
               "literal",
               [](py::object value) {
@@ -1066,6 +1074,17 @@ void BindFlow(py::module_& module) {
           py::arg("condition"), py::arg("then_body"),
           py::arg("else_body") = std::vector<flow::Statement>{},
           "Construct conditional statement bodies.")
+      .def_static(
+          "if_some",
+          [](std::string name, const flow::Expression& option,
+             const std::vector<flow::Statement>& then_body,
+             const std::vector<flow::Statement>& else_body) {
+            return ValueOrThrow(flow::Statement::IfSome(std::move(name), option,
+                                                        then_body, else_body));
+          },
+          py::arg("name"), py::arg("option"), py::arg("then_body"),
+          py::arg("else_body") = std::vector<flow::Statement>{},
+          "Bind an option payload only in its success branch; evaluate once.")
       .def_static(
           "for_",
           [](std::string variable, const flow::Expression& source,
@@ -1652,6 +1671,14 @@ a named flow from `names`.
           },
           "Runtime action identities reachable through external calls and "
           "contracts.")
+      .def(
+          "optimizations",
+          [](const BoundProgram& self) {
+            return JsonToPython(self.program->Optimizations())
+                .cast<PyJsonObject>();
+          },
+          "Explain verified single-item transport choices for this "
+          "compilation.")
       .def("describe",
            [](const BoundProgram& self) {
              return JsonToPython(
@@ -1672,25 +1699,27 @@ a named flow from `names`.
       [](std::string source, std::string identity,
          const std::map<std::string, std::string>& modules,
          const std::vector<std::string>& source_roots,
-         flow::CompilationLimits limits) {
+         flow::CompilationLimits limits, bool single_item_slots) {
         flow::ModuleSources sources(modules.begin(), modules.end());
         return BoundProgram{ValueOrThrow(flow::CompiledProgram::Compile(
             std::move(source), std::move(identity), sources,
             flow::FileModuleResolver(limits.max_source_bytes, {}, source_roots),
-            limits))};
+            limits, single_item_slots))};
       };
   document_class.def(
       "compile",
       [compile_snapshot](const flow::ModuleDocument& self,
                          const std::map<std::string, std::string>& modules,
                          const std::vector<std::string>& source_roots,
-                         flow::CompilationLimits limits) {
+                         flow::CompilationLimits limits,
+                         bool single_item_slots) {
         return compile_snapshot(self.source(), self.identity(), modules,
-                                source_roots, limits);
+                                source_roots, limits, single_item_slots);
       },
       py::arg("modules") = std::map<std::string, std::string>{},
       py::arg("source_roots") = std::vector<std::string>{},
       py::arg("limits") = flow::CompilationLimits{},
+      py::arg("single_item_slots") = true,
       "Compile an immutable snapshot with explicit source roots and "
       "compilation limits.");
   flow.def(
@@ -1699,6 +1728,7 @@ a named flow from `names`.
       py::arg("modules") = std::map<std::string, std::string>{},
       py::arg("source_roots") = std::vector<std::string>{},
       py::arg("limits") = flow::CompilationLimits{},
+      py::arg("single_item_slots") = true,
       "Compile Flow source with explicit source roots and compilation limits.");
 
   flow.def(
@@ -2098,8 +2128,8 @@ write and process permissions, environment filtering, and limits still apply.
          const py::object& registry, const py::object& session,
          const py::object& dispatch_stream,
          const std::vector<std::string>& source_roots,
-         flow::CompilationLimits limits)
-          -> py::typing::Dict<py::str, py::object> {
+         flow::CompilationLimits limits,
+         bool single_item_slots) -> py::typing::Dict<py::str, py::object> {
         namespace sdk_flow = a11::sdk::flow;
 
         // Built here rather than bound as a class: the policy a caller states
@@ -2157,10 +2187,12 @@ write and process permissions, environment filtering, and limits still apply.
         if (timeout_seconds.has_value()) {
           how.timeout = absl::Seconds(*timeout_seconds);
         }
-        const a11::flow::interpreter::Source what{.text = source,
-                                                  .name = source_name,
-                                                  .source_roots = source_roots,
-                                                  .limits = limits};
+        const a11::flow::interpreter::Source what{
+            .text = source,
+            .name = source_name,
+            .source_roots = source_roots,
+            .limits = limits,
+            .single_item_slots = single_item_slots};
 
         // Without the GIL: the program runs to completion here, and everything
         // it does -- reading a file, waiting on a clock, calling an action the
@@ -2195,6 +2227,7 @@ write and process permissions, environment filtering, and limits still apply.
       py::arg("dispatch_stream") = py::none(),
       py::arg("source_roots") = std::vector<std::string>{},
       py::arg("limits") = flow::CompilationLimits{},
+      py::arg("single_item_slots") = true,
       R"doc(Run a Flow program's entry flow, and return what it did.
 
 The same interpreter ``a11-flow-run`` is -- one implementation, called two ways

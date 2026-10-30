@@ -191,7 +191,8 @@ role.
 ```
 
 The kinds describe semantic roles used by readers and editors:
-`stage`, `builtin`, `type`, `status-code`, `member`, `action-name`, `node-map-name`,
+`stage`, `builtin`, `builtin-type`, `type`, `namespace-name`, `status-code`,
+`member`, `action-name`, `node-map-name`,
 `flow-name`, `declaration-keyword`, `statement-keyword`, `modifier-keyword`,
 `constant`, `word-operator`, `port-name`, `identifier`, `comment`, `string`,
 `number`, `duration`, `flow-operator`, `operator`, `brace`, `parenthesis`,
@@ -200,10 +201,14 @@ no lexer of its own — the same call decides that a word after a `|` is a stage
 that one past a port's `:` is a type, and that `join` is a function only where it
 is called.
 
-`port-name` requires name resolution because neighbouring tokens cannot
-distinguish a flow port from a local node. Other kinds are lexical, so an editor
-can apply them before resolution completes. The IntelliJ plugin renders resolved
-ports with the identifier colour and italic emphasis.
+`port-name` uses resolved bindings to distinguish ports from local variables,
+including shadowed names. Parsed declarations refine type positions and import
+aliases. Incomplete input retains lexical classifications where resolution is
+unavailable. The IntelliJ plugin renders port declarations, references, call
+argument labels and called output ports with italic emphasis. `builtin-type`
+uses the keyword palette for the entire standard type spelling, including
+its `std::` qualifier; custom
+types retain the class palette. Namespace qualifiers have their own role.
 
 `lexical` contains the token's lexical type (`word`, `->`, `{`), while `kind`
 contains its semantic role. Clients that tokenize locally can use both fields.
@@ -303,6 +308,19 @@ Two invariants, tested over every flow in the repository:
 `a11 flow describe --format json` returns the resolved plan: each flow's typed
 ports, headers, node maps, and runtime steps. Diff this response to detect an
 interface change.
+
+Transfer steps expose `serial_sources`, `selected_destinations`,
+`result_category: "continuation-sink"`, and `grouping`: segments are serial,
+attachments interleaved. `continuation_parent` identifies a shared tail;
+`completion` includes attached writers and `destination_close` names the
+all-registered-writers rule. These fields describe virtual sinks, not extra
+runtime nodes.
+
+Optional conditionals expose `optional_binding`,
+`binding_scope: "success-branch"`, and `condition_evaluation: "once"`.
+Syntax envelopes carry the same binding metadata and arrow associativity.
+Completion and navigation use the inferred payload type only within the
+success branch, including incomplete editor input.
 
 ### `flow.completions/v1`
 
@@ -727,3 +745,9 @@ does not grant import access.
 The host can set cumulative compilation limits for source bytes, tokens, nesting,
 imports, modules, names, work, and elapsed time. Time limits are cooperative
 checks during compilation. Requests cannot expand the host's source roots.
+
+
+The native `optimizations` method returns `flow.optimizations/v1` for single-item
+transport. It accepts source/modules and a `single_item_slots` boolean (default
+true). Eligibility evidence is available with execution disabled; this storage
+choice has no source fix. See [single-item transport](flow-single-item-slots.md).

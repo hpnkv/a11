@@ -16,6 +16,7 @@
         {"include": "#builtin"},
         {"include": "#port-type"},
         {"include": "#declaration"},
+        {"include": "#wait-mode"},
         {"include": "#statement"},
         {"include": "#modifier"},
         {"include": "#status-code"},
@@ -104,8 +105,15 @@
       "match": "\\b(declare|exported|mod|export|import|from|flow|struct|describe|in|out|header|as|default|stream|required|node|nodes|DECLARE|EXPORTED|MOD|EXPORT|IMPORT|FROM|FLOW|STRUCT|DESCRIBE|IN|OUT|HEADER|AS|DEFAULT|STREAM|REQUIRED|NODE|NODES)\\b",
       "name": "keyword.declaration.a11flow"
     },
+    "wait-mode": {
+      "match": "\\b(wait|WAIT)\\b(\\s+)(all|first|ALL|FIRST)\\b",
+      "captures": {
+        "1": {"name": "keyword.control.a11flow"},
+        "3": {"name": "keyword.control.a11flow"}
+      }
+    },
     "statement": {
-      "match": "\\b(abort|after|by|call|cancel|close|desc|else|fail|for|if|interleave|into|log|logf|max|nodes|of|parallel|repeat|run|skip|status|try|unordered|until|wait|while|zip|ABORT|AFTER|BY|CALL|CANCEL|CLOSE|DESC|ELSE|FAIL|FOR|IF|INTERLEAVE|INTO|LOG|LOGF|MAX|NODES|OF|PARALLEL|REPEAT|RUN|SKIP|STATUS|TRY|UNORDERED|UNTIL|WAIT|WHILE|ZIP)\\b",
+      "match": "\\b(abort|after|by|call|cancel|close|desc|else|fail|for|if|interleave|into|log|logf|max|nodes|of|parallel|repeat|run|skip|status|take|try|unordered|until|wait|while|zip|ABORT|AFTER|BY|CALL|CANCEL|CLOSE|DESC|ELSE|FAIL|FOR|IF|INTERLEAVE|INTO|LOG|LOGF|MAX|NODES|OF|PARALLEL|REPEAT|RUN|SKIP|STATUS|TAKE|TRY|UNORDERED|UNTIL|WAIT|WHILE|ZIP)\\b",
       "name": "keyword.control.a11flow"
     },
     "modifier": {

@@ -505,8 +505,10 @@ async def test_a_flows_outputs_reach_the_caller_as_they_are_produced(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("chained", [False, True])
 async def test_a_client_runs_the_flow_itself_and_calls_the_gateway(
     tmp_path: pathlib.Path,
+    chained: bool,
 ):
     """The other direction: the flow runs here, its calls run there.
 
@@ -534,7 +536,14 @@ async def test_a_client_runs_the_flow_itself_and_calls_the_gateway(
           echo = call __ping(input: word)
           echo.output -> said
         }
-        """,
+        """.replace(
+            "echo.output -> said",
+            (
+                '"after" -> echo.output -> said'
+                if chained
+                else "echo.output -> said"
+            ),
+        ),
         "client.flow",
     ).main
     result = await asyncio.wait_for(
@@ -547,7 +556,9 @@ async def test_a_client_runs_the_flow_itself_and_calls_the_gateway(
         ),
         timeout=30,
     )
-    assert result == {"said": ["over there"]}
+    assert result == {
+        "said": ["over there", "after"] if chained else ["over there"]
+    }
 
     serving.cancel()
     with pytest.raises(asyncio.CancelledError):

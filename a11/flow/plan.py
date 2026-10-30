@@ -355,6 +355,7 @@ def compile_source(
     modules: dict[str, str] | None = None,
     source_roots: list[str] | None = None,
     limits: _flow.CompilationLimits | None = None,
+    single_item_slots: bool = True,
 ) -> Program:
     """Compile Flow source into a [Program][a11.flow.plan.Program].
 
@@ -371,6 +372,7 @@ def compile_source(
             modules or {},
             source_roots or [],
             limits or _flow.CompilationLimits(),
+            single_item_slots,
         )
     except StatusException as error:
         for detail in error.status.details or []:

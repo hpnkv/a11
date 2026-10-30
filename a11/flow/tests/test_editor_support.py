@@ -137,9 +137,9 @@ def test_the_plugin_keeps_no_language_knowledge_of_its_own():
         quoted = set(re.findall(r'"([a-z][a-z0-9_-]*)"', text))
         # A handful of stage names would be a table; the semantic *kinds* the
         # payload uses are not stage names, so this is a real signal.
-        assert len(quoted & stages) < 3, (
-            f"{source.name} looks like it carries a list of stages"
-        )
+        assert (
+            len(quoted & stages) < 3
+        ), f"{source.name} looks like it carries a list of stages"
 
 
 def test_python_keeps_no_language_implementation_of_its_own():
@@ -152,7 +152,9 @@ def test_python_keeps_no_language_implementation_of_its_own():
         "test_parser_parity.py",
         "test_resolve_parity.py",
     ):
-        assert not (package / "tests" / gone).exists(), (
+        assert not (
+            package / "tests" / gone
+        ).exists(), (
             f"{gone} is back, which means a second implementation is too"
         )
     for module in ("plan.py", "runtime.py"):
@@ -174,3 +176,26 @@ def test_the_plugin_registers_the_language_id_the_docs_tell_people_to_use():
     # Semantic diagnostics come from one external annotator over `a11-flow`.
     assert "externalAnnotator" in registered
     assert "localInspection" not in registered
+
+
+def test_generated_pygments_wait_modes_and_take_expressions():
+    """Static highlighting colours wait modes and expression take."""
+    pytest.importorskip("pygments")
+    import importlib.util
+
+    from pygments.token import Keyword
+
+    spec = importlib.util.spec_from_file_location(
+        "a11flow_wait_lexer", PYGMENTS
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    tokens = list(
+        module.A11FlowLexer().get_tokens(
+            "flow main {\n  string x = take rows\n  wait all\n  wait first of"
+            " a, b\n}\n"
+        )
+    )
+    for word in ("take", "wait", "all", "first"):
+        matching = [kind for kind, text in tokens if text == word]
+        assert matching and all(kind in Keyword for kind in matching), word

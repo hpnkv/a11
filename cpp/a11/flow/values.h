@@ -434,7 +434,30 @@ struct CoerceContext {
 /// the tree is what lets the AST stay immutable and shared: the Python
 /// reference replaced each resolved name with a `RefValue` node, which a tree
 /// handed across a language boundary cannot do.
+struct FormatPart {
+  std::string text;
+  size_t index = 0;
+  std::string spec;
+  std::string flags;
+  std::string width;
+  std::optional<std::string> precision;
+  char conversion = 0;
+};
+
+using FormatTemplate = std::vector<FormatPart>;
+FormatTemplate CompileStrformat(std::string_view text);
+std::string StrformatCompiled(const FormatTemplate& format,
+                              absl::Span<const Value> arguments);
+
+/// Immutable, bounded literal preparation shared by execution activations.
+struct PreparedExpressions {
+  absl::flat_hash_map<std::string, pattern::Pattern> patterns;
+  absl::flat_hash_map<std::string, FormatTemplate> formats;
+  absl::flat_hash_map<const syntax::Node*, Value> folded;
+};
+
 struct EvalContext {
+  const PreparedExpressions* absl_nullable prepared = nullptr;
   std::function<absl::StatusOr<std::optional<Value>>(const syntax::Node&)>
       lookup;
   const absl::flat_hash_map<const syntax::Node*, Value>* absl_nullable bound =
@@ -489,9 +512,10 @@ absl::StatusOr<Value> CoerceShape(const DtoPlan& shape, const Value& value,
 ///
 /// Public because the `strformat` stage is the one-value shorthand for the
 /// builtin and must not become a second implementation of it.
-absl::StatusOr<Value> CallBuiltin(std::string_view name,
-                                  absl::Span<const Value> arguments,
-                                  HostBridge* absl_nullable bridge);
+absl::StatusOr<Value> CallBuiltin(
+    std::string_view name, absl::Span<const Value> arguments,
+    HostBridge* absl_nullable bridge,
+    const PreparedExpressions* absl_nullable prepared = nullptr);
 
 // --- Statuses as data --------------------------------------------------------
 

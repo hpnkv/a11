@@ -23,6 +23,7 @@
 #include <set>
 #include <utility>
 
+#include <absl/functional/function_ref.h>
 #include <absl/status/status.h>
 #include <absl/status/status_macros.h>
 #include <absl/strings/ascii.h>
@@ -410,7 +411,7 @@ class NativeBridge final : public HostBridge {
 
 Value Value::Option(std::optional<Value> value) {
   Pairs fields;
-  fields.emplace_back("present", Bool(value.has_value()));
+  fields.emplace_back("has_value", Bool(value.has_value()));
   if (value.has_value()) {
     fields.emplace_back("value", std::move(*value));
   }
@@ -608,7 +609,8 @@ absl::StatusOr<Value> LookupChecked(const Value& value, const Value& key) {
   if (value.is_option() && key.kind() == Value::Kind::kString &&
       key.text() == "value" && value.Get("value") == nullptr) {
     return absl::FailedPreconditionError(
-        "An absent option has no value; check its present flag before reading "
+        "An absent option has no value; check its has_value flag before "
+        "reading "
         "value.");
   }
   return Lookup(value, key);
@@ -1095,9 +1097,22 @@ std::string Printf(const Value& value, std::string_view flags,
 
 }  // namespace
 
-std::string Strformat(const Value& format, absl::Span<const Value> arguments) {
-  const std::string text = AsText(format);
+namespace {
+void VisitFormatParts(std::string_view text,
+                      absl::FunctionRef<void(FormatPart&&)> emit) {
   std::string out;
+  const auto flush = [&] {
+    if (!out.empty()) {
+      emit(FormatPart{.text = std::move(out),
+                      .index = 0,
+                      .spec = {},
+                      .flags = {},
+                      .width = {},
+                      .precision = {},
+                      .conversion = 0});
+      out.clear();
+    }
+  };
   size_t at = 0;
   size_t next = 0;
   while (at < text.size()) {
@@ -1120,7 +1135,8 @@ std::string Strformat(const Value& format, absl::Span<const Value> arguments) {
     }
     if (cursor > digits && cursor < text.size() && text[cursor] == '$') {
       chosen = static_cast<size_t>(std::strtoll(
-          text.substr(digits, cursor - digits).c_str(), nullptr, 10));
+          std::string(text.substr(digits, cursor - digits)).c_str(), nullptr,
+          10));
       ++cursor;
     } else {
       cursor = at + 1;
@@ -1172,22 +1188,61 @@ std::string Strformat(const Value& format, absl::Span<const Value> arguments) {
     if (!chosen.has_value()) {
       ++next;
     }
-    if (index >= arguments.size()) {
-      // Left as it was written: a visible `%3$s` in the output is easier to
-      // diagnose than a flow that died formatting a log line.
-      out.append(text, at, cursor + 1 - at);
-      at = cursor + 1;
-      continue;
+    flush();
+    FormatPart part;
+    part.text = std::string(text.substr(at, cursor + 1 - at));
+    part.index = index;
+    part.spec = std::string(spec);
+    part.flags = std::string(text.substr(flags, width - flags));
+    part.width = std::string(text.substr(width, width_end - width));
+    if (precision.has_value()) {
+      part.precision = std::string(*precision);
     }
-    Value value = arguments[index];
-    if (!spec.empty()) {
-      value = WithSpec(value, spec);
-    }
-    out += Printf(value, std::string_view(text).substr(flags, width - flags),
-                  std::string_view(text).substr(width, width_end - width),
-                  precision, conversion);
+    part.conversion = conversion;
+    emit(std::move(part));
     at = cursor + 1;
   }
+  flush();
+}
+
+void RenderFormatPart(std::string& out, const FormatPart& part,
+                      absl::Span<const Value> arguments) {
+  if (part.conversion == 0 || part.index >= arguments.size()) {
+    out += part.text;
+    return;
+  }
+  Value value = arguments[part.index];
+  if (!part.spec.empty()) {
+    value = WithSpec(value, part.spec);
+  }
+  const auto precision = part.precision.has_value()
+                             ? std::optional<std::string_view>(*part.precision)
+                             : std::nullopt;
+  out += Printf(value, part.flags, part.width, precision, part.conversion);
+}
+}  // namespace
+
+FormatTemplate CompileStrformat(std::string_view text) {
+  FormatTemplate parts;
+  VisitFormatParts(
+      text, [&](FormatPart&& part) { parts.push_back(std::move(part)); });
+  return parts;
+}
+
+std::string StrformatCompiled(const FormatTemplate& parts,
+                              absl::Span<const Value> arguments) {
+  std::string out;
+  for (const auto& part : parts) {
+    RenderFormatPart(out, part, arguments);
+  }
+  return out;
+}
+
+std::string Strformat(const Value& format, absl::Span<const Value> arguments) {
+  std::string out;
+  const auto text = AsText(format);
+  VisitFormatParts(
+      text, [&](FormatPart&& part) { RenderFormatPart(out, part, arguments); });
   return out;
 }
 
@@ -1238,8 +1293,26 @@ std::vector<std::string> Endings(const Value& value) {
 
 absl::StatusOr<Value> CallBuiltin(std::string_view name,
                                   absl::Span<const Value> arguments,
-                                  HostBridge* absl_nullable bridge) {
+                                  HostBridge* absl_nullable bridge,
+                                  const PreparedExpressions* prepared) {
   const Value& first = Argument(arguments, 0);
+  if (prepared != nullptr && first.kind() == Value::Kind::kString) {
+    if (name == "strformat") {
+      const auto cached = prepared->formats.find(first.text());
+      if (cached != prepared->formats.end()) {
+        return Value::String(StrformatCompiled(
+            cached->second,
+            arguments.empty() ? arguments : arguments.subspan(1)));
+      }
+    }
+    if (name == "match") {
+      const auto cached = prepared->patterns.find(first.text());
+      if (cached != prepared->patterns.end()) {
+        return MatchCompiled(cached->second, AsText(Argument(arguments, 1)));
+      }
+    }
+  }
+
   if (vocabulary::TypeNames().contains(name) && name != "stream") {
     if (arguments.size() != 1) {
       return Invalid("A conversion requires exactly one value.");
@@ -1856,11 +1929,22 @@ absl::StatusOr<Value> Coerce(const Value& value,
                           : absl::StatusOr<Value>(Invalid("Expected null."));
   }
   if (lowered == "option") {
-    const auto* present = value.Get("present");
+    if (value.kind() != Value::Kind::kObject) {
+      return Invalid("An option requires a presence and payload record.");
+    }
+    for (const auto& [key, field] : value.pairs()) {
+      if (key != "has_value" && key != "value") {
+        return Invalid("An option contains an unknown field.");
+      }
+    }
+    const auto* present = value.Get("has_value");
     if (present == nullptr || present->kind() != Value::Kind::kBool) {
-      return Invalid("An option requires a boolean presence flag.");
+      return Invalid("An option requires a boolean has_value field.");
     }
     if (!present->boolean()) {
+      if (value.Get("value") != nullptr) {
+        return Invalid("An absent option cannot carry a value.");
+      }
       return Value::Option(std::nullopt);
     }
     const auto* held = value.Get("value");
@@ -2079,6 +2163,7 @@ absl::StatusOr<Value> Add(const Value& left, const Value& right) {
 // NOLINTBEGIN(cppcoreguidelines-pro-type-static-cast-downcast)
 absl::StatusOr<Value> Evaluate(const syntax::Node& node,
                                const EvalContext& context) {
+
   if (context.lookup) {
     ABSL_ASSIGN_OR_RETURN(std::optional<Value> found, context.lookup(node));
     if (found.has_value()) {
@@ -2089,6 +2174,12 @@ absl::StatusOr<Value> Evaluate(const syntax::Node& node,
   // whatever shape the expression around it has.
   if (const Value* found = Bound(node, context); found != nullptr) {
     return *found;
+  }
+  if (context.prepared != nullptr) {
+    const auto found = context.prepared->folded.find(&node);
+    if (found != context.prepared->folded.end()) {
+      return found->second;
+    }
   }
   switch (node.kind) {
     case syntax::NodeKind::kLiteral:
@@ -2167,7 +2258,8 @@ absl::StatusOr<Value> Evaluate(const syntax::Node& node,
         ABSL_ASSIGN_OR_RETURN(Value value, Evaluate(*argument, context));
         arguments.push_back(std::move(value));
       }
-      return CallBuiltin(builtin.name, arguments, context.bridge);
+      return CallBuiltin(builtin.name, arguments, context.bridge,
+                         context.prepared);
     }
     case syntax::NodeKind::kTypedValue: {
       const auto& typed = static_cast<const syntax::TypedValue&>(node);

@@ -585,6 +585,7 @@ class Completer {
         return ProposalKind::kNode;
       case SymbolKind::kNodeMap:
         return ProposalKind::kNodeMap;
+      case SymbolKind::kSink:
       case SymbolKind::kBarrier:
         return ProposalKind::kBarrier;
       case SymbolKind::kValue:
@@ -598,6 +599,9 @@ class Completer {
 
   /// The type a port symbol was declared with, for the grey text beside it.
   [[nodiscard]] std::string TypeOf(const Symbol& symbol) const {
+    if (symbol.kind == SymbolKind::kSink) {
+      return "continuation-sink";
+    }
     if (flow_ == nullptr) {
       return "";
     }
@@ -636,10 +640,19 @@ class Completer {
       if (symbol.location.start >= statement) {
         continue;
       }
+      if (!symbol.VisibleAt(offset_)) {
+        continue;
+      }
       if (!accept(symbol)) {
         continue;
       }
       Add(symbol.name, KindOf(symbol), "", TypeOf(symbol));
+      if (symbol.kind == SymbolKind::kSink) {
+        proposals_.back().documentation =
+            "Append after this transfer's operation. Independent attachments "
+            "interleave; completion includes every attached writer.";
+        proposals_.back().tail = proposals_.back().documentation;
+      }
     }
   }
 
@@ -1162,7 +1175,7 @@ class Completer {
     }
     const Symbol* symbol = nullptr;
     for (const Symbol& candidate : flow_->symbols) {
-      if (candidate.name == base->text) {
+      if (candidate.name == base->text && candidate.VisibleAt(offset_)) {
         symbol = &candidate;
       }
     }
@@ -1192,6 +1205,9 @@ class Completer {
         Add("status", ProposalKind::kField);
         return;
       }
+      case SymbolKind::kSink:
+        Add("status", ProposalKind::kField);
+        return;
       case SymbolKind::kBarrier:
         for (const std::string_view field : vocabulary::OrderedStatusFields()) {
           Add(std::string(field), ProposalKind::kField);
@@ -1322,6 +1338,7 @@ class Completer {
     AddNames([](const Symbol& symbol) {
       switch (symbol.kind) {
         case SymbolKind::kCall:
+        case SymbolKind::kSink:
         case SymbolKind::kBarrier:
         case SymbolKind::kNode:
         case SymbolKind::kInputPort:

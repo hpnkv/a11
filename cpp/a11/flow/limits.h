@@ -54,6 +54,16 @@ class CompilationBudget {
     return true;
   }
 
+  /// Charge optional work without invalidating an already valid baseline.
+  bool TryOptional(size_t work = 1) {
+    if (exhausted_ || work > remaining_ ||
+        std::chrono::steady_clock::now() >= deadline_) {
+      return false;
+    }
+    remaining_ -= work;
+    return true;
+  }
+
   bool ConsumeTokens(size_t count) {
     if (count > remaining_tokens_) {
       exhausted_ = true;

@@ -688,6 +688,8 @@ struct Until : NodeOf<NodeKind::kUntil> {
 
 /// `if expr { ... } else { ... }`.
 struct If : NodeOf<NodeKind::kIf> {
+  Word binding;
+  Location binding_scope;
   NodePtr condition;
   std::vector<NodePtr> then_body;
   std::vector<NodePtr> else_body;
@@ -876,6 +878,9 @@ using DtoDeclarationPtr = std::unique_ptr<DtoDeclaration>;
 /// A literal, and a list or object of literals; anything that has to be read at
 /// run time is not a constant. This is what the grammar's constant positions --
 /// a header's default -- are checked with.
+/// Whether a bounded expression contains only literal data and pure operators.
+bool IsPureLiteralExpression(const Node& node);
+
 std::optional<Constant> ConstantValue(const Node* node);
 
 /// Every node `node` directly holds, in the order they were written.

@@ -225,6 +225,14 @@ Expression Expression::Take(bool optional) const {
       absl::StrCat("(", optional ? "try take (" : "take (", source_, "))"));
 }
 
+absl::StatusOr<Expression> Expression::Transfer(const Expression& destination,
+                                                bool tolerant) const {
+  auto source = absl::StrCat("(", tolerant ? "try " : "", source_, " -> ",
+                             destination.source(), ")");
+  ABSL_RETURN_IF_ERROR(Parsed(absl::StrCat("flow { sink = ", source, "\n}")));
+  return Expression(std::move(source));
+}
+
 absl::StatusOr<Expression> Expression::Reference(std::string name) {
   ABSL_RETURN_IF_ERROR(Name(name, true));
   return Expression(std::move(name));
@@ -522,6 +530,19 @@ absl::StatusOr<Statement> Statement::If(
     const std::vector<Statement>& else_body) {
   std::string source =
       absl::StrCat("if ", condition.source(), " ", Body(then_body));
+  if (!else_body.empty()) {
+    absl::StrAppend(&source, " else ", Body(else_body));
+  }
+  return Validated(std::move(source));
+}
+
+absl::StatusOr<Statement> Statement::IfSome(
+    std::string name, const Expression& option,
+    const std::vector<Statement>& then_body,
+    const std::vector<Statement>& else_body) {
+  ABSL_RETURN_IF_ERROR(Name(name));
+  auto source =
+      absl::StrCat("if ", name, " = ", option.source(), " ", Body(then_body));
   if (!else_body.empty()) {
     absl::StrAppend(&source, " else ", Body(else_body));
   }

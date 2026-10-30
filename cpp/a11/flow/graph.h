@@ -18,6 +18,7 @@
 #define A11_FLOW_GRAPH_H_
 
 #include <cstddef>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -27,6 +28,7 @@
 #include <absl/container/flat_hash_map.h>
 #include <absl/container/flat_hash_set.h>
 #include <absl/time/time.h>
+#include <absl/types/span.h>
 
 #include "a11/flow/syntax.h"
 #include "a11/flow/vocabulary.h"
@@ -48,6 +50,8 @@ inline constexpr size_t kNone = static_cast<size_t>(-1);
 
 /// What a stream in the plan *is*.
 enum class RefKind {
+  /// A virtual continuation destination and its attached writer group.
+  kSink,
   /// A declared port of this flow.
   kFlowPort,
   /// A port of an action this flow calls: `x.out`.
@@ -257,6 +261,21 @@ inline bool RecordsOutcome(StepKind kind) {
          kind == StepKind::kWait || kind == StepKind::kClose;
 }
 
+/// Sparse joins retain observable owned-call and expression cleanup boundaries.
+struct TransferJoin {
+  RefId source = kNone;
+  size_t target = kNone;
+  bool expression = false;
+};
+
+/// Extra transfer metadata is absent on ordinary single-arrow statements.
+struct TransferPlan {
+  std::vector<RefId> sources;
+  std::vector<RefId> destinations;
+  std::vector<TransferJoin> joins;
+  std::vector<StepId> destination_calls;
+};
+
 /// One resolved statement.
 struct Step {
   StepId phase_gate = kNone;
@@ -293,6 +312,9 @@ struct Step {
   /// `kPipe` reads and writes these refs. `kCapture` reads `source`.
   RefId source = kNone;
   RefId destination = kNone;
+  std::shared_ptr<TransferPlan> transfer;
+  /// The observed continuation group produced by this operation, if any.
+  RefId sink = kNone;
   /// `kPipe`: `-> _`, which reads the stream and keeps nothing.
   ///
   /// The opposite end of the language from a counted `skip`: that one is
@@ -368,6 +390,21 @@ struct Step {
 
   std::vector<VariableUpdate> variable_updates;
 };
+
+inline absl::Span<const RefId> TransferSources(const Step& step) {
+  return step.transfer != nullptr && !step.transfer->sources.empty()
+             ? absl::MakeConstSpan(step.transfer->sources)
+             : absl::MakeConstSpan(
+                   &step.source, step.source == kNone ? size_t{0} : size_t{1});
+}
+
+inline absl::Span<const RefId> TransferTargets(const Step& step) {
+  return step.transfer != nullptr && !step.transfer->destinations.empty()
+             ? absl::MakeConstSpan(step.transfer->destinations)
+             : absl::MakeConstSpan(&step.destination, step.destination == kNone
+                                                          ? size_t{0}
+                                                          : size_t{1});
+}
 
 /// A block of steps: a flow's top level, or a loop or branch body.
 struct Body {
@@ -545,6 +582,7 @@ class GraphBuilder {
         // expression, and one value bound per pass of a loop.
         ref.unary = true;
         break;
+      case RefKind::kSink:
       case RefKind::kNode:
         // A node is a stream the flow may write from anywhere, including from
         // inside a loop, so nothing about it is provable from the plan.

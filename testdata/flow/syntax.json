@@ -271,6 +271,7 @@
                 },
                 {
                   "after": [],
+                  "associativity": "right",
                   "at": {
                     "column": 7,
                     "end": 2345,
@@ -408,6 +409,7 @@
                       }
                     ]
                   },
+                  "result_category": "continuation-sink",
                   "targets": [
                     {
                       "at": {
@@ -423,6 +425,7 @@
                 },
                 {
                   "after": [],
+                  "associativity": "right",
                   "at": {
                     "column": 7,
                     "end": 2583,
@@ -551,6 +554,7 @@
                       }
                     ]
                   },
+                  "result_category": "continuation-sink",
                   "targets": [
                     {
                       "at": {
@@ -640,6 +644,7 @@
           "body": [
             {
               "after": [],
+              "associativity": "right",
               "at": {
                 "column": 5,
                 "end": 2896,
@@ -699,6 +704,7 @@
                 },
                 "stages": []
               },
+              "result_category": "continuation-sink",
               "targets": [
                 {
                   "at": {
@@ -931,6 +937,7 @@
         },
         {
           "after": [],
+          "associativity": "right",
           "at": {
             "column": 3,
             "end": 3172,
@@ -975,6 +982,7 @@
               }
             ]
           },
+          "result_category": "continuation-sink",
           "targets": [
             {
               "at": {
@@ -1026,10 +1034,10 @@
                 "optional": false,
                 "pipeline": {
                   "at": {
-                    "column": 15,
-                    "end": 3358,
+                    "column": 16,
+                    "end": 3363,
                     "line": 87,
-                    "start": 3357
+                    "start": 3358
                   },
                   "kind": "pipeline",
                   "source": {
@@ -1195,6 +1203,7 @@
           "then_body": [
             {
               "after": [],
+              "associativity": "right",
               "at": {
                 "column": 5,
                 "end": 3441,
@@ -1222,6 +1231,7 @@
                 },
                 "stages": []
               },
+              "result_category": "continuation-sink",
               "targets": [
                 {
                   "at": {
@@ -1281,6 +1291,7 @@
         },
         {
           "after": [],
+          "associativity": "right",
           "at": {
             "column": 3,
             "end": 3807,
@@ -1330,6 +1341,7 @@
             },
             "stages": []
           },
+          "result_category": "continuation-sink",
           "targets": [
             {
               "at": {
@@ -1387,6 +1399,7 @@
         },
         {
           "after": [],
+          "associativity": "right",
           "at": {
             "column": 3,
             "end": 3884,
@@ -1436,6 +1449,7 @@
             },
             "stages": []
           },
+          "result_category": "continuation-sink",
           "targets": [
             {
               "at": {
@@ -1451,6 +1465,7 @@
         },
         {
           "after": [],
+          "associativity": "right",
           "at": {
             "column": 3,
             "end": 4222,
@@ -1529,6 +1544,7 @@
               }
             ]
           },
+          "result_category": "continuation-sink",
           "targets": [
             {
               "at": {
@@ -1610,6 +1626,7 @@
         },
         {
           "after": [],
+          "associativity": "right",
           "at": {
             "column": 3,
             "end": 4340,
@@ -1669,6 +1686,7 @@
             },
             "stages": []
           },
+          "result_category": "continuation-sink",
           "targets": [
             {
               "at": {
@@ -1779,6 +1797,7 @@
         },
         {
           "after": [],
+          "associativity": "right",
           "at": {
             "column": 3,
             "end": 4766,
@@ -1838,6 +1857,7 @@
             },
             "stages": []
           },
+          "result_category": "continuation-sink",
           "targets": [
             {
               "at": {

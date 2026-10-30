@@ -177,7 +177,7 @@ contexts:
     # A type a serialisation registry knows by tag, written unquoted and dotted
     # exactly as it was registered: `a11.sdk.AudioBuffer`. First, so a tag whose
     # first part happens to be a built-in name is still read as one tag.
-    - match: '{{name}}(?:\.{{name}})+'
+    - match: '{{name}}(?:::{{name}})+'
       scope: storage.type.tag.a11flow
     - match: |-
         (?x) \b (
@@ -241,6 +241,10 @@ contexts:
         2: keyword.operator.assignment.carry.a11flow
 
   statement-keywords:
+    - match: '\b(wait|WAIT)\s+(all|first|ALL|FIRST){{kw_boundary}}'
+      captures:
+        1: keyword.control.a11flow
+        2: keyword.control.a11flow
     - match: |-
         (?x) \b (
           skip|wait|close|abort|cancel|fail|log|logf|if|for|repeat
@@ -273,7 +277,7 @@ contexts:
     - match: '\b(run|call|RUN|CALL){{kw_boundary}}'
       scope: keyword.other.call.a11flow
       push:
-        - match: '({{name}})(?:(\.)({{name}}))*'
+        - match: '({{name}})(?:(::)({{name}}))*'
           scope: entity.name.function.action.a11flow
           pop: true
         - match: '"'
@@ -365,16 +369,16 @@ contexts:
     - match: '\b(as|AS){{kw_boundary}}'
       scope: keyword.operator.cast.a11flow
       push:
-        - match: '{{name}}(?:\.{{name}})*(?:\s*\[[^\]\n]*\])?'
+        - match: '{{name}}(?:::{{name}})*(?:\s*\[[^\]\n]*\])?'
           scope: storage.type.a11flow
           pop: true
         - include: strings
         - match: '(?=\S)'
           pop: true
     # `a11.sdk.Interaction{...}`: a value of a named type.
-    - match: '{{name}}(?:\.{{name}})+(?=\s*\{)'
+    - match: '{{name}}(?:::{{name}})+(?=\s*\{)'
       scope: storage.type.a11flow
-    - match: '\b(interleave|status|zip|INTERLEAVE|STATUS|ZIP){{kw_boundary}}'
+    - match: '\b(interleave|status|take|zip|INTERLEAVE|STATUS|TAKE|ZIP){{kw_boundary}}'
       scope: keyword.other.status.a11flow
     - match: '\b(it|IT){{kw_boundary}}'
       scope: variable.language.it.a11flow

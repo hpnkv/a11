@@ -691,13 +691,14 @@ that extraction cursor; independent pipeline subscriptions still see the whole
 stream. An empty `take` fails. Use `try take` when EOF is an expected outcome:
 
 ```a11flow
-item = try take rows
-if item.present {
-  item.value -> selected
+if item = try take rows {
+  item -> selected
 }
 ```
 
-A present null item remains distinguishable from EOF. Upstream failure and
+Optional binding evaluates once and introduces a fresh success-branch name.
+A present null item remains distinguishable from EOF. Explicit options expose
+`.has_value` and `.value`; `.value` fails when absent. Upstream failure and
 cancellation propagate through both forms.
 
 ### Stream completion and failure

@@ -57,7 +57,7 @@ BOUNDARY = r"(?![A-Za-z0-9_$-])"
 
 #: A dotted name -- a tag a serialisation registry knows a type by, or the type
 #: of a value being built: ``a11.sdk.AudioBuffer``.
-DOTTED = NAME + r"(?:\." + NAME + r")"
+DOTTED = NAME + r"(?:::" + NAME + r")"
 
 
 def _keywords(*names):
@@ -139,7 +139,7 @@ STAGES = _keywords(
 BARE_STAGES = _keywords("where", "then")
 
 #: Words that open a pipeline source rather than naming one.
-SOURCE_WORDS = _keywords("interleave", "status", "zip")
+SOURCE_WORDS = _keywords("interleave", "status", "take", "zip")
 
 #: Operators that are words.
 OPERATOR_WORDS = _keywords("and", "or", "not", "in")
@@ -236,6 +236,10 @@ class A11FlowLexer(RegexLexer):
                 bygroups(Keyword.Reserved, Whitespace, Name.Namespace),
             ),
             (_group(MODIFIERS), Keyword.Reserved),
+            (
+                _word("wait") + r"(\s+)(" + _keywords("all", "first") + r")" + BOUNDARY,
+                bygroups(Keyword, Whitespace, Keyword),
+            ),
             (_group(STATEMENTS), Keyword),
             (_group(CLAUSES), Keyword),
             # A stage, which is what a word after a `|` is. The gap may hold a

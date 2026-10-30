@@ -50,6 +50,7 @@ struct Source {
   std::string name;
   std::vector<std::string> source_roots = {};
   CompilationLimits limits = {};
+  bool single_item_slots = true;
 };
 
 /// How to run it.

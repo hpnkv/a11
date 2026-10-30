@@ -114,8 +114,13 @@ x = expression or T x = expression initializes once per scope, eagerly.
 Reassignment follows source order, including child-scope updates. Parallel
 conflicting updates are rejected. Names and destructuring patterns are lvalues.
 x = take source consumes one successive item; EOF fails.
-x = try take source returns {present: bool, value: T when present}; errors fail.
-A real null item has present=true. Read the RHS of destructuring only once.
+x = try take source returns {has_value: bool, value: T when present}.
+Errors fail.
+A real null item has has_value=true. Prefer if item = try take source { ... }.
+if item = option evaluates once and binds its payload in the success branch.
+EOF is absence; false-like payloads remain present. The name must be fresh.
+Explicit option.has_value and option.value access remains available.
+Read the RHS of destructuring only once.
 
 for item in source [parallel N] { body }
   [until EXPR | while EXPR] [after subject]
@@ -126,17 +131,25 @@ repeat [state = INITIAL] [max N] {
 Postconditions run after the entire pass, in that pass's scope. Postconditions
 require sequential loops. A repeat needs a condition or an explicit bound.
 
+a -> b -> out associates right and forwards b, then a. A transfer returns a
+continuation sink: alias it without repeating work; attach streams on its right.
+Independent attachments interleave after the prefix; wait/status include all
+attached writers. Virtual sinks and serial chain flattening are enabled
+by default.
+A terminal comma list broadcasts. Group ambiguous combinations explicitly.
+
 node() creates a node. close NODE ends it normally; abort NODE [CODE [MESSAGE]]
 ends it with an error. wait SUBJECT observes completion; status SUBJECT is its
 status. cancel ACTION cancels an action. fail [CODE [MESSAGE]] fails the scope.
 try run/call or try { body } exposes a failure through the operation's status.
 wait first of a, b chooses a completion; wait all of a, b waits for every one.
 Bare wait all is a scope-local execution barrier: all preceding work must
-complete successfully before any following statement activates. This includes
-initializers, arguments, eager deadlines, owned calls, feeds, draining, and child
-scopes. Work within a phase remains concurrent. Barriers inside branches,
-blocks, and loop passes affect only that scope or pass. Stream aliases do not
-read or exhaust streams; cross-phase producer/consumer cycles are errors.
+complete successfully before any following statement activates. This
+includes initializers, arguments, eager deadlines, owned calls, feeds,
+draining, and child scopes. Work within a phase remains concurrent. Barriers
+inside branches, blocks, and loop passes affect only that scope or pass.
+Stream aliases do not read or exhaust streams; cross-phase producer/consumer
+cycles are errors.
 Bare wait all accepts no modifiers or value binding. wait all of a, b remains
 an explicit-subject wait and does not gate following statements.
 after a, b { body } gates a scope. Bound blocks and loops expose completion.

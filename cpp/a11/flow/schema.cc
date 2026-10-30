@@ -209,15 +209,15 @@ void WriteScalar(std::string_view type, nlohmann::json& out) {
   if (type == "option") {
     out["type"] = "object";
     out[std::string(kFlowTypeKey)] = "option";
-    out["properties"] = {{"present", {{"type", "boolean"}}},
+    out["properties"] = {{"has_value", {{"type", "boolean"}}},
                          {"value", nlohmann::json::object()}};
-    out["required"] = {"present"};
+    out["required"] = {"has_value"};
     out["additionalProperties"] = false;
     out["oneOf"] = nlohmann::json::array(
-        {{{"properties", {{"present", {{"const", false}}}}},
+        {{{"properties", {{"has_value", {{"const", false}}}}},
           {"not", {{"required", {"value"}}}}},
          {{"properties",
-           {{"present", {{"const", true}}},
+           {{"has_value", {{"const", true}}},
             {"value", nlohmann::json::object()}}},
           {"required", {"value"}}}});
     return;

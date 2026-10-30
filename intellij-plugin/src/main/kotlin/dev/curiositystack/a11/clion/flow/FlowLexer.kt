@@ -119,6 +119,8 @@ class FlowLexer : LexerBase() {
         "stage" -> FlowTokens.STAGE
         "builtin" -> FlowTokens.BUILTIN
         "type" -> FlowTokens.TYPE
+        "builtin-type" -> if (lexical == "::") FlowTokens.BUILTIN_TYPE_QUALIFIER else FlowTokens.BUILTIN_TYPE
+        "namespace-name" -> FlowTokens.NAMESPACE_NAME
         "status-code" -> FlowTokens.STATUS_CODE
         "constant" -> FlowTokens.CONSTANT
         "word-operator" -> FlowTokens.WORD_OPERATOR

@@ -58,6 +58,8 @@ class Expression {
   static absl::StatusOr<Expression> Completion(std::string operation,
                                                const Expression& subject);
   Expression Take(bool optional = false) const;
+  absl::StatusOr<Expression> Transfer(const Expression& destination,
+                                      bool tolerant = false) const;
   absl::StatusOr<Expression> Cast(const syntax::TypeExpression& type) const;
   absl::StatusOr<Expression> Index(const Expression& index) const;
   absl::StatusOr<Expression> Field(std::string name) const;
@@ -107,6 +109,10 @@ class Statement {
                                         std::optional<Expression> message = {});
   static absl::StatusOr<Statement> If(
       const Expression& condition, const std::vector<Statement>& then_body,
+      const std::vector<Statement>& else_body = {});
+  static absl::StatusOr<Statement> IfSome(
+      std::string name, const Expression& option,
+      const std::vector<Statement>& then_body,
       const std::vector<Statement>& else_body = {});
   static absl::StatusOr<Statement> For(std::string variable,
                                        const Expression& source,

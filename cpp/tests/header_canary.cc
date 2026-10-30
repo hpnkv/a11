@@ -52,6 +52,7 @@
 #include "a11/flow/file_modules.h"
 #include "a11/flow/limits.h"
 #include "a11/flow/module.h"
+#include "a11/flow/single_item.h"
 #include "a11/flow/temporal.h"
 #include "a11/json_codec.h"
 #include "a11/net/byte_chunking.h"

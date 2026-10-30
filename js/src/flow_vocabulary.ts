@@ -66,6 +66,7 @@ export const FLOW_KEYWORDS: readonly string[] = [
   "status",
   "stream",
   "struct",
+  "take",
   "tee",
   "timeout",
   "try",

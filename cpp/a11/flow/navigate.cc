@@ -51,6 +51,7 @@ SymbolClass ClassOf(SymbolKind kind) {
       return SymbolClass::kNode;
     case SymbolKind::kNodeMap:
       return SymbolClass::kNodeMap;
+    case SymbolKind::kSink:
     case SymbolKind::kBarrier:
       return SymbolClass::kBarrier;
     case SymbolKind::kLoopVariable:
@@ -935,7 +936,10 @@ Description Describe(std::string_view source, size_t offset,
       continue;
     }
     for (const Symbol& symbol : flow.symbols) {
-      if (symbol.name != about.text || symbol.implicit) {
+      if (symbol.name != about.text || symbol.implicit ||
+          (!symbol.VisibleAt(here->start) &&
+           !(here->start >= symbol.location.start &&
+             here->start < symbol.location.end))) {
         continue;
       }
       about.kind = ClassOf(symbol.kind);
@@ -946,6 +950,15 @@ Description Describe(std::string_view source, size_t offset,
       about.definition = RangeOf(lines, symbol.location);
       if (symbol.kind == SymbolKind::kCall) {
         absl::StrAppend(&about.summary, ", running `", symbol.action, "`");
+      }
+      if (symbol.kind == SymbolKind::kValue && symbol.value_type.has_value()) {
+        absl::StrAppend(&about.summary, ": ", symbol.value_type->ToString());
+      }
+      if (symbol.kind == SymbolKind::kSink) {
+        about.detail =
+            "Appending waits for this operation, then independent writers "
+            "interleave. Completion waits for the operation and all attached "
+            "writers. Aliases share the same sink; it cannot carry payload.";
       }
       if (const PortPlan* port =
               flow.plan.Port(symbol.name, symbol.kind == SymbolKind::kInputPort

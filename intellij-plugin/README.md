@@ -81,7 +81,7 @@ styling. Object fields remain members. Type positions support qualified tags and
 nested parameters:
 
 ```a11flow
-in frames: std::list[a11::NodeFragment] stream
+in frames: list[a11::NodeFragment] stream
 out audio: a11::sdk::AudioBuffer stream required
 ```
 

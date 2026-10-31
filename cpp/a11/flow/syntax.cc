@@ -541,6 +541,9 @@ void VisitChildren(const Node& node,
       const auto& stage = static_cast<const Stage&>(node);
       one(stage.argument);
       one(stage.parallel_expression);
+      one(stage.context_before);
+      one(stage.context_after);
+      one(stage.context_base);
       all(stage.log.arguments);
       return;
     }

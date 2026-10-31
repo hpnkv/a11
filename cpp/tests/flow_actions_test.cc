@@ -576,6 +576,18 @@ TEST(ReadFileTest, ReportsAMissingFileAsNotFound) {
   EXPECT_EQ(status.code(), absl::StatusCode::kNotFound);
 }
 
+TEST(ReadFileTest, RejectsEmbeddedNulWithoutReadingThePathPrefix) {
+  Workspace workspace;
+  const std::string path = workspace.Write("secret.txt", "private");
+  const auto action =
+      MakeReadFile(workspace, path + std::string("\0suffix", 7));
+  ASSERT_NE(action, nullptr);
+  ASSERT_TRUE(action->Run().ok());
+  EXPECT_EQ(action->Wait(kPatience).Await().status().code(),
+            absl::StatusCode::kInvalidArgument);
+  EXPECT_TRUE(ReadAll(action, "bytes").empty());
+}
+
 TEST(ReadFileTest, RefusesToReadPastTheByteLimit) {
   Workspace workspace;
   const std::string path = workspace.Write("big.bin", std::string(5000, 'y'));
@@ -1065,6 +1077,39 @@ std::shared_ptr<Action> MakeSpawn(const CapabilitiesPtr& capabilities,
     return nullptr;
   }
   return action;
+}
+
+TEST(SpawnProcessTest, RejectsEmbeddedNulBeforeStartingAProcess) {
+  const std::string nul(1, '\0');
+  const nlohmann::json arguments =
+      nlohmann::json::array({"-c", "echo unexpected"});
+  const std::vector<std::shared_ptr<Action>> actions = {
+      MakeSpawn(CanRun({}), "sh" + nul + "suffix", arguments),
+      MakeSpawn(CanRun({}), "sh", nlohmann::json::array({"-c", "echo" + nul})),
+      MakeSpawn(CanRun({}), "sh", "echo" + nul),
+      MakeSpawn(CanRun({}), "sh", arguments,
+                {{"cwd", "/tmp" + nul + "suffix"}}),
+      MakeSpawn(CanRun({}), "sh", arguments,
+                {{"environment", {{"NAME" + nul, "value"}}}}),
+      MakeSpawn(CanRun({}), "sh", arguments,
+                {{"environment", {{"NAME", "value" + nul}}}}),
+  };
+  for (const auto& action : actions) {
+    ASSERT_NE(action, nullptr);
+    ASSERT_TRUE(action->Run().ok());
+    EXPECT_EQ(action->Wait(kPatience).Await().status().code(),
+              absl::StatusCode::kInvalidArgument);
+    EXPECT_FALSE(ReadOne(action, "pid").has_value());
+  }
+}
+
+TEST(SpawnProcessTest, PreservesNulInStandardInputAndOutput) {
+  const std::string data("a\0b", 3);
+  const auto action = MakeSpawn(CanRun({}), "cat", {}, {}, {data});
+  ASSERT_NE(action, nullptr);
+  ASSERT_TRUE(action->Run().ok());
+  ASSERT_TRUE(action->Wait(kPatience).Await().ok());
+  EXPECT_EQ(Concat(ReadAll(action, "stdout")), data);
 }
 
 TEST(SpawnProcessTest, KeepsStandardOutputAndStandardErrorApart) {

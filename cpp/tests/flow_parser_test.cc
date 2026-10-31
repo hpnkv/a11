@@ -765,6 +765,57 @@ flow main {
   EXPECT_FALSE(stage["ordered"].get<bool>());
 }
 
+TEST(FlowParser, ContextRequiresBothCountsAndPreservesTheirExpressions) {
+  const auto parsed = Parse(R"(
+flow main {
+  in rows: string stream
+  in width: int
+
+  out excerpts: list[string] stream
+
+  rows | CONTEXT std::contains(it, "error") BEFORE width + 1 AFTER width
+    NUMBERED BASE width - 1 -> excerpts
+}
+)");
+  ASSERT_FALSE(parsed.HasErrors()) << absl::StrJoin(Messages(parsed), "; ");
+  const auto value = SyntaxToJsonValue("context.flow", parsed);
+  const auto& stage = value["flows"][0]["body"][0]["pipeline"]["stages"][0];
+  EXPECT_EQ(stage["name"], "context");
+  EXPECT_EQ(stage["before"]["kind"], "binary");
+  EXPECT_EQ(stage["after"]["kind"], "name");
+  EXPECT_EQ(stage["numbered"], true);
+  EXPECT_EQ(stage["base"]["kind"], "binary");
+  for (const auto tail :
+       {"true", "true before 1", "true before 1 after",
+        "true before 1 after 1 parallel 2", "true before 1 after 1 unordered",
+        "true before 1 after 1 base 0",
+        "true before 1 after 1 numbered base"}) {
+    EXPECT_TRUE(Parse(absl::StrCat("flow f { [1] | flatten | context ", tail,
+                                   " -> _\n}"))
+                    .HasErrors())
+        << tail;
+  }
+}
+
+TEST(FlowParser, ContextOptionsPreserveFollowingStatementsAndContextualNames) {
+  const auto parsed = Parse(R"(
+flow main {
+  a = [1] | flatten | context true before 0 after 0
+  numbered = 2
+  b = [1] | flatten | context true before 0 after 0 numbered
+  base = 0
+  c = [1] | flatten | context true before 0 after 0 numbered base base
+  [1] | flatten | context true before 0 after 0 numbered -> _
+  [1] | flatten | context true before 0 after 0
+    numbered -> _
+  a -> _
+  b -> _
+  c -> _
+}
+)");
+  ASSERT_FALSE(parsed.HasErrors()) << absl::StrJoin(Messages(parsed), "; ");
+}
+
 TEST(FlowParser, TheSyntaxEnvelopeIsWhatTheFormatSays) {
   const ParseResult result =
       Parse("flow f { in a: string\n out b: string\n a | truncate 5 -> b }");

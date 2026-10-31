@@ -1080,10 +1080,10 @@ def format(source: str) -> dict[str, typing.Any]:
     Returns a ``flow.format/v1`` payload: the formatted text, whether it differs, one
     edit that turns the input into it, and any problems found on the way.
 
-    It decides indentation, the spaces between tokens, blank lines and the columns of a
-    run of declarations. It does *not* decide where the lines break: that is a judgement
-    about what belongs together, and it stays the author's. A file with an error in it is
-    returned exactly as it was, with the diagnostics saying why.
+    It decides indentation, spacing, blank lines and declaration columns. Long lines
+    wrap at syntax boundaries to 80 columns; string and comment tokens remain intact.
+    Declaration modifiers follow their canonical order. The parsed program retains
+    its meaning. A file with an error is returned unchanged with diagnostics.
     """
 
 def highlight(source: str, source_name: str = "-") -> dict[str, typing.Any]:

@@ -210,6 +210,24 @@ TEST(FlowValues, StrformatIsPrintfAndOnlyPrintf) {
       "1m30s");
 }
 
+TEST(FlowValues, StrformatPreservesNulInStringsAndLiteralText) {
+  const std::string text("a\0b", 3);
+  EXPECT_EQ(Strformat(Value::String("%s"), {Value::String(text)}), text);
+  EXPECT_EQ(Strformat(Value::String("%5s"), {Value::String(text)}),
+            "  " + text);
+  EXPECT_EQ(Strformat(Value::String("%-5s"), {Value::String(text)}),
+            text + "  ");
+  EXPECT_EQ(Strformat(Value::String("%.2s"), {Value::String(text)}),
+            std::string("a\0", 2));
+  EXPECT_EQ(Strformat(Value::String("%+05s"), {Value::String(text)}),
+            "  " + text);
+  EXPECT_EQ(Strformat(Value::String(std::string("%s\0%s", 5)),
+                      {Value::String("a"), Value::String("b")}),
+            text);
+  EXPECT_EQ(StrformatCompiled(CompileStrformat("%s"), {Value::String(text)}),
+            text);
+}
+
 TEST(FlowValues, EvaluatesLiteralsAndPaths) {
   EXPECT_EQ(TextOf(R"("hello")"), "hello");
   EXPECT_EQ(TextOf("42"), "42");

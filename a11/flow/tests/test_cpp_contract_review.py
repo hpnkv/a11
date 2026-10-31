@@ -144,6 +144,11 @@ async def test_file_failure_does_not_stop_other_files(failure):
     async def read(action):
         path = await action["path"].consume(str)
         reads.append(path)
+        if "\0" in path:
+            raise a11.Status(
+                code=a11.StatusCode.INVALID_ARGUMENT,
+                message="Paths must not contain NUL.",
+            ).to_exception()
         if path == bad_path and failure == "read":
             raise a11.Status(
                 code=a11.StatusCode.NOT_FOUND, message="file missing",
@@ -178,8 +183,11 @@ async def test_file_failure_does_not_stop_other_files(failure):
     if failure == "read":
         assert reviews[bad_path]["error"]["code"] == "NOT_FOUND"
         assert reviews[bad_path]["error"]["details"] == [{"path": bad_path}]
-    if failure in ("", "bad\0.cc"):
+    if failure == "":
         assert bad_path not in reads
+    if failure == "bad\0.cc":
+        assert bad_path in reads
+        assert reviews[bad_path]["error"]["code"] == "INVALID_ARGUMENT"
 
 
 @pytest.mark.asyncio

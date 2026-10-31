@@ -17,9 +17,11 @@ from std import contains, default, get, join, replace, slice, split, strformat, 
 flow suggest-fixes {
   describe "Review the file the developer is looking at and suggest fixes for it, on the IDE's ranges and on its own."
 
-  out file_comment: string        "What the file needs, taken together."
-  out comments:     object stream "What is wrong with one range, as soon as it is written."
-  out patches:      object stream "The diff that fixes one range, keyed to its comment by id."
+  out file_comment: string "What the file needs, taken together."
+  out comments:     object stream
+    "What is wrong with one range, as soon as it is written."
+  out patches:      object stream
+    "The diff that fixes one range, keyed to its comment by id."
 
   # Local nodes: the file's text, the prompt built out of it and the answer taken
   # apart again are the composition's own business, and none of them belongs in
@@ -38,7 +40,8 @@ flow suggest-fixes {
   )
 
   whole = run interact_with_llm(
-    config: {max_tokens: 48000, effort: "medium", max_output_tokens: 48000, num_predict: 48000}
+    config: {max_tokens: 48000, effort: "medium", max_output_tokens: 48000,
+      num_predict: 48000}
   )
       forward headers "x-a11-llm-*"
       with "x-a11-allowed-llm-actions": ""

@@ -36,14 +36,13 @@ Keep full data needed by downstream actions inside the Flow; truncate the
 branch returned to the model. Retain identifiers, errors, and available counts
 or truncation indicators so the next Flow can retrieve missing evidence.
 
-Treat test runs, builds, installs, lint, and diagnostics as expected-long tools.
-Filter their outputs inside the Flow: return exit status and summary counts on
-success. For failures, select relevant failed tests, errors, and causal trace
-or stack sections with enough surrounding context. Prefer relevance filtering
-to blind head/tail cuts. Preserve complete diagnostic units and structured
-details needed to explain a failure; apply size caps to residual bulk text.
-Save complete logs to files when needed and expand selected evidence to resolve
-specific gaps; routine results need not include unrelated diagnostic groups.
+For file/tool-output matches (tests, web fetches, external systems), prefer
+`context e before N after M` on original lines/items per source; filtering first
+loses neighbors. Use search hits to locate source spans. Split unary text with
+`std::split(text, "\n") | flatten`. Keep N/M small; `first G` caps groups, then
+`map std::join(it, "\n") | truncate C` caps each text excerpt. Successful checks
+need only status/counts. Preserve complete causal diagnostics and structured
+details; save full logs and expand only for a concrete gap.
 
 Use this reference first. Consult extended guides only when your specific
 concern is genuinely not answered here; do not load them as routine background.
@@ -56,7 +55,8 @@ For missing details: [guide](flow.md),
 
 `e` = expression, `s` = stream, `T` = type; `[ ... ]` in tables means optional.
 Examples use separate lines; tables use semicolons only to separate alternatives.
-One statement per line; braces delimit scopes; `#` comments. Keywords accept
+One statement per logical line; incomplete expressions, types, pipelines, and
+modifier tails may continue across lines. Braces delimit scopes; `#` comments. Keywords accept
 lowercase or UPPERCASE. Functions need `std::` unless imported; stages do not.
 Flows join owned work; emitting an output does not finish execution.
 Strings and `"""` strings decode `\0` (NUL), `\a`, `\b`, `\f`, `\n`, `\r`,
@@ -104,14 +104,17 @@ safety restrictions on outer-variable updates and trailing conditions.
 
 ## Types and conversions
 
+Prefer `list[T]` and `list(value)`: `list` is available without an import as an
+alias of `std::list`. The qualified spelling remains valid.
+
 | Types | Meaning |
 |---|---|
 | `int`, `number`, `bool`, `string`, `bytes`, `null` | Primitive prelude; prefer `int` (`integer` is an alias). Same-name conversions are unqualified. |
 | `object`, `object[V]` | String-keyed heterogeneous / uniformly typed values; no key-type parameter. |
-| `std::list[T]`, `std::json`, `std::any` | One list value, JSON-compatible data, unrestricted payload. |
+| `list[T]`, `std::json`, `std::any` | One list value, JSON-compatible data, unrestricted payload. |
 | `std::time`, `std::duration` | Instant / interval; timezone-less input is UTC. Durations: `ns us ms s m h`, e.g. `1m30s`; numeric conversions use seconds. |
 | `std::status`, `std::option[T]`, `std::stream[T]` | Status data, explicit presence, live stream capability. Prefer optional binding below. Explicit `.has_value` tests presence; absent `.value` access fails. |
-| Standard-type conversions `int(v)`, `std::list(v)`, etc.; `v as T` | Convert/validate; existing permissive coercions may lose precision or map invalid numeric text to zero. Checked parsers below fail instead. |
+| Standard-type conversions `int(v)`, `list(v)`, etc.; `v as T` | Convert/validate; existing permissive coercions may lose precision or map invalid numeric text to zero. Checked parsers below fail instead. |
 | `std::text`, `std::boolean`, `std::array[T]` | Aliases of string, bool, list. Exposing a standard type also exposes its supported conversion. |
 
 ## Optional reads
@@ -229,6 +232,7 @@ and reductions need EOF; bound endless sources upstream.
 | `first N`; `last N`; `drop N`; `distinct` | Prefix / suffix / skip / deduplicate. |
 | `truncate N`; `chunk N` | Shorten each value / split text or bytes into ≤N-byte chunks. |
 | `batch N`; `window N`; `group e`; `flatten` | Batches / full-width rolling windows / groups closed by e / expand lists. `batch` and `group` flush partial groups at EOF; `window` does not. |
+| `context e before N after M [numbered [base B]]` | Excerpts with N preceding items; each match within M trailing items resets the tail. EOF flushes. Counts: nonnegative int32, evaluated once outside `it`. `numbered`: `{index, value}`, counting every source item from B (default 1). Active excerpts can grow; bound endless sources upstream. |
 | `sort [by e] [desc]` | Collect and order; ascending by default. |
 | `match "pattern"`; `mime "text/*"` | Extract matching records, dropping nonmatches / filter representations. |
 | `collect`; `consume`; `count` | One list (empty → `[]`) / require exactly one item and EOF / item count (empty → 0). |
@@ -282,7 +286,7 @@ from std import trim, len
 
 struct Hit exported {
   name:  string required
-  score: int 0..100 required
+  score: int required 0..100
 }
 
 mod text exported {

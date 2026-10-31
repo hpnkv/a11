@@ -219,6 +219,23 @@ try pipe to tolerate transfer errors too. No item is dropped.
 Stages include map EXPR, where EXPR, first N, drop N, collect, flatten,
 scan INITIAL as state, EXPR, fold INITIAL as state, EXPR, sum, count,
 take while EXPR, take until EXPR, as TYPE, json, packb, timeout DURATION.
+context PREDICATE before N after M emits excerpts with N preceding items.
+Matches within the M trailing items reset that count and extend the excerpt.
+Normal EOF flushes shorter lists; upstream failures propagate. Counts evaluate
+once outside it and must be nonnegative signed 32-bit integers. Optional
+numbered [base EXPR] returns {index, value} items, counting every source item
+from base (default 1). Base evaluates once and must be an integer; overflow
+fails. Storage holds N preceding items plus the active excerpt, which can grow
+with chained matches; bound endless sources upstream. Parallel and unordered
+are unsupported.
+Prefer context for file/tool matches (tests, web, external systems). Feed
+original lines/items per source, keep neighborhoods small, cap groups with first
+and joined excerpts with truncate. Filtering first loses neighboring evidence.
+An initializer, type after a colon, or binary operator may continue on the next
+line. Pipeline and modifier tails may wrap. The formatter targets 80 columns
+and orders declaration modifiers; string and comment tokens remain intact.
+Prefer list[T] and list(value). list is a prelude alias of std::list; neither
+form requires an import. The qualified spelling remains valid.
 Stages stay unqualified. Functions are qualified: std::len, std::upper,
 std::join, std::match, std::strformat, std::now, std::duration, std::time.
 from std import now makes now() available without a prefix.

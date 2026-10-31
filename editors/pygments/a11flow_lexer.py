@@ -116,8 +116,8 @@ STATEMENTS = _keywords(
 
 #: Words that stand inside a statement without opening one.
 CLAUSES = _keywords(
-    "parallel", "unordered", "max", "of", "by", "desc", "into", "until",
-    "while"
+    "parallel", "unordered", "max", "of", "by", "before", "desc", "into",
+    "until", "while", "numbered", "base"
 )
 
 #: What may follow a call's closing parenthesis.
@@ -129,10 +129,11 @@ MODIFIERS = _keywords(
 #: Every pipeline stage.
 STAGES = _keywords(
     "take while", "take until", "first", "last", "drop", "truncate",
-    "batch", "window", "flatten", "group", "sort", "where", "map", "scan",
-    "match", "distinct", "then", "log", "logf", "mime", "strformat",
-    "chunk", "collect", "consume", "count", "sum", "min", "max", "avg",
-    "fold", "join", "text", "json", "packb", "timeout", "pace"
+    "batch", "window", "context", "flatten", "group", "sort", "where",
+    "map", "scan", "match", "distinct", "then", "log", "logf", "mime",
+    "strformat", "chunk", "collect", "consume", "count", "sum", "min",
+    "max", "avg", "fold", "join", "text", "json", "packb", "timeout",
+    "pace"
 )
 
 #: The stages that may be written without their leading ``|``.

@@ -106,6 +106,11 @@ class Workspace:
         directory: bool | None = None,
     ) -> pathlib.Path:
         """Resolve a path and enforce the configured read or write roots."""
+        if "\0" in os.fspath(value):
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT,
+                message="Paths must not contain NUL.",
+            ).to_exception()
         raw = pathlib.Path(value).expanduser()
         candidate = raw if raw.is_absolute() else self.cwd / raw
         candidate = candidate.resolve(strict=False)
@@ -181,10 +186,12 @@ class Workspace:
                         code=StatusCode.DATA_LOSS,
                         message=message,
                     ).to_exception() from error
-                instructions.append({
-                    "path": self.relative(source),
-                    "text": text,
-                })
+                instructions.append(
+                    {
+                        "path": self.relative(source),
+                        "text": text,
+                    }
+                )
         return instructions
 
     def git_status(self) -> str:

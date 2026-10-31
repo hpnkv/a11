@@ -425,6 +425,11 @@ struct Stage : NodeOf<NodeKind::kStage> {
   int parallel = 1;
   /// A nonliteral concurrency count, evaluated once when the stage starts.
   NodePtr parallel_expression;
+  /// `context`: surrounding item counts, evaluated once outside `it`.
+  NodePtr context_before;
+  NodePtr context_after;
+  bool context_numbered = false;
+  NodePtr context_base;
   /// Whether the values leave in the order they arrived. True unless
   /// `unordered` was written: a parallel stage finishes its values out of
   /// order and puts them back in order on the way out, so everything after it

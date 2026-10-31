@@ -82,8 +82,8 @@ flow interact-on-full-sentence {
   in  device:  object required "Which input to open on the client."
   in  history: string required "Id of the node holding the turns so far."
 
-  out sentence: string                       "The sentence that became the question."
-  out reply:    string stream                "The model's answer, as it is written."
+  out sentence: string "The sentence that became the question."
+  out reply:    string stream "The model's answer, as it is written."
   out turn:     a11::sdk::Interaction stream "What to remember of this turn."
 }
 ```
@@ -399,6 +399,23 @@ prior input:
 ```a11flow
 lines | scan 0 as n, n + 1 -> numbered
 ```
+
+Use `context` to retain nearby diagnostic lines with each match:
+
+```a11flow
+process.output_lines
+  | context std::contains(it, "error") before 3 after 5
+  -> excerpts
+```
+
+Each output starts with up to three preceding lines. Every match within the
+five trailing lines resets the trailing count, extending the same excerpt.
+Normal EOF flushes a shorter excerpt; upstream failures propagate. Counts are
+expressions evaluated once outside `it`; both must be nonnegative signed
+32-bit integers. Storage grows with the active excerpt, so limit potentially
+endless sources upstream. Add `numbered` for `{index, value}` items counting all
+source items from 1, or `numbered base 0` for zero-based indices. The stage
+works on arbitrary stream items as well as text lines.
 
 `| window 2` creates overlapping lists. Unlike `batch`, it can detect a pattern
 that spans a group boundary.

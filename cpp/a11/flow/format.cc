@@ -25,15 +25,20 @@
 #include <absl/container/flat_hash_set.h>
 #include <absl/strings/ascii.h>
 #include <absl/strings/str_cat.h>
+#include <nlohmann/json.hpp>
 
 #include "a11/flow/diagnostic.h"
+#include "a11/flow/emit_json.h"
 #include "a11/flow/lexer.h"
 #include "a11/flow/parser.h"
 #include "a11/flow/token.h"
 #include "a11/flow/vocabulary.h"
+#include "a11/utf8.h"
 
 namespace a11::flow {
 namespace {
+
+size_t Columns(std::string_view text);
 
 /// A declaration, split into the columns a run of them lines up by.
 ///
@@ -64,6 +69,7 @@ struct OutputLine {
   std::string text;
   /// A comment that followed code on the same line.
   std::string comment;
+  std::string description_tail;
   std::optional<PortColumns> port;
   /// Whether one blank line goes above this one.
   bool blank_before = false;
@@ -92,6 +98,19 @@ TokenKind Closes(TokenKind opener) {
     default:
       return TokenKind::kRightBrace;
   }
+}
+
+bool ExpectsOperand(const Token& token) {
+  const auto word = token.IsWord() ? vocabulary::Canonical(token.text) : "";
+  return token.kind == TokenKind::kColon || token.kind == TokenKind::kEqual ||
+         token.kind == TokenKind::kEqualEqual ||
+         token.kind == TokenKind::kBangEqual ||
+         token.kind == TokenKind::kLess ||
+         token.kind == TokenKind::kLessEqual ||
+         token.kind == TokenKind::kGreater ||
+         token.kind == TokenKind::kGreaterEqual ||
+         token.kind == TokenKind::kPlus || token.kind == TokenKind::kMinus ||
+         word == "and" || word == "or" || word == "in";
 }
 
 /// Whether `word(` reads as something being called.
@@ -215,7 +234,8 @@ class Formatter {
     // A line that begins where the one above left off mid-list continues it: a
     // comma at the end of the previous line says the statement is not over.
     if (!inside_group && index > 0 &&
-        code_[index - 1].kind == TokenKind::kComma) {
+        (code_[index - 1].kind == TokenKind::kComma ||
+         ExpectsOperand(code_[index - 1]))) {
       return true;
     }
     // Inside a bracketed group a word starts an element, never a tail: `id:` is
@@ -234,7 +254,9 @@ class Formatter {
     }
     const std::string word = vocabulary::Canonical(token.text);
     if (!vocabulary::ModifierWords().contains(word) &&
-        !vocabulary::BareStages().contains(word)) {
+        !vocabulary::BareStages().contains(word) && word != "before" &&
+        word != "parallel" && word != "unordered" && word != "into" &&
+        word != "numbered" && word != "base") {
       return false;
     }
     if (index + 1 >= code_.size()) {
@@ -381,11 +403,14 @@ class Formatter {
         // `list[` and `x[0]`; a list literal anywhere else takes its space --
         // including after `one of` and `default`, where the brackets hold a
         // value rather than a type's parameters.
-        return !(
-            (previous.IsWord() && !vocabulary::FieldModifierWords().contains(
-                                      vocabulary::Canonical(previous.text))) ||
-            previous.kind == TokenKind::kRightParen ||
-            previous.kind == TokenKind::kRightBracket);
+        return !((previous.IsWord() &&
+                  vocabulary::Canonical(previous.text) != "in" &&
+                  !vocabulary::OperatorWords().contains(
+                      vocabulary::Canonical(previous.text)) &&
+                  !vocabulary::FieldModifierWords().contains(
+                      vocabulary::Canonical(previous.text))) ||
+                 previous.kind == TokenKind::kRightParen ||
+                 previous.kind == TokenKind::kRightBracket);
       case TokenKind::kLeftBrace:
         // A block brace always takes its space: `flow research {`.
         if (OpensBlock(current)) {
@@ -522,7 +547,7 @@ class Formatter {
       after_block_close_ = false;
       description_line_ = brackets_.empty() && IsDescriptionLine(index);
       SeparatePortGroup(index);
-      if (brackets_.empty() && options_.align_ports) {
+      if (brackets_.empty()) {
         size_t after = EmitPort(index);
         if (after == index) {
           after = EmitHeader(index);
@@ -579,10 +604,11 @@ class Formatter {
   /// The end of the logical line starting at `index`, for a declaration.
   ///
   /// A break ends it, and so does the `}` that closes the flow around it.
-  [[nodiscard]] size_t LineEnd(size_t index) const {
+  [[nodiscard]] size_t LineEnd(size_t index, bool grouped = false) const {
     size_t end = index + 1;
     int depth = 0;
-    while (end < code_.size() && breaks_[end] == 0) {
+    while (end < code_.size() &&
+           (breaks_[end] == 0 || (grouped && depth > 0))) {
       if (IsOpener(code_[end].kind)) {
         ++depth;
       }
@@ -728,12 +754,23 @@ class Formatter {
         break;
       }
     }
-    // What the port is like, in the order it was written.
+    std::vector<Token> modifiers;
     while (at < end && code_[at].IsWord() &&
            vocabulary::PortModifierWords().contains(
                vocabulary::Canonical(code_[at].text))) {
-      absl::StrAppend(&type, " ", code_[at].text);
+      modifiers.push_back(code_[at]);
       ++at;
+    }
+    const auto order = vocabulary::OrderedPortModifiers();
+    std::stable_sort(modifiers.begin(), modifiers.end(),
+                     [&](const auto& a, const auto& b) {
+                       return std::find(order.begin(), order.end(),
+                                        vocabulary::Canonical(a.text)) <
+                              std::find(order.begin(), order.end(),
+                                        vocabulary::Canonical(b.text));
+                     });
+    for (const auto& modifier : modifiers) {
+      absl::StrAppend(&type, " ", modifier.text);
     }
     if (at < end && code_[at].kind == TokenKind::kString) {
       columns.description = std::string(code_[at].text);
@@ -781,7 +818,7 @@ class Formatter {
         code_[index + 1].kind != TokenKind::kColon) {
       return index;
     }
-    const size_t stop = LineEnd(index);
+    const size_t stop = LineEnd(index, true);
     size_t end = stop;
     if (end - index < 3) {
       return index;
@@ -809,13 +846,84 @@ class Formatter {
     PortColumns columns;
     columns.field = true;
     columns.name = absl::StrCat(code_[index].text, ":");
-    Token previous;
+
+    struct Modifier {
+      int rank;
+      size_t start;
+      size_t end;
+    };
+
+    std::vector<Modifier> modifiers;
+    int depth = 0;
+    const auto order = vocabulary::OrderedFieldModifiers();
     for (size_t at = index + 2; at < end; ++at) {
-      if (at > index + 2 && NeedsSpace(previous, code_[at])) {
+      const auto& token = code_[at];
+      if (at > index + 2 && depth == 0 &&
+          code_[at - 1].kind != TokenKind::kScope &&
+          code_[at - 1].kind != TokenKind::kDot) {
+        const auto word = vocabulary::Canonical(token.text);
+        const auto found = std::find(order.begin(), order.end(),
+                                     word == "one" ? "one of" : word);
+        const bool numeric = token.kind == TokenKind::kNumber ||
+                             token.kind == TokenKind::kDuration;
+        const bool after_default =
+            at > 1 && code_[at - 2].IsWord() &&
+            vocabulary::Canonical(code_[at - 2].text) == "default";
+        const bool range =
+            !TakesAnArgument(code_[at - 1]) &&
+            ((numeric && code_[at - 1].kind != TokenKind::kRange) ||
+             (token.kind == TokenKind::kRange &&
+              (after_default || (code_[at - 1].kind != TokenKind::kNumber &&
+                                 code_[at - 1].kind != TokenKind::kDuration))));
+        if ((token.IsWord() && found != order.end()) || range) {
+          if (!modifiers.empty()) {
+            modifiers.back().end = at;
+          }
+          modifiers.push_back(
+              {range ? 3 : static_cast<int>(found - order.begin()) * 2, at,
+               end});
+        }
+      }
+      if (IsOpener(token.kind)) {
+        ++depth;
+      }
+      if (IsCloser(token.kind)) {
+        --depth;
+      }
+    }
+    std::vector<Token> ordered;
+    const size_t type_end = modifiers.empty() ? end : modifiers.front().start;
+    ordered.insert(ordered.end(),
+                   code_.begin() + static_cast<std::ptrdiff_t>(index + 2),
+                   code_.begin() + static_cast<std::ptrdiff_t>(type_end));
+    std::stable_sort(
+        modifiers.begin(), modifiers.end(),
+        [](const auto& a, const auto& b) { return a.rank < b.rank; });
+    const bool reordered = !std::is_sorted(
+        modifiers.begin(), modifiers.end(),
+        [](const auto& a, const auto& b) { return a.start < b.start; });
+    if (!reordered) {
+      for (size_t at = index + 1; at < end; ++at) {
+        if (breaks_[at] > 0) {
+          return index;
+        }
+      }
+    }
+    for (const auto& modifier : modifiers) {
+      ordered.insert(
+          ordered.end(),
+          code_.begin() + static_cast<std::ptrdiff_t>(modifier.start),
+          code_.begin() + static_cast<std::ptrdiff_t>(modifier.end));
+    }
+    Token previous;
+    for (size_t at = 0; at < ordered.size(); ++at) {
+      if (at > 0 && previous.kind == TokenKind::kComment) {
+        columns.type.push_back('\n');
+      } else if (at > 0 && NeedsSpace(previous, ordered[at])) {
         columns.type.push_back(' ');
       }
-      columns.type.append(code_[at].text);
-      previous = code_[at];
+      columns.type.append(ordered[at].text);
+      previous = ordered[at];
     }
     columns.description = std::move(description);
     port_ = std::move(columns);
@@ -891,12 +999,22 @@ class Formatter {
       }
       std::string text = absl::StrCat(
           std::string(static_cast<size_t>(line.indent), ' '), line.text);
-      if (!line.comment.empty()) {
+      if (!line.comment.empty() && line.description_tail.empty()) {
         // Two spaces before a comment that shares its line with code, which is
         // the convention every language that has one uses.
         absl::StrAppend(&text, text.empty() ? "" : "  ", line.comment);
       }
       absl::StrAppend(&out, absl::StripTrailingAsciiWhitespace(text), "\n");
+      if (!line.description_tail.empty()) {
+        out.append(static_cast<size_t>(line.indent) +
+                       static_cast<size_t>(options_.indent),
+                   ' ');
+        out.append(line.description_tail);
+        if (!line.comment.empty()) {
+          absl::StrAppend(&out, "  ", line.comment);
+        }
+        out.push_back('\n');
+      }
     }
     return out;
   }
@@ -911,7 +1029,37 @@ class Formatter {
            vocabulary::Canonical(line.port->direction) == "header";
   }
 
+  void AppendDescription(OutputLine& line, std::string& text,
+                         const PortColumns& port, size_t padding = 0) const {
+    if (port.description.empty()) {
+      return;
+    }
+    const size_t columns = static_cast<size_t>(line.indent) + Columns(text) +
+                           1 + Columns(port.description);
+    if (options_.line_width != 0 && columns > options_.line_width) {
+      line.description_tail = port.description;
+      return;
+    }
+    if (options_.line_width != 0 && columns + padding > options_.line_width) {
+      padding = 0;
+    }
+    text.append(padding + 1, ' ');
+    text.append(port.description);
+  }
+
   void AlignPorts(size_t begin, size_t end) {
+    if (!options_.align_ports) {
+      for (size_t index = begin; index < end; ++index) {
+        if (lines_[index].port.has_value()) {
+          const auto& port = *lines_[index].port;
+          lines_[index].text =
+              absl::StrCat(port.direction, port.direction.empty() ? "" : " ",
+                           port.name, " ", port.type);
+          AppendDescription(lines_[index], lines_[index].text, port);
+        }
+      }
+      return;
+    }
     // Three for a port whatever this run holds, so `in` and `out` line up
     // across two groups of them as well as within one. A field has no such
     // word, and a header's is only ever `header`.
@@ -951,10 +1099,9 @@ class Formatter {
       text.push_back(' ');
       absl::StrAppend(&text, port.type);
       if (any_description && !port.description.empty()) {
-        text.append(
-            type_width > port.type.size() ? type_width - port.type.size() : 0,
-            ' ');
-        absl::StrAppend(&text, " ", port.description);
+        AppendDescription(
+            lines_[index], text, port,
+            type_width > port.type.size() ? type_width - port.type.size() : 0);
       }
       lines_[index].text = std::move(text);
     }
@@ -1001,6 +1148,139 @@ class Formatter {
   bool description_line_ = false;
 };
 
+nlohmann::json Meaning(const ParseResult& parsed) {
+  auto result = SyntaxToJsonValue("-", parsed);
+  result.erase("source");
+  result.erase("diagnostics");
+  std::vector<nlohmann::json*> pending{&result};
+  while (!pending.empty()) {
+    auto* node = pending.back();
+    pending.pop_back();
+    if (node->is_object()) {
+      const bool literal =
+          node->contains("kind") && (*node)["kind"] == "literal";
+      node->erase("at");
+      for (auto& [key, child] : node->items()) {
+        if (key != "default" && key != "one_of" && key != "start" &&
+            !(literal && key == "value")) {
+          pending.push_back(&child);
+        }
+      }
+    } else if (node->is_array()) {
+      for (auto& child : *node) {
+        pending.push_back(&child);
+      }
+    }
+  }
+  return result;
+}
+
+size_t Columns(std::string_view text) {
+  return static_cast<size_t>(
+      std::count_if(text.begin(), text.end(),
+                    [](char c) { return !utf8::IsContinuation(c); }));
+}
+
+std::string WrapLines(std::string_view source, const LexResult& lexed,
+                      const ParseResult& parsed, const FormatOptions& options,
+                      bool modifiers) {
+  if (options.line_width == 0) {
+    return std::string(source);
+  }
+  const absl::flat_hash_set<size_t> values(parsed.value_braces.begin(),
+                                           parsed.value_braces.end());
+  std::vector<bool> groups;
+  size_t depth = 0;
+  std::vector<size_t> breaks;
+  const Token* previous = nullptr;
+  for (const auto& token : lexed.tokens) {
+    if (token.kind == TokenKind::kNewline || token.kind == TokenKind::kEnd) {
+      continue;
+    }
+    if (previous != nullptr && token.line == previous->line &&
+        token.start >= previous->end) {
+      const auto word = token.IsWord() ? vocabulary::Canonical(token.text) : "";
+      const bool after_operator =
+          token.start > previous->end && token.kind != TokenKind::kColon &&
+          token.kind != TokenKind::kEqual && ExpectsOperand(*previous);
+      const bool group =
+          depth > 0 &&
+          (previous->kind == TokenKind::kComma || IsOpener(previous->kind) ||
+           IsCloser(token.kind) || previous->kind == TokenKind::kColon);
+      const bool modifier =
+          modifiers && word != "headers" && token.start > previous->end &&
+          (vocabulary::ModifierWords().contains(word) || word == "parallel" ||
+           word == "unordered" || word == "into" || word == "before" ||
+           word == "numbered" || word == "base");
+      if (after_operator || group || modifier ||
+          token.kind == TokenKind::kPipe || token.kind == TokenKind::kArrow ||
+          token.kind == TokenKind::kComment) {
+        breaks.push_back(token.start);
+      }
+    }
+    if (IsOpener(token.kind)) {
+      const bool group =
+          token.kind != TokenKind::kLeftBrace || values.contains(token.start);
+      groups.push_back(group);
+      if (group) {
+        ++depth;
+      }
+    } else if (IsCloser(token.kind) && !groups.empty()) {
+      if (groups.back()) {
+        --depth;
+      }
+      groups.pop_back();
+    }
+    previous = &token;
+  }
+  std::string output;
+  size_t line = 0;
+  while (line < source.size()) {
+    size_t end = source.find('\n', line);
+    if (end == std::string_view::npos) {
+      end = source.size();
+    }
+    size_t content = line;
+    while (content < end && source[content] == ' ') {
+      ++content;
+    }
+    size_t part = line;
+    const size_t line_columns = Columns(source.substr(line, end - line));
+    size_t part_column = 0;
+    size_t indent = 0;
+    while (line_columns - part_column + indent > options.line_width) {
+      const auto first = std::upper_bound(breaks.begin(), breaks.end(),
+                                          std::max(part, content));
+      if (first == breaks.end() || *first >= end) {
+        break;
+      }
+      auto chosen = first;
+      for (auto candidate = first;
+           candidate != breaks.end() && *candidate < end; ++candidate) {
+        if (Columns(source.substr(part, *candidate - part)) + indent >
+            options.line_width) {
+          break;
+        }
+        chosen = candidate;
+      }
+      absl::StrAppend(&output,
+                      absl::StripTrailingAsciiWhitespace(
+                          source.substr(part, *chosen - part)),
+                      "\n");
+      indent = content - line + static_cast<size_t>(options.indent);
+      output.append(indent, ' ');
+      part_column += Columns(source.substr(part, *chosen - part));
+      part = *chosen;
+    }
+    output.append(source.substr(part, end - part));
+    if (end < source.size()) {
+      output.push_back('\n');
+    }
+    line = end + 1;
+  }
+  return output;
+}
+
 }  // namespace
 
 FormatResult Format(std::string_view source, FormatOptions options,
@@ -1023,6 +1303,38 @@ FormatResult Format(std::string_view source, FormatOptions options,
   }
 
   result.formatted = Formatter(source, lexed.tokens, parsed, options).Run();
+  const auto meaning = Meaning(parsed);
+  for (int pass = 0; pass < 16 && budget->Check(); ++pass) {
+    auto tokens = Lex(
+        result.formatted,
+        LexOptions{.keep_comments = true, .limits = limits, .budget = budget});
+    auto tree = ParseTokens(result.formatted, tokens.tokens, tokens.diagnostics,
+                            limits, budget);
+    if (tree.HasErrors() || Meaning(tree) != meaning) {
+      result.formatted = std::string(source);
+      break;
+    }
+    std::string next = WrapLines(result.formatted, tokens, tree, options, true);
+    if (next != result.formatted) {
+      auto checked = Parse(next, limits, budget);
+      if (checked.HasErrors() || Meaning(checked) != meaning) {
+        next = WrapLines(result.formatted, tokens, tree, options, false);
+      }
+    }
+    auto next_tokens = Lex(
+        next,
+        LexOptions{.keep_comments = true, .limits = limits, .budget = budget});
+    auto next_tree = ParseTokens(next, next_tokens.tokens,
+                                 next_tokens.diagnostics, limits, budget);
+    if (next_tree.HasErrors() || Meaning(next_tree) != meaning) {
+      break;
+    }
+    next = Formatter(next, next_tokens.tokens, next_tree, options).Run();
+    if (next == result.formatted) {
+      break;
+    }
+    result.formatted = std::move(next);
+  }
   result.changed = result.formatted != source;
   if (result.changed) {
     // Trimmed to what differs, so applying this in an editor does not touch the

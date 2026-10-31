@@ -192,7 +192,6 @@ async def test_default_options(options):
         {"options": {"max_concurrency": -1}},
         {"sources": []},
         {"sources": [""]},
-        {"sources": ["a\0.cc"]},
         {"options": {"clang_tidy": ""}},
         {"options": {"build_dir": ""}},
     ],
@@ -206,3 +205,22 @@ async def test_invalid_input_never_runs_command(overrides):
             {"sources": ["a.cc"], "options": {"max_concurrency": 2}, **overrides}, unexpected
         )
     assert error.value.status.code == a11.StatusCode.INVALID_ARGUMENT
+
+
+@pytest.mark.asyncio
+async def test_nul_path_validation_belongs_to_run_command():
+    commands = []
+
+    async def reject_nul(action):
+        command = await action["command"].consume(str)
+        commands.append(command)
+        assert "\0" in command
+        raise a11.Status(
+            code=a11.StatusCode.INVALID_ARGUMENT,
+            message="Commands must not contain NUL.",
+        ).to_exception()
+
+    with pytest.raises(StatusException) as error:
+        await invoke({"sources": ["a\0.cc"]}, reject_nul)
+    assert error.value.status.code == a11.StatusCode.INVALID_ARGUMENT
+    assert len(commands) == 1

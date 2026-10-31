@@ -1307,6 +1307,11 @@ async def file_diff(action: a11.Action, context: CodingContext) -> None:
 
 async def run_command(action: a11.Action, context: CodingContext) -> None:
     command = await action["command"].consume(str)
+    if "\0" in command:
+        raise Status(
+            code=StatusCode.INVALID_ARGUMENT,
+            message="Commands must not contain NUL.",
+        ).to_exception()
     if not command.strip():
         raise Status(
             code=StatusCode.INVALID_ARGUMENT,

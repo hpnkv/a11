@@ -33,6 +33,7 @@
 #include <absl/strings/cord.h>
 #include <absl/strings/match.h>
 #include <absl/strings/str_cat.h>
+#include <absl/strings/str_join.h>
 #include <absl/time/clock.h>
 #include <absl/time/time.h>
 #include <gtest/gtest.h>
@@ -1974,6 +1975,197 @@ flow machine {
   // says it carries. That is the runtime's own behaviour and not the stage's;
   // see Part 4 of `doc/FLOW_PROGRAMS_PLAN.md`.
   EXPECT_EQ(outcome.outputs.at("kept"), Values({"\"one\"", "\"two\""}));
+}
+
+TEST(FlowRuntimeTest, ListPreludeAliasesTheQualifiedTypeAndConstructor) {
+  const auto got = RunFlow(R"(
+flow main {
+  out groups: list[int] stream
+
+  list[int] values = list([1, "2"])
+  std::list[int] qualified = std::list([3, "4"])
+  values -> qualified -> groups
+}
+)",
+                           "main");
+  ASSERT_TRUE(got.status.ok()) << got.status;
+  EXPECT_EQ(got.outputs.at("groups"), (Values{"[3, 4]", "[1, 2]"}));
+}
+
+TEST(FlowRuntimeTest, ContextClipsBoundariesAndExtendsThroughNearbyMatches) {
+  for (int size = 0; size <= 8; ++size) {
+    for (int before = 0; before <= 3; ++before) {
+      for (int after = 0; after <= 3; ++after) {
+        PortValues inputs;
+        Values expected;
+        const auto matches = [](int index) {
+          return index == 0 || index == 2 || index == 3 || index == 7;
+        };
+        for (int index = 0; index < size; ++index) {
+          inputs["items"].push_back(absl::StrCat(index));
+        }
+        for (int index = 0; index < size; ++index) {
+          if (!matches(index)) {
+            continue;
+          }
+          const int start = std::max(0, index - before);
+          int end = std::min(size - 1, index + after);
+          for (int next = index + 1; next <= end; ++next) {
+            if (matches(next)) {
+              end = std::min(size - 1, next + after);
+            }
+          }
+          Values group;
+          for (int entry = start; entry <= end; ++entry) {
+            group.push_back(absl::StrCat(entry));
+          }
+          expected.push_back(
+              absl::StrCat("[", absl::StrJoin(group, ", "), "]"));
+          index = end;
+        }
+        const auto got =
+            RunFlow(absl::StrCat(R"(
+flow main {
+  in items: int stream
+
+  out groups: list[int] stream
+
+  items | context it == 0 or it == 2 or it == 3 or it == 7 before )",
+                                 before, " after ", after, " -> groups\n}\n"),
+                    "main", inputs);
+        ASSERT_TRUE(got.status.ok()) << got.status;
+        EXPECT_EQ(got.outputs.at("groups"), expected)
+            << "size=" << size << " before=" << before << " after=" << after;
+      }
+    }
+  }
+}
+
+TEST(FlowRuntimeTest, ContextCountsAndPredicatesAreEvaluatedOnce) {
+  const auto got = RunFlow(
+      R"(
+flow main {
+  in widths: int stream
+  in flags: bool stream
+
+  out groups: list[int] stream
+
+  [0, 1, 2, 3] | flatten
+    | context take flags before take widths after take widths -> groups
+}
+)",
+      "main",
+      {{"widths", {"1", "1"}}, {"flags", {"false", "true", "true", "false"}}});
+  ASSERT_TRUE(got.status.ok()) << got.status;
+  EXPECT_EQ(got.outputs.at("groups"), (Values{"[0, 1, 2, 3]"}));
+}
+
+TEST(FlowRuntimeTest, ContextValidatesCountsEvenOnAnEmptySource) {
+  for (const auto count :
+       {"-1", "1.5", "true", "null", "\"2\"", "2147483648"}) {
+    for (bool before : {false, true}) {
+      const auto got = RunFlow(
+          absl::StrCat("flow main { in items: int stream\n out groups: "
+                       "list[int] stream\n",
+                       "items | context true before ", before ? count : "0",
+                       " after ", before ? "0" : count, " -> groups\n}"),
+          "main");
+      EXPECT_EQ(got.status.code(), absl::StatusCode::kInvalidArgument)
+          << got.status;
+    }
+  }
+}
+
+TEST(FlowRuntimeTest, ContextNumbersAllSourceItemsAndEvaluatesBaseOnce) {
+  for (const auto base : {"", " base take bases"}) {
+    const auto got = RunFlow(absl::StrCat(R"(
+flow main {
+  in bases: int stream
+
+  out indices: int stream
+  out values: int stream
+
+  groups = [10, 20, 30, 40, 50, 60] | flatten
+    | context it == 30 or it == 50 before 1 after 1 numbered)",
+                                          base, R"(
+  groups | flatten | map it.index -> indices
+  groups | flatten | map it.value -> values
+}
+)"),
+                             "main", {{"bases", {"0"}}});
+    ASSERT_TRUE(got.status.ok()) << got.status;
+    EXPECT_EQ(got.outputs.at("indices"),
+              base[0] == '\0' ? (Values{"2", "3", "4", "4", "5", "6"})
+                              : (Values{"1", "2", "3", "3", "4", "5"}));
+    EXPECT_EQ(got.outputs.at("values"),
+              (Values{"20", "30", "40", "40", "50", "60"}));
+  }
+}
+
+TEST(FlowRuntimeTest, ContextValidatesBaseAndReportsIndexOverflow) {
+  for (const auto base : {"1.5", "true", "null", "\"0\""}) {
+    const auto got = RunFlow(absl::StrCat(R"(
+flow main {
+  in items: int stream
+  items | context true before 0 after 0 numbered base )",
+                                          base, " -> _\n}"),
+                             "main");
+    EXPECT_EQ(got.status.code(), absl::StatusCode::kInvalidArgument)
+        << got.status;
+  }
+  const auto got = RunFlow(R"(
+flow main {
+  [1, 2] | flatten
+    | context true before 0 after 0 numbered base 9223372036854775807 -> _
+}
+)",
+                           "main");
+  EXPECT_EQ(got.status.code(), absl::StatusCode::kOutOfRange) << got.status;
+}
+
+TEST(FlowRuntimeTest, ContextSupportsEarlyDownstreamStop) {
+  const auto got = RunFlow(R"(
+flow main {
+  out groups: list[int] stream
+
+  [1, 2, 3, 4] | flatten | context it == 1 before 1 after 1 | first 1 -> groups
+}
+)",
+                           "main");
+  ASSERT_TRUE(got.status.ok()) << got.status;
+  EXPECT_EQ(got.outputs.at("groups"), (Values{"[1, 2]"}));
+}
+
+TEST(FlowRuntimeTest, ContextDoesNotFlushPendingGroupsOnUpstreamFailure) {
+  const auto got = RunFlow(R"(
+flow main {
+  out groups: list[string] stream
+
+  ["b2s=", "!"] | flatten | map std::utf8decode(std::b64decode(it))
+    | context true before 1 after 3 -> groups
+}
+)",
+                           "main");
+  EXPECT_EQ(got.status.code(), absl::StatusCode::kInvalidArgument);
+  EXPECT_TRUE(got.outputs.at("groups").empty());
+}
+
+TEST(FlowRuntimeTest,
+     ContextCanReportPredicateFailuresWithoutDroppingTheirLines) {
+  const auto got = RunFlow(R"(
+flow main {
+  out groups: std::list[string] stream
+  out errors: std::status stream
+
+  ["bWF0Y2g=", "!", "bWF0Y2g="] | flatten
+    | try context std::utf8decode(std::b64decode(it)) == "match" before 1 after 2 into errors -> groups
+}
+)",
+                           "main");
+  ASSERT_TRUE(got.status.ok()) << got.status;
+  EXPECT_EQ(got.outputs.at("groups"),
+            (Values{"[\"bWF0Y2g=\", \"!\", \"bWF0Y2g=\"]"}));
+  EXPECT_EQ(got.outputs.at("errors").size(), 1u);
 }
 
 TEST(FlowRuntimeTest, AWindowOverlapsWhereABatchWouldNot) {

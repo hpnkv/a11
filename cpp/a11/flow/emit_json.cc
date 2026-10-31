@@ -305,6 +305,12 @@ nlohmann::json NodeJson(const syntax::Node* node) {
             NodeJson(stage->parallel_expression.get());
       }
       value["ordered"] = stage->ordered;
+      if (stage->name == "context") {
+        value["before"] = NodeJson(stage->context_before.get());
+        value["after"] = NodeJson(stage->context_after.get());
+        value["numbered"] = stage->context_numbered;
+        value["base"] = NodeJson(stage->context_base.get());
+      }
       value["into"] = stage->failures == nullptr
                           ? nlohmann::json(nullptr)
                           : NodeJson(stage->failures.get());

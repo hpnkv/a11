@@ -36,20 +36,21 @@ constexpr std::array kStageOrder = {
     std::string_view("first"),      std::string_view("last"),
     std::string_view("drop"),       std::string_view("truncate"),
     std::string_view("batch"),      std::string_view("window"),
-    std::string_view("flatten"),    std::string_view("group"),
-    std::string_view("sort"),       std::string_view("where"),
-    std::string_view("map"),        std::string_view("scan"),
-    std::string_view("match"),      std::string_view("distinct"),
-    std::string_view("then"),       std::string_view("log"),
-    std::string_view("logf"),       std::string_view("mime"),
-    std::string_view("strformat"),  std::string_view("chunk"),
-    std::string_view("collect"),    std::string_view("consume"),
-    std::string_view("count"),      std::string_view("sum"),
-    std::string_view("min"),        std::string_view("max"),
-    std::string_view("avg"),        std::string_view("fold"),
-    std::string_view("join"),       std::string_view("text"),
-    std::string_view("json"),       std::string_view("packb"),
-    std::string_view("timeout"),    std::string_view("pace"),
+    std::string_view("context"),    std::string_view("flatten"),
+    std::string_view("group"),      std::string_view("sort"),
+    std::string_view("where"),      std::string_view("map"),
+    std::string_view("scan"),       std::string_view("match"),
+    std::string_view("distinct"),   std::string_view("then"),
+    std::string_view("log"),        std::string_view("logf"),
+    std::string_view("mime"),       std::string_view("strformat"),
+    std::string_view("chunk"),      std::string_view("collect"),
+    std::string_view("consume"),    std::string_view("count"),
+    std::string_view("sum"),        std::string_view("min"),
+    std::string_view("max"),        std::string_view("avg"),
+    std::string_view("fold"),       std::string_view("join"),
+    std::string_view("text"),       std::string_view("json"),
+    std::string_view("packb"),      std::string_view("timeout"),
+    std::string_view("pace"),
 };
 
 const absl::flat_hash_map<std::string_view, StageArgument>& StageTable() {
@@ -65,6 +66,7 @@ const absl::flat_hash_map<std::string_view, StageArgument>& StageTable() {
           {"window", StageArgument::kNumber},
           {"chunk", StageArgument::kNumber},
           {"where", StageArgument::kExpression},
+          {"context", StageArgument::kExpression},
           {"map", StageArgument::kExpression},
           {"group", StageArgument::kExpression},
           {"join", StageArgument::kOptionalString},
@@ -160,6 +162,20 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StageDocs() {
         "over "
         "a stream that never ends costs nothing that grows.",
         R"(lines | window 3 | map std::join(it, "\n") -> paragraphs)"}},
+      {"context",
+       {"Matching excerpts extended by nearby matches.",
+        "predicate before COUNT after COUNT [numbered [base EXPR]]",
+        "Keeps preceding items, then emits a list after COUNT consecutive "
+        "nonmatches. A match in that trailing window resets the count. EOF "
+        "flushes a shorter excerpt. Counts are nonnegative signed 32-bit "
+        "integers evaluated once outside it. Numbered items are {index, "
+        "value}; "
+        "indices count all source items from base (default 1). Base evaluates "
+        "once and must be an integer. Storage grows with the active excerpt; "
+        "bound endless sources upstream. Predicate failures propagate; try "
+        "context treats them as nonmatches and reports them.",
+        "lines | context std::contains(it, \"error\") before 3 after 5 "
+        "numbered -> excerpts"}},
       {"group",
        {"Gathers values into lists, closed by a question rather than a count.",
         "an expression, with `it` bound to the value in hand",
@@ -405,7 +421,7 @@ const absl::flat_hash_map<std::string_view, WordDoc>& BuiltinDocs() {
       {"list",
        {"Convert a value to a list; a scalar becomes one item.", "one value",
         "Convert a value to a list; a scalar becomes one item.",
-        "std::list([1, 2])"}},
+        "list([1, 2])"}},
       {"status",
        {"Convert a status record while preserving its code, message and "
         "details.",
@@ -1029,6 +1045,23 @@ const absl::flat_hash_map<std::string_view, WordDoc>& ClauseDocs() {
         "Only `sort` takes one. Without it the values compare as themselves, "
         "which is what a stream of numbers or of text wants.",
         "hits | sort by it.score desc -> ranked"}},
+      {"before",
+       {"Preceding items included by a context stage.", "a count expression",
+        "Evaluated once outside it; zero keeps no preceding items. Context "
+        "also requires an after count for following items.",
+        "lines | context it == \"error\" before 3 after 5 -> excerpts"}},
+      {"numbered",
+       {"Includes source sequence numbers in context excerpts.", "[base EXPR]",
+        "Each item becomes {index, value}. Indices count every source item, "
+        "including skipped items, from 1 unless base is supplied.",
+        "items | context it.failed before 2 after 3 numbered -> excerpts"}},
+      {"base",
+       {"Starting source index for numbered context items.",
+        "an integer expression",
+        "Evaluated once outside it. Default 1; zero and negative bases are "
+        "accepted. Index overflow fails the stage.",
+        "items | context it.failed before 2 after 3 numbered base 0 -> "
+        "excerpts"}},
       {"desc",
        {"Reverses the order a `sort` puts values in.", "",
         "Largest first, by the same comparison `>` uses. Ascending is the "
@@ -1271,8 +1304,9 @@ const absl::flat_hash_map<std::string_view, WordDoc>& TypeDocs() {
         "May say what it holds, as `list[string]` or `list[a11.NodeFragment]`, "
         "and `T[]` is the same thing. A list is *one* value: a port of "
         "`list[string]` carries one list and a port of `string stream` carries "
-        "many strings, which are different things.",
-        "in frames: std::list[a11::NodeFragment] stream"}},
+        "many strings, which are different things. The type and list(value) "
+        "conversion are available without an import; std::list is equivalent.",
+        "in frames: list[a11::NodeFragment] stream"}},
       {"array",
        {"Several values in order. The other spelling of `list`.", "",
         "The same type, and it may say what it holds in the same way.",
@@ -1886,8 +1920,10 @@ constexpr std::array kClauseOrder = {
     std::string_view("else"),      std::string_view("parallel"),
     std::string_view("unordered"), std::string_view("max"),
     std::string_view("of"),        std::string_view("by"),
-    std::string_view("desc"),      std::string_view("into"),
-    std::string_view("until"),     std::string_view("while"),
+    std::string_view("before"),    std::string_view("desc"),
+    std::string_view("into"),      std::string_view("until"),
+    std::string_view("while"),     std::string_view("numbered"),
+    std::string_view("base"),
 };
 
 // As a flow is written, top to bottom.
@@ -2028,7 +2064,7 @@ std::string_view StageArgumentName(StageArgument argument) {
 bool IsPrimitiveType(std::string_view name) {
   return name == "int" || name == "integer" || name == "number" ||
          name == "bool" || name == "string" || name == "bytes" ||
-         name == "object" || name == "null";
+         name == "object" || name == "null" || name == "list";
 }
 
 const WordDoc* absl_nullable StageDocumentation(

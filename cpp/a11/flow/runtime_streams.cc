@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <cstddef>
 #include <optional>
 
 #include <absl/cleanup/cleanup.h>
@@ -653,6 +654,83 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
           out.push_back(Item::Of(Truncate(value, stage.count)));
           return absl::OkStatus();
         });
+  }
+  if (name == "context") {
+    const auto count = [&](ExprId expression) -> absl::StatusOr<size_t> {
+      ABSL_ASSIGN_OR_RETURN(const Value value, Evaluate(expression));
+      if (value.kind() != Value::Kind::kInteger || value.integer() < 0 ||
+          value.integer() > std::numeric_limits<int>::max()) {
+        return absl::InvalidArgumentError(
+            "context counts must be nonnegative signed 32-bit integers.");
+      }
+      return static_cast<size_t>(value.integer());
+    };
+    ABSL_ASSIGN_OR_RETURN(const size_t before, count(stage.context_before));
+    ABSL_ASSIGN_OR_RETURN(const size_t after, count(stage.context_after));
+    long long index = 1;
+    if (stage.context_base != graph::kNone) {
+      ABSL_ASSIGN_OR_RETURN(const Value base, Evaluate(stage.context_base));
+      if (base.kind() != Value::Kind::kInteger) {
+        return absl::InvalidArgumentError("context base must be an integer.");
+      }
+      index = base.integer();
+    }
+    bool exhausted = false;
+    std::deque<Value> preceding;
+    std::vector<Value> group;
+    size_t remaining = 0;
+    const auto emit = [&]() -> absl::Status {
+      ABSL_RETURN_IF_ERROR(sink.One(Item::Of(Value::List(std::move(group)))));
+      group.clear();
+      return absl::OkStatus();
+    };
+    ABSL_RETURN_IF_ERROR(each([&](const ItemPtr& item) -> absl::Status {
+      ABSL_ASSIGN_OR_RETURN(Value value, item->Read(&host));
+      auto matched = EvaluateWith(stage.expr, value);
+      if (!matched.ok() && !stage.tolerant) {
+        return matched.status();
+      }
+      if (!matched.ok()) {
+        ABSL_RETURN_IF_ERROR(tolerate(item, matched.status()));
+      }
+      const bool matches = matched.ok() && Truthy(*matched);
+      if (stage.context_numbered) {
+        if (exhausted) {
+          return absl::OutOfRangeError("context item index overflow.");
+        }
+        value = Value::Object(
+            {{"index", Value::Integer(index)}, {"value", std::move(value)}});
+        exhausted = index == std::numeric_limits<long long>::max();
+        if (!exhausted) {
+          ++index;
+        }
+      }
+      if (matches && group.empty()) {
+        group.assign(preceding.begin(), preceding.end());
+      }
+      if (matches || !group.empty()) {
+        group.push_back(value);
+        if (matches) {
+          remaining = after;
+        } else {
+          --remaining;
+        }
+        if (remaining == 0) {
+          ABSL_RETURN_IF_ERROR(emit());
+        }
+      }
+      if (before != 0) {
+        preceding.push_back(std::move(value));
+        if (preceding.size() > before) {
+          preceding.pop_front();
+        }
+      }
+      return absl::OkStatus();
+    }));
+    if (!group.empty()) {
+      ABSL_RETURN_IF_ERROR(emit());
+    }
+    return absl::OkStatus();
   }
   if (name == "batch") {
     std::vector<Value> group;

@@ -102,7 +102,7 @@ declared `required`. Keywords accept lower or upper case, such as `for` and
 
 ```a11flow
 in  question: string required
-in  frames:   std::list[a11::NodeFragment] stream
+in  frames:   list[a11::NodeFragment] stream
 out audio:    a11::sdk::AudioBuffer stream
 out raw:      "application/x-msgpack"
 ```
@@ -112,8 +112,11 @@ Besides the primitive names — `int`, `bool`, `number`, `string`,
 host type such as `a11::sdk::AudioBuffer`. Its wire tag remains
 `a11.sdk.AudioBuffer`; qualified host types are
 preserved without importing the module that defines the type. Brackets specify
-container contents, as in `std::list[string]` and `std::list[a11::NodeFragment]`. A quoted
+container contents, as in `list[string]` and `list[a11::NodeFragment]`. A quoted
 type is a media type that describes the representation.
+`list` is a prelude alias of `std::list`; prefer `list[T]` for types and
+`list(value)` for conversion. Neither requires an import, and the qualified
+spelling remains valid.
 
 ## Descriptions
 
@@ -285,6 +288,38 @@ pages | map it.lines | flatten -> lines
 
 Lists are expanded and other values pass through unchanged, so `flatten` also
 accepts a mixed stream.
+
+`| context PREDICATE before N after M` emits lists of matching items and their
+neighbors. The first match includes up to `N` preceding items. Each match among
+the next `M` items resets the trailing count, extending the same excerpt until
+`M` consecutive nonmatches arrive or the source ends:
+
+```a11flow
+lines | context std::contains(it, "error") before 3 after 5 -> excerpts
+```
+
+The predicate runs once on every original item. Normal EOF flushes a shorter
+excerpt; upstream failures propagate without flushing the active excerpt.
+Separate excerpts may share preceding items when a later match falls outside
+the earlier trailing window. With `after 0`, each match emits immediately.
+Counts are expressions evaluated once outside `it` and must be nonnegative
+signed 32-bit integers. Storage holds up to `N` preceding items plus the active
+excerpt. A chain of nearby matches can grow that excerpt indefinitely; limit
+potentially endless sources upstream.
+
+Add `numbered` to wrap each item as `{index, value}`. Indices count every source
+item, including unmatched items, from 1. `base EXPR` changes the starting index
+and evaluates once outside `it`; it must be an integer. Negative bases are
+accepted, and signed 64-bit index overflow fails the stage:
+
+```a11flow
+items | context it.failed before 2 after 3 numbered base 0 -> excerpts
+```
+
+The stage supports `try context ... into failures`: predicate errors become
+nonmatches, while their items remain available as context. Count, base, index,
+and upstream errors still fail. Evaluation is sequential; `parallel` and
+`unordered` are rejected.
 
 `| window N` is `batch` with the lists overlapping: one list of the last `N`
 values per value, once `N` have arrived.

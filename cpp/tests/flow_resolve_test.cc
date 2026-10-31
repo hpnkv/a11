@@ -964,6 +964,19 @@ flow main { in rows: Row stream
   EXPECT_EQ(result.flows.front().plan.steps.back().optional_binding, "row");
 }
 
+TEST(FlowResolve, ContextCountsResolveOutsideThePerItemScope) {
+  for (const auto count : {"it", "missing"}) {
+    const auto result =
+        Check(absl::StrCat("flow f { [1] | flatten | context true before ",
+                           count, " after 0 -> _\n}"));
+    EXPECT_TRUE(result.HasErrors()) << count;
+    const auto numbered = Check(absl::StrCat(
+        "flow f { [1] | flatten | context true before 0 after 0 numbered base ",
+        count, " -> _\n}"));
+    EXPECT_TRUE(numbered.HasErrors()) << count;
+  }
+}
+
 TEST(FlowResolve, OptionalDefaultsInferThePayloadType) {
   const auto result = Check(R"(
 struct Row { name: string default "unknown" }

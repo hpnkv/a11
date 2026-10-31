@@ -69,7 +69,7 @@
     },
     "stage": {
       "//": "A word is a stage after a `|`, and the same word may be a function elsewhere.",
-      "match": "(\\|)\\s*((?:take|TAKE)\s+(?:while|WHILE)|(?:take|TAKE)\s+(?:until|UNTIL)|first|last|drop|truncate|batch|window|flatten|group|sort|where|map|scan|match|distinct|then|log|logf|mime|strformat|chunk|collect|consume|count|sum|min|max|avg|fold|join|text|json|packb|timeout|pace|FIRST|LAST|DROP|TRUNCATE|BATCH|WINDOW|FLATTEN|GROUP|SORT|WHERE|MAP|SCAN|MATCH|DISTINCT|THEN|LOG|LOGF|MIME|STRFORMAT|CHUNK|COLLECT|CONSUME|COUNT|SUM|MIN|MAX|AVG|FOLD|JOIN|TEXT|JSON|PACKB|TIMEOUT|PACE)\\b",
+      "match": "(\\|)\\s*((?:take|TAKE)\s+(?:while|WHILE)|(?:take|TAKE)\s+(?:until|UNTIL)|first|last|drop|truncate|batch|window|context|flatten|group|sort|where|map|scan|match|distinct|then|log|logf|mime|strformat|chunk|collect|consume|count|sum|min|max|avg|fold|join|text|json|packb|timeout|pace|FIRST|LAST|DROP|TRUNCATE|BATCH|WINDOW|CONTEXT|FLATTEN|GROUP|SORT|WHERE|MAP|SCAN|MATCH|DISTINCT|THEN|LOG|LOGF|MIME|STRFORMAT|CHUNK|COLLECT|CONSUME|COUNT|SUM|MIN|MAX|AVG|FOLD|JOIN|TEXT|JSON|PACKB|TIMEOUT|PACE)\\b",
       "captures": {
         "1": {"name": "keyword.operator.pipe.a11flow"},
         "2": {"name": "support.function.stage.a11flow"}
@@ -114,7 +114,7 @@
       }
     },
     "statement": {
-      "match": "\\b(abort|after|by|call|cancel|close|desc|else|fail|for|if|interleave|into|log|logf|max|nodes|of|parallel|repeat|run|skip|status|take|try|unordered|until|wait|while|zip|ABORT|AFTER|BY|CALL|CANCEL|CLOSE|DESC|ELSE|FAIL|FOR|IF|INTERLEAVE|INTO|LOG|LOGF|MAX|NODES|OF|PARALLEL|REPEAT|RUN|SKIP|STATUS|TAKE|TRY|UNORDERED|UNTIL|WAIT|WHILE|ZIP)\\b",
+      "match": "\\b(abort|after|base|before|by|call|cancel|close|desc|else|fail|for|if|interleave|into|log|logf|max|nodes|numbered|of|parallel|repeat|run|skip|status|take|try|unordered|until|wait|while|zip|ABORT|AFTER|BASE|BEFORE|BY|CALL|CANCEL|CLOSE|DESC|ELSE|FAIL|FOR|IF|INTERLEAVE|INTO|LOG|LOGF|MAX|NODES|NUMBERED|OF|PARALLEL|REPEAT|RUN|SKIP|STATUS|TAKE|TRY|UNORDERED|UNTIL|WAIT|WHILE|ZIP)\\b",
       "name": "keyword.control.a11flow"
     },
     "modifier": {

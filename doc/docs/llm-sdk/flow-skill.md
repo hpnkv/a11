@@ -197,12 +197,17 @@ access, search, HTTP, and transformations. Process tools serve actual programs
 such as tests and builds or missing capabilities; direct executables are
 preferred over Bash when shell syntax is unnecessary.
 
-Test runs, builds, installs, lint, and diagnostics use filtered Flow outputs.
-Successful checks return exit status and summary counts; failures add a
-selection of relevant errors, failed tests, and causal trace or stack sections
-with context. Relevance filtering comes before size limits; complete diagnostic
-units and necessary structured details are preserved. Complete logs can be
-saved to files and inspected further for specific gaps.
+For matches in files or tool outputs—including tests, web fetches, and external
+systems—agents prefer `context e before N after M` on original lines/items per
+source. Filtering first loses neighbors; search hits locate source spans.
+Unary text becomes lines with
+`std::split(text, "\n") | flatten`. Small neighborhoods, `first G` groups, and
+`map std::join(it, "\n") | truncate C` return bounded evidence. Chained matches
+extend excerpts; bound potentially endless sources upstream. Add `numbered`
+for `{index, value}` items (`base 0` for zero-based indices). Successful checks
+return status/counts; failures retain complete causal diagnostics and
+structured details. Full logs stay outside model context unless needed for a
+specific gap.
 
 The coding agent's `workspace_info` returns instruction paths and sizes by
 default. `fields` selects metadata and `instruction_chars` sets a total excerpt

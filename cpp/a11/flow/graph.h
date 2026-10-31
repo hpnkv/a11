@@ -120,6 +120,11 @@ struct Stage {
   std::string text;
   /// `kExpression`: the expression, with `it` bound.
   ExprId expr = kNone;
+  /// `context`: surrounding item counts, evaluated once at stage activation.
+  ExprId context_before = kNone;
+  ExprId context_after = kNone;
+  bool context_numbered = false;
+  ExprId context_base = kNone;
   /// `kStream`: the stream `then` reads after this one.
   RefId stream = kNone;
   /// `kLog`/`kLogFormat`: what was written after the stage name.

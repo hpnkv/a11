@@ -559,6 +559,12 @@ bool CheckSingleItemStructure(const graph::FlowGraph& flow) {
            ref.stage.expr >= flow.exprs.size()) ||
           (ref.stage.parallel_expression != graph::kNone &&
            ref.stage.parallel_expression >= flow.exprs.size()) ||
+          (ref.stage.context_before != graph::kNone &&
+           ref.stage.context_before >= flow.exprs.size()) ||
+          (ref.stage.context_after != graph::kNone &&
+           ref.stage.context_after >= flow.exprs.size()) ||
+          (ref.stage.context_base != graph::kNone &&
+           ref.stage.context_base >= flow.exprs.size()) ||
           !ref_ok(ref.stage.failures) || !ref_ok(ref.stage.stream))) ||
         (ref.kind == graph::RefKind::kNode && ref.id_expr != graph::kNone &&
          ref.id_expr >= flow.exprs.size()) ||

@@ -1106,6 +1106,7 @@ class ParserImpl {
 
   /// A qualified type name, its generic arguments, or a quoted MIME type.
   syntax::TypeExpression ParseType() {
+    SkipNewlines();
     const Descent descent(*this);
     syntax::TypeExpression type;
     if (TooDeep()) {
@@ -2456,6 +2457,43 @@ class ParserImpl {
         break;
       case vocabulary::StageArgument::kExpression:
         stage->argument = ParseExpression();
+        if (stage->name == "context") {
+          for (const auto clause : {"before", "after"}) {
+            SkipNewlines();
+            if (!AcceptWord(clause)) {
+              ReportHere("flow.form.stage-argument",
+                         absl::StrCat("Expected '", clause,
+                                      " COUNT in a context stage."),
+                         Family::kForm);
+              break;
+            }
+            const BlockHeader header(this);
+            auto count = ParseExpression();
+            if (clause == std::string_view("before")) {
+              stage->context_before = std::move(count);
+            } else {
+              stage->context_after = std::move(count);
+            }
+          }
+          const auto continues = [&](std::string_view word) {
+            const size_t offset = NewlinesAhead();
+            return Keyword(offset) == word &&
+                   Peek(offset + 1).kind != TokenKind::kEqual &&
+                   (word == "numbered" ||
+                    Peek(offset + 1).kind != TokenKind::kArrow);
+          };
+          if (continues("numbered")) {
+            SkipNewlines();
+            Advance();
+            stage->context_numbered = true;
+            if (continues("base")) {
+              SkipNewlines();
+              Advance();
+              const BlockHeader header(this);
+              stage->context_base = ParseExpression();
+            }
+          }
+        }
         break;
       case vocabulary::StageArgument::kStream:
         // A stream rather than a value: `then` reads this one and then that
@@ -2579,21 +2617,43 @@ class ParserImpl {
 
   /// `[parallel n [unordered]] [into ref]`, in either order, after a stage.
   void ParseStageTail(syntax::Stage& stage, const Token& keyword) {
+    const auto continues = [&] {
+      const size_t offset = NewlinesAhead();
+      if (offset == 0) {
+        return false;
+      }
+      const auto word = Keyword(offset);
+      return (word == "parallel" || word == "unordered" || word == "into") &&
+             Peek(offset + 1).kind != TokenKind::kEqual &&
+             Peek(offset + 1).kind != TokenKind::kArrow;
+    };
+    if (continues()) {
+      SkipNewlines();
+    }
     while (Current().IsWord()) {
       const std::string word = Keyword();
       if (word == "parallel") {
         Advance();
         stage.parallel_expression = ParseParallelCount(stage.parallel);
+        if (continues()) {
+          SkipNewlines();
+        }
         continue;
       }
       if (word == "unordered") {
         Advance();
         stage.ordered = false;
+        if (continues()) {
+          SkipNewlines();
+        }
         continue;
       }
       if (word == "into") {
         Advance();
         stage.failures = ParseReference();
+        if (continues()) {
+          SkipNewlines();
+        }
         continue;
       }
       break;
@@ -2601,7 +2661,8 @@ class ParserImpl {
     const auto concurrent = [&] {
       return stage.parallel > 1 || stage.parallel_expression != nullptr;
     };
-    if ((stage.name == "take while" || stage.name == "take until") &&
+    if ((stage.name == "take while" || stage.name == "take until" ||
+         stage.name == "context") &&
         (concurrent() || !stage.ordered)) {
       Report("flow.form.stage-not-parallel",
              absl::StrCat("'", stage.name,
@@ -2742,6 +2803,7 @@ class ParserImpl {
   }
 
   NodePtr ParseExpression() {
+    SkipNewlines();
     const Descent descent(*this);
     if (TooDeep()) {
       return MakeError(Current(), "a value");
@@ -2762,6 +2824,7 @@ class ParserImpl {
       auto binary = Make<syntax::Binary>(op);
       binary->op = "or";
       binary->left = std::move(left);
+      SkipNewlines();
       binary->right = ParseAnd();
       left = Bounded(std::move(binary));
     }
@@ -2775,6 +2838,7 @@ class ParserImpl {
       auto binary = Make<syntax::Binary>(op);
       binary->op = "and";
       binary->left = std::move(left);
+      SkipNewlines();
       binary->right = ParseNot();
       left = Bounded(std::move(binary));
     }
@@ -2817,6 +2881,7 @@ class ParserImpl {
       auto binary = Make<syntax::Binary>(op);
       binary->op = std::string(KindName(op.kind));
       binary->left = std::move(left);
+      SkipNewlines();
       binary->right = ParseAdditive();
       return Bounded(std::move(binary));
     }
@@ -2825,6 +2890,7 @@ class ParserImpl {
       auto binary = Make<syntax::Binary>(op);
       binary->op = "in";
       binary->left = std::move(left);
+      SkipNewlines();
       binary->right = ParseAdditive();
       return Bounded(std::move(binary));
     }
@@ -2845,6 +2911,7 @@ class ParserImpl {
       auto binary = Make<syntax::Binary>(op);
       binary->op = std::string(KindName(op.kind));
       binary->left = std::move(left);
+      SkipNewlines();
       binary->right = ParseCast();
       left = Bounded(std::move(binary));
     }

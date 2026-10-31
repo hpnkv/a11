@@ -17,11 +17,12 @@ from std import strformat, zip
 struct DeepResearchSource {
   describe "A source an investigation cited, correlated to the prose by id."
 
-  id:   string required matching "^[A-Za-z0-9_-]+$" "As written in <span source>."
+  id:   string required matching "^[A-Za-z0-9_-]+$"
+    "As written in <span source>."
   url:  string required matching "^https?://"
   type: string required one of ["web", "paper", "book"]
-  tags: string[] required unique                    "How the source was found."
-  rank: number 0..1 default 0.5                     "How much to trust it."
+  tags: string[] required unique "How the source was found."
+  rank: number 0..1 default 0.5  "How much to trust it."
 }
 
 flow investigate {
@@ -51,7 +52,8 @@ flow investigate {
   # carries through whatever else the searcher sent -- it knows more about a
   # page than this file declares -- and the keys written after it win, which is
   # how `tags` is set without the rest being restated.
-  answer.found | map DeepResearchSource{...it, "tags": ["investigated"]} -> sources
+  answer.found | map DeepResearchSource{...it, "tags": ["investigated"]}
+    -> sources
 }
 
 flow investigate-with-notes {

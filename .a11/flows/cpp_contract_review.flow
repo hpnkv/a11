@@ -5,21 +5,22 @@ struct CppContractOptions {
 }
 
 struct CppContractFinding {
-  rule:       string one of ["raw-pointer-nullability", "status-discard"] required
-  line:       int 1..2147483647 required
+  rule: string required one of ["raw-pointer-nullability",
+    "status-discard"]
+  line:       int required 1..2147483647
   message:    string required
   suggestion: string required
 }
 
 struct CppContractAnalysis {
-  findings:      std::list[CppContractFinding] required
-  uncertainties: std::list[string] required
+  findings:      list[CppContractFinding] required
+  uncertainties: list[string] required
 }
 
 struct CppContractReview {
   path:          string required
-  findings:      std::list[CppContractFinding] default []
-  uncertainties: std::list[string] default []
+  findings:      list[CppContractFinding] default []
+  uncertainties: list[string] default []
   error:         object default {}
 }
 
@@ -36,13 +37,15 @@ flow cpp_contract_review {
     fail invalid_argument "Concurrency and source byte limit must be positive."
   }
   header "x-a11-llm-provider" as provider default ""
-  if provider in["claude_code", "codex"] {
+  if provider in ["claude_code", "codex"] {
     fail invalid_argument "Use a direct model provider, not a coding-agent backend."
   }
   wait all
 
   results = sources
-    | map(run review_cpp_contract_file(source: it, options: settings) forward headers "x-a11-llm-*").review parallel settings.max_concurrency unordered
+    | map(run review_cpp_contract_file(source: it, options: settings
+    ) forward headers "x-a11-llm-*"
+    ).review parallel settings.max_concurrency unordered
   results -> reviews
   count = take (results | count)
   if count == 0 {
@@ -58,7 +61,8 @@ flow review_cpp_contract_file {
 
   path = take source
   settings = take options
-  attempt = try run analyze_cpp_contract_file(source: path, options: settings) forward headers "x-a11-llm-*"
+  attempt = try run analyze_cpp_contract_file(source: path, options: settings
+  ) forward headers "x-a11-llm-*"
   outcome = wait attempt
   if outcome.ok {
     analysis = take attempt.review
@@ -70,7 +74,8 @@ flow review_cpp_contract_file {
   } else {
     CppContractReview{
       path: path,
-      error: {code: outcome.code, message: outcome.message, details: outcome.details}
+      error: {code: outcome.code, message: outcome.message, details:
+        outcome.details}
     } -> review
   }
 }
@@ -83,13 +88,13 @@ flow analyze_cpp_contract_file {
 
   path = take source
   settings = take options
-  nul = "\0"
-  if path == "" or std::contains(path, nul) {
-    fail invalid_argument "Source paths must be nonempty and contain no NUL."
+  if path == "" {
+    fail invalid_argument "Source paths must be nonempty."
   }
   wait all
 
-  file = try run read_file(path: path, options: {max_bytes: settings.max_source_bytes})
+  file = try run read_file(path: path, options: {max_bytes:
+    settings.max_source_bytes})
   file_status = wait file
   content = node()
   if file_status.ok {
@@ -133,13 +138,15 @@ flow analyze_cpp_contract_file {
     Use empty arrays when appropriate. No Markdown fences or compliance claim.
     This is a source review, not a compilation or proof of complete coverage.
   """
-  prompt = std::strformat("Review this JSON source record: %s", {path: path, source: text})
+  prompt = std::strformat("Review this JSON source record: %s", {path: path,
+    source: text})
   model = try run interact_with_llm(
     config: settings.model_config,
     interactions: a11::sdk::Interaction{
       role: "user",
       system_instructions: [std::to_chunk(system)],
-      content: [std::to_chunk({role: "user", content: [{type: "text", text: prompt}]})]
+      content: [std::to_chunk({role: "user", content: [{type: "text", text:
+        prompt}]})]
     }
   ) forward headers "x-a11-llm-*"
   model_status = wait model

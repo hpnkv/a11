@@ -55,7 +55,7 @@ flow ask-the-pages {
     }
   }
 
-  std::list[string] snippets = take (pages | collect)
+  list[string] snippets = take (pages | collect)
   string asked = join([
     "Answer from the pages below. Say so if they do not answer it.",
     join(["Question:", question_text], " "),

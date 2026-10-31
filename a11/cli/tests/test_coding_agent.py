@@ -431,6 +431,21 @@ async def test_studio_can_configure_gateway_agent_permissions(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_tools_reject_nul_paths_and_commands_before_authorization(
+    tmp_path,
+):
+    registry, agent = _agent(tmp_path)
+    for write in [False, True]:
+        with pytest.raises(StatusException) as error:
+            agent.context.workspace.resolve("file\0suffix", write=write)
+        assert error.value.status.code == StatusCode.INVALID_ARGUMENT
+    with pytest.raises(StatusException) as error:
+        await _invoke(registry, "run_command", {"command": "echo ok\0ignored"})
+    assert error.value.status.code == StatusCode.INVALID_ARGUMENT
+    assert agent.context.workspace.checks == []
+
+
+@pytest.mark.asyncio
 async def test_ui_can_enable_and_restore_sandbox(tmp_path):
     workspace = tmp_path / "repo"
     workspace.mkdir()

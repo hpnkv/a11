@@ -119,6 +119,16 @@ std::vector<RefId> FlowGraph::ValueRefs(RefId ref) const {
       Push(found, read);
     }
   }
+  if (one.kind == RefKind::kDerived) {
+    for (const ExprId expr : {one.stage.context_before, one.stage.context_after,
+                              one.stage.context_base}) {
+      if (expr != kNone) {
+        for (const RefId read : exprs[expr].refs) {
+          Push(found, read);
+        }
+      }
+    }
+  }
   // A `| log`/`| logf` stage reads whatever it prints, the same way the
   // statement does:
   if (one.kind == RefKind::kDerived) {

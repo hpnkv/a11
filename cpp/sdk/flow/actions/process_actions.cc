@@ -289,7 +289,15 @@ absl::StatusOr<SpawnSettings> ReadSpawnSettings(const Options& options,
         return absl::InvalidArgumentError(
             absl::StrCat("options.environment.", name, " must be a string"));
       }
-      settings.environment.emplace_back(name, entry.get<std::string>());
+      std::string text = entry.get<std::string>();
+      if (name.empty() || name.find('=') != std::string::npos ||
+          name.find('\0') != std::string::npos ||
+          text.find('\0') != std::string::npos) {
+        return absl::InvalidArgumentError(
+            "environment names must be nonempty and contain neither '=' nor "
+            "NUL; environment values must not contain NUL");
+      }
+      settings.environment.emplace_back(name, std::move(text));
     }
   }
   return settings;
@@ -556,6 +564,12 @@ absl::Status RunSpawnProcess(const std::shared_ptr<Action>& action,
                         ResolveProgram(policy, requested));
   ABSL_ASSIGN_OR_RETURN(const std::vector<std::string> arguments,
                         ReadArguments(action));
+  for (const std::string& argument : arguments) {
+    if (argument.find('\0') != std::string::npos) {
+      return absl::InvalidArgumentError(
+          "process arguments must not contain NUL");
+    }
+  }
   if (!settings.cwd.empty()) {
     // A working directory is a path, so it answers to the filesystem policy
     // like any other -- otherwise `cwd` would be the way around it.

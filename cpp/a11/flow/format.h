@@ -17,6 +17,7 @@
 #ifndef A11_FLOW_FORMAT_H_
 #define A11_FLOW_FORMAT_H_
 
+#include <cstddef>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -35,6 +36,8 @@ struct FormatOptions {
   int indent = 2;
   /// Whether to align consecutive `in` and `out` declaration columns.
   bool align_ports = true;
+  /// Maximum columns where syntax permits a break; zero leaves lines unbound.
+  size_t line_width = 80;
 };
 
 /// The formatted text, and what it took to get there.
@@ -60,18 +63,9 @@ struct FormatResult {
 /// at
 /// the end of the file.
 ///
-/// **What it leaves to the author:** where the lines break. Whether a pipeline
-/// is
-/// written across four lines or one, whether a list literal is split a value
-/// per
-/// line, and where the comments are, is a judgement about what the flow *means*
-/// --
-/// which values belong together, which stage is the interesting one -- and a
-/// formatter that overruled it would make every flow in the repository worse.
-/// So a
-/// break the author wrote is kept and indented properly, and a break they did
-/// not
-/// write is not invented.
+/// Existing line breaks remain, and long lines wrap at syntax boundaries.
+/// Tokens and comments are never split. Declaration modifiers follow the
+/// vocabulary's canonical order.
 ///
 /// **It refuses a file it cannot read.** With an error diagnostic, `formatted`
 /// is the input and `diagnostics` says why: half-formatting a file somebody is
@@ -80,10 +74,8 @@ struct FormatResult {
 /// Two invariants, both tested over every flow in the repository:
 ///
 /// * **Idempotent.** Formatting formatted text changes nothing.
-/// * **Token-preserving.** The formatted text lexes to the same tokens as the
-///   input, comments included -- the only difference being trailing whitespace
-///   trimmed from inside a comment. Whitespace is all it may touch, and this is
-///   what says so rather than promising it.
+/// * **Meaning-preserving.** Syntax stays equivalent; only declaration
+///   modifier order and whitespace change. Literal and comment text remain.
 FormatResult Format(std::string_view source, FormatOptions options = {},
                     CompilationLimits limits = {},
                     CompilationBudget* absl_nullable budget = nullptr);

@@ -685,6 +685,9 @@ class Inspector {
         Expression(stage.argument.get());
       }
       Expression(stage.parallel_expression.get());
+      Expression(stage.context_before.get());
+      Expression(stage.context_after.get());
+      Expression(stage.context_base.get());
       for (const syntax::NodePtr& argument : stage.log.arguments) {
         Expression(argument.get());
       }

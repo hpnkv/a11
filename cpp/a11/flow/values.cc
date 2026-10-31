@@ -1047,9 +1047,8 @@ std::string Printf(const Value& value, std::string_view flags,
       absl::StrContains(std::string_view("difeEgGxXo"), conversion);
   std::string pattern = "%";
   for (const char flag : flags) {
-    // `#` and `0` mean nothing beside a string, and the reference's `%` raised
-    // on them rather than rendering; dropping them keeps the value visible.
-    if (!numeric && (flag == '#' || flag == '0')) {
+    // Only left alignment affects a string conversion.
+    if (!numeric && flag != '-') {
       continue;
     }
     pattern.push_back(flag);
@@ -1080,13 +1079,12 @@ std::string Printf(const Value& value, std::string_view flags,
   } else {
     pattern.push_back('s');
     const std::string text = AsText(value);
-    written =
-        std::snprintf(out.data(), out.size(), pattern.c_str(), text.c_str());
-    if (written >= static_cast<int>(out.size())) {
-      out.resize(static_cast<size_t>(written) + 1);
-      written =
-          std::snprintf(out.data(), out.size(), pattern.c_str(), text.c_str());
+    out.clear();
+    if (!absl::FormatUntyped(&out, absl::UntypedFormatSpec(pattern),
+                             {absl::FormatArg(text)})) {
+      return text;
     }
+    return out;
   }
   if (written < 0) {
     return AsText(value);

@@ -298,15 +298,17 @@ continued line is indented, how many blank lines are allowed and where, the colu
 of a run of `in`/`out` or `header` declarations, trailing whitespace, and the
 newline at the end of the file.
 
-It does **not** change line breaks. Existing breaks are retained and indented;
-new breaks are not introduced.
+Long lines wrap at syntax boundaries to 80 columns. String and comment tokens
+remain intact, so an indivisible token can exceed the limit. Declaration
+modifiers follow the vocabulary's order: ports use `stream required`, and
+fields place `required` before uniqueness, ranges, matching and enumeration
+constraints. Existing grouping and meaningful line breaks remain.
 
 Two invariants, tested over every flow in the repository:
 
 * **Idempotent.** Formatting formatted text changes nothing.
-* **The program does not change.** Except for required block-body line breaks,
-  formatted text has the same tokens and parse tree. Tests enforce this
-  invariant.
+* **The program does not change.** Tokens retain their text; declaration
+  modifiers may move. Every formatting pass checks the equivalent parse tree.
 
 ### `flow.plan/v1`
 
@@ -693,7 +695,8 @@ informational tip for a scalar read of an anonymous stream; its explicit
 `| consume` edit has `automatic: false`. Hosts retain such suggestions as
 manual actions. `flow.sequence.redundant-parentheses` offers deletions only
 after reparsing the combined edits and checking unchanged native syntax and
-resolution. The formatter continues to preserve tokens, including grouping.
+resolution. The formatter preserves grouping and canonicalizes declaration
+modifier order without changing the parsed program.
 
 Completion and navigation use native expression result descriptors for call
 ports, node IDs, statuses, and known record fields. Declaration-first,

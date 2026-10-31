@@ -632,6 +632,16 @@ std::string StageLabel(const syntax::Stage& stage) {
     return Unparse(stage.argument.get());
   }
   std::string tail;
+  if (stage.name == "context") {
+    absl::StrAppend(&tail, " before ", Unparse(stage.context_before.get()),
+                    " after ", Unparse(stage.context_after.get()));
+    if (stage.context_numbered) {
+      absl::StrAppend(&tail, " numbered");
+      if (stage.context_base != nullptr) {
+        absl::StrAppend(&tail, " base ", Unparse(stage.context_base.get()));
+      }
+    }
+  }
   if (stage.parallel_expression != nullptr) {
     absl::StrAppend(&tail, " parallel ",
                     Unparse(stage.parallel_expression.get()));
@@ -3979,12 +3989,28 @@ class FlowResolver {
       made.carry = carry;
       made.parallel_expression =
           ResolveExpression(stage->parallel_expression.get(), scope, false);
+      made.context_before =
+          ResolveExpression(stage->context_before.get(), scope, false);
+      made.context_after =
+          ResolveExpression(stage->context_after.get(), scope, false);
+      made.context_numbered = stage->context_numbered;
+      made.context_base =
+          ResolveExpression(stage->context_base.get(), scope, false);
       ref.node = Derive(source, std::move(made), ref.label);
       if (stage->name == "map") {
         const auto mapped = DescribeExpression(stage->argument.get(), scope);
         carried.type = mapped.type;
         carried.shape = mapped.shape;
         carried.fields = mapped.fields;
+      } else if (stage->name == "context") {
+        carried.type = stage->context_numbered ? "list[object]"
+                       : carried.type.empty()
+                           ? "list"
+                           : absl::StrCat("list[", carried.type, "]");
+        carried.unary = false;
+        carried.cardinality_known = false;
+        carried.shape = nullptr;
+        carried.fields.clear();
       } else if (stage->name == "count") {
         carried.type = "int";
         carried.unary = true;

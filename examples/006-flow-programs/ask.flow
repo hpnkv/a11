@@ -25,10 +25,13 @@ flow {
   llm = run interact_with_llm(
     interactions: a11::sdk::Interaction{
       role: "user",
-      content: [std::to_chunk({role: "user", content: [{type: "text", text: question}]})]
+      content: [std::to_chunk({role: "user", content: [{type: "text", text:
+        question}]})]
     },
     config: {}
-  ) with "x-a11-llm-provider": "claude", "x-a11-llm-model": "claude-sonnet-4-5", "x-a11-llm-api-key": api_key
+  )
+      with "x-a11-llm-provider": "claude", "x-a11-llm-model":
+    "claude-sonnet-4-5", "x-a11-llm-api-key": api_key
 
   run write_stdout(content: llm.text_output)
   int pieces = take (llm.text_output | count)

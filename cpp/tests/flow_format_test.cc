@@ -89,6 +89,7 @@ std::vector<std::string> Stream(std::string_view source) {
 nlohmann::json Tree(std::string_view source) {
   nlohmann::json value = SyntaxToJsonValue("-", Parse(source));
   value.erase("source");
+  value.erase("diagnostics");
   const auto strip = [](nlohmann::json& node, const auto& self) -> void {
     if (node.is_object()) {
       node.erase("at");
@@ -573,5 +574,125 @@ flow f exported {
   EXPECT_NE(formatted.formatted.find("wait try run check()"),
             std::string::npos);
 }
+
+TEST(FlowFormat, ContextPreservesPredicateAndCountExpressions) {
+  const std::string source = R"(flow f{
+in rows:string stream
+out excerpts:list[string] stream
+rows|context std::contains(it,"error") before(1+2) after 0 numbered base(1 + 0)->excerpts
+}
+)";
+  const auto formatted = Format(source);
+  ASSERT_EQ(FirstError(formatted.diagnostics), nullptr);
+  EXPECT_EQ(Stream(source), Stream(formatted.formatted));
+  EXPECT_EQ(Tree(source), Tree(formatted.formatted));
+  EXPECT_FALSE(Format(formatted.formatted).changed);
+}
+
+TEST(FlowFormat, WrapsExpressionsAndContextWithinTheRequestedWidth) {
+  const std::string source = R"(
+flow excerpts {
+  in rows: string required stream
+
+  out groups: list[string] stream
+
+  rows | context std::contains(it, "error") before (1 + 2) after (3 + 4) -> groups
+  if std::len(take rows) > 100 or std::len(take rows) > 200 { "long" -> _ }
+}
+)";
+  const auto result = Format(source, {.line_width = 60});
+  ASSERT_EQ(FirstError(result.diagnostics), nullptr);
+  EXPECT_EQ(Tree(source), Tree(result.formatted));
+  EXPECT_EQ(Format(result.formatted, {.line_width = 60}).formatted,
+            result.formatted);
+  std::istringstream lines(result.formatted);
+  std::string line;
+  while (std::getline(lines, line)) {
+    EXPECT_LE(line.size(), 60u) << line;
+  }
+  EXPECT_NE(result.formatted.find("string stream required"), std::string::npos);
+}
+
+TEST(FlowFormat, CanonicalizesFieldConstraintsAndPortModifiers) {
+  const std::string source = R"(
+struct Finding {
+  rule: string one of ["raw-pointer-nullability", "status-discard"] required
+  line: int 1..2147483647 required
+  tags: list[string] unique required
+  score: number default 0.5 0..1
+}
+flow main {
+  in rows: Finding required stream
+
+  out results: Finding stream required
+
+  rows -> results
+}
+)";
+  for (bool align : {false, true}) {
+    const auto result = Format(source, {.align_ports = align});
+    EXPECT_TRUE(result.changed);
+    EXPECT_EQ(Tree(source), Tree(result.formatted));
+    EXPECT_EQ(Format(result.formatted, {.align_ports = align}).formatted,
+              result.formatted);
+    EXPECT_NE(result.formatted.find("required one of"), std::string::npos);
+    EXPECT_NE(result.formatted.find("int required 1..2147483647"),
+              std::string::npos);
+    EXPECT_NE(result.formatted.find("list[string] required unique"),
+              std::string::npos);
+    EXPECT_NE(result.formatted.find("number 0..1 default 0.5"),
+              std::string::npos);
+    for (const auto& diagnostic : Parse(result.formatted).diagnostics) {
+      EXPECT_NE(diagnostic.code, "flow.form.field-modifier-order");
+    }
+  }
+}
+
+TEST(FlowFormat, WrapsCompoundCallModifiersWithoutSplittingTheirKeywords) {
+  const std::string source = R"(
+flow main {
+  in sources: string stream
+
+  out results: object stream
+
+  sources | map(run review_cpp_contract_file(source: it, options: {} ) forward headers "x-a11-llm-*").review parallel settings.max_concurrency unordered -> results
+}
+)";
+  const auto result = Format(source);
+  EXPECT_EQ(Tree(source), Tree(result.formatted));
+  EXPECT_NE(result.formatted.find("forward headers"), std::string::npos);
+  EXPECT_EQ(Format(result.formatted).formatted, result.formatted);
+  std::istringstream lines(result.formatted);
+  std::string line;
+  while (std::getline(lines, line)) {
+    EXPECT_LE(line.size(), 80u) << line;
+  }
+}
+
+TEST(FlowFormat, ReordersModifiersAroundACommentedMultilineEnumeration) {
+  const std::string source = R"(
+struct S {
+  mode: string one of ["first", # the first mode
+    "second"] required
+}
+)";
+  const auto result = Format(source);
+  EXPECT_EQ(Tree(source), Tree(result.formatted));
+  EXPECT_NE(result.formatted.find("string required one of"), std::string::npos);
+  EXPECT_NE(result.formatted.find("# the first mode"), std::string::npos);
+  EXPECT_EQ(Format(result.formatted).formatted, result.formatted);
+}
+
+TEST(FlowFormat, PreservesLongLiteralAndCommentTokens) {
+  const std::string literal(100, 'x');
+  const std::string source =
+      absl::StrCat("flow f {\n out text: string\n \"", literal,
+                   "\" -> text\n}\n# ", literal, "\n");
+  const auto result = Format(source);
+  EXPECT_EQ(Tree(source), Tree(result.formatted));
+  EXPECT_EQ(Stream(source), Stream(result.formatted));
+  EXPECT_EQ(Format(result.formatted).formatted, result.formatted);
+}
+
 }  // namespace
 }  // namespace a11::flow

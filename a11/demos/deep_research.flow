@@ -34,7 +34,8 @@ flow plan-research {
 
   out briefs:    string stream "One instruction per investigation."
   out synthesis: string        "How to write the final report."
-  out narration: string stream "Lines for the caller's log; see `deep-research`."
+  out narration: string stream
+    "Lines for the caller's log; see `deep-research`."
 
   strformat("[plan] planning research on: %s", topic) -> narration
 
@@ -56,7 +57,8 @@ flow plan-research {
         """)],
       content: [to_chunk({
         role: "user",
-        content: [{type: "text", text: strformat("The research topic is: %s", it)}]
+        content: [{type: "text", text: strformat("The research topic is: %s", it
+        )}]
       })]
     },
     config: {}
@@ -81,8 +83,9 @@ flow investigate {
   in  topic: string required "What the whole research is about."
   in  brief: string required "This investigation's instruction."
 
-  out report:    string        "What it found."
-  out narration: string stream "Lines for the caller's log; see `deep-research`."
+  out report:    string "What it found."
+  out narration: string stream
+    "Lines for the caller's log; see `deep-research`."
 
   strformat("[investigate] %s", brief) -> narration
 
@@ -124,7 +127,8 @@ flow synthesise-findings {
   in  findings: string stream required "One report per investigation."
 
   out report:    string stream "The report, as it is written."
-  out narration: string stream "Lines for the caller's log; see `deep-research`."
+  out narration: string stream
+    "Lines for the caller's log; see `deep-research`."
 
   strformat("[synthesise] writing the report on: %s", topic) -> narration
 

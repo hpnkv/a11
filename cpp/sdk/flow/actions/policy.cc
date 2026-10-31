@@ -133,6 +133,9 @@ absl::StatusOr<std::filesystem::path> ResolvePath(
   if (path.empty()) {
     return absl::InvalidArgumentError("a path is required");
   }
+  if (path.find('\0') != std::string_view::npos) {
+    return absl::InvalidArgumentError("paths must not contain NUL");
+  }
   if (for_write && !policy.writable) {
     return absl::PermissionDeniedError(
         "this host registered the filesystem actions read-only");
@@ -170,6 +173,9 @@ absl::StatusOr<std::string> ResolveProgram(const ProcessPolicy& policy,
                                            std::string_view program) {
   if (program.empty()) {
     return absl::InvalidArgumentError("a program is required");
+  }
+  if (program.find('\0') != std::string_view::npos) {
+    return absl::InvalidArgumentError("program names must not contain NUL");
   }
   if (!policy.enabled) {
     return absl::PermissionDeniedError(

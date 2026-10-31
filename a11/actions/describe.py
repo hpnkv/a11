@@ -200,7 +200,7 @@ def registry_to_json(
     Args:
         registry: The registry to describe.
         request: What `__list_actions__` takes on its `request` port -- a
-            mapping with any of ``names`` (full-match patterns), ``exact``,
+            mapping with any of ``names`` (full-match RE2 patterns), ``exact``,
             ``ports`` (``"callable"`` or ``"all"``), ``include_reserved`` and
             ``runnable_only``; or a bare list of patterns; or None for all of
             them.

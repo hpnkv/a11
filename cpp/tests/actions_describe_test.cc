@@ -259,6 +259,32 @@ TEST(ParseDescribeRequestTest, RejectsAPatternThatIsNotOne) {
   EXPECT_EQ(request.status().code(), absl::StatusCode::kInvalidArgument);
 }
 
+TEST(DescribeRequestTest, Re2PatternsKeepFullMatchSemantics) {
+  const auto query =
+      ParseSchemaQuery(R"({"names":["(?i)read_[a-z]+","\\p{Greek}+"]})");
+  ASSERT_TRUE(query.ok()) << query.status();
+  EXPECT_TRUE(SchemaQueryAccepts(*query, "READ_FILE"));
+  EXPECT_TRUE(SchemaQueryAccepts(*query, "αβ"));
+  EXPECT_FALSE(SchemaQueryAccepts(*query, "prefix_read_file"));
+  EXPECT_FALSE(SchemaQueryAccepts(*query, "read_file_suffix"));
+}
+
+TEST(ParseDescribeRequestTest, RejectsUnsupportedRe2Syntax) {
+  for (const std::string pattern : {"(?=read).*", "(read)_\\1", "["}) {
+    const auto request =
+        ParseSchemaQuery(nlohmann::json{{"names", {pattern}}}.dump());
+    ASSERT_FALSE(request.ok()) << pattern;
+    EXPECT_EQ(request.status().code(), absl::StatusCode::kInvalidArgument);
+    EXPECT_NE(request.status().message().find("RE2"), std::string::npos);
+  }
+}
+
+TEST(DescribeRequestTest, NestedRepetitionHandlesALongNonmatch) {
+  SchemaQuery request;
+  request.names.emplace_back("(a+)+$");
+  EXPECT_FALSE(SchemaQueryAccepts(request, std::string(100000, 'a') + "!"));
+}
+
 TEST(ParseDescribeQueryTest, ReadsTheQueryString) {
   const absl::StatusOr<SchemaQuery> request = ParseSchemaQueryString(
       "name=shell_.%2A&name=read_.%2A&ports=all&reserved=1&runnable=1");

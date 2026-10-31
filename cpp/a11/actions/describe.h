@@ -101,7 +101,7 @@ enum class PortView {
  * on `GET /actions`.
  */
 struct SchemaQuery {
-  /// Full-match name patterns; empty matches every name.
+  /// Full-match RE2 name patterns; empty matches every name.
   std::vector<std::string> names;
   /// Exact names, in addition to @c names; empty adds nothing.
   std::vector<std::string> exact;

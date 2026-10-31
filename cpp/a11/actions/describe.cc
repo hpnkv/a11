@@ -28,9 +28,9 @@
 #include <absl/strings/str_split.h>
 #include <nlohmann/json.hpp>
 
-#include "a11/actions/internal/pattern.h"
 #include "a11/actions/registry.h"
 #include "a11/actions/schema.h"
+#include "a11/internal/regex.h"
 #include "a11/json_codec.h"
 #include "a11/percent.h"
 
@@ -215,15 +215,13 @@ ActionHeaderSchema HeaderFromJson(const nlohmann::json& value) {
 
 bool MatchesAnyPattern(const std::vector<std::string>& patterns,
                        std::string_view name) {
-  const std::string subject(name);
   for (const std::string& pattern : patterns) {
-    // Full match, the same rule `x-a11-allowed-llm-actions` already uses, so a
-    // pattern means one thing across this codebase rather than two.
-    absl::StatusOr<std::regex> expression = internal::CompilePattern(pattern);
+    auto expression = a11::internal::CompileRegex(pattern);
     if (!expression.ok()) {
       continue;
     }
-    if (std::regex_match(subject, *expression)) {
+    if (RE2::FullMatch(absl::string_view(name.data(), name.size()),
+                       **expression)) {
       return true;
     }
   }
@@ -233,7 +231,7 @@ bool MatchesAnyPattern(const std::vector<std::string>& patterns,
 /// Every pattern compiles, or the first one that does not, named.
 absl::Status ValidatePatterns(const std::vector<std::string>& patterns) {
   for (const std::string& pattern : patterns) {
-    absl::StatusOr<std::regex> expression = internal::CompilePattern(pattern);
+    auto expression = a11::internal::CompileRegex(pattern);
     if (!expression.ok()) {
       return absl::InvalidArgumentError(absl::StrCat(
           "'", pattern,

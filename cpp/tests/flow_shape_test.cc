@@ -157,6 +157,47 @@ TEST(FlowShape, SaysWhichFieldWasWrongAndWhy) {
             std::string::npos);
 }
 
+TEST(FlowShape, Re2FieldPatternsSearchInsideUtf8Values) {
+  const Compiled compiled = Compile(R"(struct Message {
+  text: string required matching "(?i)error"
+  name: string required matching "^\\p{Greek}+$"
+}
+)");
+  const CoerceContext context{.shapes = &compiled.resolved.program};
+  const auto made =
+      CoerceShape(compiled.Shape("Message"),
+                  Object({{"text", Value::String("prefix ERROR suffix")},
+                          {"name", Value::String("αβ")}}),
+                  context);
+  ASSERT_TRUE(made.ok()) << made.status();
+  const auto binary_text =
+      CoerceShape(compiled.Shape("Message"),
+                  Object({{"text", Value::String(std::string("ok\0ERROR", 8))},
+                          {"name", Value::String("αβ")}}),
+                  context);
+  ASSERT_TRUE(binary_text.ok()) << binary_text.status();
+  const auto rejected =
+      CoerceShape(compiled.Shape("Message"),
+                  Object({{"text", Value::String("prefix ERROR suffix")},
+                          {"name", Value::String("αβ!")}}),
+                  context);
+  ASSERT_FALSE(rejected.ok());
+  EXPECT_EQ(rejected.status().code(), absl::StatusCode::kInvalidArgument);
+}
+
+TEST(FlowShape, UnsupportedRe2FieldPatternsReturnAStatus) {
+  const Compiled compiled = Compile(R"(struct Message {
+  text: string required matching "(?=error)error"
+}
+)");
+  const auto made = CoerceShape(compiled.Shape("Message"),
+                                Object({{"text", Value::String("error")}}),
+                                {.shapes = &compiled.resolved.program});
+  ASSERT_FALSE(made.ok());
+  EXPECT_EQ(made.status().code(), absl::StatusCode::kInvalidArgument);
+  EXPECT_NE(made.status().message().find("RE2"), std::string::npos);
+}
+
 TEST(FlowShape, FollowsTheShapesAShapeNames) {
   const Compiled compiled = Compile(kShapes);
   const CoerceContext context{.shapes = &compiled.resolved.program};

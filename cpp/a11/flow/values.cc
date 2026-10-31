@@ -19,7 +19,6 @@
 #include <cstdlib>
 #include <functional>
 #include <limits>
-#include <regex>
 #include <set>
 #include <utility>
 
@@ -38,8 +37,8 @@
 #include <nlohmann/json.hpp>
 
 #include "a11/data/serialization.h"
-#include "a11/flow/internal/pattern.h"
 #include "a11/flow/vocabulary.h"
+#include "a11/internal/regex.h"
 #include "a11/json_codec.h"
 #include "a11/status.h"
 #include "a11/time.h"
@@ -1722,7 +1721,7 @@ Value OfConstant(const syntax::Constant& constant) {
   return Value::Of(constant);
 }
 
-absl::Status FieldError(std::string_view path, const std::string& what) {
+absl::Status FieldError(std::string_view path, std::string_view what) {
   return absl::InvalidArgumentError(absl::StrCat(path, ": ", what));
 }
 
@@ -1821,15 +1820,11 @@ absl::StatusOr<Value> CoerceField(const FieldPlan& field, const Value& given,
     }
   }
   if (field.has_pattern && held.IsTextlike()) {
-    // JSON Schema patterns use ECMA-262. Compile them through Flow's exception
-    // boundary because std::regex reports invalid patterns by throwing.
-    absl::StatusOr<std::regex> pattern =
-        internal::CompilePattern(field.pattern);
+    auto pattern = a11::internal::CompileRegex(field.pattern);
     if (!pattern.ok()) {
-      return FieldError(path, absl::StrCat("the pattern '", field.pattern,
-                                           "' is not a regular expression."));
+      return FieldError(path, pattern.status().message());
     }
-    if (!std::regex_search(held.text(), *pattern)) {
+    if (!RE2::PartialMatch(held.text(), **pattern)) {
       return FieldError(path,
                         absl::StrCat("'", held.text(), "' does not match '",
                                      field.pattern, "'."));

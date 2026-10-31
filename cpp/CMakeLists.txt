@@ -297,6 +297,26 @@ a11_require_static_target(absl::status)
 a11_require_static_target(absl::strings)
 a11_require_static_target(absl::time)
 
+# RE2 shares the pinned Abseil and ships as a static installed dependency.
+set(RE2_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(RE2_TEST OFF CACHE BOOL "" FORCE)
+set(RE2_BENCHMARK OFF CACHE BOOL "" FORCE)
+set(RE2_USE_ICU OFF CACHE BOOL "" FORCE)
+set(USEPCRE OFF CACHE BOOL "" FORCE)
+set(RE2_INSTALL ON CACHE BOOL "" FORCE)
+FetchContent_Declare(
+        re2
+        GIT_REPOSITORY https://github.com/google/re2.git
+        GIT_TAG 2025-11-05
+        GIT_SHALLOW TRUE
+        SYSTEM)
+FetchContent_MakeAvailable(re2)
+a11_require_static_target(re2::re2)
+install(FILES "${re2_SOURCE_DIR}/LICENSE"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/licenses/a11" RENAME RE2.txt)
+install(FILES "${re2_SOURCE_DIR}/LICENSE"
+        DESTINATION a11/licenses RENAME RE2.txt COMPONENT python)
+
 # OpenTelemetry C++ supplies A11's span/trace/context model. It is built
 # statically from source (like Abseil) so the shipped extension stays
 # self-contained and relocatable. Only the API + SDK and the local
@@ -1387,7 +1407,7 @@ target_link_libraries(
         # nlohmann for a11/actions/describe.cc, which builds the a11.actions/v1
         # document. Private, and the public header includes only json_fwd.hpp,
         # so describing an action costs a consumer no nlohmann dependency.
-        PRIVATE a11::obs $<BUILD_INTERFACE:absl::random_random> $<INSTALL_INTERFACE:absl::random_random> $<BUILD_INTERFACE:absl::strings> $<INSTALL_INTERFACE:absl::strings> a11::warnings nlohmann_json::nlohmann_json)
+        PRIVATE re2::re2 a11::obs $<BUILD_INTERFACE:absl::random_random> $<INSTALL_INTERFACE:absl::random_random> $<BUILD_INTERFACE:absl::strings> $<INSTALL_INTERFACE:absl::strings> a11::warnings nlohmann_json::nlohmann_json)
 
 add_library(a11_service STATIC ${A11_SERVICE_SOURCES})
 add_library(a11::service ALIAS a11_service)
@@ -1426,7 +1446,7 @@ target_link_libraries(
         nlohmann_json::nlohmann_json
         PRIVATE $<BUILD_INTERFACE:absl::strings> $<INSTALL_INTERFACE:absl::strings>
         $<BUILD_INTERFACE:absl::str_format> $<INSTALL_INTERFACE:absl::str_format>
-        a11::warnings)
+        re2::re2 a11::warnings)
 
 if (A11_BUILD_AUDIO)
     # The Action-based audio interface: schemas, streaming handlers and the
@@ -1996,8 +2016,7 @@ a11_allow_exceptions(
         # Status in this file's frame rather than unwinding through one of A11's.
         a11/concurrency/boundary.cc a11/net/boundary.cc
         a11/nodes/boundary.cc
-        a11/service/boundary.cc a11/actions/boundary.cc
-        a11/flow/boundary.cc)
+        a11/service/boundary.cc a11/actions/boundary.cc)
 if (A11_BUILD_AUDIO)
     # whisper.cpp is C++ behind a C API that promises no noexcept, and this file
     # is where A11 calls into it.
@@ -2115,5 +2134,5 @@ add_library(a11_header_canary STATIC tests/header_canary.cc)
 target_link_libraries(
         a11_header_canary PRIVATE
         a11::actions a11::concurrency a11::core a11::data a11::net a11::nodes
-        a11::obs a11::service a11::stores a11::warnings)
+        a11::obs a11::service a11::stores re2::re2 a11::warnings)
 a11_disallow_exceptions(a11_header_canary)

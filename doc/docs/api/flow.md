@@ -660,6 +660,12 @@ literal and becomes whatever `<-` names. `until` (or `while`) ends the loop, and
 `max` bounds it regardless. One of the two is required because `repeat` has no
 default bound.
 
+Struct field constraints written `matching "pattern"` use RE2 regular
+expressions and search anywhere in the string; use `^` and `$` to anchor a
+whole value. RE2 supports inline flags and Unicode character classes, and
+rejects lookaround and backreferences. Invalid patterns return an
+`INVALID_ARGUMENT` status when the field is validated.
+
 `match` pulls named fields out of text, as a stage over a stream and as a
 function over one value: `lines | match "name={name} age={age:int}"` turns
 `name=Alice   age=27` into a record with `name` and `age`. Literal text matches

@@ -63,10 +63,13 @@ struct FormatResult {
 /// at
 /// the end of the file.
 ///
-/// Existing line breaks remain, and long lines wrap at syntax boundaries.
-/// Long ordinary strings split at spaces into adjacent literals, grouped where
-/// needed. Triple-quoted strings, unbroken words and comments remain intact.
-/// Declaration modifiers follow the vocabulary's canonical order.
+/// Equivalent whitespace has one layout, preserving parsed statement boundaries.
+/// Groups stay compact when they fit, or expand with indented contents and
+/// dedented closers. Trailing commas request expanded item lists. Module bodies
+/// have no extra indentation. Declaration modifiers follow canonical order.
+/// Ordinary strings split into adjacent literals at spaces or between complete
+/// characters, preserving escapes. Triple-quoted strings and comments remain
+/// intact.
 ///
 /// **It refuses a file it cannot read.** With an error diagnostic, `formatted`
 /// is the input and `diagnostics` says why: half-formatting a file somebody is

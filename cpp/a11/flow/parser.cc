@@ -656,6 +656,9 @@ class ParserImpl {
         continue;
       }
       const bool interface_only = AcceptWord("declare");
+      if (interface_only) {
+        SkipNewlines();
+      }
       if (AtWord("mod")) {
         const Token start = Advance();
         syntax::ModuleDeclaration module;
@@ -673,6 +676,9 @@ class ParserImpl {
         }
         module.exported = AcceptWord("exported");
         module.extent = syntax::LocationOf(start);
+        if (interface_only) {
+          module.extent.start = tokens_[before].start;
+        }
         const auto owner = result_.modules.size();
         result_.modules.push_back(std::move(module));
         if (Expect(TokenKind::kLeftBrace)) {
@@ -2525,19 +2531,33 @@ class ParserImpl {
     switch (*takes) {
       case vocabulary::StageArgument::kNone:
         break;
-      case vocabulary::StageArgument::kNumber:
-        if (At(TokenKind::kNumber)) {
-          const Token& number = Advance();
-          stage->number = number.number;
-          stage->integer = number.integer;
-          stage->is_integer = number.is_integer;
-        } else {
+      case vocabulary::StageArgument::kNumber: {
+        if (Current().EndsStatement() || At(TokenKind::kPipe) ||
+            At(TokenKind::kArrow) || At(TokenKind::kRightParen) ||
+            At(TokenKind::kRightBracket) || At(TokenKind::kComma)) {
           Report("flow.form.stage-argument",
                  absl::StrCat("Expected a count for ", Quoted(stage->name),
                               ", found ", Found(), "."),
                  Current(), Severity::kError, Family::kForm);
+          break;
+        }
+        const Token count = Current();
+        stage->argument = ParseExpression();
+        const auto value = syntax::ConstantValue(stage->argument.get());
+        if (value.has_value()) {
+          if (value->kind != syntax::Constant::Kind::kInteger) {
+            Report("flow.form.stage-argument",
+                   absl::StrCat("The count for ", Quoted(stage->name),
+                                " must be an integer."),
+                   count, Severity::kError, Family::kForm);
+          } else {
+            stage->integer = value->integer;
+            stage->number = static_cast<double>(value->integer);
+            stage->is_integer = true;
+          }
         }
         break;
+      }
       case vocabulary::StageArgument::kString:
         if (At(TokenKind::kString)) {
           stage->text = ParseStringRun();

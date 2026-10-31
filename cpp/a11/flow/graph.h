@@ -114,11 +114,12 @@ struct Stage {
   bool optional = false;
   std::optional<syntax::TypeExpression> type;
   vocabulary::StageArgument takes = vocabulary::StageArgument::kNone;
-  /// `kNumber`: the count.
+  /// `kNumber`: a constant count, or the runtime configuration when evaluated.
   long long count = 0;
   /// `kString`/`kOptionalString`: the text. Also the field name for `at`.
   std::string text;
-  /// `kExpression`: the expression, with `it` bound.
+  /// `kExpression`: the expression, with `it` bound. `kNumber`/`kDuration`:
+  /// scalar configuration evaluated once per activation, without `it`.
   ExprId expr = kNone;
   /// `context`: surrounding item counts, evaluated once at stage activation.
   ExprId context_before = kNone;

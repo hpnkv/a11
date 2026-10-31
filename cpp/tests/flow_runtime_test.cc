@@ -1484,6 +1484,69 @@ flow absent {
   EXPECT_EQ(outcome.outputs.at("said"), Values({"\"nothing arrived\""}));
 }
 
+TEST(FlowRuntimeTest, CountStagesEvaluateScalarExpressions) {
+  struct Case {
+    std::string_view name;
+    std::string_view input;
+    Values expected;
+  };
+
+  const std::vector<Case> cases{
+      {"first", "[1, 2, 3, 4] | flatten", {"1", "2"}},
+      {"last", "[1, 2, 3, 4] | flatten", {"3", "4"}},
+      {"drop", "[1, 2, 3, 4] | flatten", {"3", "4"}},
+      {"batch", "[1, 2, 3, 4] | flatten", {"[1, 2]", "[3, 4]"}},
+      {"window", "[1, 2, 3, 4] | flatten", {"[1, 2]", "[2, 3]", "[3, 4]"}},
+      {"truncate", "\"abcd\"", {"\"ab\""}},
+      {"chunk", "\"abcd\"", {"\"ab\"", "\"cd\""}}};
+  for (const auto& test : cases) {
+    for (const bool slots : {false, true}) {
+      for (std::string_view count :
+           {"settings.count", "(settings.count + 0)"}) {
+        SCOPED_TRACE(absl::StrCat(test.name, " ", count, ", slots=", slots));
+        const auto source = absl::StrCat(
+            "flow main { in settings: object\n out values: std::json stream\n",
+            test.input, " | ", test.name, " ", count, " -> values\n}");
+        const auto outcome =
+            RunFlow(source, "main", {{"settings", {R"({"count":2})"}}}, {},
+                    true, {}, nullptr, slots);
+        ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+        EXPECT_EQ(outcome.outputs.at("values"), test.expected);
+      }
+    }
+  }
+}
+
+TEST(FlowRuntimeTest, CountExpressionsCaptureEachLoopActivation) {
+  for (const auto drop : {"loc.skip", "(loc.start - 1)"}) {
+    const auto source = absl::StrCat(R"(flow contexts {
+  out snippets: string stream
+  for loc in [{start: 1, skip: 0, count: 2},
+              {start: 3, skip: 2, count: 1}] {
+    lines = ["a", "b", "c", "d"] | flatten
+    text = lines | drop )",
+                                     drop, R"( | first loc.count | join ","
+    text -> snippets
+  }
+})");
+    const auto outcome = RunFlow(source, "contexts");
+    ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+    EXPECT_EQ(outcome.outputs.at("snippets"), Values({"\"a,b\"", "\"c\""}));
+  }
+}
+
+TEST(FlowRuntimeTest, CountExpressionsEvaluateOnceBeforeReadingItems) {
+  const auto outcome = RunFlow(R"(flow main {
+  out values: int stream
+  counts = node()
+  2 -> counts
+  [1, 2, 3, 4] | flatten | first (take counts) -> values
+})",
+                               "main");
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("values"), Values({"1", "2"}));
+}
+
 TEST(FlowRuntimeTest, ChunkCutsOneValueIntoSizedPieces) {
   const Outcome outcome = RunFlow(R"(
 flow pieces {

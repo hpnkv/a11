@@ -304,13 +304,22 @@ continued line is indented, how many blank lines are allowed and where, the colu
 of a run of `in`/`out` or `header` declarations, trailing whitespace, and the
 newline at the end of the file.
 
-Long lines wrap at syntax boundaries to 80 columns. Long ordinary strings split
-at spaces into adjacent literals, with parentheses where needed. String values
-and escapes are preserved. Triple-quoted strings, unbroken words and comments
-remain intact and can exceed the limit. Declaration
+Equivalent whitespace produces the same layout. Groups stay compact when they
+fit within 80 columns. Expanded groups place their contents one level deeper,
+with closing delimiters aligned to their opening lines. Nested literal
+delimiters can share opening and closing lines. Expanded objects, lists and
+argument lists place all items on one contents line when they fit, or one item
+per line throughout. A trailing comma requests the vertical form.
+Module bodies use namespace indentation: declarations inside `mod {}` have no
+extra indentation, while flow and struct bodies retain two-space indentation.
+
+Long ordinary strings split at spaces or complete character boundaries into
+adjacent literals, with parentheses where needed. String values and escapes are
+preserved. Triple-quoted strings and comments remain intact and can exceed the
+limit. Declaration
 modifiers follow the vocabulary's order: ports use `stream required`, and
 fields place `required` before uniqueness, ranges, matching and enumeration
-constraints. Existing grouping and meaningful line breaks remain.
+constraints. Parsed statement boundaries and explicit grouping remain.
 
 Two invariants, tested over every flow in the repository:
 

@@ -116,7 +116,8 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StageDocs() {
         "A tolerated predicate failure drops that item and keeps looking.",
         "lines | take until std::lower(it) == \"/exit\" -> work.input"}},
       {"first",
-       {"The first `n` values of the stream, and then nothing.", "a count",
+       {"The first `n` values of the stream, and then nothing.",
+        "a scalar integer expression, evaluated once",
         "Stops reading upstream as soon as it has them, so nothing downstream "
         "waits for values nobody will see. It does not *cancel* whoever is "
         "producing: a step feeding a node that nobody drains would stall, and "
@@ -127,20 +128,23 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StageDocs() {
         "`| first 1` is how a stream becomes one value.",
         "hits | first 3 -> shown"}},
       {"last",
-       {"The last `n` values of the stream.", "a count",
+       {"The last `n` values of the stream.",
+        "a scalar integer expression, evaluated once",
         "Reads the whole stream to find out which those are, holding `n` "
         "values "
         "while it does, so nothing comes out until the stream ends.",
         "lines | last 20 -> tail"}},
       {"drop",
-       {"Everything except the first `n` values.", "a count",
+       {"Everything except the first `n` values.",
+        "a scalar integer expression, evaluated once",
         "Only this pipeline sees fewer values. `skip n port` is the other half "
         "of the pair: it takes them off the node itself, for every reader of "
         "it, "
         "which is how a header row stops being everybody's problem.",
         "rows | drop 1 -> body"}},
       {"truncate",
-       {"Shortens each value. The stream keeps its length.", "a count",
+       {"Shortens each value. The stream keeps its length.",
+        "a scalar integer expression, evaluated once",
         "`n` characters of a string, `n` bytes of a byte string, `n` items of "
         "a "
         "list, `n` keys of a record. Anything else goes through unchanged. "
@@ -148,12 +152,14 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StageDocs() {
         "between a cheap call and an expensive one.",
         "page.text | truncate 4000 -> brief.pages"}},
       {"batch",
-       {"Gathers values into lists of `n`.", "a count",
+       {"Gathers values into lists of `n`.",
+        "a scalar integer expression, evaluated once",
         "Each list goes on as one value, so what follows reads a stream of "
         "lists. Whatever is left when the stream ends goes on too, short.",
         "samples | batch 100 -> frames"}},
       {"window",
-       {"Gathers values into overlapping lists of the last `n`.", "a count",
+       {"Gathers values into overlapping lists of the last `n`.",
+        "a scalar integer expression, evaluated once",
         "One list per value once `n` have arrived, each sharing all but one "
         "value with the list before it. This is `batch` for a question about "
         "neighbours rather than about groups: a pattern spanning two lines is "
@@ -268,7 +274,8 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StageDocs() {
         "same name is there for when more than one value goes in.",
         "elapsed | strformat \"took %s\" -> log"}},
       {"chunk",
-       {"Cuts each value into pieces of at most `n` bytes.", "a size in bytes",
+       {"Cuts each value into pieces of at most `n` bytes.",
+        "a scalar integer size in bytes, evaluated once",
         "One value becomes a stream of pieces, "
         "which is what an upload wanting 64 KiB frames and a model wanting a "
         "paragraph are both asking for. Text is cut on a character boundary, "

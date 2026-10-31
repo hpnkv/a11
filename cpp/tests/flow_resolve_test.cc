@@ -964,6 +964,26 @@ flow main { in rows: Row stream
   EXPECT_EQ(result.flows.front().plan.steps.back().optional_binding, "row");
 }
 
+TEST(FlowResolve, CountStageArgumentsResolveOutsideThePerItemScope) {
+  for (const auto name : vocabulary::Stages()) {
+    if (vocabulary::StageTakes(name) != vocabulary::StageArgument::kNumber) {
+      continue;
+    }
+    for (const auto count : {"it", "missing"}) {
+      const auto result = Check(absl::StrCat("flow f { [1, 2] | flatten | ",
+                                             name, " ", count, " -> _\n}"));
+      EXPECT_TRUE(result.HasErrors()) << name << ": " << count;
+    }
+    const auto good =
+        Check(absl::StrCat("flow f { in settings: object\n [1, 2] | flatten | ",
+                           name, " settings.count -> _\n}"));
+    EXPECT_FALSE(good.HasErrors()) << Messages(good);
+    for (const auto& diagnostic : good.diagnostics) {
+      EXPECT_NE(diagnostic.code, "flow.sequence.impossible");
+    }
+  }
+}
+
 TEST(FlowResolve, ContextCountsResolveOutsideThePerItemScope) {
   for (const auto count : {"it", "missing"}) {
     const auto result =

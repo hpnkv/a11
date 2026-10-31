@@ -810,6 +810,16 @@ stream dependency. `cancel` still requires a condition, loop body, or `after`;
 naming its target does not wait for that action.
 
 
+Count-taking stages (`first`, `last`, `drop`, `truncate`, `batch`, `window` and
+`chunk`) accept scalar integer expressions, including fields and grouped
+calculations. A count is evaluated once when its pipeline activates, using the
+surrounding scope. Inside a loop, each activation uses that iteration's values.
+The per-item name `it` belongs to predicates and mappings, rather than counts.
+
+```a11flow
+lines | drop (settings.start - 1) | first settings.count | join "\n" -> snippet
+```
+
 ## Forward a stream prefix and clean up
 
 `take while CONDITION` forwards values while the condition is true.

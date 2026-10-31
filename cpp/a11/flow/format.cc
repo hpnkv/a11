@@ -25,6 +25,7 @@
 #include <absl/container/flat_hash_map.h>
 #include <absl/container/flat_hash_set.h>
 #include <absl/strings/ascii.h>
+#include <absl/strings/match.h>
 #include <absl/strings/str_cat.h>
 #include <nlohmann/json.hpp>
 
@@ -147,21 +148,87 @@ bool IsCalled(std::string_view text) {
 class Formatter {
  public:
   Formatter(std::string_view source, const std::vector<Token>& tokens,
-            const ParseResult& parsed, const FormatOptions& options)
+            const ParseResult& parsed, const FormatOptions& options,
+            bool layout_groups = false)
       : source_(source),
         options_(options),
         value_braces_(parsed.value_braces.begin(), parsed.value_braces.end()),
         tagged_braces_(parsed.tagged_braces.begin(),
                        parsed.tagged_braces.end()) {
-    for (const auto& flow : parsed.flows) {
-      syntax::VisitSubtree(*flow, [&](const syntax::Node& node) {
-        for (const auto& group : node.groups) {
-          expression_groups_.insert(group.start);
-        }
-        if (node.kind == syntax::NodeKind::kUntil) {
-          loop_conditions_.insert(node.location.start);
-        }
+    const auto body = [&](const auto& statements) {
+      for (const auto& statement : statements) {
+        statement_starts_.insert(statement->extent.start);
+      }
+    };
+    const auto imports = [&](const auto& declarations) {
+      for (const auto& declaration : declarations) {
+        statement_starts_.insert(declaration.extent.start);
+      }
+    };
+    imports(parsed.imports);
+    imports(parsed.exports);
+    const auto opening_brace = [&](const syntax::Location& extent) {
+      const auto begin = std::lower_bound(
+          tokens.begin(), tokens.end(), extent.start,
+          [](const Token& token, size_t start) { return token.start < start; });
+      return std::find_if(begin, tokens.end(), [&](const Token& token) {
+        return token.kind == TokenKind::kLeftBrace || token.start >= extent.end;
       });
+    };
+    const auto visit = [&](const syntax::Node& node) {
+      for (const auto& group : node.groups) {
+        expression_groups_.insert(group.start);
+      }
+      if (node.kind == syntax::NodeKind::kUntil) {
+        loop_conditions_.insert(node.location.start);
+      }
+      if (syntax::IsAnyOf(&node, {syntax::NodeKind::kPortDeclaration,
+                                  syntax::NodeKind::kHeaderDeclaration,
+                                  syntax::NodeKind::kFieldDeclaration})) {
+        statement_starts_.insert(node.extent.start);
+      }
+      if (const auto* flow = syntax::As<syntax::FlowDeclaration>(&node);
+          flow != nullptr) {
+        declaration_starts_.insert(node.extent.start);
+        body(flow->body);
+        imports(flow->imports);
+      } else if (const auto* block = syntax::As<syntax::Block>(&node);
+                 block != nullptr) {
+        body(block->body);
+      } else if (const auto* loop = syntax::As<syntax::ForEach>(&node);
+                 loop != nullptr) {
+        body(loop->body);
+      } else if (const auto* repeat = syntax::As<syntax::Repeat>(&node);
+                 repeat != nullptr) {
+        body(repeat->body);
+      } else if (const auto* branch = syntax::As<syntax::If>(&node);
+                 branch != nullptr) {
+        body(branch->then_body);
+        body(branch->else_body);
+      } else if (const auto* nodes = syntax::As<syntax::Nodes>(&node);
+                 nodes != nullptr) {
+        body(nodes->body);
+      }
+      if (node.kind == syntax::NodeKind::kDtoDeclaration) {
+        declaration_starts_.insert(node.extent.start);
+        const auto brace = opening_brace(node.extent);
+        if (brace != tokens.end() && brace->start < node.extent.end) {
+          struct_braces_.insert(brace->start);
+        }
+      }
+    };
+    for (const auto& flow : parsed.flows) {
+      syntax::VisitSubtree(*flow, visit);
+    }
+    for (const auto& shape : parsed.dtos) {
+      syntax::VisitSubtree(*shape, visit);
+    }
+    for (const auto& module : parsed.modules) {
+      declaration_starts_.insert(module.extent.start);
+      const auto brace = opening_brace(module.extent);
+      if (brace != tokens.end() && brace->start < module.extent.end) {
+        module_braces_.insert(brace->start);
+      }
     }
     // Line breaks are not tokens here: what matters is how *many* there were
     // between two pieces of code, and the lexer folds a run of them into one.
@@ -184,6 +251,11 @@ class Formatter {
       breaks_.push_back(std::max(breaks, separated ? 1 : 0));
       previous_end = token.end;
     }
+    if (layout_groups) {
+      LayoutGroups();
+    } else {
+      NormalizeWhitespace();
+    }
   }
 
   std::string Run() {
@@ -195,6 +267,47 @@ class Formatter {
   }
 
  private:
+  // Statement boundaries come from the AST. Comment attachment and string
+  // fragments retain their source breaks.
+  void NormalizeWhitespace() {
+    size_t depth = 0;
+    for (size_t index = 0; index < code_.size(); ++index) {
+      const auto& token = code_[index];
+      const bool comment =
+          token.kind == TokenKind::kComment ||
+          (index > 0 && code_[index - 1].kind == TokenKind::kComment);
+      const bool strings = token.kind == TokenKind::kString && index > 0 &&
+                           code_[index - 1].kind == TokenKind::kString;
+      if (!comment && !strings) {
+        if (declaration_starts_.find(token.start) !=
+            declaration_starts_.end()) {
+          breaks_[index] = 2;
+        } else if (statement_starts_.find(token.start) !=
+                   statement_starts_.end()) {
+          breaks_[index] = 1;
+        } else {
+          breaks_[index] = 0;
+        }
+        if (depth == 0 && token.IsWord() &&
+            vocabulary::Canonical(token.text) == "describe" &&
+            index + 1 < code_.size() &&
+            code_[index + 1].kind == TokenKind::kString) {
+          breaks_[index] = 1;
+        }
+        if (index > 0 && code_[index - 1].IsWord() && token.IsWord() &&
+            vocabulary::Canonical(code_[index - 1].text) == "else" &&
+            vocabulary::Canonical(token.text) == "if") {
+          breaks_[index] = 0;
+        }
+      }
+      if (IsOpener(token.kind) && !OpensBlock(token)) {
+        ++depth;
+      } else if (IsCloser(token.kind) && depth > 0) {
+        --depth;
+      }
+    }
+  }
+
   /// Whether this `{` opens a block rather than a value.
   [[nodiscard]] bool OpensBlock(const Token& token) const {
     return token.kind == TokenKind::kLeftBrace &&
@@ -213,7 +326,134 @@ class Formatter {
     return brackets_.back().kind != TokenKind::kLeftBrace;
   }
 
-  [[nodiscard]] int BlockIndent() const { return block_ * options_.indent; }
+  [[nodiscard]] int BlockIndent() const {
+    return blocks_.empty() ? 0
+                           : blocks_.back().indent +
+                                 (blocks_.back().module ? 0 : options_.indent);
+  }
+
+  // Measure compact groups before expanding them. Comments and trailing commas
+  // request expansion through their enclosing groups.
+  void LayoutGroups() {
+    struct Group {
+      size_t close;
+      size_t width;
+      bool forced;
+      bool expanded;
+      bool vertical;
+      bool hug;
+      int indent;
+    };
+
+    std::vector<Group> groups(code_.size(),
+                              Group{0, 0, false, false, false, false, 0});
+    std::vector<size_t> stack;
+    std::vector<size_t> widths{0};
+    std::vector<size_t> hard{0};
+    for (size_t index = 0; index < code_.size(); ++index) {
+      const auto& token = code_[index];
+      widths.push_back(widths.back() + Columns(token.text) +
+                       (index > 0 && NeedsSpace(code_[index - 1], token)));
+      hard.push_back(hard.back() + (token.kind == TokenKind::kComment ||
+                                    absl::StrContains(token.text, '\n')));
+      if (IsOpener(token.kind)) {
+        stack.push_back(index);
+      } else if (IsCloser(token.kind) && !stack.empty()) {
+        const size_t open = stack.back();
+        stack.pop_back();
+        auto& group = groups[open];
+        group.close = index;
+        group.width =
+            widths[index + 1] - widths[open + 1] + Columns(code_[open].text);
+        group.forced =
+            group.forced || hard[index + 1] != hard[open] ||
+            (index > open + 1 && code_[index - 1].kind == TokenKind::kComma);
+        if (!stack.empty() && group.forced) {
+          groups[stack.back()].forced = true;
+        }
+      }
+    }
+    stack.clear();
+    size_t column = 0;
+    int indent = 0;
+    std::optional<size_t> pipeline;
+    for (size_t index = 0; index < code_.size(); ++index) {
+      const auto& token = code_[index];
+      if (!stack.empty() && !OpensBlock(code_[stack.back()])) {
+        const size_t open = stack.back();
+        const auto& parent = groups[open];
+        const bool comment = token.kind == TokenKind::kComment ||
+                             code_[index - 1].kind == TokenKind::kComment;
+        const bool strings = parent.expanded &&
+                             token.kind == TokenKind::kString &&
+                             code_[index - 1].kind == TokenKind::kString;
+        if (!comment && !strings) {
+          const bool edge = index == open + 1 || index == parent.close;
+          const bool comma = code_[index - 1].kind == TokenKind::kComma;
+          if (!parent.expanded || edge || comma) {
+            breaks_[index] = parent.expanded && ((edge && !parent.hug) ||
+                                                 (comma && parent.vertical))
+                                 ? 1
+                                 : 0;
+          }
+        }
+      }
+      if (index == 0 || breaks_[index] > 0) {
+        pipeline.reset();
+        if (!stack.empty() && !OpensBlock(code_[stack.back()])) {
+          const auto& parent = groups[stack.back()];
+          indent =
+              parent.indent + (index == parent.close ? 0 : options_.indent);
+        } else {
+          const size_t newline = source_.rfind('\n', token.start);
+          const size_t line =
+              newline == std::string_view::npos ? 0 : newline + 1;
+          const size_t content = source_.find_first_not_of(' ', line);
+          indent = static_cast<int>(content - line);
+        }
+        column = static_cast<size_t>(indent);
+      } else if (index > 0 && NeedsSpace(code_[index - 1], token)) {
+        ++column;
+      }
+      if (IsOpener(token.kind)) {
+        auto& group = groups[index];
+        group.indent = indent;
+        group.expanded =
+            !OpensBlock(token) && group.close > index + 1 &&
+            ((!stack.empty() && groups[stack.back()].hug) || group.forced ||
+             (options_.line_width != 0 &&
+              column + group.width > options_.line_width));
+        if (group.expanded && pipeline.has_value() &&
+            (stack.empty() || OpensBlock(code_[stack.back()]))) {
+          if (breaks_[*pipeline] == 0) {
+            group.indent += options_.indent;
+          }
+          breaks_[*pipeline] = 1;
+        }
+        group.vertical = group.forced ||
+                         (options_.line_width != 0 &&
+                          static_cast<size_t>(group.indent + options_.indent) +
+                                  group.width - 2 >
+                              options_.line_width);
+        if (group.expanded && index + 1 < code_.size()) {
+          const auto& child = code_[index + 1];
+          const bool literal =
+              child.kind == TokenKind::kLeftBracket ||
+              (child.kind == TokenKind::kLeftBrace &&
+               value_braces_.find(child.start) != value_braces_.end());
+          group.hug = literal && groups[index + 1].close + 1 == group.close;
+        }
+        stack.push_back(index);
+      } else if (IsCloser(token.kind) && !stack.empty()) {
+        stack.pop_back();
+      }
+      if (token.kind == TokenKind::kPipe &&
+          (stack.empty() || OpensBlock(code_[stack.back()]))) {
+        pipeline = index;
+      }
+      column += Columns(token.text);
+    }
+  }
 
   /// Whether the line starting at `index` continues the statement above it.
   ///
@@ -338,7 +578,7 @@ class Formatter {
                  (IsModifierTail(index) || IsArgumentTail(index) ? 2 : 1);
     }
     if (ClosesBlock(code_[index])) {
-      return std::max(0, block_ - 1) * options_.indent;
+      return blocks_.empty() ? 0 : blocks_.back().indent;
     }
     return BlockIndent();
   }
@@ -361,6 +601,9 @@ class Formatter {
   /// of a
   /// pipeline stays with the stage.
   [[nodiscard]] int IndentForComment(size_t index) const {
+    if (!brackets_.empty()) {
+      return brackets_.back().indent + options_.indent;
+    }
     size_t next = index + 1;
     while (next < code_.size() && code_[next].kind == TokenKind::kComment) {
       ++next;
@@ -509,16 +752,16 @@ class Formatter {
     if (ClosesBlock(token)) {
       last_port_direction_.clear();
       Flush();
-      block_ = std::max(0, block_ - 1);
-      if (!dto_blocks_.empty()) {
-        dto_blocks_.pop_back();
+      const int indent = blocks_.empty() ? 0 : blocks_.back().indent;
+      if (!blocks_.empty()) {
+        blocks_.pop_back();
       }
-      in_dto_ = !dto_blocks_.empty() && dto_blocks_.back();
+      in_dto_ = !blocks_.empty() && blocks_.back().dto;
       // A blank line before a `}` says nothing, so it is dropped rather than
       // indented: this is the one place a break the author wrote is thrown
       // away.
       blank_pending_ = false;
-      Start(BlockIndent());
+      Start(indent);
       Append(token);
       // Left open, so an `else` can join it.
       opened_block_ = false;
@@ -589,10 +832,10 @@ class Formatter {
       // Which kind of body this is, so a `name: type` inside a shape is read as
       // a field and one inside a flow is not read as anything of the sort. Only
       // the outermost matters: a `struct` holds no blocks.
-      dto_blocks_.push_back(block_ == 0 && opens_dto_);
-      opens_dto_ = false;
-      ++block_;
-      in_dto_ = dto_blocks_.back();
+      blocks_.push_back(Block{
+          indent_, struct_braces_.find(token.start) != struct_braces_.end(),
+          module_braces_.find(token.start) != module_braces_.end()});
+      in_dto_ = blocks_.back().dto;
       opened_block_ = true;
       blank_pending_ = false;
       after_block_open_ = true;
@@ -600,12 +843,6 @@ class Formatter {
       return index + 1;
     }
 
-    // `struct Name {`: remembered here, because by the time the `{` arrives the
-    // word that said what it opens is two tokens back.
-    if (block_ == 0 && token.IsWord() &&
-        vocabulary::Canonical(token.text) == "struct") {
-      opens_dto_ = true;
-    }
     Append(token);
     after_block_close_ = false;
     return index + 1;
@@ -943,6 +1180,20 @@ class Formatter {
     return stop;
   }
 
+  void SeparateGroup() {
+    size_t first = lines_.size();
+    while (first > 0 && lines_[first - 1].indent == indent_ &&
+           lines_[first - 1].text.starts_with("#")) {
+      --first;
+    }
+    if (first < lines_.size()) {
+      lines_[first].blank_before = true;
+      blank_pending_ = false;
+    } else {
+      Blank();
+    }
+  }
+
   void SeparatePortGroup(size_t index) {
     if (!brackets_.empty() || ContinuesStatement(index) || description_line_) {
       return;
@@ -955,23 +1206,16 @@ class Formatter {
                       code_[index + 2].kind == TokenKind::kColon;
     if (!port) {
       if (word != "header" && word != "describe") {
+        if (!last_port_direction_.empty()) {
+          SeparateGroup();
+        }
         last_port_direction_.clear();
       }
       return;
     }
     if (!last_port_direction_.empty() && word != last_port_direction_ &&
         indent_ == last_port_indent_) {
-      size_t first = lines_.size();
-      while (first > 0 && lines_[first - 1].indent == indent_ &&
-             lines_[first - 1].text.starts_with("#")) {
-        --first;
-      }
-      if (first < lines_.size()) {
-        lines_[first].blank_before = true;
-        blank_pending_ = false;
-      } else {
-        Blank();
-      }
+      SeparateGroup();
     }
     last_port_direction_ = word;
     last_port_indent_ = indent_;
@@ -979,9 +1223,8 @@ class Formatter {
 
   /// The lines, with each run of port declarations lined up.
   std::string Render() {
-    // A run is consecutive declarations at one indent with nothing between
-    // them: a blank line or a comment means the author grouped them on purpose,
-    // and two groups line up their own columns.
+    // Consecutive declarations share column widths. Comments and changes of
+    // port direction delimit runs.
     for (size_t index = 0; index < lines_.size();) {
       if (!lines_[index].port.has_value()) {
         ++index;
@@ -1122,23 +1365,30 @@ class Formatter {
     int indent;
   };
 
+  struct Block {
+    int indent;
+    bool dto;
+    bool module;
+  };
+
   std::string_view source_;
   FormatOptions options_;
   absl::flat_hash_set<size_t> value_braces_;
   absl::flat_hash_set<size_t> loop_conditions_;
   absl::flat_hash_set<size_t> tagged_braces_;
   absl::flat_hash_set<size_t> expression_groups_;
+  absl::flat_hash_set<size_t> struct_braces_;
+  absl::flat_hash_set<size_t> module_braces_;
+  absl::flat_hash_set<size_t> statement_starts_;
+  absl::flat_hash_set<size_t> declaration_starts_;
 
   std::vector<Token> code_;
   std::vector<int> breaks_;
 
   std::vector<OutputLine> lines_;
   std::vector<Bracket> brackets_;
-  /// Whether each open block is a `struct` body, innermost last.
-  std::vector<bool> dto_blocks_;
-  /// Whether the `struct` that opens the block about to start was just read.
-  bool opens_dto_ = false;
-  /// Whether a field may be read here: see [dto_blocks_].
+  std::vector<Block> blocks_;
+  /// Whether a field may be read in the innermost block.
   bool in_dto_ = false;
   std::string line_;
   std::string comment_;
@@ -1148,7 +1398,6 @@ class Formatter {
   Token previous_;
   bool line_started_ = false;
   int indent_ = 0;
-  int block_ = 0;
   int statement_indent_ = 0;
   bool opened_block_ = false;
   bool blank_pending_ = false;
@@ -1192,30 +1441,35 @@ size_t Columns(std::string_view text) {
                     [](char c) { return !utf8::IsContinuation(c); }));
 }
 
-// Split only at unescaped spaces, keeping every source byte in one fragment.
-// Escape pairs and UTF-8 sequences remain inside their original fragment.
+// Prefer unescaped spaces; split long words between complete source characters.
 std::vector<std::string_view> StringParts(std::string_view text, size_t width) {
+  if (width <= 2) {
+    return {text};
+  }
   std::vector<std::string_view> parts;
   size_t start = 0;
   size_t start_column = 0;
   size_t columns = 0;
   size_t space = std::string_view::npos;
   size_t space_column = 0;
-  for (size_t at = 0; at < text.size(); ++at) {
-    if (text[at] == '\\' && at + 1 < text.size()) {
-      ++columns;
-      ++at;
-    } else if (text[at] == ' ' && at > start) {
+  for (size_t at = 0; at < text.size();) {
+    const bool escaped = text[at] == '\\' && at + 1 < text.size();
+    const size_t atom = escaped ? 1 + utf8::SequenceWidth(text[at + 1])
+                                : utf8::SequenceWidth(text[at]);
+    const size_t atom_columns = escaped ? 2 : 1;
+    if (!escaped && text[at] == ' ' && at > start) {
       space = at;
       space_column = columns;
     }
-    columns += !utf8::IsContinuation(text[at]);
-    if (columns - start_column + 2 > width && space != std::string_view::npos) {
-      parts.push_back(text.substr(start, space - start));
-      start = space;
-      start_column = space_column;
+    if (columns + atom_columns - start_column + 2 > width && at > start) {
+      const size_t split = space == std::string_view::npos ? at : space;
+      parts.push_back(text.substr(start, split - start));
+      start = split;
+      start_column = space == std::string_view::npos ? columns : space_column;
       space = std::string_view::npos;
     }
+    columns += atom_columns;
+    at += std::min(atom, text.size() - at);
   }
   parts.push_back(text.substr(start));
   return parts;
@@ -1363,7 +1617,7 @@ std::string WrapStrings(std::string_view source, const LexResult& lexed,
     const size_t available =
         options.line_width > indent ? options.line_width - indent : 0;
     const auto parts = StringParts(text, available);
-    if (parts.size() < 2) {
+    if (parts.size() < 2 && !(description && token.start != content)) {
       index = last;
       continue;
     }
@@ -1418,6 +1672,7 @@ std::string WrapLines(std::string_view source, const LexResult& lexed,
   std::vector<bool> groups;
   size_t depth = 0;
   std::vector<size_t> breaks;
+  std::vector<size_t> pipeline_breaks;
   const Token* previous = nullptr;
   for (const auto& token : lexed.tokens) {
     if (token.kind == TokenKind::kNewline || token.kind == TokenKind::kEnd) {
@@ -1429,19 +1684,18 @@ std::string WrapLines(std::string_view source, const LexResult& lexed,
       const bool after_operator =
           token.start > previous->end && token.kind != TokenKind::kColon &&
           token.kind != TokenKind::kEqual && ExpectsOperand(*previous);
-      const bool group =
-          depth > 0 &&
-          (previous->kind == TokenKind::kComma || IsOpener(previous->kind) ||
-           IsCloser(token.kind) || previous->kind == TokenKind::kColon);
       const bool modifier =
           modifiers && word != "headers" && token.start > previous->end &&
           (vocabulary::ModifierWords().contains(word) || word == "parallel" ||
            word == "unordered" || word == "into" || word == "before" ||
            word == "numbered" || word == "base");
-      if (after_operator || group || modifier ||
-          token.kind == TokenKind::kPipe || token.kind == TokenKind::kArrow ||
+      if (after_operator || modifier || token.kind == TokenKind::kPipe ||
+          token.kind == TokenKind::kArrow ||
           token.kind == TokenKind::kComment) {
         breaks.push_back(token.start);
+      }
+      if (depth == 0 && token.kind == TokenKind::kPipe) {
+        pipeline_breaks.push_back(token.start);
       }
     }
     if (IsOpener(token.kind)) {
@@ -1481,6 +1735,7 @@ std::string WrapLines(std::string_view source, const LexResult& lexed,
         break;
       }
       auto chosen = first;
+      std::optional<size_t> pipeline;
       for (auto candidate = first;
            candidate != breaks.end() && *candidate < end; ++candidate) {
         if (Columns(source.substr(part, *candidate - part)) + indent >
@@ -1488,6 +1743,13 @@ std::string WrapLines(std::string_view source, const LexResult& lexed,
           break;
         }
         chosen = candidate;
+        if (std::binary_search(pipeline_breaks.begin(), pipeline_breaks.end(),
+                               *candidate)) {
+          pipeline = *candidate;
+        }
+      }
+      if (pipeline.has_value()) {
+        chosen = std::lower_bound(first, breaks.end(), *pipeline);
       }
       absl::StrAppend(&output,
                       absl::StripTrailingAsciiWhitespace(
@@ -1553,6 +1815,16 @@ FormatResult Format(std::string_view source, FormatOptions options,
         tree = std::move(string_tree);
       }
     }
+    const std::string grouped =
+        Formatter(result.formatted, tokens.tokens, tree, options, true).Run();
+    if (grouped != result.formatted) {
+      result.formatted = grouped;
+      tokens = Lex(result.formatted, LexOptions{.keep_comments = true,
+                                                .limits = limits,
+                                                .budget = budget});
+      tree = ParseTokens(result.formatted, tokens.tokens, tokens.diagnostics,
+                         limits, budget);
+    }
     std::string next = WrapLines(result.formatted, tokens, tree, options, true);
     if (next != result.formatted) {
       auto checked = Parse(next, limits, budget);
@@ -1568,7 +1840,7 @@ FormatResult Format(std::string_view source, FormatOptions options,
     if (next_tree.HasErrors() || Meaning(next_tree) != meaning) {
       break;
     }
-    next = Formatter(next, next_tokens.tokens, next_tree, options).Run();
+    next = Formatter(next, next_tokens.tokens, next_tree, options, true).Run();
     if (next == result.formatted) {
       break;
     }

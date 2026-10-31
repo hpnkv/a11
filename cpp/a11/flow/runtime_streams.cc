@@ -267,6 +267,18 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
         configured->parallel,
         Parallelism(one.stage.parallel, one.stage.parallel_expression));
   }
+  if (one.stage.takes == vocabulary::StageArgument::kNumber &&
+      one.stage.expr != kNone) {
+    ABSL_ASSIGN_OR_RETURN(const Value count, Evaluate(one.stage.expr));
+    if (count.kind() != Value::Kind::kInteger) {
+      return Fail(absl::StrCat("The count for '", one.stage.name,
+                               "' must be an integer."));
+    }
+    if (!configured.has_value()) {
+      configured = one.stage;
+    }
+    configured->count = count.integer();
+  }
   const graph::Stage& stage = configured.has_value() ? *configured : one.stage;
   ABSL_ASSIGN_OR_RETURN(ReaderPtr source, Subscribe(one.source));
   HostBridge& host = bridge();

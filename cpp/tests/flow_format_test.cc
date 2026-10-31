@@ -29,6 +29,7 @@
 #include "a11/flow/lexer.h"
 #include "a11/flow/parser.h"
 #include "a11/flow/token.h"
+#include "a11/utf8.h"
 
 namespace a11::flow {
 namespace {
@@ -164,8 +165,7 @@ TEST(FlowFormat, PortGroupsKeepDescriptionsAndLeadingCommentsTogether) {
   const auto formatted = Formatted(source);
   EXPECT_EQ(formatted,
             "flow main {\n"
-            "  in  value: string\n"
-            "    \"Input description.\"\n"
+            "  in  value: string \"Input description.\"\n"
             "\n"
             "  # Output description.\n"
             "  out result: string\n"
@@ -264,6 +264,7 @@ TEST(FlowFormat, IndentsBlocksAndSpacesTokensTheOneWay) {
             "  in  a: string required\n"
             "\n"
             "  out b: string\n"
+            "\n"
             "  x = run act(p: a, q: \"s\") timeout 250ms\n"
             "  a | truncate 200 | where it != \"\" -> b\n"
             "  if (a | count) > 0 {\n"
@@ -283,8 +284,6 @@ TEST(FlowFormat, LinesUpARunOfPortDeclarations) {
       "  in  x: string\n"
       "  out yy: string\n"
       "}\n";
-  // A blank line means the author grouped them, so the second group
-  // lines up its own columns rather than the first group's.
   EXPECT_EQ(Formatted(source),
             "flow t {\n"
             "  in  question: string required \"What to find out.\"\n"
@@ -299,9 +298,7 @@ TEST(FlowFormat, LinesUpARunOfPortDeclarations) {
             "}\n");
 }
 
-TEST(FlowFormat, KeepsTheBreaksTheAuthorWroteAndIndentsThem) {
-  // The formatter's one big decision: where a line breaks says what the author
-  // thought went together, and that judgement is theirs.
+TEST(FlowFormat, CompactsShortPipelinesAndCallModifiers) {
   const std::string source =
       "flow t {\n"
       "  in  a: string\n"
@@ -314,19 +311,16 @@ TEST(FlowFormat, KeepsTheBreaksTheAuthorWroteAndIndentsThem) {
       "with \"h\": 1\n"
       "forward headers \"authorization\"\n"
       "}\n";
-  EXPECT_EQ(Formatted(source),
-            "flow t {\n"
-            "  in  a: string\n"
-            "\n"
-            "  out b: string\n"
-            "  pages\n"
-            "    | collect\n"
-            "    | join \", \"\n"
-            "    -> b\n"
-            "  x = run act(p: a)\n"
-            "      with \"h\": 1\n"
-            "      forward headers \"authorization\"\n"
-            "}\n");
+  EXPECT_EQ(
+      Formatted(source),
+      "flow t {\n"
+      "  in  a: string\n"
+      "\n"
+      "  out b: string\n"
+      "\n"
+      "  pages | collect | join \", \" -> b\n"
+      "  x = run act(p: a) with \"h\": 1 forward headers \"authorization\"\n"
+      "}\n");
 }
 
 TEST(FlowFormat, ABracketedGroupIndentsFromTheLineThatOpenedIt) {
@@ -336,14 +330,13 @@ TEST(FlowFormat, ABracketedGroupIndentsFromTheLineThatOpenedIt) {
       "[std::to_chunk(it)]\n},\nconfig: {}\n)\n}\n";
   EXPECT_EQ(
       Formatted(source),
-      "flow t {\n  in  a: string\n  llm = call interact(\n    interactions: a "
-      "| map a11::sdk::Interaction{\n      role: \"user\",\n      content: "
+      "flow t {\n  in  a: string\n\n  llm = call interact(\n    interactions: "
+      "a "
+      "| map a11::sdk::Interaction{\n      role: \"user\", content: "
       "[std::to_chunk(it)]\n    },\n    config: {}\n  )\n}\n");
 }
 
-TEST(FlowFormat, AFoldArgumentOnTheNextLineIsIndentedUnderItsStage) {
-  // A comma at the end of a line says the statement is not over, so what
-  // follows is a tail of it.
+TEST(FlowFormat, CompactsShortFoldArguments) {
   const std::string source =
       "flow t {\n"
       "  in  n: number stream\n"
@@ -357,13 +350,12 @@ TEST(FlowFormat, AFoldArgumentOnTheNextLineIsIndentedUnderItsStage) {
             "  in  n: number stream\n"
             "\n"
             "  out o: number\n"
-            "  n | fold 0 as total,\n"
-            "      total + it\n"
-            "    -> o\n"
+            "\n"
+            "  n | fold 0 as total, total + it -> o\n"
             "}\n");
 }
 
-TEST(FlowFormat, ADescriptionOnItsOwnLineIsIndentedUnderWhatItDescribes) {
+TEST(FlowFormat, ShortDescriptionsUseTheDeclarationLine) {
   const std::string source =
       "flow t {\n"
       "describe\n"
@@ -375,13 +367,10 @@ TEST(FlowFormat, ADescriptionOnItsOwnLineIsIndentedUnderWhatItDescribes) {
       "}\n";
   EXPECT_EQ(Formatted(source),
             "flow t {\n"
-            "  describe\n"
-            "    \"What this is for.\"\n"
-            "  in  question: string required\n"
-            "    \"What to find out, at length.\"\n"
+            "  describe \"What this is for.\"\n"
+            "  in  question: string required \"What to find out, at length.\"\n"
             "\n"
-            "  out answer: string\n"
-            "    \"The answer.\"\n"
+            "  out answer: string \"The answer.\"\n"
             "}\n");
 }
 
@@ -421,6 +410,7 @@ TEST(FlowFormat, CommentsStayWhereTheyWere) {
             "flow t {\n"
             "  # Why this port.\n"
             "  in  a: string\n"
+            "\n"
             "  a -> b  # and why this line\n"
             "}\n");
 }
@@ -460,6 +450,7 @@ TEST(FlowFormat, AnElseKeepsItsPlaceOnTheClosingLine) {
   EXPECT_EQ(Formatted(source),
             "flow t {\n"
             "  in  a: string\n"
+            "\n"
             "  if a {\n"
             "    skip 1 a\n"
             "  } else if a {\n"
@@ -528,6 +519,34 @@ TEST(FlowFormat, EveryFlowThisRepositoryShipsIsFormatted) {
   for (const std::filesystem::path& path : Corpus()) {
     const std::string source = ReadFile(path);
     EXPECT_EQ(Format(source).formatted, source) << path;
+  }
+}
+
+TEST(FlowFormat, CorpusWhitespaceVariantsHaveOneLayout) {
+  for (const auto& path : Corpus()) {
+    const std::string source = ReadFile(path);
+    const auto expected = Formatted(source);
+    std::string variant;
+    size_t previous = 0;
+    for (const auto& token : Lex(source).tokens) {
+      if (token.kind == TokenKind::kNewline || token.kind == TokenKind::kEnd) {
+        continue;
+      }
+      const auto gap =
+          std::string_view(source).substr(previous, token.start - previous);
+      if (gap.find('\n') != std::string_view::npos) {
+        variant.append(std::count(gap.begin(), gap.end(), '\n') > 1
+                           ? "\n\n\n\t  "
+                           : "\n\t  ");
+      } else if (!gap.empty()) {
+        variant.append("\t  ");
+      }
+      variant.append(token.text);
+      previous = token.end;
+    }
+    ASSERT_FALSE(Parse(variant).HasErrors()) << path;
+    EXPECT_EQ(Tree(source), Tree(variant)) << path;
+    EXPECT_EQ(Formatted(variant), expected) << path;
   }
 }
 
@@ -667,6 +686,367 @@ flow main {
   }
 }
 
+TEST(FlowFormat, PrefersExpandedPipelineCalls) {
+  const std::string source = R"(flow review {
+  results = sources
+    | map (run review_cpp_contract_file(source: it, options: settings
+  ) forward headers "x-a11-llm-*"
+  ).review parallel settings.max_concurrency unordered
+}
+)";
+  const std::string expected = R"(flow review {
+  results = sources
+    | map (
+      run review_cpp_contract_file(source: it, options: settings)
+      forward headers "x-a11-llm-*"
+    ).review parallel settings.max_concurrency unordered
+}
+)";
+  EXPECT_EQ(Formatted(source), expected);
+  EXPECT_EQ(Tree(source), Tree(expected));
+  EXPECT_FALSE(Format(expected).changed);
+}
+
+TEST(FlowFormat, CompactsShortNestedValues) {
+  const std::string source = R"(flow f {
+  value = std::list(
+    [{
+      "items": [
+        1,
+        2
+      ]
+    }]
+  )
+}
+)";
+  const std::string expected =
+      "flow f {\n  value = std::list([{\"items\": [1, 2]}])\n}\n";
+  EXPECT_EQ(Formatted(source), expected);
+  EXPECT_EQ(Tree(source), Tree(expected));
+  EXPECT_FALSE(Format(expected).changed);
+}
+
+TEST(FlowFormat, CompactsShortBlockConditions) {
+  const std::string source = R"(flow f {
+  if true or
+false {
+log "first"
+} else if false or
+true {
+if true or
+false {
+log "nested"
+}
+} else {
+log "last"
+}
+}
+)";
+  const std::string expected = R"(flow f {
+  if true or false {
+    log "first"
+  } else if false or true {
+    if true or false {
+      log "nested"
+    }
+  } else {
+    log "last"
+  }
+}
+)";
+  EXPECT_EQ(Formatted(source), expected);
+  EXPECT_EQ(Tree(source), Tree(expected));
+  EXPECT_FALSE(Format(expected).changed);
+}
+
+TEST(FlowFormat, WrappedClosersUseTheirOpeningIndentWithCustomWidths) {
+  const std::string source = R"(flow review {
+  results = sources
+    | map (run review_cpp_contract_file(source: it, options: {"limit": [1, 2, 3]}) forward headers "x-a11-llm-*").review parallel settings.max_concurrency unordered
+  if std::len(results) > 100 or std::len(results) > 200 { log "many results" }
+}
+)";
+  for (int indent : {2, 4}) {
+    for (size_t width : {40u, 60u, 80u}) {
+      const FormatOptions options{.indent = indent, .line_width = width};
+      const auto result = Format(source, options);
+      ASSERT_EQ(FirstError(result.diagnostics), nullptr);
+      EXPECT_EQ(Tree(source), Tree(result.formatted));
+      EXPECT_FALSE(Format(result.formatted, options).changed);
+      std::vector<size_t> openers;
+      for (const auto& token : Lex(result.formatted).tokens) {
+        const size_t newline = result.formatted.rfind('\n', token.start);
+        const size_t line = newline == std::string::npos ? 0 : newline + 1;
+        const size_t content = result.formatted.find_first_not_of(' ', line);
+        if (token.kind == TokenKind::kLeftParen ||
+            token.kind == TokenKind::kLeftBracket ||
+            token.kind == TokenKind::kLeftBrace) {
+          openers.push_back(content - line);
+        } else if (token.kind == TokenKind::kRightParen ||
+                   token.kind == TokenKind::kRightBracket ||
+                   token.kind == TokenKind::kRightBrace) {
+          ASSERT_FALSE(openers.empty());
+          if (token.start == content) {
+            EXPECT_EQ(content - line, openers.back()) << result.formatted;
+          }
+          openers.pop_back();
+        }
+      }
+      EXPECT_TRUE(openers.empty());
+    }
+  }
+}
+
+TEST(FlowFormat, EquivalentWhitespaceHasOneLayout) {
+  const std::vector<std::string> programs{
+      R"(flow review {
+in sources: string stream;
+out results: object stream;
+results = sources | map (run review_cpp_contract_file(source: it, options: settings) forward headers "x-a11-llm-*").review parallel settings.max_concurrency unordered;
+})",
+      R"(mod outer {
+struct Record { first: string; second: list[int]; }
+flow main { in value: Record; out result: string;
+values = [{"first": std::upper(value.first), "second": [1, 2, 3]}];
+if true or false { value.first -> result; } else { fail invalid_argument "Missing value."; }
+}
+})",
+      R"(flow main {
+in rows: int stream;
+out result: int;
+rows | fold 0 as total, total + it -> result;
+run other(value: 1) timeout 1s forward headers "x-a11-*";
+})"};
+  for (const auto& source : programs) {
+    const auto expected = Formatted(source);
+    for (std::string_view gap : {" ", "\n", "\r\n\t", "  \n\n  "}) {
+      std::string variant;
+      for (const auto& token : Lex(source).tokens) {
+        if (token.kind != TokenKind::kNewline &&
+            token.kind != TokenKind::kEnd) {
+          variant.append(token.text);
+          variant.append(gap);
+        }
+      }
+      ASSERT_FALSE(Parse(variant).HasErrors()) << variant;
+      EXPECT_EQ(Tree(source), Tree(variant));
+      EXPECT_EQ(Formatted(variant), expected) << variant;
+    }
+    EXPECT_FALSE(Format(expected).changed);
+  }
+}
+
+TEST(FlowFormat, TrailingCommasRequestExpandedItems) {
+  const std::string source = R"(flow f {
+  compact = {"items": [1, 2]}
+  expanded = {"items": [1, 2,],}
+}
+)";
+  const std::string expected = R"(flow f {
+  compact = {"items": [1, 2]}
+  expanded = {
+    "items": [
+      1,
+      2,
+    ],
+  }
+}
+)";
+  EXPECT_EQ(Formatted(source), expected);
+  EXPECT_EQ(Tree(source), Tree(expected));
+  EXPECT_FALSE(Format(expected).changed);
+}
+
+TEST(FlowFormat, ExpandedArgumentsArePackedTogetherOrOnePerLine) {
+  const std::string packed =
+      "flow main { value = run process(first: 1, second: 2, third: 3) }";
+  const std::string vertical =
+      "flow main { value = run process(first: 1, second: 2, third: 3,) }";
+  const FormatOptions options{.line_width = 40};
+  const auto together = Format(packed, options);
+  EXPECT_EQ(together.formatted, R"(flow main {
+  value = run process(
+    first: 1, second: 2, third: 3
+  )
+}
+)");
+  const auto separate = Format(vertical, options);
+  EXPECT_EQ(separate.formatted, R"(flow main {
+  value = run process(
+    first: 1,
+    second: 2,
+    third: 3,
+  )
+}
+)");
+  EXPECT_EQ(Tree(packed), Tree(together.formatted));
+  EXPECT_EQ(Tree(vertical), Tree(separate.formatted));
+  EXPECT_FALSE(Format(together.formatted, options).changed);
+  EXPECT_FALSE(Format(separate.formatted, options).changed);
+}
+
+TEST(FlowFormat, NestedLiteralDelimitersShareLines) {
+  const std::string source = R"(flow main {
+  value = std::list([{"first_long_field_name": 1, "second_long_field_name": 2}])
+}
+)";
+  const std::string expected = R"(flow main {
+  value = std::list([{
+    "first_long_field_name": 1,
+    "second_long_field_name": 2
+  }])
+}
+)";
+  const auto result = Format(source, {.line_width = 40});
+  EXPECT_EQ(result.formatted, expected);
+  EXPECT_EQ(Tree(source), Tree(result.formatted));
+  EXPECT_FALSE(Format(result.formatted, {.line_width = 40}).changed);
+}
+
+TEST(FlowFormat, LongArgumentExpressionsWrapWithinExpandedCalls) {
+  const std::string source = R"(flow main {
+  work = run process(value: first_input_value + second_input_value + third_input_value + fourth_input_value, options: {"enabled": true})
+}
+)";
+  const auto result = Format(source, {.line_width = 50});
+  ASSERT_EQ(FirstError(result.diagnostics), nullptr);
+  EXPECT_EQ(Tree(source), Tree(result.formatted));
+  EXPECT_FALSE(Format(result.formatted, {.line_width = 50}).changed);
+  std::istringstream lines(result.formatted);
+  std::string line;
+  while (std::getline(lines, line)) {
+    EXPECT_LE(line.size(), 50u) << line;
+  }
+}
+
+TEST(FlowFormat, SignificantStatementBoundariesRemainDistinct) {
+  const std::string source = R"(flow f {
+  fail invalid_argument
+  "A separate transfer." -> output
+}
+)";
+  const std::string explicit_boundary = R"(flow f { fail invalid_argument;
+"A separate transfer." -> output; })";
+  EXPECT_EQ(Tree(source), Tree(explicit_boundary));
+  EXPECT_EQ(Formatted(source), Formatted(explicit_boundary));
+  EXPECT_EQ(Tree(source), Tree(Formatted(source)));
+  const std::string message =
+      "flow f { fail invalid_argument\n\t\"An attached message.\" }";
+  EXPECT_EQ(Formatted(message),
+            "flow f {\n  fail invalid_argument \"An attached message.\"\n}\n");
+}
+
+TEST(FlowFormat, UnbrokenUnicodeAndEscapeRunsRespectStringWidth) {
+  for (std::string_view atom : {"abcd", "東京", "😀", R"(\"\\\0)"}) {
+    std::string literal;
+    for (int count = 0; count < 40; ++count) {
+      literal.append(atom);
+    }
+    const std::string source =
+        absl::StrCat("flow f {\n log \"", literal, "\"\n}\n");
+    const auto result = Format(source, {.line_width = 40});
+    ASSERT_EQ(FirstError(result.diagnostics), nullptr);
+    EXPECT_EQ(Tree(source), Tree(result.formatted));
+    EXPECT_FALSE(Format(result.formatted, {.line_width = 40}).changed);
+    std::istringstream lines(result.formatted);
+    std::string line;
+    while (std::getline(lines, line)) {
+      const size_t columns = static_cast<size_t>(
+          std::count_if(line.begin(), line.end(),
+                        [](char c) { return !utf8::IsContinuation(c); }));
+      EXPECT_LE(columns, 40u) << line;
+    }
+  }
+}
+
+TEST(FlowFormat, ModulesUseNamespaceIndentationAndKeepStructFields) {
+  const std::string source = R"(mod outer {
+  struct Record {
+  title: string required
+  count: int default 0
+  }
+  mod inner {
+    flow main {
+    in value: Record
+    out result: string
+    value.title -> result
+    }
+  }
+}
+)";
+  const std::string expected = R"(mod outer {
+struct Record {
+  title: string required
+  count: int default 0
+}
+
+mod inner {
+flow main {
+  in  value: Record
+
+  out result: string
+
+  value.title -> result
+}
+}
+}
+)";
+  EXPECT_EQ(Formatted(source), expected);
+  EXPECT_EQ(Tree(source), Tree(expected));
+  EXPECT_FALSE(Format(expected).changed);
+}
+
+TEST(FlowFormat, DeclaredModulesKeepTheirDeclarationPrefixTogether) {
+  const std::string source = R"(declare
+mod library {
+declare flow work { in value: string; out result: string; }
+})";
+  const std::string expected = R"(declare mod library {
+declare flow work {
+  in  value: string
+
+  out result: string
+}
+}
+)";
+  EXPECT_EQ(Formatted(source), expected);
+  EXPECT_EQ(Tree(source), Tree(expected));
+  EXPECT_FALSE(Format(expected).changed);
+}
+
+TEST(FlowFormat, ExpandedGroupsKeepCommentsInsideTheirDelimiters) {
+  const std::string source = R"(flow f {
+  values = [1, # first item
+  # second item
+  2,
+  # final note
+  ]
+  value = {"text": std::upper(
+  # the text
+  "hello"
+  ),}
+}
+)";
+  const std::string expected = R"(flow f {
+  values = [
+    1,  # first item
+    # second item
+    2,
+    # final note
+  ]
+  value = {
+    "text": std::upper(
+      # the text
+      "hello"
+    ),
+  }
+}
+)";
+  EXPECT_EQ(Formatted(source), expected);
+  EXPECT_EQ(Tree(source), Tree(expected));
+  EXPECT_FALSE(Format(expected).changed);
+}
+
 TEST(FlowFormat, ReordersModifiersAroundACommentedMultilineEnumeration) {
   const std::string source = R"(
 struct S {
@@ -681,14 +1061,17 @@ struct S {
   EXPECT_EQ(Format(result.formatted).formatted, result.formatted);
 }
 
-TEST(FlowFormat, PreservesLongLiteralAndCommentTokens) {
+TEST(FlowFormat, WrapsUnbrokenStringsAndPreservesLongComments) {
   const std::string literal(100, 'x');
   const std::string source =
       absl::StrCat("flow f {\n out text: string\n \"", literal,
                    "\" -> text\n}\n# ", literal, "\n");
   const auto result = Format(source);
   EXPECT_EQ(Tree(source), Tree(result.formatted));
-  EXPECT_EQ(Stream(source), Stream(result.formatted));
+  EXPECT_EQ(Stream(source, false), Stream(result.formatted, false));
+  EXPECT_NE(result.formatted.find(absl::StrCat("# ", literal)),
+            std::string::npos);
+  EXPECT_NE(result.formatted.find("\"\n"), std::string::npos);
   EXPECT_EQ(Format(result.formatted).formatted, result.formatted);
 }
 

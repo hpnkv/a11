@@ -296,6 +296,7 @@ FORMATTED = (
     "  in  words: string stream\n"
     "\n"
     "  out loudest: string\n"
+    "\n"
     "  words | first 1 -> loudest\n"
     "}\n"
 )

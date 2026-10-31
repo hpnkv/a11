@@ -219,6 +219,9 @@ try pipe to tolerate transfer errors too. No item is dropped.
 Stages include map EXPR, where EXPR, first N, drop N, collect, flatten,
 scan INITIAL as state, EXPR, fold INITIAL as state, EXPR, sum, count,
 take while EXPR, take until EXPR, as TYPE, json, packb, timeout DURATION.
+first, last, drop, truncate, batch, window and chunk accept scalar integer
+expressions as their counts, including fields and grouped calculations. Counts
+evaluate once per pipeline activation, outside it.
 context PREDICATE before N after M emits excerpts with N preceding items.
 Matches within the M trailing items reset that count and extend the excerpt.
 Normal EOF flushes shorter lists; upstream failures propagate. Counts evaluate
@@ -238,8 +241,11 @@ After a complete statement, a following complete statement keeps its boundary.
 Use grouping to attach an expression that also reads as a separate statement.
 Adjacent string literals concatenate; declaration descriptions retain their
 ownership. The formatter targets 80 columns and orders declaration modifiers.
-Long ordinary strings split at spaces while preserving values and escapes;
-triple-quoted strings and comments remain intact.
+Equivalent whitespace formats alike. Groups stay compact when they fit or
+expand with indented contents and dedented closing delimiters; trailing commas
+request expanded item lists. Module bodies have no extra indentation. Long
+ordinary strings split at spaces or character boundaries, preserving values and
+escapes. Triple-quoted strings and comments remain intact.
 Prefer list[T] and list(value). list is a prelude alias of std::list; neither
 form requires an import. The qualified spelling remains valid.
 Stages stay unqualified. Functions are qualified: std::len, std::upper,

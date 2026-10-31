@@ -16,7 +16,6 @@ from std import strformat, zip
 
 struct DeepResearchSource {
   describe "A source an investigation cited, correlated to the prose by id."
-
   id:   string required matching "^[A-Za-z0-9_-]+$"
     "As written in <span source>."
   url:  string required matching "^https?://"
@@ -27,7 +26,6 @@ struct DeepResearchSource {
 
 flow investigate {
   describe "Do a single planned investigation for Deep Research"
-
   in  whole_research_brief: string stream required
     "Summary of the whole research"
   in  investigation_brief:  string stream required
@@ -44,7 +42,6 @@ flow investigate {
   # buffered into a string first.
   brief = node()
   whole_research_brief | then investigation_brief -> brief
-
   answer = run investigate-one(brief: brief)
   answer.prose -> investigation
 
@@ -52,13 +49,12 @@ flow investigate {
   # carries through whatever else the searcher sent -- it knows more about a
   # page than this file declares -- and the keys written after it win, which is
   # how `tags` is set without the rest being restated.
-  answer.found | map DeepResearchSource{...it, "tags": ["investigated"]}
-    -> sources
+  answer.found
+    | map DeepResearchSource{...it, "tags": ["investigated"]} -> sources
 }
 
 flow investigate-with-notes {
   describe "The same investigation, with a note written against each source."
-
   in  whole_research_brief: string stream required
   in  investigation_brief:  string stream required
 
@@ -67,14 +63,12 @@ flow investigate-with-notes {
 
   found = node()
   notes = node()
-
   inner = run investigate(
     whole_research_brief: whole_research_brief,
     investigation_brief: investigation_brief,
   )
   inner.investigation -> investigation
   inner.sources -> found
-
   annotate = run note-each(sources: found)
   annotate.notes -> notes
 

@@ -393,7 +393,7 @@ struct LogTail {
 struct Stage : NodeOf<NodeKind::kStage> {
   std::string name;
   vocabulary::StageArgument takes = vocabulary::StageArgument::kNone;
-  /// `kNumber`: the count, and whether it was written as a whole number.
+  /// `kNumber`: a constant count, when the argument folds to an integer.
   double number = 0.0;
   long long integer = 0;
   bool is_integer = false;
@@ -402,7 +402,8 @@ struct Stage : NodeOf<NodeKind::kStage> {
   /// `kExpression`/`kOptionalExpression`: the expression, with `it` bound.
   /// `kSortKey`: the `by` key, or null for the values themselves. `kFold`: the
   /// fold expression, with the carried name and `it` bound. `kStream`: the
-  /// stream to read next.
+  /// stream to read next. `kNumber`/`kDuration`: a scalar stage configuration,
+  /// evaluated once per activation without `it`.
   NodePtr argument;
   /// `kDuration`: how long `timeout` waits, or `pace` spaces values out by.
   absl::Duration duration;

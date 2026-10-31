@@ -1332,6 +1332,54 @@ default
   EXPECT_FALSE(Format(formatted.formatted).changed);
 }
 
+TEST(FlowParser, AllCountStagesAcceptScalarExpressions) {
+  for (const auto name : vocabulary::Stages()) {
+    if (vocabulary::StageTakes(name) != vocabulary::StageArgument::kNumber) {
+      continue;
+    }
+    for (std::string_view count : {"settings.count", "(settings.count - 1)",
+                                   "(\n settings.count\n -\n 1\n)"}) {
+      const auto source =
+          absl::StrCat("flow f { in settings: object\n [1, 2] | flatten | ",
+                       name, " ", count, " -> _\n}");
+      const auto parsed = Parse(source);
+      ASSERT_FALSE(parsed.HasErrors()) << source;
+      EXPECT_FALSE(Format(source).diagnostics.size());
+      EXPECT_EQ(ParsedMeaning(source), ParsedMeaning(Format(source).formatted));
+    }
+    const auto constant = Parse(
+        absl::StrCat("flow f { [1, 2] | flatten | ", name, " (1 + 1) -> _\n}"));
+    ASSERT_FALSE(constant.HasErrors()) << name;
+    for (std::string_view count : {"1.5", "true", "\"two\"", "null"}) {
+      EXPECT_TRUE(Parse(absl::StrCat("flow f { [1] | flatten | ", name, " ",
+                                     count, " -> _\n}"))
+                      .HasErrors())
+          << name << ": " << count;
+    }
+    EXPECT_TRUE(
+        Parse(absl::StrCat("flow f { [1] | flatten | ", name, "; 2 -> _\n}"))
+            .HasErrors());
+  }
+}
+
+TEST(FlowParser, IncompleteDeclarationPrefixesContinueAcrossNewlines) {
+  for (std::string_view gap : {" ", "\n", "\r\n\t", "\n\n  "}) {
+    const std::string source =
+        absl::StrCat("declare", gap, "mod library { declare", gap,
+                     "flow work { in value: string; out result: string; } }");
+    const auto parsed = Parse(source);
+    ASSERT_FALSE(parsed.HasErrors()) << source;
+    ASSERT_EQ(parsed.modules.size(), 1u);
+    EXPECT_TRUE(parsed.modules[0].interface_only);
+    EXPECT_EQ(parsed.modules[0].extent.start, 0u);
+    ASSERT_EQ(parsed.flows.size(), 1u);
+    EXPECT_TRUE(parsed.flows[0]->interface_only);
+    EXPECT_EQ(parsed.flows[0]->name.text, "library::work");
+  }
+  EXPECT_TRUE(Parse("declare; mod library {}").HasErrors());
+  EXPECT_TRUE(Parse("declare; flow work {}").HasErrors());
+}
+
 TEST(FlowParser, ExplicitBoundariesAndGroupedErrorsKeepSourceLocations) {
   const std::string source =
       "flow f {\nfail invalid_argument;\n\t\"café\" -> output;\n}\n";

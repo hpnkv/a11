@@ -642,7 +642,7 @@ export function flowTemplate(
         !FLOW_TOOL_ACTIONS.has(candidate.name),
     );
     if (!action) {
-      return 'flow ask {\n  out reply: string stream\n  # said = call some-action(port: "value")\n  # said.output -> reply\n  drain reply\n}\n';
+      return 'flow ask {\n  out reply: string stream\n\n  # said = call some-action(port: "value")\n  # said.output -> reply\n}\n';
     }
     const input = action.inputs?.[0]?.name;
     const output = action.outputs?.[0]?.name ?? "output";
@@ -653,9 +653,9 @@ export function flowTemplate(
     return [
       "flow ask {",
       "  out reply: string stream",
+      "",
       `  said = ${call}`,
       `  said.${output} -> reply`,
-      "  drain reply",
       "}",
       "",
     ].join("\n");
@@ -672,16 +672,16 @@ function modelTemplate(name: string, verb: "call" | "run"): string {
   out thinking: string stream  "The model's reasoning, as it arrives."
 
   # Everything worth playing with is here.
-  let question = "What is RPC and how to make them distributed?"
-  let system   = "Answer in one or two sentences. Be concrete."
+  question = "What is RPC and how to make them distributed?"
+  system = "Answer in one or two sentences. Be concrete."
 
-  let asked = now()
+  asked = std::now()
 
   said = ${verb} ${name}(
-    interactions: a11.sdk.Interaction{
+    interactions: a11::sdk::Interaction{
       role: "user",
-      system_instructions: [to_chunk(system)],
-      content: [to_chunk({
+      system_instructions: [std::to_chunk(system)],
+      content: [std::to_chunk({
         role: "user",
         content: [{type: "text", text: question}]
       })]
@@ -704,7 +704,7 @@ function modelTemplate(name: string, verb: "call" | "run"): string {
 
   # \`after done\` is what makes this the last line rather than the first.
   done = wait said
-  logf info "asked at %s, answered %s later" asked, (now() - asked) after done
+  logf info "asked at %s, answered %s later" asked, (std::now() - asked) after done
 }
 `;
 }

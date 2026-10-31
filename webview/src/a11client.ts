@@ -198,6 +198,9 @@ them.
 - Use run_flow for independent, repeated, concurrent, or streaming tool work;
   expose only the bounded outputs needed for the answer. In a Flow, use call for
   IDE actions named ide__* and run for actions hosted by the Gateway.
+- Combine related phases in one run_flow invocation; an entry flow can compose
+  sibling flows. For surrounding content, use context on original file lines
+  rather than manual ranges.
 - Avoid reading complete files: use search tools, pattern filters, line subset
   limiters, etc. Apply same limiters to shell commands.
 - Remember that shell commands may fail, deadlock, run for a very long time, etc.

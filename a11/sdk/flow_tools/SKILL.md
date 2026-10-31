@@ -38,8 +38,10 @@ Flow combines streaming tools into one action: filter intermediates before they
 reach model context and fix orchestration without per-call model decisions.
 Execute almost every tool operation through the host's Flow runner, including
 a single read, search, edit, command, or HTTP request. A one-step Flow is the
-default for small operations too. Group independent work and known chains in
-one Flow; filter and bound outputs before returning them. When fresh judgment
+default for small operations too. Combine related phases in one invocation;
+an entry flow can compose sibling flows. Filter and bound outputs. For
+surrounding content, use `context` on original file lines rather than manual
+ranges. When fresh judgment
 is needed, return its evidence and execute the next operation in another Flow.
 Use direct calls only for discovery/guides/checks, user interaction, session
 controls, completion reporting, tools the runner cannot invoke, or an explicit
@@ -257,7 +259,9 @@ Brackets mark optional arguments; `v` is a value, `s` text, `xs` a list.
 Write `s | STAGE`; `it` is the current item. Parallel per-item stages restore
 input order unless `unordered`; `sort` reorders deliberately. `first` ends
 consumption, not producer ownership/cancellation. `collect`, `sort`, `last`,
-and reductions need EOF; bound endless sources upstream.
+and reductions need EOF; bound endless sources upstream. Counts for `first`,
+`last`, `drop`, `truncate`, `batch`, `window`, and `chunk` are scalar integer
+expressions, evaluated once per activation outside `it`.
 
 | Stage | Effect |
 |---|---|

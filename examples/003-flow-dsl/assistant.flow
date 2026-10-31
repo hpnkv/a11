@@ -27,13 +27,11 @@ from std import join, split, to_chunk
 
 flow ask-the-pages {
   describe "Answer a question from the pages a search turns up."
-
   in  question: string required "What to find out."
 
   out answer: string        "The model's answer."
   out cited:  string stream "The pages it was given."
   out prompt: string        "Exactly what the model was asked."
-
   header "x-a11-llm-api-key"  as api_key
   header "x-a11-llm-provider" as provider
   header "x-a11-llm-model"    as model
@@ -45,41 +43,30 @@ flow ask-the-pages {
   # The pages, gathered where one reader can see all of them. A node, because
   # every pass of the loop below writes it and one pipeline reads it.
   pages = node()
-
   nodes fetched {
     for hit in search.hits parallel 3 {
       page = run web-fetch(url: hit.url)
-
       hit.url -> cited
       page.text | truncate 400 -> pages
     }
   }
-
   list[string] snippets = take (pages | collect)
-  string asked = join([
-    "Answer from the pages below. Say so if they do not answer it.",
-    join(["Question:", question_text], " "),
-    join(snippets, "\n\n---\n\n")
-  ], "\n\n")
+  string asked = join(
+    [
+      "Answer from the pages below. Say so if they do not answer it.",
+      join(["Question:", question_text], " "),
+      join(snippets, "\n\n---\n\n")
+    ],
+    "\n\n"
+  )
   asked -> prompt
-
   a11::sdk::Interaction request = {
     role: "user",
-    content: [to_chunk({
-      role: "user",
-      content: [{type: "text", text: asked}]
-    })]
+    content: [to_chunk({role: "user", content: [{type: "text", text: asked}]})]
   }
-
-  llm = call interact_with_llm(
-    interactions: request,
-    config: {}
-  )
-      with "x-a11-llm-api-key": api_key
-      with "x-a11-llm-provider": provider
-      with "x-a11-llm-model": model
-      with "x-a11-llm-base-url": base_url
-
+  llm = call interact_with_llm(interactions: request, config: {})
+      with "x-a11-llm-api-key": api_key with "x-a11-llm-provider": provider
+      with "x-a11-llm-model": model with "x-a11-llm-base-url": base_url
   llm.text_output | join "" -> answer
 }
 
@@ -94,7 +81,6 @@ flow ask-the-pages {
 # pass them in as the history of the next one and keep no other state.
 flow chat-turn {
   describe "One turn of a conversation, given the turns before it."
-
   in  history:  a11::sdk::Interaction stream "Everything said so far."
   in  question: string required              "What to say now."
 
@@ -104,18 +90,12 @@ flow chat-turn {
   string question_text = take question
   a11::sdk::Interaction asked = {
     role: "user",
-    content: [to_chunk({
-      role: "user",
-      content: [{type: "text", text: question_text}]
-    })]
+    content: [
+      to_chunk({role: "user", content: [{type: "text", text: question_text}]})
+    ]
   }
-
-  llm = call interact_with_llm(
-    interactions: history | then asked,
-    config: {}
-  )
+  llm = call interact_with_llm(interactions: history | then asked, config: {})
       forward headers "x-a11-llm-*"
-
   llm.text_output | join "" -> reply
 
   # The same ordering again, for what the caller will feed back in next time.
@@ -127,17 +107,14 @@ flow chat-turn {
 # the flow above is the retrieval rather than the model.
 flow quote-the-pages {
   describe "Answer with the first line of the best page, and no model."
-
   in  question: string required
 
   out answer: string
   out cited:  string stream
 
   search = run web-search(query: question, limit: 1)
-
   for hit in search.hits {
     page = run web-fetch(url: hit.url)
-
     hit.url -> cited
     page.text | map join(split(it, "."), ".") | truncate 160 -> answer
   }

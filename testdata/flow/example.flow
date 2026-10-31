@@ -18,7 +18,6 @@
 # loop, a pipeline, a branch, a block, an advanced value, a log and a failure.
 struct Source {
   describe "Where an answer came from."
-
   url:    string required matching "^https?://" "The page."
   title:  string 1..200
   tags:   string[] unique
@@ -30,14 +29,12 @@ struct Source {
 
 flow example {
   describe "Read a few pages and answer from them."
-
   in  question: string required "What to find out."
 
   out answer:  string        "The answer."
   out sources: Source stream "Where it came from."
   out notes:   string stream "Each page, against the source it came from."
   out frames:  string stream "The answer, in pieces small enough to send."
-
   header "x-a11-deadline" as deadline
   header "x-a11-budget"   as budget default 3
 
@@ -46,13 +43,10 @@ flow example {
   # A node of the flow's own: every pass of the loop writes it, and one pipeline
   # reads it back.
   pages = node()
-
   nodes fetched {
     for hit in search.hits parallel 2 {
-      page = try call web-fetch(url: hit.url)
-          timeout 20s
-          with "accept": "text/html"
-          forward headers "authorization"
+      page = try call web-fetch(url: hit.url) timeout 20s with "accept":
+        "text/html" forward headers "authorization"
 
       # Reading a status waits for the call, so this is the pass's barrier too --
       # and a `try` whose status nothing reads is a failure nobody notices.
@@ -66,7 +60,6 @@ flow example {
       page.text | truncate 200 | where it != "" | log debug it -> pages
     }
   }
-
   close pages after search
 
   # Two streams read in step, taken apart by name. A source that ends first
@@ -74,7 +67,6 @@ flow example {
   for page_text, url in std::zip(pages, search.hits) {
     std::strformat("%s: %s", url, page_text) -> notes
   }
-
   brief = run llm-summarize(question: question, pages: pages)
       with "x-a11-deadline": deadline
 

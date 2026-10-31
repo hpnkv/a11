@@ -265,8 +265,8 @@ class Inference {
             vocabulary::ReducingStages().find(stage.name) !=
                 vocabulary::ReducingStages().end()) {
           fact.upper = 1;
-        } else if (stage.name == "first" && stage.count >= 0 &&
-                   stage.count <= 1) {
+        } else if (stage.name == "first" && stage.expr == kNone &&
+                   stage.count >= 0 && stage.count <= 1) {
           fact.upper = static_cast<int>(stage.count);
         } else if (GraphBuilder::StagePreservesCount(stage)) {
           fact.upper = Infer(ref.source);

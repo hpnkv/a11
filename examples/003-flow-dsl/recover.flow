@@ -19,7 +19,6 @@
 
 flow resilient-read {
   describe "Read the first candidate that works, and report on the rest."
-
   in  urls: string stream required "Candidates, best first."
 
   out text:  string        "The first one that could be read."
@@ -30,13 +29,11 @@ flow resilient-read {
     page = try run web-fetch(url: url)
     std::status outcome = wait page
     {url: url, ok: outcome.ok, why: outcome.message} -> tried
-
     if outcome.ok {
       page.text | truncate 120 -> text
       found = true
     }
   } until found
-
   if not found {
     fail not_found "none of the candidates could be read"
   }
@@ -44,7 +41,6 @@ flow resilient-read {
 
 flow annotated-read {
   describe "Read one page, keeping the notes the reader made on the way."
-
   in  url: string required
 
   out summary:  string
@@ -53,11 +49,9 @@ flow annotated-read {
   # The reader is told which node to report progress into, so its notes arrive
   # here as it works rather than after it finishes.
   seen = node()
-
   page = run web-fetch(url: url)
   reader = run take-notes(pages: page.text | truncate 200)
       with "x-a11-progress-node": seen.id
-
   reader.summary -> summary
   seen -> progress
 
@@ -67,14 +61,12 @@ flow annotated-read {
 
 flow strict-read {
   describe "Read a page, and translate a failure into the caller's terms."
-
   in  url: string required
 
   out text: string
 
   page = try run web-fetch(url: url)
   std::status outcome = wait page
-
   if outcome.ok {
     page.text | truncate 60 -> text
   } else {

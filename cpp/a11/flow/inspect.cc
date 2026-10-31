@@ -47,7 +47,7 @@ std::string Quoted(std::string_view text) {
 
 /// A stage as a message names it: `'| drop 3'`.
 std::string StageName(const syntax::Stage& stage) {
-  if (stage.takes == vocabulary::StageArgument::kNumber) {
+  if (stage.takes == vocabulary::StageArgument::kNumber && stage.is_integer) {
     return absl::StrCat("'| ", stage.name, " ", stage.integer, "'");
   }
   return absl::StrCat("'| ", stage.name, "'");
@@ -679,8 +679,7 @@ class Inspector {
     const syntax::Stage* previous = nullptr;
     for (const syntax::StagePtr& held : pipeline.stages) {
       const syntax::Stage& stage = *held;
-      if (stage.takes == vocabulary::StageArgument::kExpression &&
-          stage.argument != nullptr) {
+      if (stage.argument != nullptr) {
         // `| where (x | count) > 0` -- a pipeline inside a stage is a pipeline.
         Expression(stage.argument.get());
       }
@@ -692,7 +691,7 @@ class Inspector {
         Expression(argument.get());
       }
       if (stage.takes == vocabulary::StageArgument::kNumber &&
-          stage.number < 1) {
+          stage.is_integer && stage.integer < 1) {
         Report("flow.sequence.impossible",
                absl::StrCat(StageName(stage), " keeps nothing."),
                stage.location, Severity::kWarning, Family::kSequence);
@@ -701,7 +700,7 @@ class Inspector {
         // impossible or a no-op.
         const bool keeps_one =
             (stage.name == "first" || stage.name == "last") &&
-            stage.number == 1;
+            stage.is_integer && stage.integer == 1;
         if (keeps_one) {
           Report("flow.sequence.redundant-stage",
                  absl::StrCat(StageName(stage), " has nothing to choose from: ",

@@ -695,6 +695,9 @@ std::string StageLabel(const syntax::Stage& stage) {
 std::string StageBodyLabel(const syntax::Stage& stage) {
   switch (stage.takes) {
     case vocabulary::StageArgument::kNumber:
+      if (!stage.is_integer && stage.argument != nullptr) {
+        return absl::StrCat(stage.name, " ", Unparse(stage.argument.get()));
+      }
       return absl::StrCat(stage.name, " ",
                           stage.is_integer ? absl::StrCat(stage.integer)
                                            : absl::StrCat(stage.number));
@@ -1100,6 +1103,7 @@ class FlowResolver {
     switch (stage.takes) {
       case vocabulary::StageArgument::kNumber:
         made.count = stage.is_integer ? stage.integer : 0;
+        made.expr = stage.is_integer ? graph::kNone : expr;
         break;
       case vocabulary::StageArgument::kString:
       case vocabulary::StageArgument::kOptionalString:
@@ -3950,7 +3954,10 @@ class FlowResolver {
         // pattern's fields.
         const std::string outer = it_pattern_;
         it_pattern_ = previous_pattern;
-        expr = ResolveExpression(stage->argument.get(), scope, true);
+        expr = ResolveExpression(
+            stage->argument.get(), scope,
+            stage->takes != vocabulary::StageArgument::kNumber &&
+                stage->takes != vocabulary::StageArgument::kDuration);
         it_pattern_ = outer;
       }
       if ((stage->parallel > 1 || stage->parallel_expression != nullptr) &&

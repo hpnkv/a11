@@ -258,7 +258,9 @@ nlohmann::json NodeJson(const syntax::Node* node) {
       switch (stage->takes) {
         case vocabulary::StageArgument::kNumber:
           value["arg"] = stage->is_integer ? nlohmann::json(stage->integer)
-                                           : nlohmann::json(stage->number);
+                         : stage->argument != nullptr
+                             ? NodeJson(stage->argument.get())
+                             : nlohmann::json(stage->number);
           break;
         case vocabulary::StageArgument::kString:
         case vocabulary::StageArgument::kOptionalString:

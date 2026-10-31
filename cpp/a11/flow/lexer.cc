@@ -84,6 +84,11 @@ class Lexer {
         break;
       }
       const char letter = source_[index_];
+      if (letter == ';') {
+        Push(TokenKind::kSemicolon, index_, index_ + 1);
+        ++index_;
+        continue;
+      }
       if (letter == '\n') {
         // A statement ends at the end of its line. The parser steps over these
         // wherever a break cannot mean that -- inside brackets, before a
@@ -613,6 +618,8 @@ std::string_view KindName(TokenKind kind) {
   switch (kind) {
     case TokenKind::kNewline:
       return "newline";
+    case TokenKind::kSemicolon:
+      return ";";
     case TokenKind::kComment:
       return "comment";
     case TokenKind::kString:
@@ -683,22 +690,23 @@ std::string_view KindName(TokenKind kind) {
 
 TokenKind KindFromName(std::string_view name) {
   static constexpr TokenKind kAll[] = {
-      TokenKind::kNewline,      TokenKind::kComment,
-      TokenKind::kString,       TokenKind::kNumber,
-      TokenKind::kDuration,     TokenKind::kWord,
-      TokenKind::kDot,          TokenKind::kRange,
-      TokenKind::kSpread,       TokenKind::kArrow,
-      TokenKind::kCarry,        TokenKind::kEqual,
-      TokenKind::kEqualEqual,   TokenKind::kBangEqual,
-      TokenKind::kLess,         TokenKind::kLessEqual,
-      TokenKind::kGreater,      TokenKind::kGreaterEqual,
-      TokenKind::kPlus,         TokenKind::kMinus,
-      TokenKind::kPipe,         TokenKind::kColon,
-      TokenKind::kScope,        TokenKind::kStar,
-      TokenKind::kComma,        TokenKind::kLeftBrace,
-      TokenKind::kRightBrace,   TokenKind::kLeftParen,
-      TokenKind::kRightParen,   TokenKind::kLeftBracket,
-      TokenKind::kRightBracket, TokenKind::kEnd,
+      TokenKind::kNewline,      TokenKind::kSemicolon,
+      TokenKind::kComment,      TokenKind::kString,
+      TokenKind::kNumber,       TokenKind::kDuration,
+      TokenKind::kWord,         TokenKind::kDot,
+      TokenKind::kRange,        TokenKind::kSpread,
+      TokenKind::kArrow,        TokenKind::kCarry,
+      TokenKind::kEqual,        TokenKind::kEqualEqual,
+      TokenKind::kBangEqual,    TokenKind::kLess,
+      TokenKind::kLessEqual,    TokenKind::kGreater,
+      TokenKind::kGreaterEqual, TokenKind::kPlus,
+      TokenKind::kMinus,        TokenKind::kPipe,
+      TokenKind::kColon,        TokenKind::kScope,
+      TokenKind::kStar,         TokenKind::kComma,
+      TokenKind::kLeftBrace,    TokenKind::kRightBrace,
+      TokenKind::kLeftParen,    TokenKind::kRightParen,
+      TokenKind::kLeftBracket,  TokenKind::kRightBracket,
+      TokenKind::kEnd,
   };
   for (const TokenKind kind : kAll) {
     if (KindName(kind) == name) {

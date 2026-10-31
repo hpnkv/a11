@@ -27,6 +27,7 @@
 #include <nlohmann/json.hpp>
 
 #include "a11/flow/emit_json.h"
+#include "a11/flow/format.h"
 #include "a11/flow/parser.h"
 #include "a11/flow/syntax.h"
 #include "absl/strings/match.h"
@@ -497,12 +498,11 @@ TEST(FlowParser, InsideBracketsALineBreakIsWhitespace) {
   }
 }
 
-TEST(FlowParser, OutsideBracketsALineBreakStillEndsTheStatement) {
-  // The property the change above must not cost.
+TEST(FlowParser, OperatorsContinueExpressionsAcrossSoftNewlines) {
   const ParseResult result = Parse(
       "flow f {\n  in l: string stream\n  out o: string stream\n  l where "
       "std::startswith(it, \"B\")\n  or std::endswith(it, \"E\") -> o\n}\n");
-  EXPECT_FALSE(result.diagnostics.empty());
+  EXPECT_TRUE(result.diagnostics.empty());
 }
 
 TEST(FlowParser, AStringWithSomethingAfterItIsAStatementAndNotADescription) {
@@ -1135,6 +1135,248 @@ TEST(FlowParser, TellsABlockFromARecordAtTheHeadOfAStatement) {
   EXPECT_STREQ(kind("flow f {\n  out o: string\n  { skip 1 o }\n}\n"), "block");
   EXPECT_STREQ(kind("flow f {\n  out o: string\n  try { skip 1 o }\n}\n"),
                "block");
+}
+
+TEST(FlowParser, BuiltinArgumentsConcatenateStringsAcrossLines) {
+  const auto result = Parse(
+      "flow f {\n log std::strformat(\n \"first\"\n \" second {}\",\n"
+      " std::trim(\" value\"\n \" \"))\n}\n");
+  ASSERT_FALSE(result.HasErrors()) << absl::StrJoin(Messages(result), "; ");
+  const auto* log = As<syntax::Log>(result.flows[0]->body[0].get());
+  ASSERT_NE(log, nullptr);
+  const auto* builtin = As<syntax::Builtin>(log->tail.arguments[0].get());
+  ASSERT_NE(builtin, nullptr);
+  ASSERT_EQ(builtin->args.size(), 2u);
+  const auto* literal = As<syntax::Literal>(builtin->args[0].get());
+  ASSERT_NE(literal, nullptr);
+  EXPECT_EQ(literal->value.text, "first second {}");
+}
+
+nlohmann::json ParsedMeaning(std::string_view source) {
+  const auto parsed = Parse(source);
+  EXPECT_FALSE(parsed.HasErrors()) << source << "\n"
+                                   << absl::StrJoin(Messages(parsed), "; ");
+  auto tree = SyntaxToJsonValue("-", parsed);
+  tree.erase("source");
+  tree.erase("diagnostics");
+  std::vector<nlohmann::json*> pending{&tree};
+  while (!pending.empty()) {
+    auto* at = pending.back();
+    pending.pop_back();
+    if (at->is_object()) {
+      const bool literal = at->contains("kind") && (*at)["kind"] == "literal";
+      at->erase("at");
+      for (auto& [key, value] : at->items()) {
+        if (!(literal && key == "value") && key != "default" &&
+            key != "one_of" && key != "start") {
+          pending.push_back(&value);
+        }
+      }
+    } else if (at->is_array()) {
+      for (auto& value : *at) {
+        pending.push_back(&value);
+      }
+    }
+  }
+  return tree;
+}
+
+TEST(FlowParser, ContinuationsPreserveMeaningAndFormatting) {
+  const std::vector<std::pair<std::string, std::string>> cases{
+      {"fail invalid_argument \"Configuration is missing.\"",
+       "fail invalid_argument\n\t\"Configuration is missing.\""},
+      {"fail invalid_argument \"Configuration is missing.\"",
+       "fail (invalid_argument)\n (\n\"Configuration is missing.\"\n)"},
+      {"logf \"format {}\" \"value\"",
+       "logf\n (\n\"format\"\n\" {}\"\n)\n\"value\""},
+      {"log std::strformat(\"{}\", not (false or true))",
+       "log\n std\n ::\n strformat\n (\n \"{}\"\n ,\n not\n (false\n or\n "
+       "true)\n )"},
+      {"x = [1, 2][0]\nlog x", "x\n =\n [\n1\n,\n2\n]\n[\n0\n]\nlog x"},
+      {"x = \"a\" in values\nlog x", "x = \"a\"\n in\n values\nlog x"},
+      {"log ({key: [1, 2]}).key[0]",
+       "log (\n {\nkey\n:\n[1\n,2]\n}\n)\n.\nkey\n[\n0\n]"},
+      {"x = \"first second\"\nlog x",
+       "x = \"first\"\n# between literals\n \" second\"\nlog x"},
+      {"run work(value: \"first second\", count: 1) timeout 2s via scratch",
+       "run\nwork\n(\nvalue\n:\n\"first\"\n\" second\"\n,\ncount\n:\n1\n)"
+       "\ntimeout\n2s\nvia\nscratch"},
+      {"run work() with \"x-key\": 1 forward headers \"x-other\"",
+       "run work()\n with\n \"x-key\"\n :\n 1\n forward\n headers\n "
+       "\"x-other\""},
+      {"rows | sum it.value -> output",
+       "rows\n|\nsum\n it\n .\n value\n->\noutput"},
+      {"rows | join \", \" -> output", "rows\n| join\n \", \"\n -> output"},
+      {"rows | sort by it.value desc -> output",
+       "rows | sort\nby\nit.value\ndesc -> output"},
+      {"for item in [1, 2] parallel 1 { log item }",
+       "for\nitem\nin\n[1,2]\nparallel\n1\n{\nlog item\n}"},
+      {"if not false { log \"yes\" } else { log \"no\" }",
+       "if\nnot\nfalse\n{\nlog \"yes\"\n}\nelse\n{\nlog \"no\"\n}"},
+      {"if row = try take rows { log row } else if next = try take rows { log "
+       "next }",
+       "if row = try take rows { log row }\nelse\nif next = try take rows { "
+       "log next }"},
+      {"repeat max 2 { log \"yes\" } until true",
+       "repeat\nmax\n2\n{log \"yes\"}\nuntil\ntrue"},
+      {"wait first of one, two timeout 1s",
+       "wait\nfirst\nof\none,\n two\n timeout\n1s"},
+      {"list[string] names = [\"a\"]\nlog names",
+       "list\n[\nstring\n]\nnames\n=\n[\"a\"]\nlog names"},
+      {"left, right = [1, 2]\nlog left", "left\n,\nright\n=\n[1,2]\nlog left"},
+      {"value -> left, right", "value\n->\nleft\n,\nright"},
+  };
+  for (const auto& [flat, wrapped] : cases) {
+    const auto source = absl::StrCat("flow f {\n", wrapped, "\n}\n");
+    SCOPED_TRACE(source);
+    const auto expected =
+        ParsedMeaning(absl::StrCat("flow f {\n", flat, "\n}\n"));
+    EXPECT_EQ(ParsedMeaning(source), expected);
+    const auto formatted = Format(source);
+    EXPECT_FALSE(FirstError(formatted.diagnostics)) << source;
+    EXPECT_EQ(ParsedMeaning(formatted.formatted), expected);
+    EXPECT_EQ(Format(formatted.formatted).formatted, formatted.formatted);
+  }
+}
+
+TEST(FlowParser, CompleteFollowingStatementsKeepTheirBoundaries) {
+  for (const auto* next :
+       {"\"message\" -> output", "\"message\"\n -> output", "[1, 2] -> output",
+        "run work()", "other = 1", "after work { log \"done\" }"}) {
+    for (const auto* indent : {"", " ", "\t\t", "        "}) {
+      const auto source = absl::StrCat("flow f {\nfail invalid_argument\n",
+                                       indent, next, "\n}\n");
+      SCOPED_TRACE(source);
+      const auto parsed = Parse(source);
+      ASSERT_FALSE(parsed.HasErrors()) << absl::StrJoin(Messages(parsed), "; ");
+      ASSERT_EQ(parsed.flows[0]->body.size(), 2u);
+      const auto* fail = As<syntax::Fail>(parsed.flows[0]->body[0].get());
+      ASSERT_NE(fail, nullptr);
+      EXPECT_EQ(fail->message, nullptr);
+      const auto formatted = Format(source);
+      EXPECT_EQ(ParsedMeaning(formatted.formatted), ParsedMeaning(source));
+      EXPECT_FALSE(Format(formatted.formatted).changed);
+    }
+  }
+}
+
+TEST(FlowParser, ExplicitTerminatorsStopAllContinuationAndDoNotReplaceCommas) {
+  for (const auto* source :
+       {"flow f { x = 1; + 2 -> output }",
+        "flow f { rows; | collect -> output }",
+        "flow f { log std::join([1; 2], \",\") }",
+        "flow f { run work(a: 1; b: 2) }", "flow f { log (\"one\"; \"two\") }",
+        "flow f { in value; : string }", "flow f { if true {}; else {} }",
+        "flow f { log [1\n 2] }", "flow f { run work(a: 1\n b: 2) }",
+        "flow f { log std::json{; key: 1} }",
+        "flow f { fail invalid_argument; \"message\" }"}) {
+    SCOPED_TRACE(source);
+    EXPECT_TRUE(Parse(source).HasErrors());
+  }
+  const std::string source =
+      "flow f { fail invalid_argument; \"message\" -> output; }";
+  const auto formatted = Format(source);
+  ASSERT_EQ(FirstError(formatted.diagnostics), nullptr);
+  EXPECT_EQ(formatted.formatted.find(';'), std::string::npos);
+  EXPECT_EQ(ParsedMeaning(source), ParsedMeaning(formatted.formatted));
+  EXPECT_FALSE(Format(formatted.formatted).changed);
+}
+
+TEST(FlowParser, DeclarationsKeepDescriptionsAndDefaultsSeparate) {
+  const std::string flat = R"(struct Settings {
+  root: string default "repository"
+    "The repository directory."
+}
+flow f {
+  in value: list[string] required "Input values."
+  header "x-mode" as mode default "review"
+    "The selected mode."
+  "transfer" -> output
+}
+)";
+  const std::string wrapped = R"(struct
+Settings
+{
+root
+:
+string
+default
+"repository"
+"The repository directory."
+}
+flow
+f
+{
+in
+value
+:
+list
+[
+string
+]
+required
+"Input values."
+header
+"x-mode"
+as
+mode
+default
+"review"
+"The selected mode."
+"transfer" -> output
+}
+)";
+  EXPECT_EQ(ParsedMeaning(flat), ParsedMeaning(wrapped));
+  const auto formatted = Format(wrapped);
+  EXPECT_EQ(ParsedMeaning(flat), ParsedMeaning(formatted.formatted));
+  EXPECT_FALSE(Format(formatted.formatted).changed);
+}
+
+TEST(FlowParser, ExplicitBoundariesAndGroupedErrorsKeepSourceLocations) {
+  const std::string source =
+      "flow f {\nfail invalid_argument;\n\t\"café\" -> output;\n}\n";
+  const auto parsed = Parse(source);
+  ASSERT_FALSE(parsed.HasErrors());
+  ASSERT_EQ(parsed.flows[0]->body.size(), 2u);
+  EXPECT_EQ(parsed.flows[0]->body[0]->location.line, 2);
+  EXPECT_EQ(parsed.flows[0]->body[0]->location.column, 1);
+  EXPECT_EQ(parsed.flows[0]->body[1]->location.line, 3);
+  EXPECT_EQ(parsed.flows[0]->body[1]->location.column, 2);
+  EXPECT_EQ(parsed.flows[0]->body[1]->location.start, source.find("\"café\""));
+  const auto invalid = Parse("flow f {\n log std::len(\n \"α\";\n \"β\")\n}");
+  ASSERT_TRUE(invalid.HasErrors());
+  EXPECT_EQ(invalid.FirstError()->range.start.line, 3);
+  EXPECT_EQ(invalid.FirstError()->range.start.column, 5);
+}
+
+TEST(FlowParser, OperationSelectionsRequireGroupingAcrossWhitespace) {
+  for (const auto* separator : {"", " ", "\n", "\n\t"}) {
+    const auto invalid = Parse(
+        absl::StrCat("flow f {\n x = run work()", separator, ".result\n}\n"));
+    EXPECT_TRUE(invalid.HasErrors());
+    const auto grouped =
+        absl::StrCat("flow f {\n x = (run work())", separator, ".result\n}\n");
+    EXPECT_EQ(ParsedMeaning(grouped),
+              ParsedMeaning("flow f {\n x = (run work()).result\n}\n"));
+  }
+}
+
+TEST(FlowParser, CommentsTabsAndCrlfPreserveNativeSourceMeaning) {
+  const std::string flat =
+      "from std import trim as clean, len\n"
+      "flow f {\n in rows: string stream\n out text: string\n"
+      " x = std::strformat(\"%s\", ({key: [\"α\"]}).key[0])\n"
+      " x -> text\n}\n";
+  const std::string wrapped =
+      "from\r\nstd\r\nimport\r\ntrim\r\nas\r\nclean\r\n,\r\nlen\r\n"
+      "flow\r\nf\r\n{\r\n\tin rows:\r\nstring\r\nstream\r\n"
+      "out text: string\r\nx = std::strformat(\r\n\"%s\"\r\n,\r\n"
+      "# nested values\r\n({key:\r\n[\"α\"]}\r\n)\r\n.key[\r\n0\r\n]"
+      "\r\n)\r\nx\r\n->\r\ntext\r\n}\r\n";
+  EXPECT_EQ(ParsedMeaning(flat), ParsedMeaning(wrapped));
+  const auto formatted = Format(wrapped);
+  EXPECT_EQ(ParsedMeaning(flat), ParsedMeaning(formatted.formatted));
+  EXPECT_FALSE(Format(formatted.formatted).changed);
 }
 
 }  // namespace

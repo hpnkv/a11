@@ -22,6 +22,7 @@
 #include <utility>
 #include <vector>
 
+#include <absl/container/flat_hash_map.h>
 #include <absl/container/flat_hash_set.h>
 #include <absl/strings/ascii.h>
 #include <absl/strings/str_cat.h>
@@ -154,6 +155,9 @@ class Formatter {
                        parsed.tagged_braces.end()) {
     for (const auto& flow : parsed.flows) {
       syntax::VisitSubtree(*flow, [&](const syntax::Node& node) {
+        for (const auto& group : node.groups) {
+          expression_groups_.insert(group.start);
+        }
         if (node.kind == syntax::NodeKind::kUntil) {
           loop_conditions_.insert(node.location.start);
         }
@@ -163,17 +167,21 @@ class Formatter {
     // between two pieces of code, and the lexer folds a run of them into one.
     size_t previous_end = 0;
     for (const Token& token : tokens) {
-      if (token.kind == TokenKind::kNewline || token.kind == TokenKind::kEnd) {
+      if (token.kind == TokenKind::kNewline ||
+          token.kind == TokenKind::kSemicolon ||
+          token.kind == TokenKind::kEnd) {
         continue;
       }
       int breaks = 0;
+      bool separated = false;
       for (size_t at = previous_end; at < token.start; ++at) {
         if (source_[at] == '\n') {
           ++breaks;
         }
+        separated |= source_[at] == ';';
       }
       code_.push_back(token);
-      breaks_.push_back(breaks);
+      breaks_.push_back(std::max(breaks, separated ? 1 : 0));
       previous_end = token.end;
     }
   }
@@ -396,7 +404,9 @@ class Formatter {
         return false;
       case TokenKind::kLeftParen:
         // `name(` is a call; `not (` and `if (` are a word and an expression.
-        return !((previous.IsWord() && IsCalled(previous.text)) ||
+        return expression_groups_.find(current.start) !=
+                   expression_groups_.end() ||
+               !((previous.IsWord() && IsCalled(previous.text)) ||
                  previous.kind == TokenKind::kRightParen ||
                  previous.kind == TokenKind::kRightBracket);
       case TokenKind::kLeftBracket:
@@ -1117,6 +1127,7 @@ class Formatter {
   absl::flat_hash_set<size_t> value_braces_;
   absl::flat_hash_set<size_t> loop_conditions_;
   absl::flat_hash_set<size_t> tagged_braces_;
+  absl::flat_hash_set<size_t> expression_groups_;
 
   std::vector<Token> code_;
   std::vector<int> breaks_;
@@ -1179,6 +1190,221 @@ size_t Columns(std::string_view text) {
   return static_cast<size_t>(
       std::count_if(text.begin(), text.end(),
                     [](char c) { return !utf8::IsContinuation(c); }));
+}
+
+// Split only at unescaped spaces, keeping every source byte in one fragment.
+// Escape pairs and UTF-8 sequences remain inside their original fragment.
+std::vector<std::string_view> StringParts(std::string_view text, size_t width) {
+  std::vector<std::string_view> parts;
+  size_t start = 0;
+  size_t start_column = 0;
+  size_t columns = 0;
+  size_t space = std::string_view::npos;
+  size_t space_column = 0;
+  for (size_t at = 0; at < text.size(); ++at) {
+    if (text[at] == '\\' && at + 1 < text.size()) {
+      ++columns;
+      ++at;
+    } else if (text[at] == ' ' && at > start) {
+      space = at;
+      space_column = columns;
+    }
+    columns += !utf8::IsContinuation(text[at]);
+    if (columns - start_column + 2 > width && space != std::string_view::npos) {
+      parts.push_back(text.substr(start, space - start));
+      start = space;
+      start_column = space_column;
+      space = std::string_view::npos;
+    }
+  }
+  parts.push_back(text.substr(start));
+  return parts;
+}
+
+std::string WrapStrings(std::string_view source, const LexResult& lexed,
+                        const ParseResult& parsed,
+                        const FormatOptions& options) {
+  if (options.line_width == 0) {
+    return std::string(source);
+  }
+  absl::flat_hash_set<size_t> expressions;
+  absl::flat_hash_map<size_t, std::vector<syntax::Location>> prefixes;
+  const auto protect_code = [&](const syntax::NodePtr& code,
+                                const syntax::NodePtr& message) {
+    if (syntax::As<syntax::Name>(code.get()) != nullptr &&
+        code->groups.empty() && message != nullptr) {
+      prefixes[message->location.start].push_back(code->extent);
+    }
+  };
+  const auto protect_level = [&](const syntax::LogTail& tail) {
+    if (!tail.has_format && !tail.level.Empty() && !tail.arguments.empty()) {
+      prefixes[tail.arguments.front()->location.start].push_back(
+          tail.level.location);
+    }
+  };
+  const auto visit = [&](const syntax::Node& node) {
+    if (const auto* literal = syntax::As<syntax::Literal>(&node);
+        literal != nullptr &&
+        literal->value.kind == syntax::Constant::Kind::kString) {
+      auto at = std::lower_bound(
+          lexed.tokens.begin(), lexed.tokens.end(), literal->location.start,
+          [](const Token& token, size_t start) { return token.start < start; });
+      size_t bytes = 0;
+      for (; at != lexed.tokens.end(); ++at) {
+        if (at->kind == TokenKind::kString) {
+          expressions.insert(at->start);
+          bytes += at->string_value.size();
+          if (bytes >= literal->value.text.size()) {
+            break;
+          }
+        } else if (at->kind != TokenKind::kNewline &&
+                   at->kind != TokenKind::kComment) {
+          break;
+        }
+      }
+    }
+    if (const auto* fail = syntax::As<syntax::Fail>(&node); fail != nullptr) {
+      protect_code(fail->code, fail->message);
+    } else if (const auto* abort = syntax::As<syntax::Abort>(&node);
+               abort != nullptr) {
+      protect_code(abort->code, abort->message);
+      if (syntax::As<syntax::Name>(abort->target.get()) != nullptr &&
+          abort->target->groups.empty() && abort->code != nullptr) {
+        const auto code = prefixes.find(abort->message == nullptr
+                                            ? abort->code->location.start
+                                            : abort->message->location.start);
+        if (code != prefixes.end()) {
+          code->second.insert(code->second.begin(), abort->target->extent);
+        } else if (syntax::As<syntax::Literal>(abort->code.get()) != nullptr) {
+          prefixes[abort->code->location.start].push_back(
+              abort->target->extent);
+        }
+      }
+    } else if (const auto* log = syntax::As<syntax::Log>(&node);
+               log != nullptr) {
+      protect_level(log->tail);
+    } else if (const auto* stage = syntax::As<syntax::Stage>(&node);
+               stage != nullptr) {
+      protect_level(stage->log);
+    }
+  };
+  for (const auto& flow : parsed.flows) {
+    syntax::VisitSubtree(*flow, visit);
+  }
+  for (const auto& dto : parsed.dtos) {
+    syntax::VisitSubtree(*dto, visit);
+  }
+  const absl::flat_hash_set<size_t> values(parsed.value_braces.begin(),
+                                           parsed.value_braces.end());
+
+  struct Group {
+    bool value;
+    size_t indent;
+  };
+
+  std::vector<Group> groups;
+  size_t depth = 0;
+  size_t copied = 0;
+  std::string output;
+  const auto& tokens = lexed.tokens;
+  for (size_t index = 0; index < tokens.size(); ++index) {
+    const auto& token = tokens[index];
+    const size_t newline = source.rfind('\n', token.start);
+    const size_t line = newline == std::string_view::npos ? 0 : newline + 1;
+    size_t content = line;
+    while (content < source.size() && source[content] == ' ') {
+      ++content;
+    }
+    if (IsOpener(token.kind)) {
+      const bool value = token.kind != TokenKind::kLeftBrace ||
+                         values.find(token.start) != values.end();
+      groups.push_back({value, content - line});
+      depth += value;
+    } else if (IsCloser(token.kind) && !groups.empty()) {
+      depth -= groups.back().value;
+      groups.pop_back();
+    }
+    if (token.kind != TokenKind::kString || token.text.starts_with(R"(""")")) {
+      continue;
+    }
+    size_t last = index;
+    std::string text(token.text.substr(1, token.text.size() - 2));
+    while (last + 1 < tokens.size() &&
+           tokens[last + 1].kind == TokenKind::kString &&
+           tokens[last + 1].line == token.line &&
+           !tokens[last + 1].text.starts_with(R"(""")")) {
+      ++last;
+      text.append(tokens[last].text.substr(1, tokens[last].text.size() - 2));
+    }
+    const bool expression = expressions.find(token.start) != expressions.end();
+    const auto& next = tokens[last + 1];
+    const bool description =
+        depth == 0 &&
+        ((token.start == content &&
+          (next.EndsStatement() || next.kind == TokenKind::kComment)) ||
+         (index > 0 && tokens[index - 1].start == content &&
+          vocabulary::Canonical(tokens[index - 1].text) == "describe"));
+    if (!expression && !description) {
+      continue;
+    }
+    const size_t column = Columns(source.substr(line, token.start - line));
+    if (column + Columns(text) + 2 <= options.line_width) {
+      index = last;
+      continue;
+    }
+    const bool parentheses = expression && depth == 0;
+    const size_t indent =
+        description
+            ? content - line +
+                  (token.start == content ? 0
+                                          : static_cast<size_t>(options.indent))
+        : depth > 0 ? groups.back().indent + static_cast<size_t>(options.indent)
+                    : content - line + static_cast<size_t>(options.indent);
+    const size_t available =
+        options.line_width > indent ? options.line_width - indent : 0;
+    const auto parts = StringParts(text, available);
+    if (parts.size() < 2) {
+      index = last;
+      continue;
+    }
+    const auto prefix = prefixes.find(token.start);
+    if (parentheses && prefix != prefixes.end() &&
+        prefix->second.front().start >= copied) {
+      // A bare status code or log level followed by `(` reads as a call.
+      for (const auto& at : prefix->second) {
+        output.append(source.substr(copied, at.start - copied));
+        absl::StrAppend(&output, "(",
+                        source.substr(at.start, at.end - at.start), ")");
+        copied = at.end;
+      }
+      output.append(source.substr(copied, token.start - copied));
+    } else {
+      output.append(source.substr(copied, token.start - copied));
+    }
+    if (parentheses) {
+      output.append("(\n");
+      output.append(indent, ' ');
+    } else if (token.start != content) {
+      output.push_back('\n');
+      output.append(indent, ' ');
+    }
+    for (size_t part = 0; part < parts.size(); ++part) {
+      if (part > 0) {
+        output.push_back('\n');
+        output.append(indent, ' ');
+      }
+      absl::StrAppend(&output, "\"", parts[part], "\"");
+    }
+    if (parentheses) {
+      output.push_back('\n');
+      output.append(content - line, ' ');
+      output.push_back(')');
+    }
+    copied = tokens[last].end;
+    index = last;
+  }
+  output.append(source.substr(copied));
+  return output;
 }
 
 std::string WrapLines(std::string_view source, const LexResult& lexed,
@@ -1313,6 +1539,19 @@ FormatResult Format(std::string_view source, FormatOptions options,
     if (tree.HasErrors() || Meaning(tree) != meaning) {
       result.formatted = std::string(source);
       break;
+    }
+    std::string strings = WrapStrings(result.formatted, tokens, tree, options);
+    if (strings != result.formatted) {
+      auto string_tokens = Lex(strings, LexOptions{.keep_comments = true,
+                                                   .limits = limits,
+                                                   .budget = budget});
+      auto string_tree = ParseTokens(strings, string_tokens.tokens,
+                                     string_tokens.diagnostics, limits, budget);
+      if (!string_tree.HasErrors() && Meaning(string_tree) == meaning) {
+        result.formatted = std::move(strings);
+        tokens = std::move(string_tokens);
+        tree = std::move(string_tree);
+      }
     }
     std::string next = WrapLines(result.formatted, tokens, tree, options, true);
     if (next != result.formatted) {

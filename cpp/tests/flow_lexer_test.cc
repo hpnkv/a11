@@ -90,6 +90,35 @@ TEST(FlowLexer, TheEndTokenIsAlwaysThere) {
   EXPECT_EQ(result.tokens.back().start, 9u);
 }
 
+TEST(FlowLexer, SemicolonsKeepExplicitBoundariesAndPhysicalLocations) {
+  const auto result = Lex("a;b\nc;");
+  ASSERT_FALSE(result.HasErrors());
+  ASSERT_EQ(result.tokens.size(), 7u);
+  EXPECT_EQ(result.tokens[1].kind, TokenKind::kSemicolon);
+  EXPECT_EQ(result.tokens[1].text, ";");
+  EXPECT_EQ(result.tokens[1].start, 1u);
+  EXPECT_EQ(result.tokens[1].line, 1);
+  EXPECT_EQ(result.tokens[1].column, 2);
+  EXPECT_EQ(result.tokens[2].text, "b");
+  EXPECT_EQ(result.tokens[2].line, 1);
+  EXPECT_EQ(result.tokens[2].column, 3);
+  EXPECT_EQ(result.tokens[4].text, "c");
+  EXPECT_EQ(result.tokens[4].line, 2);
+  EXPECT_EQ(result.tokens[4].column, 1);
+  EXPECT_EQ(result.tokens[5].kind, TokenKind::kSemicolon);
+  EXPECT_EQ(Dump(";;"), (std::vector<std::string>{";:;", ";:;"}));
+}
+
+TEST(FlowLexer, SemicolonsInsideStringsAndCommentsStayContent) {
+  const auto result =
+      Lex("\"a;b\";# c;d\n\"\"\"e;f\"\"\"", {.keep_comments = true});
+  ASSERT_FALSE(result.HasErrors());
+  ASSERT_EQ(result.tokens.size(), 6u);
+  EXPECT_EQ(result.tokens[0].string_value, "a;b");
+  EXPECT_EQ(result.tokens[2].text, "# c;d");
+  EXPECT_EQ(result.tokens[4].string_value, "e;f");
+}
+
 TEST(FlowLexer, ADashJoinsANameButAnArrowDoesNot) {
   EXPECT_EQ(Dump("for-each"), std::vector<std::string>{"word:for-each"});
   EXPECT_EQ(Dump("a -> b"),
@@ -194,8 +223,8 @@ TEST(FlowLexer, AnUnterminatedStringEndsAtItsLine) {
 }
 
 TEST(FlowLexer, AnUnknownCharacterIsOneTokenAndTheRestIsStillRead) {
-  const LexResult result = Lex("a ; b");
-  EXPECT_EQ(Codes("a ; b"),
+  const LexResult result = Lex("a @ b");
+  EXPECT_EQ(Codes("a @ b"),
             std::vector<std::string>{"flow.syntax.unexpected-character"});
   ASSERT_EQ(result.tokens.size(), 4u);
   EXPECT_EQ(result.tokens[1].kind, TokenKind::kBad);

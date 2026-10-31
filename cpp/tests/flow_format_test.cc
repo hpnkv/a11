@@ -44,27 +44,25 @@ std::string Formatted(std::string_view source) {
   return result.formatted;
 }
 
-// Every token as `kind:text`, minus the line breaks. The comparison the
-// token-preservation invariant is stated in.
 /// Every token as `kind:text`, minus the line breaks.
 ///
-/// The comparison the token-preservation invariant is stated in. Line breaks
-/// are left out because they are whitespace that happens to be a token: `if a
-/// { b }` has to become three lines, and a formatter that could not add one
-/// could not indent anything. What may not change is everything else -- and
-/// the tree, which is what [Tree] checks and is the guarantee that actually
-/// matters.
-///
-/// Trailing whitespace inside a comment is the one piece of whitespace that
-/// lives
-/// inside a token, and the formatter trims it.
-std::vector<std::string> Stream(std::string_view source) {
+/// Corpus checks omit strings and grouping parentheses, which string wrapping
+/// changes. Tree checks compare the resulting values and expression structure.
+/// Comment comparisons omit trailing whitespace, which the formatter trims.
+std::vector<std::string> Stream(std::string_view source,
+                                bool include_strings_and_groups = true) {
   std::vector<std::string> out;
   for (const Token& token : Lex(source).tokens) {
     if (token.kind == TokenKind::kEnd) {
       break;
     }
-    if (token.kind == TokenKind::kNewline) {
+    if (token.kind == TokenKind::kNewline ||
+        token.kind == TokenKind::kSemicolon) {
+      continue;
+    }
+    if (!include_strings_and_groups && (token.kind == TokenKind::kString ||
+                                        token.kind == TokenKind::kLeftParen ||
+                                        token.kind == TokenKind::kRightParen)) {
       continue;
     }
     std::string text(token.text);
@@ -497,7 +495,7 @@ TEST(FlowFormat, TheEditIsTrimmedToWhatActuallyDiffers) {
   EXPECT_EQ(applied, result.formatted);
 }
 
-TEST(FlowFormat, IsIdempotentAndTokenPreservingOverTheCorpus) {
+TEST(FlowFormat, IsIdempotentAndMeaningPreservingOverTheCorpus) {
   // The two invariants, over every flow this repository ships. They are what
   // let `fmt -i` be run without reading the diff: whatever the style decides,
   // the program is the same program, and running it again changes nothing.
@@ -509,8 +507,8 @@ TEST(FlowFormat, IsIdempotentAndTokenPreservingOverTheCorpus) {
     ASSERT_TRUE(once.diagnostics.empty()) << path;
     // Compared one token at a time so a failure says *which* token moved rather
     // than printing two thousand of them.
-    const std::vector<std::string> before = Stream(source);
-    const std::vector<std::string> after = Stream(once.formatted);
+    const std::vector<std::string> before = Stream(source, false);
+    const std::vector<std::string> after = Stream(once.formatted, false);
     for (size_t index = 0; index < std::min(before.size(), after.size());
          ++index) {
       ASSERT_EQ(before[index], after[index]) << path << " at token " << index;
@@ -692,6 +690,162 @@ TEST(FlowFormat, PreservesLongLiteralAndCommentTokens) {
   EXPECT_EQ(Tree(source), Tree(result.formatted));
   EXPECT_EQ(Stream(source), Stream(result.formatted));
   EXPECT_EQ(Format(result.formatted).formatted, result.formatted);
+}
+
+TEST(FlowFormat, SplitsLongStringsIntoAdjacentLiterals) {
+  const std::string source = R"(flow main {
+  message = "This message contains enough words to wrap across several lines without changing its value."
+  log message
+  fail invalid_argument "The selected repository directory must contain a readable configuration file."
+}
+)";
+  const auto result = Format(source, {.line_width = 48});
+  ASSERT_EQ(FirstError(result.diagnostics), nullptr);
+  EXPECT_EQ(Tree(source), Tree(result.formatted));
+  EXPECT_EQ(result.formatted, R"(flow main {
+  message = (
+    "This message contains enough words to wrap"
+    " across several lines without changing its"
+    " value."
+  )
+  log message
+  fail (invalid_argument) (
+    "The selected repository directory must"
+    " contain a readable configuration file."
+  )
+}
+)");
+  EXPECT_EQ(Format(result.formatted, {.line_width = 48}).formatted,
+            result.formatted);
+  ASSERT_EQ(result.edits.size(), 1u);
+  std::string applied = source;
+  applied.replace(result.edits[0].start,
+                  result.edits[0].end - result.edits[0].start,
+                  result.edits[0].text);
+  EXPECT_EQ(applied, result.formatted);
+}
+
+TEST(FlowFormat, SplitsStringsInsideGroupsAndDescriptions) {
+  const std::string source = R"(struct Settings {
+  root: string "The repository directory containing the source files and configuration to inspect."
+}
+flow main {
+  describe "Inspect repository source files and report findings with their original source locations."
+  in settings: Settings "Settings describing which repository and configuration to inspect for this run."
+  out text: string
+  std::strformat("The repository {} contains source files that can be inspected and checked for findings.", settings.root) -> text
+  ["A list item containing enough words to wrap across several separate string literals."] -> _
+}
+)";
+  const auto result = Format(source, {.line_width = 48});
+  ASSERT_EQ(FirstError(result.diagnostics), nullptr);
+  EXPECT_EQ(Tree(source), Tree(result.formatted));
+  EXPECT_EQ(Format(result.formatted, {.line_width = 48}).formatted,
+            result.formatted);
+  std::istringstream lines(result.formatted);
+  std::string line;
+  while (std::getline(lines, line)) {
+    EXPECT_LE(line.size(), 48u) << line;
+  }
+}
+
+TEST(FlowFormat, StringSplitsPreserveEscapesWhitespaceAndUnicode) {
+  for (
+      const auto* literal :
+      {R"("Escaped quotes \"hello world\" and slashes \\ remain intact when this sentence wraps.")",
+       R"("Tabs\tand newlines\n and nul\0 remain escaped when this longer string wraps at spaces.")",
+       R"("Repeated   spaces and an escaped\ space retain their exact values after the string wraps.  ")",
+       R"("Unicode café 東京 and 😀 remain intact when this sentence wraps across multiple lines.")",
+       R"("A first fragment " "and a second fragment form one long string that wraps across lines.")"}) {
+    SCOPED_TRACE(literal);
+    const auto source = absl::StrCat("flow main {\n log ", literal, "\n}\n");
+    const auto result = Format(source, {.line_width = 40});
+    ASSERT_EQ(FirstError(result.diagnostics), nullptr);
+    EXPECT_EQ(Tree(source), Tree(result.formatted));
+    EXPECT_EQ(Format(result.formatted, {.line_width = 40}).formatted,
+              result.formatted);
+    EXPECT_NE(result.formatted.find("log (\n"), std::string::npos);
+  }
+}
+
+TEST(FlowFormat, StringSplitsRespectCommentsAndExistingBreaks) {
+  const std::string source = R"(flow main {
+  log "A long message with enough words to wrap across several lines of source text." # keep this comment
+  log (
+    "An existing fragment."
+    # keep this boundary
+    "Another long fragment with enough words to wrap into multiple adjacent string literals."
+  )
+}
+)";
+  const auto result = Format(source, {.line_width = 48});
+  ASSERT_EQ(FirstError(result.diagnostics), nullptr);
+  EXPECT_EQ(Tree(source), Tree(result.formatted));
+  EXPECT_EQ(Format(result.formatted, {.line_width = 48}).formatted,
+            result.formatted);
+  EXPECT_NE(result.formatted.find(
+                "\"An existing fragment.\"\n    # keep this boundary\n"),
+            std::string::npos);
+  EXPECT_NE(result.formatted.find(")  # keep this comment"), std::string::npos);
+  EXPECT_NE(result.formatted.find("\"Another long fragment with enough words"),
+            std::string::npos);
+  EXPECT_EQ(result.formatted.find(
+                "\"Another long fragment with enough words to wrap into"),
+            std::string::npos);
+}
+
+TEST(FlowFormat, StringSplitsKeepStatusCodesAndLogLevelsSeparate) {
+  for (const auto* prefix : {"fail invalid_argument ", "log warning ",
+                             "1 | log warning ", "abort n invalid_argument "}) {
+    const auto source = absl::StrCat(
+        "flow main {\n n = node()\n ", prefix,
+        "\"A message with enough words to require several adjacent string "
+        "literals after formatting.\"",
+        std::string_view(prefix).starts_with("1 |") ? " -> _" : "", "\n}\n");
+    SCOPED_TRACE(source);
+    const auto result = Format(source, {.line_width = 48});
+    ASSERT_EQ(FirstError(result.diagnostics), nullptr);
+    EXPECT_EQ(Tree(source), Tree(result.formatted));
+    EXPECT_EQ(Format(result.formatted, {.line_width = 48}).formatted,
+              result.formatted);
+    EXPECT_NE(result.formatted.find("(\n"), std::string::npos);
+  }
+}
+
+TEST(FlowFormat, LeavesStringsIntactWhenWrappingIsDisabled) {
+  const std::string source = R"(flow main {
+  log "This message contains enough words to wrap across several lines without changing its value."
+}
+)";
+  const auto result = Format(source, {.line_width = 0});
+  EXPECT_EQ(result.formatted, source);
+  EXPECT_EQ(Stream(result.formatted), Stream(source));
+}
+
+TEST(FlowFormat, SemicolonsFormatAsNewlines) {
+  const std::string source =
+      ";;struct Settings { root: string; count: int };"
+      "declare flow inspect { in value: string; out result: string };"
+      "flow main { describe \"Inspect a repository.\";"
+      "in settings: Settings; out result: string;"
+      "a = run inspect(value: settings.root);"
+      "if settings.count < 1 { log \"empty; repository\"; log \"done\" };"
+      "a.result | map std::trim(it) -> result; wait all; };";
+  std::string multiline = source;
+  bool quoted = false;
+  for (char& c : multiline) {
+    if (c == '"') {
+      quoted = !quoted;
+    } else if (c == ';' && !quoted) {
+      c = '\n';
+    }
+  }
+  const auto result = Format(source);
+  ASSERT_EQ(FirstError(result.diagnostics), nullptr);
+  EXPECT_EQ(Tree(source), Tree(multiline));
+  EXPECT_EQ(result.formatted, Formatted(multiline));
+  EXPECT_EQ(Format(result.formatted).formatted, result.formatted);
+  EXPECT_NE(result.formatted.find("empty; repository"), std::string::npos);
 }
 
 }  // namespace

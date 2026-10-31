@@ -24,6 +24,7 @@
 #include <absl/strings/str_cat.h>
 
 #include "a11/flow/contract.h"
+#include "a11/flow/internal/editor_documentation.h"
 #include "a11/flow/lexer.h"
 #include "a11/flow/module.h"
 #include "a11/flow/navigate.h"
@@ -53,8 +54,8 @@ constexpr size_t kNoIndex = static_cast<size_t>(-1);
 /// Whether a token is one of the three things that end a statement, which is
 /// also what tells the completer where the statement under the caret began.
 bool BoundaryKind(TokenKind kind) {
-  return kind == TokenKind::kNewline || kind == TokenKind::kLeftBrace ||
-         kind == TokenKind::kRightBrace;
+  return kind == TokenKind::kNewline || kind == TokenKind::kSemicolon ||
+         kind == TokenKind::kLeftBrace || kind == TokenKind::kRightBrace;
 }
 
 /// A description as the grey text beside a proposal: one sentence, one line.
@@ -181,7 +182,10 @@ class Completer {
       linked = &owned_linked_;
     }
     linked_ = linked;
-    const auto local = linked->CatalogueAt(offset_, true, limits, budget);
+    documentation_ = internal::EditorDocumentation(
+        linked->source, linked->parsed, limits, budget);
+    const auto local =
+        documentation_.CatalogueAt(*linked, offset_, true, limits, budget);
     known_ = linked->SelectingImport(offset_) ? local : known.MergedWith(local);
     const auto evidence = known_.SchemaProgram();
     resolved_ = Resolve(linked->source, linked->parsed, false, &evidence,
@@ -240,6 +244,15 @@ class Completer {
             : member.module ? ProposalKind::kDeclaration
                             : ProposalKind::kFlow,
             member.module ? " module" : "");
+        if (const auto* action = known_.Action(member.name);
+            action != nullptr) {
+          proposals_.back().tail = Summary(action->description);
+          proposals_.back().documentation = ActionMarkdown(*action);
+        } else if (const auto* shape = known_.Type(member.name);
+                   shape != nullptr) {
+          proposals_.back().tail = Summary(shape->shape.description);
+          proposals_.back().documentation = ShapeMarkdown(shape->shape);
+        }
       }
     } else {
       Propose();
@@ -454,7 +467,15 @@ class Completer {
       }
       const Token& next = tokens_[line_[at + 1]];
       if (next.IsWord()) {
-        return std::string(next.text);
+        std::string action(next.text);
+        for (size_t part = at + 2;
+             part + 1 < line_.size() &&
+             tokens_[line_[part]].kind == TokenKind::kScope &&
+             tokens_[line_[part + 1]].IsWord();
+             part += 2) {
+          absl::StrAppend(&action, "::", tokens_[line_[part + 1]].text);
+        }
+        return action;
       }
     }
     return "";
@@ -522,7 +543,7 @@ class Completer {
       proposal.kind = ProposalKind::kType;
       proposal.insert = proposal.name;
       proposal.tail = Summary(type.shape.description);
-      proposal.documentation = ShapeMarkdown(type.shape);
+      proposal.documentation = ShapeMarkdown(documentation_.Shape(type.shape));
       proposals_.push_back(std::move(proposal));
     };
     const auto local = [&](const catalogue::TypeInfo& type) {
@@ -647,6 +668,16 @@ class Completer {
         continue;
       }
       Add(symbol.name, KindOf(symbol), "", TypeOf(symbol));
+      if (symbol.kind == SymbolKind::kInputPort ||
+          symbol.kind == SymbolKind::kOutputPort) {
+        if (const auto* port = flow_->plan.Port(
+                symbol.name, symbol.kind == SymbolKind::kInputPort
+                                 ? syntax::PortDirection::kInput
+                                 : syntax::PortDirection::kOutput);
+            port != nullptr) {
+          DocumentPort(*port);
+        }
+      }
       if (symbol.kind == SymbolKind::kSink) {
         proposals_.back().documentation =
             "Append after this transfer's operation. Independent attachments "
@@ -659,6 +690,38 @@ class Completer {
   /// The flow a call names, if it is one of this file's.
   [[nodiscard]] const FlowPlan* FlowNamed(std::string_view name) const {
     return resolved_.program.Flow(name);
+  }
+
+  void DocumentPort(std::string_view name, std::string_view type, bool required,
+                    bool unary, std::string_view text) {
+    auto& proposal = proposals_.back();
+    proposal.documentation = PortMarkdown(name, type, required, unary, text);
+    if (!text.empty()) {
+      absl::StrAppend(&proposal.tail, " — ", Summary(text));
+    }
+  }
+
+  void DocumentPort(const PortPlan& port) {
+    DocumentPort(port.name, port.declared.empty() ? port.type : port.declared,
+                 port.required, port.unary,
+                 documentation_.Get(port.description, port.location));
+  }
+
+  void DocumentPort(const catalogue::PortInfo& port) {
+    DocumentPort(port.name, port.type, port.required, port.unary,
+                 port.description);
+  }
+
+  void DocumentField(const FieldPlan& field) {
+    const auto text = documentation_.Get(field.description, field.location);
+    auto& proposal = proposals_.back();
+    proposal.documentation = absl::StrCat(
+        "`", field.name,
+        "` — field: ", field.declared.empty() ? field.type : field.declared,
+        "\n\n", text);
+    if (!text.empty()) {
+      absl::StrAppend(&proposal.tail, " — ", Summary(text));
+    }
   }
 
   /// The ports of a called flow, offered as `step.port`.
@@ -686,6 +749,7 @@ class Completer {
         }
         Add(absl::StrCat(symbol.name, ".", port.name), ProposalKind::kPort,
             port.required ? " (required)" : "", port.declared);
+        DocumentPort(port);
       }
     }
   }
@@ -932,6 +996,7 @@ class Completer {
       proposal.tail = field.required ? " (required)" : "";
       proposal.type = field.declared;
       proposals_.push_back(std::move(proposal));
+      DocumentField(field);
     }
     return true;
   }
@@ -963,6 +1028,7 @@ class Completer {
               if (port.direction == direction) {
                 Add(port.name, ProposalKind::kPort,
                     port.required ? " (required)" : "", port.declared);
+                DocumentPort(port);
               }
             }
           }
@@ -970,6 +1036,7 @@ class Completer {
                    action != nullptr) {
           for (const auto& port : action->outputs) {
             Add(port.name, ProposalKind::kPort, "", port.type);
+            DocumentPort(port);
           }
         }
         if (info.callable == nullptr) {
@@ -978,6 +1045,7 @@ class Completer {
             for (const auto& port : action->inputs) {
               Add(port.name, ProposalKind::kPort,
                   port.required ? " (required)" : "", port.type);
+              DocumentPort(port);
             }
           }
         }
@@ -1001,6 +1069,7 @@ class Completer {
         for (const auto& field : shape->fields) {
           Add(field.name, ProposalKind::kField,
               field.required ? " (required)" : "", field.declared);
+          DocumentField(field);
         }
         return true;
       }
@@ -1122,6 +1191,8 @@ class Completer {
       if (syntax::SourceTypeName(type.tag).starts_with(prefix)) {
         Add(syntax::SourceTypeName(type.tag).substr(prefix.size()),
             ProposalKind::kType, "", "");
+        proposals_.back().tail = Summary(type.shape.description);
+        proposals_.back().documentation = ShapeMarkdown(type.shape);
         any = true;
       }
     }
@@ -1193,6 +1264,7 @@ class Completer {
               continue;
             }
             Add(port.name, ProposalKind::kPort, "", port.declared);
+            DocumentPort(port);
           }
           for (const PortPlan& port : target->ports) {
             if (port.direction != syntax::PortDirection::kInput) {
@@ -1200,6 +1272,7 @@ class Completer {
             }
             Add(port.name, ProposalKind::kPort,
                 port.required ? " (required)" : "", port.declared);
+            DocumentPort(port);
           }
         }
         Add("status", ProposalKind::kField);
@@ -1260,6 +1333,7 @@ class Completer {
     for (const FieldPlan& field : shape->fields) {
       Add(field.name, ProposalKind::kField, field.required ? " (required)" : "",
           field.declared.empty() ? field.type : field.declared);
+      DocumentField(field);
     }
     return !shape->fields.empty();
   }
@@ -1513,7 +1587,8 @@ class Completer {
           continue;
         }
         offer(port.name, port.declared.empty() ? port.type : port.declared,
-              port.required, port.unary, port.description);
+              port.required, port.unary,
+              documentation_.Get(port.description, port.location));
       }
       return;
     }
@@ -1695,11 +1770,11 @@ class Completer {
           parsed().flows.begin(), parsed().flows.end(),
           [&](const auto& flow) { return flow->name.text == action.name; });
       const auto* local = declared ? FlowNamed(action.name) : nullptr;
-      OfferAction(
-          action.name, action.description,
-          local == nullptr ? ProposalKind::kCall : ProposalKind::kFlow,
-          local == nullptr ? ActionMarkdown(action) : FlowMarkdown(*local),
-          explicit_verb);
+      OfferAction(action.name, action.description,
+                  local == nullptr ? ProposalKind::kCall : ProposalKind::kFlow,
+                  local == nullptr ? ActionMarkdown(action)
+                                   : FlowMarkdown(documentation_.Flow(*local)),
+                  explicit_verb);
     }
   }
 
@@ -1752,6 +1827,7 @@ class Completer {
   LinkedModule owned_linked_;
   const LinkedModule* linked_ = nullptr;
   ResolveResult resolved_;
+  internal::EditorDocumentation documentation_;
   /// What the world outside this document contains: see [CompleteAt].
   catalogue::Catalogue known_;
   const ResolvedFlow* flow_ = nullptr;

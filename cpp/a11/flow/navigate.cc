@@ -28,6 +28,7 @@
 
 #include "a11/flow/contract.h"
 #include "a11/flow/highlight.h"
+#include "a11/flow/internal/editor_documentation.h"
 #include "a11/flow/lexer.h"
 #include "a11/flow/module.h"
 #include "a11/flow/parser.h"
@@ -410,6 +411,153 @@ std::string DocMarkdown(std::string_view name, std::string_view kind,
 
 }  // namespace
 
+namespace internal {
+
+EditorDocumentation::EditorDocumentation(std::string_view source,
+                                         const ParseResult& parsed,
+                                         CompilationLimits limits,
+                                         CompilationBudget* budget) {
+  const auto lexed =
+      Lex(source, {.keep_comments = true, .limits = limits, .budget = budget});
+  const auto leading = [&](size_t start) {
+    std::vector<std::string_view> parts;
+    auto at = std::lower_bound(
+        lexed.tokens.begin(), lexed.tokens.end(), start,
+        [](const Token& token, size_t offset) { return token.start < offset; });
+    while (at != lexed.tokens.begin()) {
+      --at;
+      if (at->kind == TokenKind::kNewline) {
+        continue;
+      }
+      if (at->kind != TokenKind::kComment) {
+        break;
+      }
+      const auto gap = source.substr(at->end, start - at->end);
+      if (gap.find_first_not_of(" \t\r\n") != std::string_view::npos ||
+          std::count(gap.begin(), gap.end(), '\n') != 1) {
+        break;
+      }
+      const size_t newline = source.rfind('\n', at->start);
+      const size_t line = newline == std::string_view::npos ? 0 : newline + 1;
+      if (source.substr(line, at->start - line).find_first_not_of(" \t\r") !=
+          std::string_view::npos) {
+        break;
+      }
+      auto text = absl::StripTrailingAsciiWhitespace(at->text.substr(1));
+      if (!text.empty() && (text.front() == ' ' || text.front() == '\t')) {
+        text.remove_prefix(1);
+      }
+      parts.push_back(text);
+      start = at->start;
+    }
+    std::reverse(parts.begin(), parts.end());
+    size_t first = 0;
+    size_t last = parts.size();
+    while (first < last && parts[first].empty()) {
+      ++first;
+    }
+    while (first < last && parts[last - 1].empty()) {
+      --last;
+    }
+    return absl::StrJoin(
+        absl::MakeConstSpan(parts).subspan(first, last - first), "\n");
+  };
+  const auto visit = [&](const syntax::Node& node) {
+    if (syntax::IsAnyOf(&node, {syntax::NodeKind::kFlowDeclaration,
+                                syntax::NodeKind::kDtoDeclaration,
+                                syntax::NodeKind::kFieldDeclaration,
+                                syntax::NodeKind::kPortDeclaration})) {
+      auto text = leading(node.extent.start);
+      if (!text.empty()) {
+        comments_.emplace(node.location.start, std::move(text));
+      }
+    }
+    if (const auto* flow = syntax::As<syntax::FlowDeclaration>(&node);
+        flow != nullptr) {
+      const auto found = flows_.find(flow->name.text);
+      if (found == flows_.end() ||
+          (found->second->interface_only && !flow->interface_only)) {
+        flows_.insert_or_assign(flow->name.text, flow);
+      }
+    }
+  };
+  for (const auto& flow : parsed.flows) {
+    syntax::VisitSubtree(*flow, visit);
+  }
+  for (const auto& dto : parsed.dtos) {
+    syntax::VisitSubtree(*dto, visit);
+  }
+}
+
+std::string_view EditorDocumentation::Get(
+    std::string_view description, const syntax::Location& location) const {
+  if (!description.empty()) {
+    return description;
+  }
+  const auto found = comments_.find(location.start);
+  return found == comments_.end() ? description : found->second;
+}
+
+FlowPlan EditorDocumentation::Flow(const FlowPlan& flow) const {
+  auto shown = flow;
+  shown.description = Get(flow.description, flow.location);
+  for (auto& port : shown.ports) {
+    port.description = Get(port.description, port.location);
+  }
+  return shown;
+}
+
+DtoPlan EditorDocumentation::Shape(const DtoPlan& shape) const {
+  auto shown = shape;
+  shown.description = Get(shape.description, shape.location);
+  for (auto& field : shown.fields) {
+    field.description = Get(field.description, field.location);
+  }
+  return shown;
+}
+
+catalogue::Catalogue EditorDocumentation::CatalogueAt(
+    const LinkedModule& linked, size_t offset, bool selection,
+    CompilationLimits limits, CompilationBudget* budget) const {
+  const auto local = linked.CatalogueAt(offset, selection, limits, budget);
+  auto actions = local.actions();
+  auto types = local.types();
+  for (auto& action : actions) {
+    for (const auto& member : linked.members) {
+      if (member.name != action.name || !action.origin.has_value() ||
+          action.origin->file != member.source ||
+          action.origin->line != member.location.line ||
+          action.origin->column != member.location.column) {
+        continue;
+      }
+      const auto found = flows_.find(member.target);
+      if (found == flows_.end()) {
+        continue;
+      }
+      const auto& flow = *found->second;
+      action.description = Get(action.description, flow.location);
+      for (const auto& port : flow.ports) {
+        auto& ports = port->direction == syntax::PortDirection::kInput
+                          ? action.inputs
+                          : action.outputs;
+        for (auto& shown : ports) {
+          if (shown.name == port->name.text) {
+            shown.description = Get(shown.description, port->location);
+          }
+        }
+      }
+      break;
+    }
+  }
+  for (auto& type : types) {
+    type.shape = Shape(type.shape);
+  }
+  return catalogue::Catalogue::Of(std::move(actions), std::move(types),
+                                  local.intrinsics());
+}
+
+}  // namespace internal
+
 std::string WordMarkdown(std::string_view name, vocabulary::WordRole role) {
   const std::string canonical = vocabulary::Canonical(name);
   const vocabulary::WordDoc* doc = vocabulary::Documentation(role, canonical);
@@ -468,8 +616,11 @@ std::string FlowMarkdown(const FlowPlan& flow) {
     absl::StrAppend(
         &ports, "- `", port.name,
         "`: ", port.declared.empty() ? port.type : port.declared,
-        port.direction == syntax::PortDirection::kInput ? " (in)" : " (out)",
-        "\n");
+        port.direction == syntax::PortDirection::kInput ? " (in)" : " (out)");
+    if (!port.description.empty()) {
+      absl::StrAppend(&ports, " — ", port.description);
+    }
+    ports.push_back('\n');
   }
   return absl::StrCat("`", flow.name, "` — a flow of this file\n\n",
                       flow.description,
@@ -584,6 +735,8 @@ std::vector<DocumentSymbol> Symbols(std::string_view source,
       ParseTokens(source, lexed.tokens, lexed.diagnostics, limits, budget);
   const ResolveResult resolved =
       Resolve(source, parsed, false, nullptr, limits, budget);
+  const internal::EditorDocumentation documentation(source, parsed, limits,
+                                                    budget);
   std::vector<DocumentSymbol> found;
 
   // The shapes first, as they are written: a file that declares one usually
@@ -592,7 +745,8 @@ std::vector<DocumentSymbol> Symbols(std::string_view source,
     DocumentSymbol shape;
     shape.name = declaration->name.text;
     shape.kind = SymbolClass::kDto;
-    shape.detail = declaration->description;
+    shape.detail =
+        documentation.Get(declaration->description, declaration->location);
     shape.selection = RangeOf(lines, declaration->name.location);
     shape.range = ConstructRange(lines, lexed.tokens, declaration->location,
                                  shape.selection);
@@ -618,7 +772,7 @@ std::vector<DocumentSymbol> Symbols(std::string_view source,
     DocumentSymbol one;
     one.name = flow.plan.name;
     one.kind = SymbolClass::kFlow;
-    one.detail = flow.plan.description;
+    one.detail = documentation.Get(flow.plan.description, flow.plan.location);
     one.selection = RangeOf(lines, flow.declaration->name.location);
     one.range = ConstructRange(lines, lexed.tokens, flow.declaration->location,
                                one.selection);
@@ -629,7 +783,8 @@ std::vector<DocumentSymbol> Symbols(std::string_view source,
       DocumentSymbol child;
       child.name = declaration->name.text;
       child.kind = SymbolClass::kFlow;
-      child.detail = declaration->description;
+      child.detail =
+          documentation.Get(declaration->description, declaration->location);
       child.selection = RangeOf(lines, declaration->name.location);
       child.range = RangeOf(lines, declaration->extent);
       for (const auto& port : declaration->ports) {
@@ -648,7 +803,7 @@ std::vector<DocumentSymbol> Symbols(std::string_view source,
       DocumentSymbol child;
       child.name = shape->name.text;
       child.kind = SymbolClass::kDto;
-      child.detail = shape->description;
+      child.detail = documentation.Get(shape->description, shape->location);
       child.selection = RangeOf(lines, shape->name.location);
       child.range = RangeOf(lines, shape->extent);
       for (const auto& field : shape->fields) {
@@ -770,7 +925,16 @@ Description Describe(std::string_view source, size_t offset,
     linked = &owned_linked;
   }
   const auto& parsed = linked->parsed;
-  const auto evidence = known.SchemaProgram();
+  const internal::EditorDocumentation documentation(linked->source, parsed,
+                                                    limits, budget);
+  auto local =
+      documentation.CatalogueAt(*linked, offset, false, limits, budget);
+  if (linked->SelectingImport(offset)) {
+    local = local.MergedWith(
+        documentation.CatalogueAt(*linked, offset, true, limits, budget));
+  }
+  const auto editor_known = known.MergedWith(local);
+  const auto evidence = editor_known.SchemaProgram();
   const ResolveResult resolved =
       Resolve(linked->source, parsed, false, &evidence, limits, budget);
   const std::string word = vocabulary::Canonical(about.text);
@@ -786,8 +950,8 @@ Description Describe(std::string_view source, size_t offset,
     std::string canonical;
     if (qualified.starts_with("std::")) {
       canonical = qualified.substr(5);
-    } else if (const auto alias = known.intrinsics().find(qualified);
-               alias != known.intrinsics().end()) {
+    } else if (const auto alias = editor_known.intrinsics().find(qualified);
+               alias != editor_known.intrinsics().end()) {
       canonical = alias->second;
     }
     if (!canonical.empty() && last + 1 < lexed.tokens.size() &&
@@ -820,6 +984,32 @@ Description Describe(std::string_view source, size_t offset,
       about.markdown = about.summary + "\n\n" + about.detail;
       return about;
     }
+  }
+
+  const syntax::FieldDeclaration* field_here = nullptr;
+  const auto find_field = [&](const syntax::Node& node) {
+    const auto* field = syntax::As<syntax::FieldDeclaration>(&node);
+    if (field != nullptr && field->name.location.start <= here->start &&
+        here->end <= field->name.location.end) {
+      field_here = field;
+    }
+  };
+  for (const auto& dto : parsed.dtos) {
+    syntax::VisitSubtree(*dto, find_field);
+  }
+  for (const auto& flow : parsed.flows) {
+    syntax::VisitSubtree(*flow, find_field);
+  }
+  if (field_here != nullptr) {
+    about.kind = SymbolClass::kField;
+    about.summary = absl::StrCat("`", field_here->name.text,
+                                 "` — field: ", field_here->type.ToString());
+    about.detail =
+        documentation.Get(field_here->description, field_here->location);
+    about.markdown = about.summary + "\n\n" + about.detail;
+    about.has_definition = true;
+    about.definition = RangeOf(lines, field_here->name.location);
+    return about;
   }
 
   std::string pipeline_note;
@@ -891,13 +1081,17 @@ Description Describe(std::string_view source, size_t offset,
         if (target != nullptr) {
           for (const auto& port : target->ports) {
             if (port->name.text == attr->name) {
+              about.detail =
+                  documentation.Get(info.description, port->location);
+              about.markdown = PortMarkdown(attr->name, info.type, false,
+                                            info.unary, about.detail);
               about.has_definition = true;
               about.definition = RangeOf(lines, port->name.location);
             }
           }
         }
         if (!about.has_definition) {
-          if (const auto* action = known.Action(base->second.action);
+          if (const auto* action = editor_known.Action(base->second.action);
               action != nullptr) {
             about.origin = action->origin;
           }
@@ -910,13 +1104,13 @@ Description Describe(std::string_view source, size_t offset,
           about.kind = SymbolClass::kField;
           about.summary =
               absl::StrCat("`", attr->name, "` — field: ", info.type);
-          about.detail = field->description;
+          about.detail = documentation.Get(field->description, field->location);
           about.markdown = about.summary + "\n\n" + about.detail;
           if (NameOfShape(parsed, base->second.type) != nullptr &&
               field->location.end > field->location.start) {
             about.has_definition = true;
             about.definition = RangeOf(lines, field->location);
-          } else if (const auto* type = known.Type(base->second.type);
+          } else if (const auto* type = editor_known.Type(base->second.type);
                      type != nullptr) {
             about.origin = type->origin;
           }
@@ -965,7 +1159,7 @@ Description Describe(std::string_view source, size_t offset,
                                               ? syntax::PortDirection::kInput
                                               : syntax::PortDirection::kOutput);
           port != nullptr) {
-        about.detail = port->description;
+        about.detail = documentation.Get(port->description, port->location);
         absl::StrAppend(&about.summary, ": ",
                         port->declared.empty() ? port->type : port->declared);
       }
@@ -983,12 +1177,12 @@ Description Describe(std::string_view source, size_t offset,
     const DtoPlan* shape = resolved.program.Dto(dotted);
     std::optional<catalogue::Origin> from_host;
     if (NameOfShape(parsed, dotted) == nullptr) {
-      if (const auto* type = known.Type(dotted); type != nullptr) {
+      if (const auto* type = editor_known.Type(dotted); type != nullptr) {
         from_host = type->origin;
       }
     }
     if (shape == nullptr) {
-      if (const catalogue::TypeInfo* type = known.Type(dotted);
+      if (const catalogue::TypeInfo* type = editor_known.Type(dotted);
           type != nullptr) {
         shape = &type->shape;
         from_host = type->origin;
@@ -1001,8 +1195,8 @@ Description Describe(std::string_view source, size_t offset,
       about.summary =
           absl::StrCat("`", dotted, "` — a struct of ", shape->fields.size(),
                        " field", shape->fields.size() == 1 ? "" : "s");
-      about.detail = shape->description;
-      about.markdown = ShapeMarkdown(*shape);
+      about.detail = documentation.Get(shape->description, shape->location);
+      about.markdown = ShapeMarkdown(documentation.Shape(*shape));
       about.origin = from_host;
       if (const syntax::Word* name = NameOfShape(parsed, dotted);
           name != nullptr) {
@@ -1017,7 +1211,7 @@ Description Describe(std::string_view source, size_t offset,
   if (!about.has_definition && index < lexed.tokens.size() &&
       lexed.tokens[index].IsWord()) {
     const auto [dotted, first] = DottedAround(lexed.tokens, index);
-    if (known.Action(dotted) != nullptr ||
+    if (editor_known.Action(dotted) != nullptr ||
         resolved.program.Flow(dotted) != nullptr) {
       about.text = dotted;
       about.range = lines.Between(lexed.tokens[first].start,
@@ -1027,18 +1221,20 @@ Description Describe(std::string_view source, size_t offset,
         sibling != nullptr && NameOfFlow(parsed, about.text) != nullptr) {
       about.kind = SymbolClass::kFlow;
       about.summary = absl::StrCat("`", about.text, "` — a flow of this file");
-      about.detail = sibling->description;
+      about.detail = documentation.Get(sibling->description, sibling->location);
       if (const syntax::Word* name = NameOfFlow(parsed, about.text);
           name != nullptr) {
         about.has_definition = true;
         about.definition = RangeOf(lines, name->location);
       }
       if (!about.has_definition) {
-        if (const auto* action = known.Action(about.text); action != nullptr) {
+        if (const auto* action = editor_known.Action(about.text);
+            action != nullptr) {
           about.origin = action->origin;
         }
       }
-      about.markdown = FlowMarkdown(*sibling) + pipeline_note;
+      about.markdown =
+          FlowMarkdown(documentation.Flow(*sibling)) + pipeline_note;
       size_t count = 0;
       for (const auto& declaration : parsed.flows) {
         if (declaration->name.text == sibling->name) {
@@ -1059,7 +1255,7 @@ Description Describe(std::string_view source, size_t offset,
       }
       return about;
     }
-    if (const catalogue::ActionInfo* action = known.Action(about.text);
+    if (const catalogue::ActionInfo* action = editor_known.Action(about.text);
         action != nullptr) {
       about.kind = SymbolClass::kExternal;
       about.summary = absl::StrCat("`", about.text, "` — an action");

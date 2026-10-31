@@ -219,7 +219,8 @@ class Classifier {
   /// opens it at the head of its line. Everywhere else a `{` holds a value.
   [[nodiscard]] bool LineOpensBlock() const {
     size_t at = index_;
-    while (at > 0 && At(at - 1).kind != TokenKind::kNewline) {
+    while (at > 0 && At(at - 1).kind != TokenKind::kNewline &&
+           At(at - 1).kind != TokenKind::kSemicolon) {
       --at;
     }
     while (at < index_ && !At(at).IsWord()) {
@@ -268,6 +269,7 @@ class Classifier {
       case TokenKind::kComma:
         return SemanticKind::kPunctuation;
       case TokenKind::kNewline:
+      case TokenKind::kSemicolon:
         return SemanticKind::kPunctuation;
       case TokenKind::kWord:
         return ClassifyWord(token);

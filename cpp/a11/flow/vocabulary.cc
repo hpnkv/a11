@@ -816,6 +816,8 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StatementDocs() {
        {"Ends the flow with a status.", "a code or a number, and a message",
         "`fail invalid_argument \"..\"`, `fail 5 \"..\"`, or `fail STATUS` to "
         "pass one on. Reads its code and message before failing. "
+        "An optional message can continue on the next line; a string that "
+        "starts a separate transfer keeps its statement boundary. "
         "Data-dependent arguments synchronize it; constant-only arguments "
         "need an `if`, a loop body, or an `after`.",
         "fail invalid_argument \"the topic is empty\""}},

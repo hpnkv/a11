@@ -64,8 +64,9 @@ struct FormatResult {
 /// the end of the file.
 ///
 /// Existing line breaks remain, and long lines wrap at syntax boundaries.
-/// Tokens and comments are never split. Declaration modifiers follow the
-/// vocabulary's canonical order.
+/// Long ordinary strings split at spaces into adjacent literals, grouped where
+/// needed. Triple-quoted strings, unbroken words and comments remain intact.
+/// Declaration modifiers follow the vocabulary's canonical order.
 ///
 /// **It refuses a file it cannot read.** With an error diagnostic, `formatted`
 /// is the input and `diagnostics` says why: half-formatting a file somebody is
@@ -74,8 +75,8 @@ struct FormatResult {
 /// Two invariants, both tested over every flow in the repository:
 ///
 /// * **Idempotent.** Formatting formatted text changes nothing.
-/// * **Meaning-preserving.** Syntax stays equivalent; only declaration
-///   modifier order and whitespace change. Literal and comment text remain.
+/// * **Meaning-preserving.** Syntax stays equivalent, including literal values.
+///   Declaration modifiers may move; comment text remains.
 FormatResult Format(std::string_view source, FormatOptions options = {},
                     CompilationLimits limits = {},
                     CompilationBudget* absl_nullable budget = nullptr);

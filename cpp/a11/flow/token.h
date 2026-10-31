@@ -37,6 +37,7 @@ namespace a11::flow {
 enum class TokenKind {
   /// The end of a statement. One per run of blank lines, never leading.
   kNewline,
+  kSemicolon,
   /// `# to the end of the line`.
   kComment,
   /// A quoted string. `string_value` holds it with escapes resolved.
@@ -120,11 +121,10 @@ struct Token {
 
   [[nodiscard]] bool IsWord() const { return kind == TokenKind::kWord; }
 
-  /// Whether a line break, a `}` or the end of the file is here: the three ways
-  /// a statement can end.
+  /// Whether this token ends a statement.
   [[nodiscard]] bool EndsStatement() const {
-    return kind == TokenKind::kNewline || kind == TokenKind::kRightBrace ||
-           kind == TokenKind::kEnd;
+    return kind == TokenKind::kNewline || kind == TokenKind::kSemicolon ||
+           kind == TokenKind::kRightBrace || kind == TokenKind::kEnd;
   }
 };
 

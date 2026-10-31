@@ -293,13 +293,21 @@ fold disruption. A file with an **error** is returned unchanged with
 
 #### Formatter scope
 
+Spaces and indentation between tokens do not affect meaning. Newlines inside
+expression groups act as whitespace. Incomplete constructs continue across
+lines; optional arguments and tails can continue when their attachment is
+unambiguous. After a complete statement, a following complete statement keeps
+its boundary. Group an expression when its contents must attach across lines.
+
 It decides indentation (two spaces a level), the spaces between tokens, how far a
 continued line is indented, how many blank lines are allowed and where, the columns
 of a run of `in`/`out` or `header` declarations, trailing whitespace, and the
 newline at the end of the file.
 
-Long lines wrap at syntax boundaries to 80 columns. String and comment tokens
-remain intact, so an indivisible token can exceed the limit. Declaration
+Long lines wrap at syntax boundaries to 80 columns. Long ordinary strings split
+at spaces into adjacent literals, with parentheses where needed. String values
+and escapes are preserved. Triple-quoted strings, unbroken words and comments
+remain intact and can exceed the limit. Declaration
 modifiers follow the vocabulary's order: ports use `stream required`, and
 fields place `required` before uniqueness, ranges, matching and enumeration
 constraints. Existing grouping and meaningful line breaks remain.
@@ -307,8 +315,9 @@ constraints. Existing grouping and meaningful line breaks remain.
 Two invariants, tested over every flow in the repository:
 
 * **Idempotent.** Formatting formatted text changes nothing.
-* **The program does not change.** Tokens retain their text; declaration
-  modifiers may move. Every formatting pass checks the equivalent parse tree.
+* **The program does not change.** String values and comment text are preserved;
+  declaration modifiers may move. Every formatting pass checks the equivalent
+  parse tree.
 
 ### `flow.plan/v1`
 
@@ -386,6 +395,12 @@ open.
 
 The language service performs name resolution before returning hover results, so
 editors do not reproduce this logic.
+
+Hover and completion use an adjacent block of full-line `#` comments when a
+struct, flow, field, or input/output port has no description. Explicit
+descriptions take precedence, and a blank source line breaks comment attachment.
+These hints stay in editor results; action schemas, type schemas, and registries
+retain their declared descriptions.
 
 ### `flow.symbols/v1`
 

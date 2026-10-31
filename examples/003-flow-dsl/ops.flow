@@ -76,7 +76,8 @@ flow explain-a-command {
         content: [to_chunk({
           role: "user",
           content: [{type: "text", text: join([
-            "In two sentences: what did this command do, and is anything in its output worth attention?",
+            "In two sentences: what did this command do, and is anything in its"
+            " output worth attention?",
             join(["$", command], " "),
             join(it, "\n")
           ], "\n\n")}]

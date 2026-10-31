@@ -483,6 +483,57 @@ TEST(FlowComplete, OffersTheFieldsTheFileSaidAValueHas) {
           .empty());
 }
 
+TEST(FlowComplete, LeadingCommentsDescribeFlowsTypesFieldsAndPorts) {
+  const std::string declarations = R"(# A record to render.
+struct Item {
+  # The display name.
+  title: string
+}
+# Render a record.
+flow render {
+  # The input record.
+  in value: Item
+  # The rendered text.
+  out result: string
+  value.title -> result
+}
+)";
+  const auto* action =
+      Find(declarations + "flow main {\n run |CARET|", "render");
+  ASSERT_NE(action, nullptr);
+  EXPECT_NE(action->documentation.find("Render a record."), std::string::npos);
+  EXPECT_NE(action->documentation.find("The input record."), std::string::npos);
+  const auto* type =
+      Find(declarations + "flow main {\n in item: |CARET|", "Item");
+  ASSERT_NE(type, nullptr);
+  EXPECT_NE(type->documentation.find("A record to render."), std::string::npos);
+  EXPECT_NE(type->documentation.find("The display name."), std::string::npos);
+  const auto* argument =
+      Find(declarations + "flow main {\n task = run render(|CARET|", "value");
+  ASSERT_NE(argument, nullptr);
+  EXPECT_NE(argument->documentation.find("The input record."),
+            std::string::npos);
+  const auto* output =
+      Find(declarations +
+               "flow main {\n in item: Item\n task = run render(value: item)"
+               "\n task.|CARET|",
+           "result");
+  ASSERT_NE(output, nullptr);
+  EXPECT_NE(output->documentation.find("The rendered text."),
+            std::string::npos);
+  const auto* field = Find(
+      declarations + "flow main {\n in item: Item\n log item.|CARET|", "title");
+  ASSERT_NE(field, nullptr);
+  EXPECT_NE(field->documentation.find("The display name."), std::string::npos);
+  const auto* port =
+      Find(declarations +
+               "flow main {\n # A local input.\n in topic: string\n"
+               " done = |CARET|",
+           "topic");
+  ASSERT_NE(port, nullptr);
+  EXPECT_NE(port->documentation.find("A local input."), std::string::npos);
+}
+
 }  // namespace
 
 TEST(FlowComplete, QualifiedActionSuggestionsInsertBothVerbsWithNativeRanges) {

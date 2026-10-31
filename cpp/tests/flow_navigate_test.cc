@@ -23,7 +23,9 @@
 
 #include "a11/flow/catalogue.h"
 #include "a11/flow/complete.h"
+#include "a11/flow/module.h"
 #include "a11/flow/navigate.h"
+#include "a11/flow/resolve.h"
 
 namespace a11::flow {
 namespace {
@@ -484,6 +486,123 @@ TEST(FlowNavigate, AWordThatIsBothAStageAndAFunctionAnswersForWhereItStands) {
        {staged.summary, staged.markdown, called.summary, called.markdown}) {
     EXPECT_EQ(text.find("--"), std::string::npos) << text;
   }
+}
+
+TEST(FlowNavigate,
+     LeadingCommentsSupplyEditorHintsWithoutSemanticDescriptions) {
+  const std::string source = R"(# A source record.
+# Includes its display name.
+struct Item {
+  # The display name.
+  title: string
+}
+# Render a source record.
+flow render {
+  # The record to render.
+  in value: Item
+  # The rendered text.
+  out result: string
+  value.title -> result
+}
+flow main {
+  in item: Item
+  out text: string
+  task = run render(value: item)
+  task.result -> text
+}
+)";
+  const std::vector<std::pair<size_t, std::string>> cases{
+      {source.find("Item {"), "A source record.\nIncludes its display name."},
+      {source.find("title:"), "The display name."},
+      {source.find("value.title") + 6, "The display name."},
+      {source.find("render {"), "Render a source record."},
+      {source.find("render(value"), "Render a source record."},
+      {source.find("value:"), "The record to render."},
+      {source.find("value.title"), "The record to render."},
+      {source.find("result:"), "The rendered text."},
+      {source.find("task.result") + 5, "The rendered text."}};
+  auto linked = LinkModules(source, "root");
+  for (const auto& [offset, text] : cases) {
+    SCOPED_TRACE(source.substr(offset, 20));
+    const auto hover = Describe(source, offset, Known(), {}, nullptr, &linked);
+    EXPECT_TRUE(hover.found);
+    EXPECT_EQ(hover.detail, text);
+    EXPECT_NE(hover.markdown.find(text), std::string::npos);
+  }
+  const auto symbols = Symbols(source);
+  ASSERT_GE(symbols.size(), 2u);
+  EXPECT_EQ(symbols[0].detail, "A source record.\nIncludes its display name.");
+  EXPECT_EQ(symbols[1].detail, "Render a source record.");
+  const auto resolved = Resolve(linked.source, linked.parsed);
+  ASSERT_FALSE(resolved.HasErrors());
+  EXPECT_TRUE(resolved.program.Dto("Item")->description.empty());
+  EXPECT_TRUE(resolved.program.Dto("Item")->fields[0].description.empty());
+  EXPECT_TRUE(resolved.program.Flow("render")->description.empty());
+  for (const auto& port : resolved.program.Flow("render")->ports) {
+    EXPECT_TRUE(port.description.empty());
+  }
+  EXPECT_TRUE(linked.parsed.flows[0]->description.empty());
+  const auto catalogue = linked.CatalogueAt(source.find("task ="));
+  ASSERT_NE(catalogue.Action("render"), nullptr);
+  EXPECT_TRUE(catalogue.Action("render")->description.empty());
+  EXPECT_TRUE(catalogue.Action("render")->inputs[0].description.empty());
+}
+
+TEST(FlowNavigate, ExplicitDescriptionsOverrideLeadingComments) {
+  const std::string source = R"(# Hidden struct comment.
+struct Item {
+  describe "Explicit struct."
+  # Hidden field comment.
+  title: string "Explicit field."
+}
+# Hidden flow comment.
+flow render {
+  describe "Explicit flow."
+  # Hidden input comment.
+  in value: Item "Explicit input."
+  # Hidden output comment.
+  out result: string "Explicit output."
+  value.title -> result
+}
+)";
+  for (const auto& [name, expected] :
+       std::vector<std::pair<std::string, std::string>>{
+           {"Item {", "Explicit struct."},
+           {"title:", "Explicit field."},
+           {"render {", "Explicit flow."},
+           {"value:", "Explicit input."},
+           {"result:", "Explicit output."}}) {
+    const auto hover = Describe(source, source.find(name));
+    EXPECT_EQ(hover.detail, expected);
+    EXPECT_EQ(hover.markdown.find("Hidden"), std::string::npos);
+  }
+}
+
+TEST(FlowNavigate, OnlyAdjacentFullLineCommentsAttachToSupportedDeclarations) {
+  const std::string source = R"(# A detached comment.
+
+struct Item {
+  first: string # A trailing comment.
+  second: string
+  # A field summary.
+  #
+  # - More detail.
+  third: string
+}
+flow main {
+  # A header comment.
+  header "x-mode"
+  # A variable comment.
+  value = 1
+}
+)";
+  EXPECT_TRUE(Describe(source, source.find("Item {")).detail.empty());
+  EXPECT_TRUE(Describe(source, source.find("second:")).detail.empty());
+  EXPECT_EQ(Describe(source, source.find("third:")).detail,
+            "A field summary.\n\n- More detail.");
+  EXPECT_EQ(Describe(source, source.find("value ="))
+                .markdown.find("A variable comment."),
+            std::string::npos);
 }
 
 }  // namespace

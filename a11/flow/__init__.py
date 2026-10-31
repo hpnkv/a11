@@ -231,9 +231,15 @@ are unsupported.
 Prefer context for file/tool matches (tests, web, external systems). Feed
 original lines/items per source, keep neighborhoods small, cap groups with first
 and joined excerpts with truncate. Filtering first loses neighboring evidence.
-An initializer, type after a colon, or binary operator may continue on the next
-line. Pipeline and modifier tails may wrap. The formatter targets 80 columns
-and orders declaration modifiers; string and comment tokens remain intact.
+Spaces and indentation between tokens do not change meaning. Newlines inside
+expression groups are whitespace. Incomplete constructs continue across lines;
+optional arguments and tails continue when the next syntax belongs to them.
+After a complete statement, a following complete statement keeps its boundary.
+Use grouping to attach an expression that also reads as a separate statement.
+Adjacent string literals concatenate; declaration descriptions retain their
+ownership. The formatter targets 80 columns and orders declaration modifiers.
+Long ordinary strings split at spaces while preserving values and escapes;
+triple-quoted strings and comments remain intact.
 Prefer list[T] and list(value). list is a prelude alias of std::list; neither
 form requires an import. The qualified spelling remains valid.
 Stages stay unqualified. Functions are qualified: std::len, std::upper,

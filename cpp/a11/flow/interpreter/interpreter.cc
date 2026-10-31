@@ -232,6 +232,7 @@ absl::StatusOr<RunOutcome> Run(const Source& source,
   // The bridge, when the host gave one.
   ::a11::flow::RunOptions how;
   how.bridge = options.bridge;
+  how.frames = options.frames;
   // Where `call` steps go. Given to the handler rather than to the action
   // below, because a locally-run action that holds a stream ends that stream
   // when it finishes -- so the stream belongs to the calls, not to the flow.

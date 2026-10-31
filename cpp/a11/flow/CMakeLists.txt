@@ -57,6 +57,16 @@ set(A11_FLOW_LANG_SOURCES
 # stay small enough to bundle per platform.
 set(A11_FLOW_RUNTIME_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/runtime_calls.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/runtime_destination.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/runtime_expressions.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/runtime_layout.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/runtime_monitor.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/runtime_schema.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/runtime_scope.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/runtime_steps.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/runtime_streams.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/runtime_transport.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/values.cc
     PARENT_SCOPE)
 

@@ -1,0 +1,109 @@
+diff --git a/cpp/bench/bench_main.cc b/cpp/bench/bench_main.cc
+index aeb15a8..02f7569 100644
+--- a/cpp/bench/bench_main.cc
++++ b/cpp/bench/bench_main.cc
+@@ -3001,6 +3001,104 @@ void FlowSuite(Recorder& recorder, double scale) {
+     }
+   }
+
++  for (const auto* workload :
++       {"small", "static", "sequential", "parallel", "nested", "escaping",
++        "peak_then_steady", "concurrent"}) {
++    const auto row = absl::StrCat("frame_", workload);
++    if (!Wanted(row)) {
++      continue;
++    }
++    const std::string kind(workload);
++    std::string source = "flow frames { out result: string stream\n";
++    int expected = 1;
++    const auto sequence = [](int count) {
++      std::string values = "[";
++      for (int i = 0; i < count; ++i) {
++        absl::StrAppend(&values, i == 0 ? "" : ",", i);
++      }
++      return values + "] | flatten";
++    };
++    if (kind == "small" || kind == "concurrent") {
++      source += "\"hello\" -> result\n";
++    } else if (kind == "static") {
++      for (int i = 0; i < 128; ++i) {
++        absl::StrAppend(&source, "v", i, " = ", i, "\n");
++      }
++      source += "std::text(v127) -> result\n";
++    } else if (kind == "nested") {
++      expected = 256;
++      absl::StrAppend(&source, "for i in ", sequence(16), " { for j in ",
++                      sequence(16), " { std::text(i + j) -> result } }\n");
++    } else {
++      expected = kind == "sequential" ? 4096 : 1024;
++      if (kind == "peak_then_steady") {
++        expected += 64;
++        absl::StrAppend(&source, "first = for i in (", sequence(64),
++                        ") parallel 16 { std::text(i) -> result }\n");
++      }
++      absl::StrAppend(&source, "for i in (",
++                      sequence(kind == "sequential" ? 4096 : 1024),
++                      kind == "parallel" ? ") parallel 4" : ")", " {\n");
++      if (kind == "escaping") {
++        absl::StrAppend(&source, "{value: i, payload: \"",
++                        std::string(4096, 'x'), "\"} | json -> result\n");
++      } else {
++        source += "v = i + 1\nstd::text(v) -> result\n";
++      }
++      source += kind == "peak_then_steady" ? "} after first\n" : "}\n";
++    }
++    source += "}\n";
++    auto compiled = flow::CompiledProgram::Compile(source, "frames.flow");
++    CHECK_OK(compiled.status()) << source;
++    const auto program = *compiled;
++    for (const size_t cache : {size_t{256 * 1024}}) {
++      const auto run = [&](std::int64_t at,
++                           std::nullptr_t) {
++        if (kind == "concurrent") {
++          std::vector<a11::Task> tasks;
++          for (int i = 0; i < 16; ++i) {
++            tasks.push_back(a11::SubmitTask([&, i] {
++              const auto result =
++                  RunOneFlow(program, "frames", registry, {}, at * 16 + i);
++              CHECK_EQ(result.values_out, expected);
++              return result.status;
++            }));
++          }
++          for (const auto& task : tasks) {
++            CHECK_OK(task.Await().status());
++          }
++        } else {
++          const auto result = RunOneFlow(program, "frames", registry, {}, at);
++          CHECK_OK(result.status);
++          CHECK_EQ(result.values_out, expected);
++        }
++      };
++      auto metrics = Latency([&](std::int64_t at) { run(at, nullptr); },
++                             Scaled(30, scale, 8), 3);
++      std::nullptr_t stats = nullptr;
++      BeginAllocationSample();
++      run(10000, stats);
++      const auto allocation = EndAllocationSample();
++      metrics["cpp_new_sample_available"] =
++          AllocationSamplesAvailable() ? 1 : 0;
++      metrics["cpp_new_calls"] = static_cast<double>(allocation.calls);
++      metrics["cpp_new_requested_bytes"] =
++          static_cast<double>(allocation.requested_bytes);
++      metrics["rss_after_bytes"] = static_cast<double>(CurrentRssBytes());
++      recorder.Add({.suite = "flow",
++                    .name = row,
++                    .metrics = std::move(metrics),
++                    .params = {{"values", absl::StrCat(expected)},
++                               {"cache_bytes", absl::StrCat(cache)}},
++                    .note =
++                        "Compilation excluded. Allocation sampling is a "
++                        "separate invocation. Frame counters include block "
++                        "headers and fixed storage; payloads, node storage, "
++                        "queues and fiber stacks remain outside them. "
++                        "C++ new excludes direct malloc/mmap."});
++    }
++  }
++
+   // The baseline the flow rows are charged against: the same action, called
+   // directly, with the same feed-and-drain the flow pays for.
+   const std::int64_t calls = Scaled(400, scale, 20);

@@ -62,6 +62,34 @@ TEST(FutureTest, CancelSafelyOwnsRootFiberUntilCompletion) {
   EXPECT_TRUE(value.Cancel().ok());
 }
 
+TEST(FutureTest, CallableCapturesAreReleasedBeforeCompletionObservation) {
+  for (const bool fail : {false, true}) {
+    auto payload = std::make_shared<int>(42);
+    const std::weak_ptr<int> weak = payload;
+    std::atomic<bool> cleaned = false;
+    Promise<Unit> gate;
+    auto ready = gate.future();
+    auto task = Submit<int>(
+        [payload = std::move(payload), fail, ready]() -> absl::StatusOr<int> {
+          ABSL_RETURN_IF_ERROR(ready.Await().status());
+          if (fail) {
+            return absl::DataLossError("original failure");
+          }
+          return *payload;
+        });
+    task.OnReady([&](const auto&) { cleaned = weak.expired(); });
+    ASSERT_TRUE(gate.SetValue(Unit{}).ok());
+    const auto result = task.Await(absl::Now() + absl::Seconds(5));
+    EXPECT_EQ(result.ok(), !fail);
+    EXPECT_TRUE(weak.expired());
+    const auto limit = absl::Now() + absl::Seconds(5);
+    while (!cleaned && absl::Now() < limit) {
+      thread::SleepFor(absl::Milliseconds(1));
+    }
+    EXPECT_TRUE(cleaned);
+  }
+}
+
 TEST(FutureTest, ConcurrentMigratingFiberStacksHaveIndependentLifetime) {
   constexpr size_t kTaskCount = 512;
   std::vector<Future<size_t>> tasks;

@@ -316,6 +316,8 @@ def run_program(
     source_roots: Sequence[str] | None = None,
     limits: CompilationLimits | None = None,
     single_item_slots: bool = True,
+    frame_cache_bytes: int = 256 * 1024,
+    frame_budget_bytes: int | None = None,
 ) -> dict[str, Any]:
     """Run a Flow program's entry flow — the `flow { ... }` with no name.
 
@@ -381,6 +383,10 @@ def run_program(
         registry: An [ActionRegistry][a11.actions.ActionRegistry] whose actions
             the program may call. One is made when omitted.
 
+        frame_cache_bytes: Cached frame capacity per runner; zero disables reuse.
+        frame_budget_bytes: Reserved frame capacity across local Flow calls.
+            Excludes payloads, fiber stacks, and ordinary containers.
+
     Returns:
         `{"exit_code": int, "diagnostics": [...]}` — the code the program put on
         an `out exit_code: int` port (or 0), and whatever the compiler said
@@ -409,6 +415,8 @@ def run_program(
         source_roots=list(source_roots or []),
         limits=limits or CompilationLimits(),
         single_item_slots=single_item_slots,
+        frame_cache_bytes=frame_cache_bytes,
+        frame_budget_bytes=frame_budget_bytes,
     )
 
 

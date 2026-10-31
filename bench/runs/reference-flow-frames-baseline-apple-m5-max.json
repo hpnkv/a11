@@ -1,0 +1,174 @@
+{
+  "environment": {
+    "build": "RelWithDebInfo",
+    "runtime": "native c++",
+    "cpu": "Apple M5 Max",
+    "architecture": "arm64",
+    "allocator": "system",
+    "variant": "baseline b04273e",
+    "baseline_commit": "b04273e"
+  },
+  "recorded_at": 1793405723,
+  "results": [
+    {
+      "metrics": {
+        "cpp_new_calls": 424.0,
+        "cpp_new_requested_bytes": 79134.0,
+        "cpp_new_sample_available": 1.0,
+        "max_us": 122.042,
+        "mean_us": 59.4111,
+        "ops_per_s": 16831.871485294836,
+        "p50_us": 55.5,
+        "p90_us": 75.625,
+        "p99_us": 122.042,
+        "rss_after_bytes": 11501568.0
+      },
+      "name": "frame_small",
+      "note": "Original runtime with matched workload generator. Compilation excluded. Timing and C++ new sampling use separate runs; direct malloc/mmap are excluded.",
+      "params": {
+        "values": "1"
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "cpp_new_calls": 6060.0,
+        "cpp_new_requested_bytes": 960070.0,
+        "cpp_new_sample_available": 1.0,
+        "max_us": 3610.125,
+        "mean_us": 2691.8903666666665,
+        "ops_per_s": 371.486154259056,
+        "p50_us": 2616.959,
+        "p90_us": 3258.334,
+        "p99_us": 3610.125,
+        "rss_after_bytes": 16351232.0
+      },
+      "name": "frame_static",
+      "note": "Original runtime with matched workload generator. Compilation excluded. Timing and C++ new sampling use separate runs; direct malloc/mmap are excluded.",
+      "params": {
+        "values": "1"
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "cpp_new_calls": 446603.0,
+        "cpp_new_requested_bytes": 66550542.0,
+        "cpp_new_sample_available": 1.0,
+        "max_us": 131040.5,
+        "mean_us": 96897.82496666667,
+        "ops_per_s": 10.320149088423863,
+        "p50_us": 93025.833,
+        "p90_us": 114525.292,
+        "p99_us": 131040.5,
+        "rss_after_bytes": 34373632.0
+      },
+      "name": "frame_sequential",
+      "note": "Original runtime with matched workload generator. Compilation excluded. Timing and C++ new sampling use separate runs; direct malloc/mmap are excluded.",
+      "params": {
+        "values": "4096"
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "cpp_new_calls": 141426.0,
+        "cpp_new_requested_bytes": 20081214.0,
+        "cpp_new_sample_available": 1.0,
+        "max_us": 81523.208,
+        "mean_us": 64532.0166,
+        "ops_per_s": 15.49618395157978,
+        "p50_us": 64414.958,
+        "p90_us": 72481.042,
+        "p99_us": 81523.208,
+        "rss_after_bytes": 35962880.0
+      },
+      "name": "frame_parallel",
+      "note": "Original runtime with matched workload generator. Compilation excluded. Timing and C++ new sampling use separate runs; direct malloc/mmap are excluded.",
+      "params": {
+        "values": "1024"
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "cpp_new_calls": 21876.0,
+        "cpp_new_requested_bytes": 3580590.0,
+        "cpp_new_sample_available": 1.0,
+        "max_us": 4643.958,
+        "mean_us": 4153.5444,
+        "ops_per_s": 240.75823048864,
+        "p50_us": 4082.917,
+        "p90_us": 4356.208,
+        "p99_us": 4643.958,
+        "rss_after_bytes": 35979264.0
+      },
+      "name": "frame_nested",
+      "note": "Original runtime with matched workload generator. Compilation excluded. Timing and C++ new sampling use separate runs; direct malloc/mmap are excluded.",
+      "params": {
+        "values": "256"
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "cpp_new_calls": 117231.0,
+        "cpp_new_requested_bytes": 53597566.0,
+        "cpp_new_sample_available": 1.0,
+        "max_us": 37070.125,
+        "mean_us": 32500.25963333333,
+        "ops_per_s": 30.76898496448832,
+        "p50_us": 32851.5,
+        "p90_us": 34236.25,
+        "p99_us": 37070.125,
+        "rss_after_bytes": 47939584.0
+      },
+      "name": "frame_escaping",
+      "note": "Original runtime with matched workload generator. Compilation excluded. Timing and C++ new sampling use separate runs; direct malloc/mmap are excluded.",
+      "params": {
+        "values": "1024"
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "cpp_new_calls": 133332.0,
+        "cpp_new_requested_bytes": 19287022.0,
+        "cpp_new_sample_available": 1.0,
+        "max_us": 55312.291,
+        "mean_us": 36134.42916666666,
+        "ops_per_s": 27.674437456520867,
+        "p50_us": 33991.584,
+        "p90_us": 40333.417,
+        "p99_us": 55312.291,
+        "rss_after_bytes": 49233920.0
+      },
+      "name": "frame_peak_then_steady",
+      "note": "Original runtime with matched workload generator. Compilation excluded. Timing and C++ new sampling use separate runs; direct malloc/mmap are excluded.",
+      "params": {
+        "values": "1088"
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "cpp_new_calls": 6770.0,
+        "cpp_new_requested_bytes": 1258568.0,
+        "cpp_new_sample_available": 1.0,
+        "max_us": 316.708,
+        "mean_us": 271.6486,
+        "ops_per_s": 3681.226407940258,
+        "p50_us": 271.125,
+        "p90_us": 302.458,
+        "p99_us": 316.708,
+        "rss_after_bytes": 49692672.0
+      },
+      "name": "frame_concurrent",
+      "note": "Original runtime with matched workload generator. Compilation excluded. Timing and C++ new sampling use separate runs; direct malloc/mmap are excluded.",
+      "params": {
+        "values": "1"
+      },
+      "suite": "flow"
+    }
+  ]
+}

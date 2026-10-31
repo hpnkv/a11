@@ -94,6 +94,7 @@ add_test(NAME a11_flow_test COMMAND a11_flow_test)
 # needs nothing but Abseil and nlohmann.
 add_executable(a11_flow_runtime_test
   flow_runtime_test.cc
+  flow_frame_test.cc
   flow_shape_test.cc
   flow_values_test.cc)
 target_link_libraries(

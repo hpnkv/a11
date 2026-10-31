@@ -331,3 +331,10 @@ Rules worth keeping:
   dependency is a skip with a reason, never a failure.
 - Put the interpretation in the `note`. A number without one is a number
   somebody will misread in three months.
+
+## Flow frame storage
+
+Run `a11_bench --suite flow --only frame_` for fixed-frame allocation, reuse,
+capacity, and live-population measurements. The rows compare zero cached
+capacity with the default retention cap. See [Flow frame measurements](flow-frames.md)
+for the workloads, recorded results, and accounting coverage.

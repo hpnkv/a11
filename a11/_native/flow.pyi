@@ -482,7 +482,11 @@ class FlowPlan:
         """
 
     def make_handler(
-        self, dispatch_stream: WireStream | None = None
+        self,
+        dispatch_stream: WireStream | None = None,
+        *,
+        frame_cache_bytes: typing.SupportsInt = 262144,
+        frame_budget_bytes: typing.SupportsInt | None = None,
     ) -> ActionHandler | NativeActionHandler | None:
         """
         The action handler that runs this flow.
@@ -491,6 +495,10 @@ class FlowPlan:
         holds: the calls that belong to the peer are bound to that stream, and the flow's
         own action is not. An action that is run locally *and* holds a stream ends that
         stream when it finishes, after which the session can dispatch nothing.
+
+        ``frame_cache_bytes`` caps cached frame capacity per runner; zero disables reuse.
+        ``frame_budget_bytes`` bounds reserved frame capacity across the invocation and
+        its local Flow calls. Payloads, fiber stacks and ordinary containers are excluded.
         """
 
     def register(
@@ -1171,6 +1179,8 @@ def run_program(
     source_roots: collections.abc.Sequence[str] = [],
     limits: CompilationLimits = ...,
     single_item_slots: bool = True,
+    frame_cache_bytes: typing.SupportsInt = 262144,
+    frame_budget_bytes: typing.SupportsInt | None = None,
 ) -> dict[str, typing.Any]:
     """
     Run a Flow program's entry flow, and return what it did.

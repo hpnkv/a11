@@ -2671,7 +2671,8 @@ FlowRun RunOneFlow(
     const std::shared_ptr<actions::ActionRegistry>& registry,
     const std::map<std::string, std::vector<std::string>>& inputs,
     std::int64_t index, bool prefilled = false,
-    std::shared_ptr<flow::TransportStats> stats = nullptr) {
+    std::shared_ptr<flow::TransportStats> stats = nullptr,
+    flow::FrameOptions frames = {}) {
   FlowRun ran;
   const flow::ResolvedFlow* found = program->Flow(name);
   if (found == nullptr) {
@@ -2683,8 +2684,9 @@ FlowRun RunOneFlow(
     ran.status = schema.status();
     return ran;
   }
-  absl::StatusOr<actions::ActionHandler> handler =
-      flow::MakeHandler(program, name, {.transport_stats = std::move(stats)});
+  absl::StatusOr<actions::ActionHandler> handler = flow::MakeHandler(
+      program, name,
+      {.transport_stats = std::move(stats), .frames = std::move(frames)});
   if (!handler.ok()) {
     ran.status = handler.status();
     return ran;
@@ -2999,6 +3001,191 @@ void FlowSuite(Recorder& recorder, double scale) {
                      "retention."});
       }
     }
+  }
+
+  for (const auto* workload :
+       {"small", "static", "sequential", "parallel", "nested", "escaping",
+        "peak_then_steady", "concurrent"}) {
+    const auto row = absl::StrCat("frame_", workload);
+    if (!Wanted(row)) {
+      continue;
+    }
+    const std::string kind(workload);
+    std::string source = "flow frames { out result: string stream\n";
+    int expected = 1;
+    const auto sequence = [](int count) {
+      std::string values = "[";
+      for (int i = 0; i < count; ++i) {
+        absl::StrAppend(&values, i == 0 ? "" : ",", i);
+      }
+      return values + "] | flatten";
+    };
+    if (kind == "small" || kind == "concurrent") {
+      source += "\"hello\" -> result\n";
+    } else if (kind == "static") {
+      for (int i = 0; i < 128; ++i) {
+        absl::StrAppend(&source, "v", i, " = ", i, "\n");
+      }
+      source += "std::text(v127) -> result\n";
+    } else if (kind == "nested") {
+      expected = 256;
+      absl::StrAppend(&source, "for i in ", sequence(16), " { for j in ",
+                      sequence(16), " { std::text(i + j) -> result } }\n");
+    } else {
+      expected = kind == "sequential" ? 4096 : 1024;
+      if (kind == "peak_then_steady") {
+        expected += 64;
+        absl::StrAppend(&source, "first = for i in (", sequence(64),
+                        ") parallel 16 { std::text(i) -> result }\n");
+      }
+      absl::StrAppend(&source, "for i in (",
+                      sequence(kind == "sequential" ? 4096 : 1024),
+                      kind == "parallel" ? ") parallel 4" : ")", " {\n");
+      if (kind == "escaping") {
+        absl::StrAppend(&source, "{value: i, payload: \"",
+                        std::string(4096, 'x'), "\"} | json -> result\n");
+      } else {
+        source += "v = i + 1\nstd::text(v) -> result\n";
+      }
+      source += kind == "peak_then_steady" ? "} after first\n" : "}\n";
+    }
+    source += "}\n";
+    auto compiled = flow::CompiledProgram::Compile(source, "frames.flow");
+    CHECK_OK(compiled.status()) << source;
+    const auto program = *compiled;
+    for (const size_t cache : {size_t{0}, size_t{256 * 1024}}) {
+      const auto run = [&](std::int64_t at,
+                           std::shared_ptr<flow::FrameStats> stats) {
+        const flow::FrameOptions frames{.cache_limit_bytes = cache,
+                                        .stats = stats};
+        if (kind == "concurrent") {
+          std::vector<a11::Task> tasks;
+          for (int i = 0; i < 16; ++i) {
+            tasks.push_back(a11::SubmitTask([&, i] {
+              const auto result =
+                  RunOneFlow(program, "frames", registry, {}, at * 16 + i,
+                             false, nullptr, frames);
+              CHECK_EQ(result.values_out, expected);
+              return result.status;
+            }));
+          }
+          for (const auto& task : tasks) {
+            CHECK_OK(task.Await().status());
+          }
+        } else {
+          const auto result = RunOneFlow(program, "frames", registry, {}, at,
+                                         false, nullptr, frames);
+          CHECK_OK(result.status);
+          CHECK_EQ(result.values_out, expected);
+        }
+      };
+      auto metrics = Latency([&](std::int64_t at) { run(at, nullptr); },
+                             Scaled(30, scale, 8), 3);
+      auto stats = std::make_shared<flow::FrameStats>();
+      BeginAllocationSample();
+      run(10000, stats);
+      const auto allocation = EndAllocationSample();
+      metrics["cpp_new_sample_available"] =
+          AllocationSamplesAvailable() ? 1 : 0;
+      metrics["cpp_new_calls"] = static_cast<double>(allocation.calls);
+      metrics["cpp_new_requested_bytes"] =
+          static_cast<double>(allocation.requested_bytes);
+      metrics["rss_after_bytes"] = static_cast<double>(CurrentRssBytes());
+      metrics["frame_blocks"] = static_cast<double>(stats->allocations.load());
+      metrics["frame_reuses"] = static_cast<double>(stats->reuses.load());
+      metrics["frame_activations"] =
+          static_cast<double>(stats->activations.load());
+      metrics["frame_peak_reserved_bytes"] =
+          static_cast<double>(stats->peak_reserved_bytes.load());
+      metrics["frame_peak_live_bytes"] =
+          static_cast<double>(stats->peak_live_bytes.load());
+      metrics["frame_peak_cached_bytes"] =
+          static_cast<double>(stats->peak_cached_bytes.load());
+      metrics["frame_peak_active"] =
+          static_cast<double>(stats->peak_active_frames.load());
+      metrics["frame_retained_bytes"] =
+          static_cast<double>(stats->reserved_bytes.load());
+      CHECK_EQ(stats->reserved_bytes.load(), 0);
+      recorder.Add({.suite = "flow",
+                    .name = row,
+                    .metrics = std::move(metrics),
+                    .params = {{"values", absl::StrCat(expected)},
+                               {"cache_bytes", absl::StrCat(cache)}},
+                    .note =
+                        "Compilation excluded. Allocation sampling is a "
+                        "separate invocation. Frame counters include block "
+                        "headers and fixed storage; payloads, node storage, "
+                        "queues and fiber stacks remain outside them. "
+                        "C++ new excludes direct malloc/mmap."});
+    }
+  }
+
+  if (Wanted("frame_live_population")) {
+    auto compiled = flow::CompiledProgram::Compile(
+        "flow parked { in items: string stream\n out result: string stream\n"
+        " for item in items { item -> result } }");
+    CHECK_OK(compiled.status());
+    auto stats = std::make_shared<flow::FrameStats>();
+    auto handler =
+        flow::MakeHandler(*compiled, "parked", {.frames = {.stats = stats}});
+    CHECK_OK(handler.status());
+    auto schema = flow::FlowSchema((*compiled)->Flow("parked")->plan);
+    CHECK_OK(schema.status());
+    std::vector<std::shared_ptr<actions::Action>> live;
+    std::string trail;
+    const auto heap_before = CurrentHeapSample();
+    const double rss_slope = MemorySlope(
+        [&](std::int64_t count) {
+          for (std::int64_t i = 0; i < count; ++i) {
+            auto map = nodes::NodeMap::Create();
+            CHECK_OK(map.status());
+            auto action = actions::Action::Create(
+                *schema, absl::StrCat("parked", live.size()), *handler, *map,
+                nullptr, nullptr, registry);
+            CHECK_OK(action.status());
+            CHECK_OK((*action)->GetInput("items").status());
+            CHECK_OK((*action)->GetOutput("result").status());
+            CHECK_OK((*action)->Run().status());
+            live.push_back(*action);
+          }
+          const auto deadline = Deadline();
+          while (stats->active_frames.load() < live.size()) {
+            CHECK_LT(absl::Now(), deadline);
+            thread::SleepFor(absl::Microseconds(100));
+          }
+        },
+        {16, 16, 32, 64}, &trail);
+    const auto heap_after = CurrentHeapSample();
+    const auto count = static_cast<double>(live.size());
+    std::map<std::string, double> metrics{
+        {"rss_bytes_each", rss_slope},
+        {"frame_bytes_each",
+         static_cast<double>(stats->live_bytes.load()) / count},
+        {"heap_live_bytes_delta",
+         static_cast<double>(heap_after.live_bytes) -
+             static_cast<double>(heap_before.live_bytes)},
+        {"frame_peak_reserved_bytes",
+         static_cast<double>(stats->peak_reserved_bytes.load())}};
+    for (const auto& action : live) {
+      CHECK_OK(action->Cancel());
+    }
+    for (const auto& action : live) {
+      action->Wait().Await().IgnoreError();
+    }
+    live.clear();
+    metrics["frame_retained_bytes"] =
+        static_cast<double>(stats->reserved_bytes.load());
+    CHECK_EQ(stats->reserved_bytes.load(), 0);
+    recorder.Add(
+        {.suite = "flow",
+         .name = "frame_live_population",
+         .metrics = std::move(metrics),
+         .params = {{"invocations", "128"}},
+         .note = absl::StrCat(
+             "Open inputs keep root frames live. RSS "
+             "slope includes fibers, queues and node stores. Heap delta "
+             "is a process reading; frame bytes use capacity accounting. ",
+             trail)});
   }
 
   // The baseline the flow rows are charged against: the same action, called

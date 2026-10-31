@@ -1590,9 +1590,15 @@ nested bodies and all.
           "make_handler",
           [](const BoundFlow& self,
              const py::typing::Optional<PyLike<net::WireStream>>&
-                 dispatch_stream) -> PyActionHandler {
+                 dispatch_stream,
+             size_t frame_cache_bytes,
+             std::optional<size_t> frame_budget_bytes) -> PyActionHandler {
             flow::RunOptions options;
             options.bridge = HostBridgeForPython();
+            options.frames.cache_limit_bytes = frame_cache_bytes;
+            if (frame_budget_bytes.has_value()) {
+              options.frames.max_reserved_bytes = *frame_budget_bytes;
+            }
             if (!dispatch_stream.is_none()) {
               options.dispatch_stream =
                   dispatch_stream.cast<std::shared_ptr<net::WireStream>>();
@@ -1602,13 +1608,19 @@ nested bodies and all.
             return py::cast(NativeActionHandler(ValueOrThrow(flow::MakeHandler(
                 self.program, self.name, std::move(options)))));
           },
-          py::arg("dispatch_stream") = py::none(),
+          py::arg("dispatch_stream") = py::none(), py::kw_only(),
+          py::arg("frame_cache_bytes") = 256 * 1024,
+          py::arg("frame_budget_bytes") = py::none(),
           R"doc(The action handler that runs this flow.
 
 ``dispatch_stream`` is only for a flow a *client* runs over a session it already
 holds: the calls that belong to the peer are bound to that stream, and the flow's
 own action is not. An action that is run locally *and* holds a stream ends that
 stream when it finishes, after which the session can dispatch nothing.
+
+``frame_cache_bytes`` caps cached frame capacity per runner; zero disables reuse.
+``frame_budget_bytes`` bounds reserved frame capacity across the invocation and
+its local Flow calls. Payloads, fiber stacks and ordinary containers are excluded.
 )doc")
       .def("__repr__", [](const BoundFlow& self) {
         return absl::StrCat("<FlowPlan ", self.plan().name, ">");
@@ -2128,8 +2140,9 @@ write and process permissions, environment filtering, and limits still apply.
          const py::object& registry, const py::object& session,
          const py::object& dispatch_stream,
          const std::vector<std::string>& source_roots,
-         flow::CompilationLimits limits,
-         bool single_item_slots) -> py::typing::Dict<py::str, py::object> {
+         flow::CompilationLimits limits, bool single_item_slots,
+         size_t frame_cache_bytes, std::optional<size_t> frame_budget_bytes)
+          -> py::typing::Dict<py::str, py::object> {
         namespace sdk_flow = a11::sdk::flow;
 
         // Built here rather than bound as a class: the policy a caller states
@@ -2160,6 +2173,10 @@ write and process permissions, environment filtering, and limits still apply.
 
         a11::flow::interpreter::RunOptions how;
         how.arguments = arguments;
+        how.frames.cache_limit_bytes = frame_cache_bytes;
+        if (frame_budget_bytes.has_value()) {
+          how.frames.max_reserved_bytes = *frame_budget_bytes;
+        }
         how.capabilities = capabilities;
         if (!registry.is_none()) {
           how.registry =
@@ -2228,6 +2245,8 @@ write and process permissions, environment filtering, and limits still apply.
       py::arg("source_roots") = std::vector<std::string>{},
       py::arg("limits") = flow::CompilationLimits{},
       py::arg("single_item_slots") = true,
+      py::arg("frame_cache_bytes") = 256 * 1024,
+      py::arg("frame_budget_bytes") = py::none(),
       R"doc(Run a Flow program's entry flow, and return what it did.
 
 The same interpreter ``a11-flow-run`` is -- one implementation, called two ways

@@ -19,6 +19,7 @@
 
 #include <atomic>
 #include <cstddef>
+#include <limits>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -49,6 +50,9 @@ namespace a11::flow {
 /// Small on purpose: A11's own stores are the buffer, and a flow should not
 /// become a second one.
 inline constexpr size_t kQueueDepth = 8;
+
+struct RuntimeLayouts;
+struct RuntimeAccess;
 
 // One flow file, compiled: the plans, the graphs, and the tree they borrow. A
 // graph points into the parse tree it was resolved from, so the two have one
@@ -106,7 +110,10 @@ class CompiledProgram {
   const PreparedExpressions& prepared() const { return prepared_; }
 
  private:
+  friend struct RuntimeAccess;
   CompiledProgram() = default;
+
+  std::shared_ptr<const RuntimeLayouts> layouts_;
 
   std::string source_;
   std::string linked_source_;
@@ -153,6 +160,33 @@ struct TransportStats {
   std::atomic<size_t> peak_writer_groups{0};
 };
 
+/// Requested frame capacity, including block headers and unused optional slots.
+/// Excludes payloads, fiber stacks, allocator overhead and ordinary containers.
+/// Gauges aggregate concurrent invocations when the collector is shared.
+struct FrameStats {
+  std::atomic<size_t> allocations{0};
+  std::atomic<size_t> reuses{0};
+  std::atomic<size_t> activations{0};
+  std::atomic<size_t> reserved_bytes{0};
+  std::atomic<size_t> peak_reserved_bytes{0};
+  std::atomic<size_t> live_bytes{0};
+  std::atomic<size_t> peak_live_bytes{0};
+  std::atomic<size_t> cached_bytes{0};
+  std::atomic<size_t> peak_cached_bytes{0};
+  std::atomic<size_t> active_frames{0};
+  std::atomic<size_t> peak_active_frames{0};
+};
+
+/// Execution-frame storage policy, independent of Flow semantics.
+struct FrameOptions {
+  /// Maximum cached frame capacity per runner; zero disables caching.
+  size_t cache_limit_bytes = 256 * 1024;
+  /// Maximum frame capacity across an invocation and its program's local calls.
+  /// Includes cached blocks and block headers; excludes other runtime memory.
+  size_t max_reserved_bytes = std::numeric_limits<size_t>::max();
+  std::shared_ptr<FrameStats> stats;
+};
+
 struct RunOptions {
   std::shared_ptr<TransportStats> transport_stats;
 
@@ -172,6 +206,8 @@ struct RunOptions {
   /// stream as the action's would find its second flow unable to reach the peer
   /// at all.
   std::shared_ptr<net::WireStream> dispatch_stream;
+
+  FrameOptions frames;
 };
 
 /// The action handler that runs one flow of `program`.

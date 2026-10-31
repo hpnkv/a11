@@ -163,13 +163,17 @@ Outcome RunFlow(std::string_view source, std::string_view name,
                 bool close_inputs = true, const ModuleSources& modules = {},
                 std::shared_ptr<actions::ActionRegistry> registry = nullptr,
                 std::optional<bool> single_item_slots = std::nullopt,
-                std::shared_ptr<TransportStats> stats = nullptr) {
+                std::shared_ptr<TransportStats> stats = nullptr,
+                FrameOptions frames = {},
+                std::shared_ptr<CompiledProgram> compiled = nullptr) {
   Outcome outcome;
   absl::StatusOr<std::shared_ptr<CompiledProgram>> program =
-      CompiledProgram::Compile(
-          std::string(source), "test.flow", modules, {}, {},
-          single_item_slots.value_or(
-              std::getenv("A11_TEST_SINGLE_ITEM_SLOTS") != nullptr));
+      compiled != nullptr
+          ? absl::StatusOr<std::shared_ptr<CompiledProgram>>(compiled)
+          : CompiledProgram::Compile(
+                std::string(source), "test.flow", modules, {}, {},
+                single_item_slots.value_or(
+                    std::getenv("A11_TEST_SINGLE_ITEM_SLOTS") != nullptr));
   if (!program.ok()) {
     outcome.status = program.status();
     return outcome;
@@ -184,8 +188,9 @@ Outcome RunFlow(std::string_view source, std::string_view name,
     outcome.status = schema.status();
     return outcome;
   }
-  absl::StatusOr<actions::ActionHandler> handler =
-      MakeHandler(*program, name, {.transport_stats = std::move(stats)});
+  absl::StatusOr<actions::ActionHandler> handler = MakeHandler(
+      *program, name,
+      {.transport_stats = std::move(stats), .frames = std::move(frames)});
   if (!handler.ok()) {
     outcome.status = handler.status();
     return outcome;
@@ -3603,6 +3608,195 @@ flow main {
   ASSERT_TRUE(got.status.ok()) << got.status;
   EXPECT_EQ(got.outputs.at("handled"), (Values{"false"}));
   EXPECT_EQ(got.outputs.at("values"), (Values{"7"}));
+}
+
+TEST(FlowRuntimeTest, FramePoolReusesCompletedPassesAndReleasesAllCapacity) {
+  const std::string source = R"(
+flow main {
+ in items: int stream
+ out result: int stream
+ for n in items { v = n + 1
+ v -> result }
+}
+)";
+  PortValues inputs;
+  for (int i = 0; i < 128; ++i) {
+    inputs["items"].push_back(absl::StrCat(i));
+  }
+  for (const size_t cap : {size_t{0}, size_t{256 * 1024}}) {
+    auto stats = std::make_shared<FrameStats>();
+    const auto outcome =
+        RunFlow(source, "main", inputs, {}, true, {}, nullptr, true, nullptr,
+                {.cache_limit_bytes = cap, .stats = stats});
+    ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+    ASSERT_EQ(outcome.outputs.at("result").size(), 128);
+    EXPECT_EQ(outcome.outputs.at("result").front(), "1");
+    EXPECT_EQ(outcome.outputs.at("result").back(), "128");
+    EXPECT_EQ(stats->activations, 129);
+    if (cap == 0) {
+      EXPECT_EQ(stats->reuses, 0);
+      EXPECT_EQ(stats->allocations, 129);
+    } else {
+      EXPECT_EQ(stats->allocations, 2);
+      EXPECT_EQ(stats->reuses, 127);
+    }
+    EXPECT_EQ(stats->active_frames, 0);
+    EXPECT_EQ(stats->reserved_bytes, 0);
+    EXPECT_EQ(stats->live_bytes, 0);
+    EXPECT_EQ(stats->cached_bytes, 0);
+    EXPECT_LE(stats->peak_cached_bytes, cap);
+  }
+}
+
+TEST(FlowRuntimeTest, ParallelFramesRemainDistinctWhileCallsAreParked) {
+  struct Barrier {
+    thread::Mutex mu;
+    thread::CondVar cv;
+    int admitted ABSL_GUARDED_BY(mu) = 0;
+  };
+
+  auto barrier = std::make_shared<Barrier>();
+  auto registry = TestRegistry();
+  actions::ActionSchema schema;
+  schema.name = "pause";
+  ASSERT_TRUE(registry
+                  ->Register("pause", schema,
+                             actions::MakeAsyncActionHandler(
+                                 [barrier](const auto&) -> absl::Status {
+                                   thread::MutexLock lock(&barrier->mu);
+                                   ++barrier->admitted;
+                                   barrier->cv.SignalAll();
+                                   const auto deadline =
+                                       absl::Now() + absl::Seconds(5);
+                                   while (barrier->admitted < 4) {
+                                     if (barrier->cv.WaitWithDeadline(
+                                             &barrier->mu, deadline)) {
+                                       return absl::DeadlineExceededError(
+                                           "Parallel passes did not overlap");
+                                     }
+                                   }
+                                   return absl::OkStatus();
+                                 }))
+                  .ok());
+  auto stats = std::make_shared<FrameStats>();
+  const auto result =
+      RunFlow(R"(
+declare flow pause {}
+flow main {
+ in items: int stream
+ out result: int stream
+ for n in items parallel 4 {
+   ready = run pause()
+   n -> result after ready
+ }
+}
+)",
+              "main", {{"items", {"1", "2", "3", "4", "5", "6", "7", "8"}}}, {},
+              true, {}, registry, true, nullptr, {.stats = stats});
+  ASSERT_TRUE(result.status.ok()) << result.status;
+  auto values = result.outputs.at("result");
+  std::sort(values.begin(), values.end());
+  EXPECT_EQ(values, Values({"1", "2", "3", "4", "5", "6", "7", "8"}));
+  EXPECT_GE(stats->peak_active_frames, 5);
+  EXPECT_GT(stats->reuses, 0);
+  EXPECT_EQ(stats->reserved_bytes, 0);
+}
+
+TEST(FlowRuntimeTest, FrameBudgetUsesOrdinaryStatusBoundary) {
+  auto stats = std::make_shared<FrameStats>();
+  const auto result = RunFlow("flow main { out result: int\n 42 -> result }",
+                              "main", {}, {}, true, {}, nullptr, true, nullptr,
+                              {.max_reserved_bytes = 0, .stats = stats});
+  EXPECT_EQ(result.status.code(), absl::StatusCode::kResourceExhausted);
+  EXPECT_EQ(stats->allocations, 0);
+  EXPECT_EQ(stats->reserved_bytes, 0);
+}
+
+TEST(FlowRuntimeTest, FrameBudgetSpansTransitiveLocalCalls) {
+  const std::string source = R"(
+flow inner { out value: int
+ 42 -> value }
+flow main { out result: int
+ call = run inner()
+ call.value -> result }
+)";
+  auto stats = std::make_shared<FrameStats>();
+  const auto first = RunFlow(source, "main", {}, {}, true, {}, nullptr, true,
+                             nullptr, {.cache_limit_bytes = 0, .stats = stats});
+  ASSERT_TRUE(first.status.ok()) << first.status;
+  ASSERT_GT(stats->peak_live_bytes, 0);
+  const auto limited =
+      RunFlow(source, "main", {}, {}, true, {}, nullptr, true, nullptr,
+              {.cache_limit_bytes = 0,
+               .max_reserved_bytes = stats->peak_live_bytes.load() - 1});
+  EXPECT_EQ(limited.status.code(), absl::StatusCode::kResourceExhausted);
+}
+
+TEST(FlowRuntimeTest,
+     ConcurrentInvocationsOfOneProgramKeepFrameDataIndependent) {
+  const std::string source = R"(
+flow main {
+ in items: int stream
+ out result: int stream
+ for n in items parallel 4 {
+   if n > 0 { v = n + 1
+ v -> result }
+ }
+}
+)";
+  auto compiled = CompiledProgram::Compile(source);
+  ASSERT_TRUE(compiled.ok()) << compiled.status();
+  auto stats = std::make_shared<FrameStats>();
+  std::vector<a11::Future<Outcome>> runs;
+  for (int seed = 0; seed < 16; ++seed) {
+    runs.push_back(a11::Submit<Outcome>([&, seed]() -> absl::StatusOr<Outcome> {
+      PortValues inputs;
+      for (int i = 0; i < 16; ++i) {
+        inputs["items"].push_back(absl::StrCat(seed * 100 + i));
+      }
+      return RunFlow(source, "main", inputs, {}, true, {}, nullptr, true,
+                     nullptr, {.stats = stats}, *compiled);
+    }));
+  }
+  for (int seed = 0; seed < 16; ++seed) {
+    const auto result = runs[static_cast<size_t>(seed)].Await();
+    ASSERT_TRUE(result.ok()) << result.status();
+    ASSERT_TRUE(result->status.ok()) << result->status;
+    Values expected;
+    for (int i = 0; i < 16; ++i) {
+      if (seed * 100 + i > 0) {
+        expected.push_back(absl::StrCat(seed * 100 + i + 1));
+      }
+    }
+    auto actual = result->outputs.at("result");
+    std::sort(expected.begin(), expected.end());
+    std::sort(actual.begin(), actual.end());
+    EXPECT_EQ(actual, expected);
+  }
+  EXPECT_GT(stats->reuses, 0);
+  EXPECT_EQ(stats->reserved_bytes, 0);
+  EXPECT_EQ(stats->active_frames, 0);
+}
+
+TEST(FlowRuntimeTest,
+     ReusedFramesKeepEmittedPayloadsAliveAndResetSkippedState) {
+  const auto result = RunFlow(R"(
+flow main {
+ out result: object stream
+ for n in [1, 2, 3, 4] | flatten {
+   if n == 2 { ignored = n + 10 }
+   {number: n, data: [n, n + 1]} -> result
+ }
+}
+)",
+                              "main", {}, {}, true, {}, nullptr, true);
+  ASSERT_TRUE(result.status.ok()) << result.status;
+  ASSERT_EQ(result.outputs.at("result").size(), 4);
+  for (size_t i = 0; i < 4; ++i) {
+    const auto decoded = nlohmann::json::parse(result.outputs.at("result")[i]);
+    EXPECT_EQ(decoded["number"], i + 1);
+    EXPECT_EQ(decoded["data"][1], i + 2);
+  }
 }
 
 }  // namespace

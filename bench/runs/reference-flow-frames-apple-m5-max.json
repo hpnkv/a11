@@ -1,0 +1,493 @@
+{
+  "environment": {
+    "build": "RelWithDebInfo",
+    "runtime": "native c++",
+    "cpu": "Apple M5 Max",
+    "architecture": "arm64",
+    "allocator": "system",
+    "variant": "dense frames and invocation-local pools",
+    "baseline_commit": "b04273e"
+  },
+  "recorded_at": 1793405762,
+  "results": [
+    {
+      "metrics": {
+        "cpp_new_calls": 407.0,
+        "cpp_new_requested_bytes": 78430.0,
+        "cpp_new_sample_available": 1.0,
+        "frame_activations": 1.0,
+        "frame_blocks": 1.0,
+        "frame_peak_active": 1.0,
+        "frame_peak_cached_bytes": 0.0,
+        "frame_peak_live_bytes": 352.0,
+        "frame_peak_reserved_bytes": 352.0,
+        "frame_retained_bytes": 0.0,
+        "frame_reuses": 0.0,
+        "max_us": 132.666,
+        "mean_us": 83.07356666666666,
+        "ops_per_s": 12037.523367842237,
+        "p50_us": 81.0,
+        "p90_us": 98.667,
+        "p99_us": 132.666,
+        "rss_after_bytes": 11157504.0
+      },
+      "name": "frame_small",
+      "note": "Compilation excluded. Allocation sampling is a separate invocation. Frame counters include block headers and fixed storage; payloads, node storage, queues and fiber stacks remain outside them. C++ new excludes direct malloc/mmap.",
+      "params": {
+        "cache_bytes": "0",
+        "values": "1"
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "cpp_new_calls": 506.0,
+        "cpp_new_requested_bytes": 90638.0,
+        "cpp_new_sample_available": 1.0,
+        "frame_activations": 1.0,
+        "frame_blocks": 1.0,
+        "frame_peak_active": 1.0,
+        "frame_peak_cached_bytes": 352.0,
+        "frame_peak_live_bytes": 352.0,
+        "frame_peak_reserved_bytes": 352.0,
+        "frame_retained_bytes": 0.0,
+        "frame_reuses": 0.0,
+        "max_us": 195.0,
+        "mean_us": 108.3209,
+        "ops_per_s": 9231.828760654684,
+        "p50_us": 104.416,
+        "p90_us": 154.291,
+        "p99_us": 195.0,
+        "rss_after_bytes": 11239424.0
+      },
+      "name": "frame_small",
+      "note": "Compilation excluded. Allocation sampling is a separate invocation. Frame counters include block headers and fixed storage; payloads, node storage, queues and fiber stacks remain outside them. C++ new excludes direct malloc/mmap.",
+      "params": {
+        "cache_bytes": "262144",
+        "values": "1"
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "cpp_new_calls": 5164.0,
+        "cpp_new_requested_bytes": 795558.0,
+        "cpp_new_sample_available": 1.0,
+        "frame_activations": 1.0,
+        "frame_blocks": 1.0,
+        "frame_peak_active": 1.0,
+        "frame_peak_cached_bytes": 0.0,
+        "frame_peak_live_bytes": 54928.0,
+        "frame_peak_reserved_bytes": 54928.0,
+        "frame_retained_bytes": 0.0,
+        "frame_reuses": 0.0,
+        "max_us": 2862.125,
+        "mean_us": 2386.457,
+        "ops_per_s": 419.03122494978953,
+        "p50_us": 2392.333,
+        "p90_us": 2736.792,
+        "p99_us": 2862.125,
+        "rss_after_bytes": 17006592.0
+      },
+      "name": "frame_static",
+      "note": "Compilation excluded. Allocation sampling is a separate invocation. Frame counters include block headers and fixed storage; payloads, node storage, queues and fiber stacks remain outside them. C++ new excludes direct malloc/mmap.",
+      "params": {
+        "cache_bytes": "0",
+        "values": "1"
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "cpp_new_calls": 5164.0,
+        "cpp_new_requested_bytes": 799102.0,
+        "cpp_new_sample_available": 1.0,
+        "frame_activations": 1.0,
+        "frame_blocks": 1.0,
+        "frame_peak_active": 1.0,
+        "frame_peak_cached_bytes": 54928.0,
+        "frame_peak_live_bytes": 54928.0,
+        "frame_peak_reserved_bytes": 54928.0,
+        "frame_retained_bytes": 0.0,
+        "frame_reuses": 0.0,
+        "max_us": 2389.958,
+        "mean_us": 1938.0805,
+        "ops_per_s": 515.9744396582082,
+        "p50_us": 1939.583,
+        "p90_us": 2063.917,
+        "p99_us": 2389.958,
+        "rss_after_bytes": 17301504.0
+      },
+      "name": "frame_static",
+      "note": "Compilation excluded. Allocation sampling is a separate invocation. Frame counters include block headers and fixed storage; payloads, node storage, queues and fiber stacks remain outside them. C++ new excludes direct malloc/mmap.",
+      "params": {
+        "cache_bytes": "262144",
+        "values": "1"
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "cpp_new_calls": 417626.0,
+        "cpp_new_requested_bytes": 67196662.0,
+        "cpp_new_sample_available": 1.0,
+        "frame_activations": 4097.0,
+        "frame_blocks": 4097.0,
+        "frame_peak_active": 2.0,
+        "frame_peak_cached_bytes": 0.0,
+        "frame_peak_live_bytes": 1704.0,
+        "frame_peak_reserved_bytes": 1704.0,
+        "frame_retained_bytes": 0.0,
+        "frame_reuses": 0.0,
+        "max_us": 165533.084,
+        "mean_us": 100346.23203333333,
+        "ops_per_s": 9.965496259668393,
+        "p50_us": 93873.584,
+        "p90_us": 114126.833,
+        "p99_us": 165533.084,
+        "rss_after_bytes": 36159488.0
+      },
+      "name": "frame_sequential",
+      "note": "Compilation excluded. Allocation sampling is a separate invocation. Frame counters include block headers and fixed storage; payloads, node storage, queues and fiber stacks remain outside them. C++ new excludes direct malloc/mmap.",
+      "params": {
+        "cache_bytes": "0",
+        "values": "4096"
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "cpp_new_calls": 409502.0,
+        "cpp_new_requested_bytes": 62552958.0,
+        "cpp_new_sample_available": 1.0,
+        "frame_activations": 4097.0,
+        "frame_blocks": 2.0,
+        "frame_peak_active": 2.0,
+        "frame_peak_cached_bytes": 1704.0,
+        "frame_peak_live_bytes": 1704.0,
+        "frame_peak_reserved_bytes": 1704.0,
+        "frame_retained_bytes": 0.0,
+        "frame_reuses": 4095.0,
+        "max_us": 124074.791,
+        "mean_us": 102138.37923333334,
+        "ops_per_s": 9.790639008628848,
+        "p50_us": 99197.042,
+        "p90_us": 113999.25,
+        "p99_us": 124074.791,
+        "rss_after_bytes": 44482560.0
+      },
+      "name": "frame_sequential",
+      "note": "Compilation excluded. Allocation sampling is a separate invocation. Frame counters include block headers and fixed storage; payloads, node storage, queues and fiber stacks remain outside them. C++ new excludes direct malloc/mmap.",
+      "params": {
+        "cache_bytes": "262144",
+        "values": "4096"
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "cpp_new_calls": 134278.0,
+        "cpp_new_requested_bytes": 20231862.0,
+        "cpp_new_sample_available": 1.0,
+        "frame_activations": 1025.0,
+        "frame_blocks": 1025.0,
+        "frame_peak_active": 5.0,
+        "frame_peak_cached_bytes": 0.0,
+        "frame_peak_live_bytes": 5088.0,
+        "frame_peak_reserved_bytes": 5088.0,
+        "frame_retained_bytes": 0.0,
+        "frame_reuses": 0.0,
+        "max_us": 81444.041,
+        "mean_us": 62189.36106666667,
+        "ops_per_s": 16.07992079108202,
+        "p50_us": 60970.083,
+        "p90_us": 66072.084,
+        "p99_us": 81444.041,
+        "rss_after_bytes": 45498368.0
+      },
+      "name": "frame_parallel",
+      "note": "Compilation excluded. Allocation sampling is a separate invocation. Frame counters include block headers and fixed storage; payloads, node storage, queues and fiber stacks remain outside them. C++ new excludes direct malloc/mmap.",
+      "params": {
+        "cache_bytes": "0",
+        "values": "1024"
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "cpp_new_calls": 132097.0,
+        "cpp_new_requested_bytes": 19078046.0,
+        "cpp_new_sample_available": 1.0,
+        "frame_activations": 1025.0,
+        "frame_blocks": 5.0,
+        "frame_peak_active": 5.0,
+        "frame_peak_cached_bytes": 5088.0,
+        "frame_peak_live_bytes": 5088.0,
+        "frame_peak_reserved_bytes": 5088.0,
+        "frame_retained_bytes": 0.0,
+        "frame_reuses": 1020.0,
+        "max_us": 77281.792,
+        "mean_us": 60616.53606666667,
+        "ops_per_s": 16.497148548709383,
+        "p50_us": 58960.792,
+        "p90_us": 64584.541,
+        "p99_us": 77281.792,
+        "rss_after_bytes": 46792704.0
+      },
+      "name": "frame_parallel",
+      "note": "Compilation excluded. Allocation sampling is a separate invocation. Frame counters include block headers and fixed storage; payloads, node storage, queues and fiber stacks remain outside them. C++ new excludes direct malloc/mmap.",
+      "params": {
+        "cache_bytes": "262144",
+        "values": "1024"
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "cpp_new_calls": 22004.0,
+        "cpp_new_requested_bytes": 3631350.0,
+        "cpp_new_sample_available": 1.0,
+        "frame_activations": 273.0,
+        "frame_blocks": 273.0,
+        "frame_peak_active": 3.0,
+        "frame_peak_cached_bytes": 0.0,
+        "frame_peak_live_bytes": 1600.0,
+        "frame_peak_reserved_bytes": 1600.0,
+        "frame_retained_bytes": 0.0,
+        "frame_reuses": 0.0,
+        "max_us": 5027.75,
+        "mean_us": 4408.073633333333,
+        "ops_per_s": 226.85646456495596,
+        "p50_us": 4312.667,
+        "p90_us": 4683.75,
+        "p99_us": 5027.75,
+        "rss_after_bytes": 46825472.0
+      },
+      "name": "frame_nested",
+      "note": "Compilation excluded. Allocation sampling is a separate invocation. Frame counters include block headers and fixed storage; payloads, node storage, queues and fiber stacks remain outside them. C++ new excludes direct malloc/mmap.",
+      "params": {
+        "cache_bytes": "0",
+        "values": "256"
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "cpp_new_calls": 21494.0,
+        "cpp_new_requested_bytes": 3521102.0,
+        "cpp_new_sample_available": 1.0,
+        "frame_activations": 273.0,
+        "frame_blocks": 3.0,
+        "frame_peak_active": 3.0,
+        "frame_peak_cached_bytes": 1600.0,
+        "frame_peak_live_bytes": 1600.0,
+        "frame_peak_reserved_bytes": 1600.0,
+        "frame_retained_bytes": 0.0,
+        "frame_reuses": 270.0,
+        "max_us": 14329.0,
+        "mean_us": 5321.255433333334,
+        "ops_per_s": 187.92557743719914,
+        "p50_us": 4309.917,
+        "p90_us": 7006.375,
+        "p99_us": 14329.0,
+        "rss_after_bytes": 46972928.0
+      },
+      "name": "frame_nested",
+      "note": "Compilation excluded. Allocation sampling is a separate invocation. Frame counters include block headers and fixed storage; payloads, node storage, queues and fiber stacks remain outside them. C++ new excludes direct malloc/mmap.",
+      "params": {
+        "cache_bytes": "262144",
+        "values": "256"
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "cpp_new_calls": 118164.0,
+        "cpp_new_requested_bytes": 53838158.0,
+        "cpp_new_sample_available": 1.0,
+        "frame_activations": 1025.0,
+        "frame_blocks": 1025.0,
+        "frame_peak_active": 2.0,
+        "frame_peak_cached_bytes": 0.0,
+        "frame_peak_live_bytes": 976.0,
+        "frame_peak_reserved_bytes": 976.0,
+        "frame_retained_bytes": 0.0,
+        "frame_reuses": 0.0,
+        "max_us": 41451.417,
+        "mean_us": 33728.9069,
+        "ops_per_s": 29.648159158101855,
+        "p50_us": 33434.416,
+        "p90_us": 35567.208,
+        "p99_us": 41451.417,
+        "rss_after_bytes": 58966016.0
+      },
+      "name": "frame_escaping",
+      "note": "Compilation excluded. Allocation sampling is a separate invocation. Frame counters include block headers and fixed storage; payloads, node storage, queues and fiber stacks remain outside them. C++ new excludes direct malloc/mmap.",
+      "params": {
+        "cache_bytes": "0",
+        "values": "1024"
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "cpp_new_calls": 116135.0,
+        "cpp_new_requested_bytes": 53391638.0,
+        "cpp_new_sample_available": 1.0,
+        "frame_activations": 1025.0,
+        "frame_blocks": 2.0,
+        "frame_peak_active": 2.0,
+        "frame_peak_cached_bytes": 976.0,
+        "frame_peak_live_bytes": 976.0,
+        "frame_peak_reserved_bytes": 976.0,
+        "frame_retained_bytes": 0.0,
+        "frame_reuses": 1023.0,
+        "max_us": 43521.833,
+        "mean_us": 33539.46113333333,
+        "ops_per_s": 29.815625123629246,
+        "p50_us": 32201.917,
+        "p90_us": 36965.292,
+        "p99_us": 43521.833,
+        "rss_after_bytes": 59572224.0
+      },
+      "name": "frame_escaping",
+      "note": "Compilation excluded. Allocation sampling is a separate invocation. Frame counters include block headers and fixed storage; payloads, node storage, queues and fiber stacks remain outside them. C++ new excludes direct malloc/mmap.",
+      "params": {
+        "cache_bytes": "262144",
+        "values": "1024"
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "cpp_new_calls": 126120.0,
+        "cpp_new_requested_bytes": 19455974.0,
+        "cpp_new_sample_available": 1.0,
+        "frame_activations": 1089.0,
+        "frame_blocks": 1089.0,
+        "frame_peak_active": 16.0,
+        "frame_peak_cached_bytes": 0.0,
+        "frame_peak_live_bytes": 6856.0,
+        "frame_peak_reserved_bytes": 6856.0,
+        "frame_retained_bytes": 0.0,
+        "frame_reuses": 0.0,
+        "max_us": 65284.75,
+        "mean_us": 37710.19593333333,
+        "ops_per_s": 26.5180271608206,
+        "p50_us": 35634.416,
+        "p90_us": 43399.0,
+        "p99_us": 65284.75,
+        "rss_after_bytes": 61014016.0
+      },
+      "name": "frame_peak_then_steady",
+      "note": "Compilation excluded. Allocation sampling is a separate invocation. Frame counters include block headers and fixed storage; payloads, node storage, queues and fiber stacks remain outside them. C++ new excludes direct malloc/mmap.",
+      "params": {
+        "cache_bytes": "0",
+        "values": "1088"
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "cpp_new_calls": 123913.0,
+        "cpp_new_requested_bytes": 18278542.0,
+        "cpp_new_sample_available": 1.0,
+        "frame_activations": 1089.0,
+        "frame_blocks": 18.0,
+        "frame_peak_active": 17.0,
+        "frame_peak_cached_bytes": 8384.0,
+        "frame_peak_live_bytes": 7256.0,
+        "frame_peak_reserved_bytes": 8384.0,
+        "frame_retained_bytes": 0.0,
+        "frame_reuses": 1071.0,
+        "max_us": 54523.541,
+        "mean_us": 36323.16943333333,
+        "ops_per_s": 27.530637210372728,
+        "p50_us": 34745.584,
+        "p90_us": 40754.167,
+        "p99_us": 54523.541,
+        "rss_after_bytes": 61882368.0
+      },
+      "name": "frame_peak_then_steady",
+      "note": "Compilation excluded. Allocation sampling is a separate invocation. Frame counters include block headers and fixed storage; payloads, node storage, queues and fiber stacks remain outside them. C++ new excludes direct malloc/mmap.",
+      "params": {
+        "cache_bytes": "262144",
+        "values": "1088"
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "cpp_new_calls": 6585.0,
+        "cpp_new_requested_bytes": 1265064.0,
+        "cpp_new_sample_available": 1.0,
+        "frame_activations": 16.0,
+        "frame_blocks": 16.0,
+        "frame_peak_active": 10.0,
+        "frame_peak_cached_bytes": 0.0,
+        "frame_peak_live_bytes": 3520.0,
+        "frame_peak_reserved_bytes": 3520.0,
+        "frame_retained_bytes": 0.0,
+        "frame_reuses": 0.0,
+        "max_us": 311.084,
+        "mean_us": 275.4597,
+        "ops_per_s": 3630.295103058633,
+        "p50_us": 272.167,
+        "p90_us": 300.583,
+        "p99_us": 311.084,
+        "rss_after_bytes": 62521344.0
+      },
+      "name": "frame_concurrent",
+      "note": "Compilation excluded. Allocation sampling is a separate invocation. Frame counters include block headers and fixed storage; payloads, node storage, queues and fiber stacks remain outside them. C++ new excludes direct malloc/mmap.",
+      "params": {
+        "cache_bytes": "0",
+        "values": "1"
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "cpp_new_calls": 6570.0,
+        "cpp_new_requested_bytes": 1266080.0,
+        "cpp_new_sample_available": 1.0,
+        "frame_activations": 16.0,
+        "frame_blocks": 16.0,
+        "frame_peak_active": 14.0,
+        "frame_peak_cached_bytes": 352.0,
+        "frame_peak_live_bytes": 4928.0,
+        "frame_peak_reserved_bytes": 4928.0,
+        "frame_retained_bytes": 0.0,
+        "frame_reuses": 0.0,
+        "max_us": 347.583,
+        "mean_us": 275.4444666666667,
+        "ops_per_s": 3630.49587490957,
+        "p50_us": 272.417,
+        "p90_us": 316.5,
+        "p99_us": 347.583,
+        "rss_after_bytes": 62734336.0
+      },
+      "name": "frame_concurrent",
+      "note": "Compilation excluded. Allocation sampling is a separate invocation. Frame counters include block headers and fixed storage; payloads, node storage, queues and fiber stacks remain outside them. C++ new excludes direct malloc/mmap.",
+      "params": {
+        "cache_bytes": "262144",
+        "values": "1"
+      },
+      "suite": "flow"
+    },
+    {
+      "metrics": {
+        "frame_bytes_each": 576.0,
+        "frame_peak_reserved_bytes": 73728.0,
+        "frame_retained_bytes": 0.0,
+        "heap_live_bytes_delta": 188698304.0,
+        "rss_bytes_each": 81590.85714285713
+      },
+      "name": "frame_live_population",
+      "note": "Open inputs keep root frames live. RSS slope includes fibers, queues and node stores. Heap delta is a process reading; frame bytes use capacity accounting. 3-point fit over 16:61312K 32:61424K 64:63488K 128:68976K",
+      "params": {
+        "invocations": "128"
+      },
+      "suite": "flow"
+    }
+  ]
+}

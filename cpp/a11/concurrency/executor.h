@@ -96,6 +96,8 @@ Future<T> SubmitWithCancellationHook(
             result = raised;
           }
         }
+        // Callable captures are released before completion becomes observable.
+        work = nullptr;
         const absl::Status completion = promise.SetResult(std::move(result));
         (void)completion;
       },

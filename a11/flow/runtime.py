@@ -69,7 +69,13 @@ def _header_bytes(value: Any) -> bytes:
     return _flow.strformat("%s", [value]).encode()
 
 
-def make_handler(flow: FlowPlan, dispatch_stream: Any = None) -> Callable:
+def make_handler(
+    flow: FlowPlan,
+    dispatch_stream: Any = None,
+    *,
+    frame_cache_bytes: int = 256 * 1024,
+    frame_budget_bytes: int | None = None,
+) -> Callable:
     """The action handler that runs ``flow``.
 
     Registering this makes the composition an action like any other: a peer can
@@ -79,8 +85,16 @@ def make_handler(flow: FlowPlan, dispatch_stream: Any = None) -> Callable:
     ``dispatch_stream`` is only for a flow a client runs itself over a session
     it already holds; [invoke][a11.flow.runtime.invoke] passes it, and nothing
     that registers a flow as an action needs it.
+
+    ``frame_cache_bytes=0`` disables frame reuse. ``frame_budget_bytes`` bounds
+    reserved frame capacity, including local Flow calls; payloads, fiber stacks,
+    and ordinary containers are outside that budget.
     """
-    return flow.make_handler(dispatch_stream)
+    return flow.make_handler(
+        dispatch_stream,
+        frame_cache_bytes=frame_cache_bytes,
+        frame_budget_bytes=frame_budget_bytes,
+    )
 
 
 class Running:
@@ -181,6 +195,8 @@ async def start(
     dispatch_stream: Any = None,
     headers: Mapping[str, Any] | None = None,
     timeout: timing.Duration | None = None,
+    frame_cache_bytes: int = 256 * 1024,
+    frame_budget_bytes: int | None = None,
     action_id: str | None = None,
     open_inputs: Iterable[str] = (),
     publish_to: Any = None,
@@ -200,13 +216,22 @@ async def start(
     values produced immediately after startup. Use ``action_id`` when peers
     need deterministic port node ids.
 
+    ``frame_cache_bytes`` caps cached frames per runner; zero disables reuse.
+    ``frame_budget_bytes`` bounds frame capacity across local Flow calls,
+    excluding payloads, fiber stacks, and ordinary containers.
+
     See [invoke][a11.flow.runtime.invoke] for ``stream`` against
     ``dispatch_stream``.
     """
     inputs = {**(inputs or {}), **keyword_inputs}
     action = Action(
         flow.schema,
-        handler=make_handler(flow, dispatch_stream=dispatch_stream),
+        handler=make_handler(
+            flow,
+            dispatch_stream=dispatch_stream,
+            frame_cache_bytes=frame_cache_bytes,
+            frame_budget_bytes=frame_budget_bytes,
+        ),
         registry=registry,
         session=session,
         node_map=node_map,
@@ -285,6 +310,8 @@ async def invoke(
     dispatch_stream: Any = None,
     headers: Mapping[str, Any] | None = None,
     timeout: timing.Duration | None = None,
+    frame_cache_bytes: int = 256 * 1024,
+    frame_budget_bytes: int | None = None,
     **keyword_inputs: Any,
 ) -> dict[str, Any]:
     """Run ``flow`` once, here, and return its outputs collected.
@@ -300,6 +327,9 @@ async def invoke(
     Collecting is the convenience, not the mechanism: a flow's outputs are
     nodes, and [start][a11.flow.runtime.start] hands them over live for a
     caller that would rather read them as they fill.
+
+    ``frame_cache_bytes`` and ``frame_budget_bytes`` configure frame storage as
+    described by [start][a11.flow.runtime.start].
 
     The two stream arguments are different questions, and a caller wants exactly
     one of them:
@@ -324,6 +354,8 @@ async def invoke(
         dispatch_stream=dispatch_stream,
         headers=headers,
         timeout=timeout,
+        frame_cache_bytes=frame_cache_bytes,
+        frame_budget_bytes=frame_budget_bytes,
         **keyword_inputs,
     )
     return await running.collect()

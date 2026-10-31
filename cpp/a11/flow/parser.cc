@@ -1901,7 +1901,7 @@ class ParserImpl {
       loop->pipeline = ParsePipeline();
     }
     if (AcceptWord("parallel")) {
-      loop->parallel = ExpectCount();
+      loop->parallel_expression = ParseParallelCount(loop->parallel);
     }
     loop->body = ParseBlock();
     loop->termination = ParseLoopTermination();
@@ -2014,7 +2014,29 @@ class ParserImpl {
     return std::nullopt;
   }
 
-  /// A whole number of something: `parallel 2`, `max 6`.
+  NodePtr ParseParallelCount(int& count) {
+    const Token& token = Current();
+    const BlockHeader header(this);
+    auto expression = ParseExpression();
+    const auto literal = syntax::ConstantValue(expression.get());
+    if (literal.has_value() &&
+        (literal->kind == syntax::Constant::Kind::kInteger ||
+         literal->kind == syntax::Constant::Kind::kDouble)) {
+      if (literal->kind != syntax::Constant::Kind::kInteger ||
+          literal->integer < std::numeric_limits<int>::min() ||
+          literal->integer > std::numeric_limits<int>::max()) {
+        Report("flow.form.bad-number",
+               "This count must fit in a signed 32-bit integer.", token,
+               Severity::kError, Family::kForm);
+      } else {
+        count = static_cast<int>(literal->integer);
+      }
+      return nullptr;
+    }
+    return expression;
+  }
+
+  /// A whole number of something: `max 6`.
   int ExpectCount() {
     if (!At(TokenKind::kNumber)) {
       ReportHere("flow.syntax.unexpected",
@@ -2561,7 +2583,7 @@ class ParserImpl {
       const std::string word = Keyword();
       if (word == "parallel") {
         Advance();
-        stage.parallel = ExpectCount();
+        stage.parallel_expression = ParseParallelCount(stage.parallel);
         continue;
       }
       if (word == "unordered") {
@@ -2576,18 +2598,21 @@ class ParserImpl {
       }
       break;
     }
+    const auto concurrent = [&] {
+      return stage.parallel > 1 || stage.parallel_expression != nullptr;
+    };
     if ((stage.name == "take while" || stage.name == "take until") &&
-        (stage.parallel > 1 || !stage.ordered)) {
+        (concurrent() || !stage.ordered)) {
       Report("flow.form.stage-not-parallel",
              absl::StrCat("'", stage.name,
                           "' evaluates predicates in input order. Remove "
                           "'parallel' and 'unordered' from this stage."),
              keyword, Severity::kError, Family::kForm);
       stage.parallel = 1;
+      stage.parallel_expression.reset();
       stage.ordered = true;
     }
-    if (stage.parallel > 1 &&
-        !vocabulary::ParallelStages().contains(stage.name)) {
+    if (concurrent() && !vocabulary::ParallelStages().contains(stage.name)) {
       Report("flow.form.stage-not-parallel",
              absl::StrCat("'", stage.name,
                           "' reads the whole stream, so there is nothing for "
@@ -2595,8 +2620,9 @@ class ParserImpl {
                           "reshapes each value, like 'map'."),
              keyword, Severity::kError, Family::kForm);
       stage.parallel = 1;
+      stage.parallel_expression.reset();
     }
-    if (!stage.ordered && stage.parallel <= 1) {
+    if (!stage.ordered && !concurrent()) {
       Report("flow.form.unordered-without-parallel",
              absl::StrCat("'unordered' says a parallel stage may finish its "
                           "values in any order, so it needs 'parallel n'. "

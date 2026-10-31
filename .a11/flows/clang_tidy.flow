@@ -1,0 +1,79 @@
+struct ClangTidyOptions {
+  max_concurrency: int default 4
+  clang_tidy:      string default "clang-tidy"
+  build_dir:       string
+}
+
+flow clang_tidy {
+  describe "Run clang-tidy on source paths with bounded concurrency."
+
+  in  sources: string stream required
+  in  options: ClangTidyOptions
+
+  out diagnostics: string stream
+  out result:      object
+
+  nul = "\0"
+  ClangTidyOptions settings = try take options or ClangTidyOptions{}
+  concurrency = settings.max_concurrency
+  executable = settings.clang_tidy
+  string build_flags = ""
+  directory = std::get(settings, "build_dir")
+  if directory != null {
+    if directory == "" or std::contains(directory, nul) {
+      fail invalid_argument "build_dir must be a nonempty path without NUL."
+    }
+    build_flags = std::strformat(" -p '%s'", std::replace(directory, "'", "'\"'\"'"))
+  }
+
+  if concurrency < 1 {
+    fail invalid_argument "max_concurrency must be positive."
+  }
+  if executable == "" or std::contains(executable, nul) {
+    fail invalid_argument "clang_tidy must be a nonempty path without NUL."
+  }
+  wait all
+
+  command_prefix = std::strformat("'%s'%s", std::replace(executable, "'", "'\"'\"'"), build_flags)
+  checks = sources
+    | map(run tidy_source(source: it, command_prefix: command_prefix)).result parallel concurrency
+
+  checks | map it.diagnostics | flatten -> diagnostics
+  checked = take (checks | count)
+  if checked == 0 {
+    fail invalid_argument "sources must contain at least one path."
+  } else {
+    checks | map it.exit_code | max | map {exit_code: it} -> result
+  }
+}
+
+flow tidy_source {
+  in  source:         string required
+  in  command_prefix: string required
+
+  out result: object
+
+  source_path = take source
+  nul = "\0"
+  if source_path == "" or std::contains(source_path, nul) {
+    fail invalid_argument "Each source must be a nonempty path without NUL."
+  }
+  wait all
+  prefix = take command_prefix
+  string path = source_path
+  if not std::startswith(source_path, "/") {
+    path = std::strformat("./%s", source_path)
+  }
+  command = std::strformat("%s '%s'", prefix, std::replace(path, "'", "'\"'\"'"))
+  process = run run_command(
+    command: command,
+    timeout_seconds: 600
+  )
+  lines = take (process.output_lines | collect)
+  completion = take process.result
+  if completion.exit_code == 0 {
+    {exit_code: 0, diagnostics: lines} -> result
+  } else {
+    {exit_code: 1, diagnostics: lines} -> result
+  }
+}

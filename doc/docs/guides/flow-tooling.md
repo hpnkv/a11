@@ -195,6 +195,7 @@ The kinds describe semantic roles used by readers and editors:
 `member`, `action-name`, `node-map-name`,
 `flow-name`, `declaration-keyword`, `statement-keyword`, `modifier-keyword`,
 `constant`, `word-operator`, `port-name`, `identifier`, `comment`, `string`,
+`string-escape`,
 `number`, `duration`, `flow-operator`, `operator`, `brace`, `parenthesis`,
 `bracket`, `punctuation`, `bad`. An editor maps them to its own palette and needs
 no lexer of its own — the same call decides that a word after a `|` is a stage,
@@ -212,6 +213,10 @@ types retain the class palette. Namespace qualifiers have their own role.
 
 `lexical` contains the token's lexical type (`word`, `->`, `{`), while `kind`
 contains its semantic role. Clients that tokenize locally can use both fields.
+String tokens split into nonoverlapping `string` and `string-escape` spans;
+each span retains `lexical: "string"`. Escapes use their original source ranges
+in both ordinary and triple-quoted strings. LSP exposes the `stringEscape`
+semantic type, which VS Code maps to its string escape palette.
 
 Tokens tile the source: every offset in the file is covered by exactly one of
 them, comments included, so a client can colour a whole file from one response.

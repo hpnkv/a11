@@ -745,6 +745,26 @@ TEST(FlowParser, ALexProblemIsReportedAndParsingCarriesOn) {
   EXPECT_EQ(result.flows[0]->body.back()->kind, NodeKind::kPipe);
 }
 
+TEST(FlowParser, ParallelExpressionsArePreservedInTheSyntaxEnvelope) {
+  const auto parsed = Parse(R"(
+flow main {
+  in workers: int
+  in rows: int stream
+  out values: int stream
+  for n in rows parallel (workers + 1) { n -> values }
+  rows | map it parallel workers unordered -> values
+}
+)");
+  ASSERT_FALSE(parsed.HasErrors()) << absl::StrJoin(Messages(parsed), "; ");
+  const auto value = SyntaxToJsonValue("parallel.flow", parsed);
+  const auto& body = value["flows"][0]["body"];
+  EXPECT_FALSE(body[0]["parallel_expression"].is_null());
+  EXPECT_EQ(body[0]["parallel"], 1);
+  const auto& stage = body[1]["pipeline"]["stages"][0];
+  EXPECT_FALSE(stage["parallel_expression"].is_null());
+  EXPECT_FALSE(stage["ordered"].get<bool>());
+}
+
 TEST(FlowParser, TheSyntaxEnvelopeIsWhatTheFormatSays) {
   const ParseResult result =
       Parse("flow f { in a: string\n out b: string\n a | truncate 5 -> b }");

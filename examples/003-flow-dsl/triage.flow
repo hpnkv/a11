@@ -18,10 +18,11 @@
 flow triage {
   describe "Run a triage step until it is confident enough, then report."
 
-  in  report:  string required "What to triage."
-  out passes:  object stream   "Every pass, as it happened."
-  out verdict: string          "What the last pass concluded."
-  out notes:   string          "The trail it left."
+  in  report: string required "What to triage."
+
+  out passes:  object stream "Every pass, as it happened."
+  out verdict: string        "What the last pass concluded."
+  out notes:   string        "The trail it left."
 
   object state = {round: 0, notes: []}
   repeat max 6 {
@@ -39,7 +40,8 @@ flow triage {
 flow triage-strictly {
   describe "Triage, but refuse a report too short to be worth a pass."
 
-  in  report:  string required
+  in  report: string required
+
   out verdict: string
 
   if std::len(report) < 12 {

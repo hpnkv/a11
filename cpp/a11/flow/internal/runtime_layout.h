@@ -47,6 +47,7 @@ struct RuntimeLayouts {
     internal::FrameLayout::Slots<StepState> steps;
     internal::FrameLayout::Slots<std::optional<Value>> captures;
     internal::FrameLayout::Slots<std::optional<Value>> folds;
+    internal::FrameLayout::Slots<int> value_consumers;
     absl::flat_hash_map<size_t, size_t> capture_slots;
     internal::FrameObjectLayout<internal::CallHandle> calls;
     internal::FrameObjectLayout<internal::Lazy> lazies;

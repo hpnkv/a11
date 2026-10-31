@@ -29,9 +29,10 @@ flow ask-the-pages {
   describe "Answer a question from the pages a search turns up."
 
   in  question: string required "What to find out."
-  out answer:   string          "The model's answer."
-  out cited:    string stream   "The pages it was given."
-  out prompt:   string          "Exactly what the model was asked."
+
+  out answer: string        "The model's answer."
+  out cited:  string stream "The pages it was given."
+  out prompt: string        "Exactly what the model was asked."
 
   header "x-a11-llm-api-key"  as api_key
   header "x-a11-llm-provider" as provider
@@ -96,8 +97,9 @@ flow chat-turn {
 
   in  history:  a11::sdk::Interaction stream "Everything said so far."
   in  question: string required              "What to say now."
-  out reply:    string                       "What the model answered."
-  out turn:     a11::sdk::Interaction stream "The question and the answer."
+
+  out reply: string                       "What the model answered."
+  out turn:  a11::sdk::Interaction stream "The question and the answer."
 
   string question_text = take question
   a11::sdk::Interaction asked = {
@@ -127,8 +129,9 @@ flow quote-the-pages {
   describe "Answer with the first line of the best page, and no model."
 
   in  question: string required
-  out answer:   string
-  out cited:    string stream
+
+  out answer: string
+  out cited:  string stream
 
   search = run web-search(query: question, limit: 1)
 

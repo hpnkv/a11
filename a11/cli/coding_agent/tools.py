@@ -63,24 +63,52 @@ def _port(
 WORKSPACE_INFO_SCHEMA = a11.ActionSchema(
     name="workspace_info",
     description=(
-        "Read coding-session metadata when repository state, applicable"
-        " instructions, roots, or policy affect the next decision. Reuse a"
-        " previous result unless the state may have changed or the task moves"
-        " to another root. This action takes no inputs. Its unary `result` has"
-        " exactly these fields: `cwd`, `root`, `repository_root`, `read_roots`,"
-        " `write_roots`, `initial_git_status`, `current_git_status`,"
-        " `agent_changed_files`, `checks`, `instructions`, `approval_mode`,"
-        " `sandbox`, and `network`. `instructions` is an array of"
-        " `{path, text}` objects containing the AGENTS.md files that apply to"
-        " `cwd`; read and obey their text before editing. Empty Git fields do"
-        " not mean the workspace is empty."
+        "Read compact coding-session metadata only when it affects the next"
+        " decision; reuse previous results. Select needed fields with fields."
+        " Available fields: cwd, root, repository_root, read_roots,"
+        " write_roots, initial_git_status, current_git_status,"
+        " agent_changed_files, check_count, instructions, approval_mode,"
+        " sandbox, network, and truncated_fields. Command history is omitted."
+        " Git status text is capped at 2000 characters and lists at 50 entries;"
+        " truncated_fields names capped fields. Empty Git fields do not mean an"
+        " empty workspace. instructions lists applicable AGENTS.md paths,"
+        " text_chars, and text_truncated. Text is omitted by default;"
+        " instruction_chars opts into a bounded total excerpt. Read relevant"
+        " sections with read_file only when their rules are needed and absent"
+        " from context. Within a Flow, project needed fields, filter"
+        " instructions to relevant paths and sections, and truncate excerpts"
+        " even on the first lookup. Obey applicable repository instructions"
+        " before editing."
     ),
+    inputs={
+        "fields": _port(
+            "fields",
+            "application/json",
+            "Optional list of result field names; omit to return all compact"
+            " metadata. Prefer only fields needed for the next decision.",
+            typeinfo=list,
+            json_schema={
+                "type": "array",
+                "items": {"type": "string"},
+                "maxItems": 16,
+                "uniqueItems": True,
+            },
+        ),
+        "instruction_chars": _port(
+            "instruction_chars",
+            "application/json",
+            "Total instruction-text character budget, 0–8000; default 0"
+            " returns paths and sizes only. Prefer targeted file excerpts.",
+            typeinfo=int,
+            json_schema={"type": "integer", "minimum": 0, "maximum": 8000},
+        ),
+    },
     outputs={
         "result": _port(
             "result",
             "application/json",
-            "The complete workspace/session object described by this action;"
-            " fields are not nested under another key.",
+            "Selected compact workspace fields. Requested capped fields also"
+            " include truncated_fields; command history is never returned.",
             typeinfo=dict,
         )
     },
@@ -202,7 +230,8 @@ APPLY_PATCH_SCHEMA = a11.ActionSchema(
         " counts are inferred from their lines. The implementation repeats"
         " the whitespace and final-newline normalization defensively. Read"
         " the current target span before constructing a patch. After a"
-        " context or preimage mismatch, reread that span before retrying. The"
+        " context or preimage mismatch, reread that span before retrying. Send"
+        " only corrected hunks and retain edits already applied. The"
         " entire multi-file patch is preflighted before any"
         " file changes; a context/preimage mismatch changes nothing. The only"
         " output is unary `result`, exactly"
@@ -276,7 +305,10 @@ FILE_DIFF_SCHEMA = a11.ActionSchema(
 RUN_COMMAND_SCHEMA = a11.ActionSchema(
     name="run_command",
     description=(
-        "Run one non-interactive Bash command in the kernel sandbox. `command`"
+        "Use only for work requiring Bash or unavailable in specialized"
+        " actions. Prefer composing non-shell actions in run_flow; for a"
+        " program needing no shell syntax, use spawn_process. Run one"
+        " non-interactive Bash command in the kernel sandbox. `command`"
         " is one shell-source string passed to `bash --noprofile --norc -c`;"
         " it is not an argv array. Optional `cwd` is relative to the coding"
         " `cwd`, and `timeout_seconds` defaults to 120 (range 1–600). Output"
@@ -287,7 +319,14 @@ RUN_COMMAND_SCHEMA = a11.ActionSchema(
         " not the text. A nonzero process exit is reported in `result` rather"
         " than treated as a malformed tool call. In Flow, filter"
         " `step.output_lines`; omit that output when only completion data is"
-        " needed. One call may contain a coherent bounded sequence such as"
+        " needed. Tests, builds, installs, lint, and diagnostics require"
+        " filtered Flow outputs. On success return status and summary counts;"
+        " on failure select relevant errors, failed tests, and complete causal"
+        " trace or stack sections with context. Prefer relevance filtering to"
+        " blind truncation; size-cap residual bulk text. Preserve necessary"
+        " structured details. Save complete logs to files and retrieve more"
+        " only for a concrete gap. One call may contain a coherent bounded"
+        " sequence such as"
         " environment setup followed by its check, when later commands do not"
         " require model interpretation of earlier output. Use web-fetch for"
         " HTTP retrieval, not curl or wget."
@@ -341,10 +380,13 @@ REPORT_COMPLETION_SCHEMA = a11.ActionSchema(
         "Finish the coding turn after implementation and proportionate"
         " verification. Pass required plain-text `summary` plus optional"
         " plain-text `checks` and `remaining` as separate inputs. Do not pass"
-        " a single object and do not invent a `files` input: changed files and"
-        " recorded run_command checks come from session state. The unary"
-        " `result` is exactly `{summary, changed_files, checks,"
-        " recorded_checks, remaining}`. Call once, only when no further tool"
+        " a single object and do not invent a `files` input: changed files"
+        " come from session state. The unary `result` is only"
+        " `{reported: true, changed_file_count: N}`. Inputs and command"
+        " history are not echoed. The completion is saved in session state."
+        " Keep inputs"
+        " concise; summarize verification outcomes without transcripts."
+        " Call once, only when no further tool"
         " work is needed; use `remaining` for genuine unresolved work."
     ),
     inputs={
@@ -358,8 +400,8 @@ REPORT_COMPLETION_SCHEMA = a11.ActionSchema(
         "checks": _port(
             "checks",
             "text/plain",
-            "Optional concise verification summary. Detailed run_command"
-            " records are added automatically as `recorded_checks`.",
+            "Optional concise verification outcome: checks passed, failures,"
+            " or limitations. Do not paste command history, scripts, or logs.",
         ),
         "remaining": _port(
             "remaining",
@@ -372,8 +414,8 @@ REPORT_COMPLETION_SCHEMA = a11.ActionSchema(
         "result": _port(
             "result",
             "application/json",
-            "Object `{summary, changed_files, checks, recorded_checks,"
-            " remaining}` assembled from inputs and session state.",
+            "Acknowledgement `{reported: true, changed_file_count: N}` only;"
+            " no input echo, scripts, or command history.",
             typeinfo=dict,
         )
     },
@@ -571,14 +613,10 @@ CODING_AGENT_INFO_SCHEMA = a11.ActionSchema(
 DISCOVER_ACTIONS_SCHEMA = a11.ActionSchema(
     name="discover_actions",
     description=(
-        "Get registered action contracts before writing a Flow that calls an"
-        " unfamiliar action. Pass one JSON array `names` containing at most 12"
-        " distinct action-name strings—not an object and not a comma-separated"
-        " string. The unary `result` is"
-        " `{actions: {ACTION_NAME: ACTION_SCHEMA}}`; each schema includes exact"
-        " input/output port names, media types, required flags, unary/stream"
-        " shape, descriptions, and JSON Schemas. Use it only for actions"
-        " planned in the next Flow whose existing description is insufficient."
+        "Request missing input/output contracts for selected actions. Use"
+        " contracts already in context; this lookup is optional. Returns"
+        " `{actions: {name: schema}}`, including port names, types, cardinality"
+        " and JSON Schemas. Unknown names fail the request."
     ),
     inputs={
         "names": _port(
@@ -611,60 +649,32 @@ DISCOVER_ACTIONS_SCHEMA = a11.ActionSchema(
 RUN_FLOW_SCHEMA = a11.ActionSchema(
     name="run_flow",
     description=(
-        "Compile and run an A11 Flow for parallel or streaming multi-action"
-        " work. Use it when independent operations benefit from concurrency"
-        " or when a deterministic projection materially reduces the action"
-        " output entering model context. Use direct actions for small or"
-        " adaptive operations. Use Flow to expose only"
-        " the smallest output needed instead of requiring a full tool result"
-        " in context. Every value the model should receive must be declared"
-        " as an `out` port and routed there with `->`; undeclared values stay"
-        " internal. Every local coding-action call has the exact form"
-        " `step = run action(port: value)`. A flow name has no `()` and a"
-        " string stream is `string stream`, never `[string]`. This runner has"
-        " no attached peer stream, so its compositions use `run`, not `call`."
-        " For workspace research, batch independent reads and searches and"
-        " project bounded outputs. For external research, put independent"
-        " `web-fetch` calls in the"
-        " entry Flow and project bounded parts of their `text`, `json`, or"
-        " `items` outputs. Start with relevant workspace evidence when it may"
-        " answer the request, then add remote evidence for current facts or"
-        " gaps. Common coding outputs are `read_file.lines`,"
-        " `list_files.result.files`, `search_text.result.matches`, and"
-        " `run_command.output_lines`."
+        "Default execution tool for almost every workspace or web operation,"
+        " including a single read, search, edit, or command. Invoke underlying"
+        " actions inside a Flow. Prefer specialized non-shell actions and"
+        " Flow stages; reserve process tools for actual program execution or"
+        " missing capabilities. Combine independent work and known chains."
+        " Compile and execute using the available coding actions."
+        " Returns only declared outputs as an object keyed by port name."
+        " Proactively set source limits, filter and project results, and"
+        " combine item caps with text truncation before returning evidence."
+        " Keep full intermediates needed by other actions inside the Flow."
+        " Uses `run` for action calls; this runner has no peer stream."
+        " Compilation diagnostics identify errors before execution."
     ),
     inputs={
         "source": _port(
             "source",
             "text/plain",
-            "Raw, unfenced Flow source; the first named flow is invoked."
-            " Start with `flow NAME {`, not `flow NAME() {`. Declare"
-            " `in` and `out` ports before statements. Types include"
-            " `string`, `any`, and `list[string]`; append `stream` for a"
-            " stream port, as in `out lines: string stream`. Never spell"
-            " that `[string]`. Every local call uses exactly"
-            " `step = run action(port: value)`. Use `try run` only when"
-            " handling `status step`; do not use `read` as a verb. This"
-            " runner never has an attached peer stream, so do not use"
-            " `call`. Never use bare"
-            " `run action port: value`, an unbound action call, invented"
-            " stages such as `lines` or `slice`, or `slice A..B`."
-            " Documented stages include `where EXPR`, `map EXPR`,"
-            " `flatten`, `drop N`, `first N`, `truncate N`, and `collect`."
-            " Declare each returned value as a typed `out` port and route"
-            " it there with `->`; only declared outputs reach the model."
-            " Copyable bounded-read example:\n"
+            "Raw, unfenced source. The first named flow is invoked; other"
+            " declarations are callable siblings. Use the compact reference"
+            " in the system prompt for syntax. Only declared outputs are"
+            " returned to the model. A one-step Flow is enough. Example:\n"
             "flow inspect {\n"
-            "  in path: string required\n"
             "  out lines: string stream\n"
-            "  file = run read_file(path: path)\n"
-            "  file.lines | drop 3 | first 9 | truncate 400 -> lines\n"
-            "}\n"
-            " Never return whole text or an unbounded line stream when a"
-            " bounded selection answers the question. `first N` bounds"
-            " value count; `truncate N` bounds each value. Pipe only"
-            " needed outputs so intermediate values stay out of model"
-            " context. Do not include Markdown backticks.",
+            '  file = run read_file(path: "README.md")\n'
+            "  file.lines | first 40 | truncate 300 -> lines\n"
+            "}",
             required=True,
         ),
         "inputs": _port(
@@ -701,50 +711,36 @@ RUN_FLOW_SCHEMA = a11.ActionSchema(
     output_to_json_field={"result": "$"},
 )
 
+_FLOW_GUIDE_TOPICS = {
+    "programs": "entry selection and sibling flows",
+    "permissions": "current policy and effectful actions",
+    "language": "extended native language reference",
+}
+
 FLOW_GUIDE_SCHEMA = a11.ActionSchema(
     name="flow_guide",
     description=(
-        "Get one compact A11 Flow guide section for advanced syntax or error"
-        " recovery. Ordinary Flows use the run_flow template and compiler"
-        " diagnostics without this action. Request one topic after two failed"
-        " attempts or when the needed construct is absent from that template."
-        " Topics: quickstart—structure and a complete"
-        " example; programs—multiple flows and sibling composition;"
-        " permissions—current mode and effectful-action availability;"
-        " slicing—line/value selection; concurrency—parallelism and ordering;"
-        " control—failure, deadline, cancellation, and loops."
+        "Optional details for a question the compact reference does not"
+        " answer. "
+        + "; ".join(
+            f"{name}: {detail}" for name, detail in _FLOW_GUIDE_TOPICS.items()
+        )
+        + ". Request only the missing topic."
     ),
     inputs={
         "topic": _port(
             "topic",
             "text/plain",
-            "Section to return: quickstart for structure and an example;"
-            " programs for multiple flows and sibling composition;"
-            " permissions for current-mode action availability; slicing"
-            " for line/value selection; concurrency for parallel execution"
-            " and ordering; control for failures, deadlines, cancellation,"
-            " and loops.",
-            json_schema={
-                "type": "string",
-                "enum": [
-                    "quickstart",
-                    "programs",
-                    "permissions",
-                    "slicing",
-                    "concurrency",
-                    "control",
-                ],
-            },
+            "Specific runner or language topic to return.",
+            required=True,
+            json_schema={"type": "string", "enum": list(_FLOW_GUIDE_TOPICS)},
         )
     },
     outputs={
-        "result": _port(
-            "result",
-            "text/plain",
-            "A concise compiler-valid Flow guide and example.",
-        )
+        "result": _port("result", "text/plain", "The requested detail."),
     },
 )
+
 
 TOOL_SCHEMAS = (
     WORKSPACE_INFO_SCHEMA,
@@ -786,6 +782,7 @@ class CodingContext:
     registry: a11.ActionRegistry
     sandbox_mode: SandboxMode
     command_tools: bool = True
+    flow_tools: bool = True
     native_action_names: set[str] = field(default_factory=set)
     completion: dict[str, object] | None = None
     action_log: list[dict[str, object]] = field(default_factory=list)
@@ -794,6 +791,32 @@ class CodingContext:
     pending_user_inputs: dict[str, PendingUserInput] = field(
         default_factory=dict
     )
+
+
+def describe_flow_execution(context: CodingContext) -> None:
+    """Mark executable model tools for Flow use in this session's registry."""
+    if not context.flow_tools:
+        return
+    direct_tools = {
+        "run_flow",
+        "discover_actions",
+        "flow_guide",
+        "request_user_input",
+        "report_completion",
+    }
+    hint = "Execute this action inside run_flow, even for one operation. "
+    for name in context.model_tool_names:
+        if name in direct_tools:
+            continue
+        schema = context.registry.get_schema(name)
+        if schema.description.startswith(hint):
+            continue
+        schema = schema.model_copy(
+            update={"description": hint + schema.description}
+        )
+        context.registry.register(
+            name, schema, context.registry.get_handler(name)
+        )
 
 
 async def _optional(action: a11.Action, name: str, value_type: type, default):
@@ -848,14 +871,63 @@ async def _native_lines(
 
 
 async def workspace_info(action: a11.Action, context: CodingContext) -> None:
-    await action["result"].finalize(
-        context.workspace.summary()
-        | {
-            "approval_mode": context.policy.mode.value,
-            "sandbox": context.sandbox_mode.value,
-            "network": True,
-        }
+    fields = await _optional(action, "fields", list, None)
+    budget = _bounded(
+        await _optional(action, "instruction_chars", int, 0),
+        0,
+        8000,
+        "instruction_chars",
     )
+    if fields is not None and (
+        len(fields) > 16
+        or any(not isinstance(field, str) for field in fields)
+        or len(set(fields)) != len(fields)
+    ):
+        raise Status(
+            code=StatusCode.INVALID_ARGUMENT,
+            message="fields must be up to 16 unique field-name strings.",
+        ).to_exception()
+    result = context.workspace.summary() | {
+        "approval_mode": context.policy.mode.value,
+        "sandbox": context.sandbox_mode.value,
+        "network": True,
+    }
+    result["check_count"] = len(result.pop("checks"))
+    truncated = []
+    for name in ("initial_git_status", "current_git_status"):
+        if len(result[name]) > 2000:
+            result[name] = result[name][:2000]
+            truncated.append(name)
+    for name in (
+        "read_roots",
+        "write_roots",
+        "agent_changed_files",
+        "instructions",
+    ):
+        if len(result[name]) > 50:
+            result[name] = result[name][:50]
+            truncated.append(name)
+    for instruction in result["instructions"]:
+        text = instruction.pop("text")
+        instruction["text_chars"] = len(text)
+        instruction["text_truncated"] = len(text) > budget
+        if budget:
+            instruction["text"] = text[:budget]
+            budget -= len(instruction["text"])
+    result["truncated_fields"] = truncated
+    if fields is not None:
+        unknown = set(fields) - result.keys()
+        if unknown:
+            raise Status(
+                code=StatusCode.INVALID_ARGUMENT,
+                message="Unknown workspace fields: "
+                + ", ".join(sorted(unknown)),
+            ).to_exception()
+        result = {name: result[name] for name in fields}
+        selected_truncated = [name for name in truncated if name in fields]
+        if selected_truncated:
+            result["truncated_fields"] = selected_truncated
+    await action["result"].finalize(result)
 
 
 def _program_is_missing(
@@ -912,9 +984,9 @@ async def list_files(action: a11.Action, context: CodingContext) -> None:
                 context.workspace.cwd,
                 line_limit=limit + 1,
             )
-            git_succeeded = result["exit_code"] in {0, 1} and not any(
-                line.startswith("stderr: ") for line in lines
-            )
+            git_succeeded = (
+                result["exit_code"] in {0, 1} or result.get("stopped_early")
+            ) and not any(line.startswith("stderr: ") for line in lines)
             if git_succeeded:
                 lines = [str(context.workspace.root / line) for line in lines]
         else:
@@ -943,10 +1015,12 @@ async def list_files(action: a11.Action, context: CodingContext) -> None:
         context.workspace.relative(pathlib.Path(line).resolve())
         for line in lines
     ]
-    await action["result"].finalize({
-        "files": paths[:limit],
-        "truncated": len(paths) > limit,
-    })
+    await action["result"].finalize(
+        {
+            "files": paths[:limit],
+            "truncated": len(paths) > limit,
+        }
+    )
 
 
 async def search_text(action: a11.Action, context: CodingContext) -> None:
@@ -965,7 +1039,7 @@ async def search_text(action: a11.Action, context: CodingContext) -> None:
     command = ["rg", "-n", "--no-heading", "--color", "never"]
     if not regex:
         command.append("-F")
-    command.extend([query, str(path)])
+    command.extend(["-e", query, "--", str(path)])
     lines, result = await _native_lines(
         context,
         command[0],
@@ -974,25 +1048,84 @@ async def search_text(action: a11.Action, context: CodingContext) -> None:
         line_limit=limit + 1,
     )
     if _program_is_missing("rg", lines, result):
-        grep_arguments = ["-R", "-n", "-I"]
-        grep_arguments.append("-E" if regex else "-F")
-        grep_arguments.extend(["--", query, str(path)])
-        lines, result = await _native_lines(
-            context,
-            "grep",
-            grep_arguments,
-            context.workspace.cwd,
-            line_limit=limit + 1,
-        )
+        try:
+            relative = path.relative_to(context.workspace.root)
+        except ValueError:
+            relative = None
+        git_succeeded = False
+        if relative is not None:
+            lines, result = await _native_lines(
+                context,
+                "git",
+                [
+                    "-C",
+                    str(context.workspace.root),
+                    "grep",
+                    "--full-name",
+                    "--no-color",
+                    "-n",
+                    "-I",
+                    "--untracked",
+                    "--exclude-standard",
+                    "-E" if regex else "-F",
+                    "-e",
+                    query,
+                    "--",
+                    str(relative) if relative.parts else ".",
+                ],
+                context.workspace.cwd,
+                line_limit=limit + 1,
+            )
+            git_succeeded = (
+                result["exit_code"] in {0, 1} or result.get("stopped_early")
+            ) and not any(line.startswith("stderr: ") for line in lines)
+            if git_succeeded:
+                lines = [str(context.workspace.root / line) for line in lines]
+        if not git_succeeded:
+            lines, result = await _grep_search(
+                context, path, query, regex=regex, limit=limit
+            )
     if result["exit_code"] not in {0, 1} and not result.get("stopped_early"):
         raise Status(
             code=StatusCode.INVALID_ARGUMENT,
             message=f"Search failed: {'; '.join(lines)}",
         ).to_exception()
-    await action["result"].finalize({
-        "matches": lines[:limit],
-        "truncated": len(lines) > limit,
-    })
+    await action["result"].finalize(
+        {
+            "matches": lines[:limit],
+            "truncated": len(lines) > limit,
+        }
+    )
+
+
+async def _grep_search(
+    context: CodingContext,
+    path: pathlib.Path,
+    query: str,
+    *,
+    regex: bool,
+    limit: int,
+) -> tuple[list[str], dict[str, object]]:
+    """Search outside Git without traversing dependency trees or symlinks."""
+    grep_arguments = ["-r", "-n", "-I"]
+    for directory in (
+        ".git",
+        ".venv",
+        "venv",
+        "node_modules",
+        "build",
+        "__pycache__",
+    ):
+        grep_arguments.append(f"--exclude-dir={directory}")
+    grep_arguments.append("-E" if regex else "-F")
+    grep_arguments.extend(["-e", query, "--", str(path)])
+    return await _native_lines(
+        context,
+        "grep",
+        grep_arguments,
+        context.workspace.cwd,
+        line_limit=limit + 1,
+    )
 
 
 def _patch_paths(patch: str) -> list[str]:
@@ -1164,10 +1297,12 @@ async def file_diff(action: a11.Action, context: CodingContext) -> None:
             message=f"Git diff failed: {'; '.join(lines)}",
         ).to_exception()
     text = "\n".join(lines)
-    await action["result"].finalize({
-        "diff": text[:MAX_TOOL_TEXT],
-        "truncated": len(text) > MAX_TOOL_TEXT,
-    })
+    await action["result"].finalize(
+        {
+            "diff": text[:MAX_TOOL_TEXT],
+            "truncated": len(text) > MAX_TOOL_TEXT,
+        }
+    )
 
 
 async def run_command(action: a11.Action, context: CodingContext) -> None:
@@ -1197,17 +1332,18 @@ async def run_command(action: a11.Action, context: CodingContext) -> None:
             cwd=cwd,
             timeout_seconds=timeout,
             output=output,
-            on_line=action.log,
         )
     finally:
         await output.close()
     result["cwd"] = context.workspace.relative(cwd)
     context.workspace.checks.append({"command": command, **result})
-    context.action_log.append({
-        "action": "run_command",
-        "command": command,
-        **result,
-    })
+    context.action_log.append(
+        {
+            "action": "run_command",
+            "command": command,
+            **result,
+        }
+    )
     await action.log(
         f"Command exited with {result['exit_code']} after"
         f" {result['output_lines']} output lines."
@@ -1228,20 +1364,26 @@ async def report_completion(action: a11.Action, context: CodingContext) -> None:
         "summary": summary.strip(),
         "changed_files": sorted(context.workspace.changed_files),
         "checks": checks.strip(),
-        "recorded_checks": list(context.workspace.checks),
         "remaining": remaining.strip(),
     }
-    context.action_log.append({
-        "action": "report_completion",
-        **context.completion,
-    })
+    context.action_log.append(
+        {
+            "action": "report_completion",
+            **context.completion,
+        }
+    )
     report = summary.strip()
     if checks.strip():
         report += f"\nChecks: {checks.strip()}"
     if remaining.strip():
         report += f"\nRemaining: {remaining.strip()}"
     await action.log(report)
-    await action["result"].finalize(context.completion)
+    await action["result"].finalize(
+        {
+            "reported": True,
+            "changed_file_count": len(context.workspace.changed_files),
+        }
+    )
 
 
 async def request_user_input(
@@ -1263,10 +1405,12 @@ async def request_user_input(
                 code=StatusCode.INVALID_ARGUMENT,
                 message="Every option requires a non-empty label.",
             ).to_exception()
-        options.append({
-            "label": str(raw["label"]).strip(),
-            "description": str(raw.get("description", "")).strip(),
-        })
+        options.append(
+            {
+                "label": str(raw["label"]).strip(),
+                "description": str(raw.get("description", "")).strip(),
+            }
+        )
     if raw_options and not 2 <= len(options) <= 8:
         raise Status(
             code=StatusCode.INVALID_ARGUMENT,
@@ -1343,12 +1487,14 @@ async def respond_user_input(
 async def pending_user_inputs(
     action: a11.Action, context: CodingContext
 ) -> None:
-    await action["result"].finalize({
-        "requests": [
-            pending.describe(request_id)
-            for request_id, pending in context.pending_user_inputs.items()
-        ]
-    })
+    await action["result"].finalize(
+        {
+            "requests": [
+                pending.describe(request_id)
+                for request_id, pending in context.pending_user_inputs.items()
+            ]
+        }
+    )
 
 
 async def configure_coding_agent(
@@ -1390,12 +1536,17 @@ async def configure_coding_agent(
     context.policy.mode = mode
     from a11.cli.coding_agent.prompts import system_prompt
 
-    context.system_prompt = system_prompt(context.workspace, mode)
-    context.action_log.append({
-        "action": "configure_coding_agent",
-        "approval_mode": mode.value,
-        "sandbox_mode": sandbox.value,
-    })
+    context.system_prompt = system_prompt(
+        context.workspace, mode, flow_tools=context.flow_tools
+    )
+    describe_flow_execution(context)
+    context.action_log.append(
+        {
+            "action": "configure_coding_agent",
+            "approval_mode": mode.value,
+            "sandbox_mode": sandbox.value,
+        }
+    )
     result = {
         "approval_mode": mode.value,
         "sandbox_ceiling": context.sandbox_mode.value,
@@ -1544,64 +1695,27 @@ async def run_flow(action: a11.Action, context: CodingContext) -> None:
             code=StatusCode.RESOURCE_EXHAUSTED,
             message="Flow output exceeded the 128 KiB result limit.",
         ).to_exception()
-    context.action_log.append({
-        "action": "run_flow",
-        "effectful": effectful,
-        "outputs": list(result),
-    })
+    context.action_log.append(
+        {
+            "action": "run_flow",
+            "effectful": effectful,
+            "outputs": list(result),
+        }
+    )
     ports = ", ".join(sorted(result)) or "no outputs"
     await action.log(f"Flow `{program.main.name}` completed → {ports}\n")
     await action["result"].finalize(result)
 
 
 async def flow_guide(action: a11.Action, context: CodingContext) -> None:
-    """Return bounded Flow syntax without spending context on SDK source."""
-    topic = await _optional(action, "topic", str, "quickstart")
-    mode = context.policy.mode
-    if mode == ApprovalMode.SUGGEST:
-        permission_notice = (
-            "Current permission mode is `suggest`. Effectful actions such as "
-            "`run_command`, `spawn_process`, `apply_patch`, and write/move/"
-            "remove filesystem actions are unavailable in executable Flows. "
-            "Do not reference them in a Flow passed to `run_flow`; use only "
-            "read-only actions, or present the proposed Flow without running "
-            "it."
-        )
-    elif mode == ApprovalMode.AUTO:
-        permission_notice = (
-            "Current permission mode is `auto`. Effectful actions may be used "
-            "in Flows within the configured kernel-sandbox boundary."
-        )
-    else:
-        permission_notice = (
-            "Current permission mode is `ask`. An effectful Flow requires "
-            "user approval and may be denied; read-only Flows do not."
-        )
-    sections = {
-        "quickstart": (
-            """A Flow composes registered actions. Every action call
-must be bound and parenthesized: `step = run action(port: value)`. This local
-runner has no peer stream, so use `run`, not `call`. Bare
-`run action port: value` is invalid. A flow name has no parentheses, and a
-string stream port is `out lines: string stream`, never `out lines: [string]`.
-Connect `step.output` to another input or the Flow output, and return only what
-the caller needs. Every unreferenced action output is drained.
+    """Return one requested runner detail or the native extended reference."""
+    topic = await action["topic"].consume(str)
+    if topic == "language":
+        from a11 import flow
 
-```a11flow
-flow inspect {
-  in path: string required
-  out lines: string stream
-  file = run read_file(path: path)
-  file.lines | drop 3 | first 9 -> lines
-}
-```
-
-To propose or explain a Flow, return a fenced `a11flow` source block without
-calling `run_flow`. For coding work that benefits from composition or bounded
-output, execute it proactively as raw source without the backticks."""
-        ),
-        "programs": (
-            """One Flow source is a program and may declare several
+        text = flow.REFERENCE
+    elif topic == "programs":
+        text = """One Flow source is a program and may declare several
 named flows. The first declaration is the entry flow invoked by `run_flow`.
 Any flow may `run` a sibling declared before or after it; sibling flows need no
 registry entry. Factor repeated pipelines into focused sibling flows:
@@ -1621,45 +1735,34 @@ flow helper {
 ```
 
 The whole multi-flow program is passed as one raw `run_flow.source`."""
-        ),
-        "permissions": (
-            """Flow can compose only actions available under the
-current coding-agent policy. `run_flow` inspects the compiled action graph and
-enforces permission before execution; setting `effectful` to false cannot
-bypass that boundary. When effects are unavailable, compose read-only actions
-or return a fenced `a11flow` proposal for the user instead of executing it."""
-        ),
-        "slicing": (
-            """Flow line streams are zero-copy pipelines. `drop N`
-discards the first N values, `first N` keeps N values, and `truncate N` bounds
-each text value by characters. Lines 4 through 12 inclusive are:
-`file.lines | drop 3 | first 9 -> lines`. There is no generic `lines` or `slice`
-stage and no `slice A..B` form. If an action returns one whole text
-value, turn it into lines without exposing the whole value to the model:
-`page.text | map split(it, "\\n") | flatten | first 20 -> lines`."""
-        ),
-        "concurrency": (
-            """Independent Flow steps start concurrently. Use
-`for item in items parallel 4 { ... }` for bounded fan-out. Data dependencies,
-`after step`, and `wait all of a, b` establish ordering; do not serialize
-independent reads in the model context."""
-        ),
-        "control": (
-            """Use `try run action(...)` when a failure is data the
-Flow handles, then inspect `status step`. `wait step timeout 30s` bounds a
-step. `cancel step` stops work early. A `repeat` must have `until`, `while`, or
-`max N`. Put `fail`, `cancel`, and `log` behind a condition or `after`."""
-        ),
-    }
-    if topic not in sections:
+    elif topic == "permissions":
+        mode = context.policy.mode
+        if mode == ApprovalMode.SUGGEST:
+            permission_notice = (
+                "Current permission mode is `suggest`. Effectful actions such"
+                " as `run_command`, `spawn_process`, `apply_patch`, and"
+                " write/move/remove filesystem actions are unavailable in"
+                " executable Flows. Do not reference them in a Flow passed to"
+                " `run_flow`; use only read-only actions, or present the"
+                " proposed Flow without running it."
+            )
+        elif mode == ApprovalMode.AUTO:
+            permission_notice = (
+                "Current permission mode is `auto`. Effectful actions may be"
+                " used in Flows within the configured kernel-sandbox boundary."
+            )
+        else:
+            permission_notice = (
+                "Current permission mode is `ask`. An effectful Flow requires "
+                "user approval and may be denied; read-only Flows do not."
+            )
+        text = permission_notice
+    else:
         raise Status(
             code=StatusCode.INVALID_ARGUMENT,
-            message=(
-                "topic must be quickstart, programs, permissions, slicing,"
-                " concurrency, or control."
-            ),
+            message="topic must be " + ", ".join(_FLOW_GUIDE_TOPICS) + ".",
         ).to_exception()
-    await action["result"].finalize(f"{permission_notice}\n\n{sections[topic]}")
+    await action["result"].finalize(text)
 
 
 def _flow_action_names(value: object) -> set[str]:
@@ -1702,6 +1805,7 @@ def install(
     flow_tools: bool = True,
 ) -> list[str]:
     """Register all coding actions and return their allowed-action names."""
+    context.flow_tools = flow_tools
     schemas = [
         schema
         for schema in TOOL_SCHEMAS

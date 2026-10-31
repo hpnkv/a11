@@ -300,6 +300,10 @@ nlohmann::json NodeJson(const syntax::Node* node) {
       // of them may be tried, run wide, or routed.
       value["try"] = stage->tolerant;
       value["parallel"] = stage->parallel;
+      if (stage->parallel_expression != nullptr) {
+        value["parallel_expression"] =
+            NodeJson(stage->parallel_expression.get());
+      }
       value["ordered"] = stage->ordered;
       value["into"] = stage->failures == nullptr
                           ? nlohmann::json(nullptr)
@@ -469,6 +473,10 @@ nlohmann::json NodeJson(const syntax::Node* node) {
       value["variables"] = std::move(names);
       value["pipeline"] = NodeJson(loop->pipeline.get());
       value["parallel"] = loop->parallel;
+      if (loop->parallel_expression != nullptr) {
+        value["parallel_expression"] =
+            NodeJson(loop->parallel_expression.get());
+      }
       value["termination"] = NodeJson(loop->termination.get());
       value["body"] = NodeList(loop->body);
       value["after"] = WordList(loop->after);
@@ -1043,6 +1051,7 @@ nlohmann::json TokensToJsonValue(std::string_view source_name,
   // identifiers are ports of the flow they stand in. See [RefinePorts].
   RefinePorts(source, semantic);
   nlohmann::json tokens = nlohmann::json::array();
+  size_t lexical = 0;
   for (size_t index = 0; index < semantic.size(); ++index) {
     const SemanticToken& token = semantic[index];
     nlohmann::json written{
@@ -1054,8 +1063,12 @@ nlohmann::json TokensToJsonValue(std::string_view source_name,
     };
     // The lexer's own name for it, beside the meaning: one call then serves a
     // client that colours and a client that has to tokenise.
-    if (index < lexed.tokens.size()) {
-      written["lexical"] = KindName(lexed.tokens[index].kind);
+    while (lexical + 1 < lexed.tokens.size() &&
+           lexed.tokens[lexical].end <= token.start) {
+      ++lexical;
+    }
+    if (lexical < lexed.tokens.size()) {
+      written["lexical"] = KindName(lexed.tokens[lexical].kind);
     }
     tokens.push_back(std::move(written));
   }

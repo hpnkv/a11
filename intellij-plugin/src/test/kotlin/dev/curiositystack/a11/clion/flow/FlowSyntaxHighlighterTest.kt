@@ -26,6 +26,24 @@ import org.junit.Test
 
 class FlowSyntaxHighlighterTest {
     @Test
+    fun `native escapes reach the string escape palette`() {
+        val highlighter = FlowSyntaxHighlighter()
+        assertSame(FlowColors.STRING_ESCAPE, highlighter.getTokenHighlights(FlowTokens.STRING_ESCAPE).single())
+        assumeTrue(FlowEngine.instance().available)
+        val source = "\"a\\0b\\n\""
+        val lexer = FlowLexer()
+        lexer.start(source, 0, source.length, 0)
+        val escapes = mutableListOf<String>()
+        while (lexer.tokenType != null) {
+            if (lexer.tokenType == FlowTokens.STRING_ESCAPE) {
+                escapes += source.substring(lexer.tokenStart, lexer.tokenEnd)
+            }
+            lexer.advance()
+        }
+        assertEquals(listOf("\\0", "\\n"), escapes)
+    }
+
+    @Test
     fun `standard types inherit the primitive keyword palette`() {
         val highlighter = FlowSyntaxHighlighter()
         val key = highlighter.getTokenHighlights(FlowTokens.BUILTIN_TYPE).single()

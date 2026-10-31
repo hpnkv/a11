@@ -82,8 +82,8 @@ flow interact-on-full-sentence {
   in  device:  object required "Which input to open on the client."
   in  history: string required "Id of the node holding the turns so far."
 
-  out sentence: string                     "The sentence that became the question."
-  out reply:    string stream              "The model's answer, as it is written."
+  out sentence: string                       "The sentence that became the question."
+  out reply:    string stream                "The model's answer, as it is written."
   out turn:     a11::sdk::Interaction stream "What to remember of this turn."
 }
 ```
@@ -278,6 +278,18 @@ completed sentence and the caller receives the streamed answer.
 
 ## Values, assignment, and loop termination
 
+`for path in ["a11", "cpp", "js"] { ... }` visits each list element. The
+literal is evaluated once; nested lists remain individual items and an empty
+literal makes no passes. This shorthand applies to bare list literals. Other
+sources retain their stream values: use `| flatten` to iterate the elements of
+a named list or a list-valued pipeline.
+
+Loop and per-item stage concurrency can use a value or expression:
+`for path in ["a11", "cpp"] parallel workers { ... }` or
+`rows | map it.name parallel (workers + 1) -> names`. The count is evaluated
+once at activation and must be a positive signed 32-bit integer. Dynamic loop
+counts follow parallel safety rules for outer-variable writes and termination.
+
 Capture an item with `take`, then use the value in ordinary expressions.
 Assignments run once when their dependencies are ready, including unused
 initializers. Later reads observe the preceding assignment in structured source
@@ -287,8 +299,9 @@ order; independent actions still overlap.
 from std import startswith
 
 flow between-markers {
-  in lines: string stream
-  out body: string stream
+  in  lines: string stream
+
+  out body:  string stream
   out count: int
 
   bool inside = false
@@ -315,7 +328,8 @@ A trailing `until` or `while` tests after the entire pass finishes:
 
 ```a11flow
 flow first-success {
-  in urls: string stream
+  in  urls: string stream
+
   out text: string
 
   bool found = false
@@ -418,7 +432,8 @@ Select an output directly when a call is used once:
 
 ```a11flow
 flow shrink {
-  in request: object
+  in  request: object
+
   out result: object
   nodes scratch
   (run llm_context_compress(request: request) via scratch).result -> result
@@ -456,6 +471,17 @@ initializers run only after preceding branches were not selected. Explicit
 `candidate.has_value` and `candidate.value` access remains available; an absent
 option's `.value` raises an error. Ordinary records need a validated
 `std::option(...)` conversion before optional binding.
+
+Use `or` to initialize a value from an optional input with a lazy default:
+
+```a11flow
+ClangTidyOptions settings = try take options or ClangTidyOptions{}
+```
+
+With a `std::option` on the left, `or` unwraps a present payload and evaluates
+the fallback only when the option is absent. Present null, false, zero and
+empty values skip the fallback. Stored options support the same expression.
+Upstream errors propagate. With ordinary values, `or` tests truthiness.
 
 An operation activates when its containing expression is demanded. `and` and
 `or` short-circuit, and skipped branches do not start their operations.
@@ -517,7 +543,8 @@ a flow definition, with no executable statements:
 declare flow render {
   describe "Render a report"
   header "x-tenant" as tenant default "public"
-  in data: object required
+  in  data: object required
+
   out text: string stream
 }
 ```
@@ -548,7 +575,8 @@ lexical scope; nested imports in branches or loops are invalid.
 import "report.flow" as report
 
 flow publish {
-  in data: object
+  in  data: object
+
   out text: string stream
   (run report::render(data: data)).text -> text
 }
@@ -595,9 +623,14 @@ Modules are private by default. Expose a module and selected members explicitly:
 
 ```a11flow
 mod reports exported {
-  struct Summary { text: string required }
-  declare flow build { in source: string
-    out result: Summary }
+  struct Summary {
+    text: string required
+  }
+  declare flow build {
+    in  source: string
+
+    out result: Summary
+  }
   export Summary
   export build as summarize
 }
@@ -665,7 +698,8 @@ A duration timeout and an absolute deadline can be named like other values:
 from std import now, time, duration
 
 flow search {
-  in query: string
+  in  query: string
+
   out text: string
   duration timeout = 30s
   time deadline = now() + 1m
@@ -775,7 +809,7 @@ flow {
   forwarded = stdin.lines | take until std::lower(it) == "/exit"
     | map std::strformat("%s\n", it) -> echo.content
 
-  after forwarded {
+      after forwarded {
     {"command": "stop"} -> stdin.control_events
     run write_stderr(content: "Input finished.\n")
   }
@@ -817,13 +851,15 @@ modifiers, including headers, `after`, `timeout`, `deadline`, and node placement
 
 ```a11flow
 flow clean_lines {
-  in input: string stream
+  in  input: string stream
+
   out output: string stream
   input | map std::trim(it) | where std::len(it) > 0 -> output
 }
 
 flow main {
-  in lines: string stream
+  in  lines: string stream
+
   out text: string stream
   lines | run clean_lines() | first 10 -> text
 }

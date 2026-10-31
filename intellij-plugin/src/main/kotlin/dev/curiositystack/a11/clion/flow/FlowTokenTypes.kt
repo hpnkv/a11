@@ -35,6 +35,7 @@ class FlowTokenType(debugName: String) : IElementType(debugName, FlowLanguage) {
 object FlowTokens {
     val COMMENT = FlowTokenType("COMMENT")
     val STRING = FlowTokenType("STRING")
+    val STRING_ESCAPE = FlowTokenType("STRING_ESCAPE")
     val NUMBER = FlowTokenType("NUMBER")
     val DURATION = FlowTokenType("DURATION")
 
@@ -119,7 +120,7 @@ object FlowTokens {
     val RIGHT_BRACKET = FlowTokenType("RIGHT_BRACKET")
 
     val COMMENTS = TokenSet.create(COMMENT)
-    val STRINGS = TokenSet.create(STRING)
+    val STRINGS = TokenSet.create(STRING, STRING_ESCAPE)
 
     val KEYWORDS = TokenSet.create(
         DECLARATION_KEYWORD,

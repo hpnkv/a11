@@ -30,10 +30,11 @@ flow plan-research {
     `synthesis` rather than with the others.
     """
 
-  in  topic:     string required "What to research."
-  out briefs:    string stream   "One instruction per investigation."
-  out synthesis: string          "How to write the final report."
-  out narration: string stream   "Lines for the caller's log; see `deep-research`."
+  in  topic: string required "What to research."
+
+  out briefs:    string stream "One instruction per investigation."
+  out synthesis: string        "How to write the final report."
+  out narration: string stream "Lines for the caller's log; see `deep-research`."
 
   strformat("[plan] planning research on: %s", topic) -> narration
 
@@ -77,10 +78,11 @@ flow plan-research {
 flow investigate {
   describe "Carry out one brief, in the context of the whole topic."
 
-  in  topic:     string required "What the whole research is about."
-  in  brief:     string required "This investigation's instruction."
-  out report:    string          "What it found."
-  out narration: string stream   "Lines for the caller's log; see `deep-research`."
+  in  topic: string required "What the whole research is about."
+  in  brief: string required "This investigation's instruction."
+
+  out report:    string        "What it found."
+  out narration: string stream "Lines for the caller's log; see `deep-research`."
 
   strformat("[investigate] %s", brief) -> narration
 
@@ -117,11 +119,12 @@ flow investigate {
 flow synthesise-findings {
   describe "Write one report out of what the investigations found."
 
-  in  topic:     string required        "What the research is about."
-  in  brief:     string required        "How the report should be written."
-  in  findings:  string stream required "One report per investigation."
-  out report:    string stream          "The report, as it is written."
-  out narration: string stream          "Lines for the caller's log; see `deep-research`."
+  in  topic:    string required        "What the research is about."
+  in  brief:    string required        "How the report should be written."
+  in  findings: string stream required "One report per investigation."
+
+  out report:    string stream "The report, as it is written."
+  out narration: string stream "Lines for the caller's log; see `deep-research`."
 
   strformat("[synthesise] writing the report on: %s", topic) -> narration
 
@@ -176,9 +179,10 @@ flow deep-research {
     which is plumbing between these flows and no part of what a caller sees.
     """
 
-  in  topic:  string required "What to research."
-  out report: string stream   "The final report, as it is written."
-  out plan:   string stream   "The briefs the planner came up with."
+  in  topic: string required "What to research."
+
+  out report: string stream "The final report, as it is written."
+  out plan:   string stream "The briefs the planner came up with."
 
   planned = run plan-research(topic: topic)
   for line in planned.narration {

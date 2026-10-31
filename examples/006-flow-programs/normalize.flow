@@ -16,7 +16,8 @@
 # a11-flow-run normalize.flow < some-file
 
 flow clean_lines {
-  in  input:  string stream
+  in  input: string stream
+
   out output: string stream
   input | map std::trim(it) | where std::len(it) > 0 -> output
 }
@@ -24,6 +25,7 @@ flow clean_lines {
 flow number_lines {
   in  input:  string stream
   in  prefix: string
+
   out output: string stream
 
   string label = take prefix

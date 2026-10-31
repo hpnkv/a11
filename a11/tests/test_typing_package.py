@@ -90,13 +90,16 @@ def test_the_flow_stub_names_what_it_hands_back() -> None:
         (
             'def check( source: str, source_name: str = "-",'
             " modules: collections.abc.Mapping[str, str] = {},"
-            " resolve_files: bool = False, )"
+            " source_roots: collections.abc.Sequence[str] = [],"
+            " limits: CompilationLimits = ..., )"
             " -> dict[str, typing.Any]:"
         ),
         "def codes() -> list[dict[str, typing.Any]]:",
         "def stages() -> dict[str, str]:",
         (
             "def make_handler( self, dispatch_stream: WireStream | None = None"
+            ", *, frame_cache_bytes: typing.SupportsInt = 262144,"
+            " frame_budget_bytes: typing.SupportsInt | None = None,"
             " ) -> ActionHandler | NativeActionHandler | None:"
         ),
         "def schema(self) -> ActionSchema:",

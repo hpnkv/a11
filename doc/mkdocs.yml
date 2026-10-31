@@ -198,6 +198,7 @@ nav:
       - A port per thing the caller cares about: guides/generative-media.md
       - Local models on the web: guides/local-models-web.md
       - Compose actions without deploying code: guides/flow.md
+      - Compact Flow reference for agents: guides/flow-reference-short.md
       - Flow frame storage: guides/flow-frames.md
       - Single-item Flow transport: guides/flow-single-item-slots.md
       - Continuation sinks: guides/flow-continuation-sinks.md

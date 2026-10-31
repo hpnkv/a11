@@ -91,7 +91,8 @@ and verifier, limit concurrent trials, and stream scores as they finish:
 
 ```a11flow
 flow evaluate-answers {
-  in  cases:  object stream required
+  in  cases: object stream required
+
   out scores: number stream
 
   nodes trials {

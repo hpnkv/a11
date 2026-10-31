@@ -472,6 +472,7 @@ class Formatter {
         after_block_open_ || (after_block_close_ && !joins_tail);
 
     if (ClosesBlock(token)) {
+      last_port_direction_.clear();
       Flush();
       block_ = std::max(0, block_ - 1);
       if (!dto_blocks_.empty()) {
@@ -520,6 +521,7 @@ class Formatter {
       after_block_open_ = false;
       after_block_close_ = false;
       description_line_ = brackets_.empty() && IsDescriptionLine(index);
+      SeparatePortGroup(index);
       if (brackets_.empty() && options_.align_ports) {
         size_t after = EmitPort(index);
         if (after == index) {
@@ -823,6 +825,40 @@ class Formatter {
     return stop;
   }
 
+  void SeparatePortGroup(size_t index) {
+    if (!brackets_.empty() || ContinuesStatement(index) || description_line_) {
+      return;
+    }
+    const auto& token = code_[index];
+    const std::string word =
+        token.IsWord() ? vocabulary::Canonical(token.text) : "";
+    const bool port = (word == "in" || word == "out") &&
+                      index + 2 < code_.size() && code_[index + 1].IsWord() &&
+                      code_[index + 2].kind == TokenKind::kColon;
+    if (!port) {
+      if (word != "header" && word != "describe") {
+        last_port_direction_.clear();
+      }
+      return;
+    }
+    if (!last_port_direction_.empty() && word != last_port_direction_ &&
+        indent_ == last_port_indent_) {
+      size_t first = lines_.size();
+      while (first > 0 && lines_[first - 1].indent == indent_ &&
+             lines_[first - 1].text.starts_with("#")) {
+        --first;
+      }
+      if (first < lines_.size()) {
+        lines_[first].blank_before = true;
+        blank_pending_ = false;
+      } else {
+        Blank();
+      }
+    }
+    last_port_direction_ = word;
+    last_port_indent_ = indent_;
+  }
+
   /// The lines, with each run of port declarations lined up.
   std::string Render() {
     // A run is consecutive declarations at one indent with nothing between
@@ -949,6 +985,8 @@ class Formatter {
   std::string line_;
   std::string comment_;
   std::optional<PortColumns> port_;
+  std::string last_port_direction_;
+  int last_port_indent_ = 0;
   Token previous_;
   bool line_started_ = false;
   int indent_ = 0;

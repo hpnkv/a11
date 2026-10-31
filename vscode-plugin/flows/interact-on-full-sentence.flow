@@ -17,9 +17,10 @@ from std import endswith, trim, join, to_chunk
 flow interact-on-full-sentence {
   describe "Listen for a sentence, then answer it as the next conversation turn."
 
-  in  asr:      object required              "Speech recognition options; model required."
-  in  device:   object required              "Which input to open on the client."
-  in  history:  string required              "Id of the node holding earlier turns."
+  in  asr:     object required "Speech recognition options; model required."
+  in  device:  object required "Which input to open on the client."
+  in  history: string required "Id of the node holding earlier turns."
+
   out sentence: string                       "The sentence used as the question."
   out reply:    string stream                "The answer as it is written."
   out turn:     a11::sdk::Interaction stream "The interactions to remember."

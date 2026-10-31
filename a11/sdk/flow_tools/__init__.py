@@ -74,7 +74,7 @@ from a11.sdk.flow_tools.schemas import (
     FLOW_TOOL_NAMES,
 )
 
-#: The three (schema, handler) pairs, in the order a model needs them.
+#: The discovery, compile-only, and execution (schema, handler) pairs.
 FLOW_ACTIONS: tuple[tuple[ActionSchema, ActionHandler], ...] = (
     (FLOW_ACTIONS_SCHEMA, flow_actions),
     (FLOW_CHECK_SCHEMA, flow_check),

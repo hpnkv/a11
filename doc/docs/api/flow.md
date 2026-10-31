@@ -62,8 +62,9 @@ flow research {
   describe "Search, read the best hits, and answer from them."
 
   in  question: string required
-  out answer:   string
-  out sources:  string stream
+
+  out answer:  string
+  out sources: string stream
 
   header "x-a11-deadline" as deadline
 
@@ -137,6 +138,12 @@ first line, a whitespace-only final line and its preceding break, and the common
 indentation from all remaining lines. Additional indentation on individual
 lines remains. Escapes match ordinary strings.
 
+Both string forms decode `\0` (NUL), `\a` (bell), `\b` (backspace),
+`\f` (form feed), `\n` (newline), `\r` (carriage return), `\t` (tab),
+`\v` (vertical tab), `\"`, `\'`, and `\\`. Other escapes yield the character
+after the backslash. Native semantic tokens highlight escape sequences
+separately from the surrounding string.
+
 A description may also appear alone on the line below a port, header, or
 `describe` declaration. A string followed by another token, such as
 `"a literal" -> out`, remains a statement.
@@ -196,15 +203,17 @@ Either verb may name another flow in the same file without a registry entry:
 ```a11flow
 flow ask-twice {
   in  question: string
-  out answers:  string stream
-  first  = run ask(question: question)
+
+  out answers: string stream
+  first = run ask(question: question)
   second = run ask(question: question)
   first.answer then second.answer -> answers
 }
 
 flow ask {
   in  question: string
-  out answer:   string stream
+
+  out answer: string stream
   said = run answer-question(question: question)
   said.text -> answer
 }
@@ -646,10 +655,22 @@ blocks only the statements inside the braces. A bound block yields a status like
 a call. With `try`, the flow handles a block failure; otherwise the failure ends
 the flow.
 
+`for v in [a, b, c]` iterates the bare literal's elements one level deep. The
+literal is evaluated once; empty literals make no passes. Nested lists remain
+individual loop values. Named lists and list-valued pipelines require
+`| flatten` to iterate their elements.
+
 `for v in stream` runs its block once per value; `parallel n` runs up to `n`
 passes concurrently. A stream read inside a loop or branch is materialised once
 and replayed to every pass. Its buffer grows during reads, so each pass waits
 only for the requested value. It does not wait for the source stream to finish.
+
+`parallel` accepts expressions in loops and per-item stages, for example
+`parallel workers`, `parallel settings.workers`, or `parallel (workers + 1)`.
+The expression is evaluated once when the loop or stage starts and must yield a
+positive signed 32-bit integer. Stage results remain ordered unless `unordered`
+is present. Dynamic loop counts retain parallel restrictions on conflicting
+outer-variable updates and trailing `until`/`while` conditions.
 
 A named loop returns its outcome in the same shape as `s = try { .. }`:
 
@@ -700,6 +721,12 @@ Optional binding evaluates once and introduces a fresh success-branch name.
 A present null item remains distinguishable from EOF. Explicit options expose
 `.has_value` and `.value`; `.value` fails when absent. Upstream failure and
 cancellation propagate through both forms.
+
+`T settings = try take options or T{}` unwraps a present option or evaluates
+the default when absent. The fallback is lazy, including constructors, calls
+and stream reads. Present null, false, zero and empty values skip it. Stored
+`std::option[T]` values support the same `or` expression. Errors propagate.
+Ordinary values retain truthiness-based `or` behavior.
 
 ### Stream completion and failure
 

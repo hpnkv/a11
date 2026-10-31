@@ -22,6 +22,7 @@
 import {
   FLOW_KEYWORDS, FLOW_TYPES, FLOW_STAGES, FLOW_BUILTINS,
   FLOW_LOG_LEVELS, FLOW_CONSTANTS, FLOW_OPERATOR_WORDS,
+  FLOW_STRING_PATTERN, FLOW_STRING_ESCAPE_PATTERN,
 } from "./flow_vocabulary.js";
 
 export {
@@ -33,6 +34,7 @@ export {
 export type FlowTokenKind =
   | "comment"
   | "string"
+  | "string-escape"
   | "number"
   | "keyword"
   | "type"
@@ -76,6 +78,8 @@ const WORD = /[A-Za-z_][A-Za-z0-9_.-]*/y;
 /** A number, with the duration and byte-size suffixes a flow may write. */
 const NUMBER = /\d[\d_]*(?:\.\d+)?(?:ms|s|m|h|d|ns|us|kb|mb|gb)?/iy;
 const PUNCTUATION = new Set("{}()[],:");
+const STRING = new RegExp(FLOW_STRING_PATTERN, "uy");
+const STRING_ESCAPE = new RegExp(FLOW_STRING_ESCAPE_PATTERN, "gu");
 
 function wordKind(word: string, previous: FlowToken | null): FlowTokenKind {
   // After a `|`, a word is the stage it names -- which is the one piece of
@@ -132,28 +136,22 @@ export function tokenizeFlow(source: string): FlowToken[] {
       continue;
     }
 
-    if (source.startsWith('"""', at)) {
-      const close = source.indexOf('"""', at + 3);
-      const end = close === -1 ? source.length : close + 3;
-      push("string", at, end);
-      at = end;
-      continue;
-    }
-
-    if (character === '"' || character === "'") {
-      let scan = at + 1;
-      while (scan < source.length) {
-        if (source[scan] === "\\") {
-          scan += 2;
-          continue;
+    if (character === '"') {
+      STRING.lastIndex = at;
+      const found = STRING.exec(source);
+      if (found) {
+        const end = at + found[0].length;
+        let part = at;
+        for (const escape of found[0].matchAll(STRING_ESCAPE)) {
+          const start = at + escape.index;
+          if (part < start) push("string", part, start);
+          part = start + escape[0].length;
+          push("string-escape", start, part);
         }
-        if (source[scan] === character || source[scan] === "\n") break;
-        scan += 1;
+        if (part < end) push("string", part, end);
+        at = end;
+        continue;
       }
-      const end = source[scan] === character ? scan + 1 : scan;
-      push("string", at, end);
-      at = end;
-      continue;
     }
 
     if (character >= "0" && character <= "9") {

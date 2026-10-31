@@ -114,6 +114,11 @@ std::vector<RefId> FlowGraph::ValueRefs(RefId ref) const {
       Push(found, read);
     }
   }
+  if (one.kind == RefKind::kDerived && one.stage.parallel_expression != kNone) {
+    for (const RefId read : exprs[one.stage.parallel_expression].refs) {
+      Push(found, read);
+    }
+  }
   // A `| log`/`| logf` stage reads whatever it prints, the same way the
   // statement does:
   if (one.kind == RefKind::kDerived) {
@@ -186,6 +191,7 @@ std::vector<RefId> FlowGraph::ValueSources(StepId step) const {
   add(one.code);
   add(one.message);
   add(one.condition);
+  add(one.parallel_expression);
   // What a `log`/`logf` prints. Not `message`: a log keeps its arguments in its
   // own tail, so a `logf info "took %s" started` read nothing as far as the
   // analysis could see and the stream it named got no reader slot.
@@ -417,6 +423,9 @@ Analysis Analyse(const FlowGraph& flow, BodyId body) {
       return;
     }
     own(ref);
+    if (flow.refs[ref].owner == body) {
+      ++analysis.value_consumers[ref];
+    }
     if (valued.insert(ref).second) {
       note(ref);
     }

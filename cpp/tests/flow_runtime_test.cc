@@ -477,6 +477,232 @@ flow each {
   EXPECT_EQ(outcome.outputs.at("lines"), Values({"\"<a>\"", "\"<b>\""}));
 }
 
+TEST(FlowRuntimeTest, ForEachIteratesBareListLiteralElements) {
+  const auto outcome = RunFlow(R"(
+flow main {
+  out values: std::json stream
+  for value in ["a", null, false, [], {}, "b"] {
+    value -> values
+  }
+}
+)",
+                               "main");
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("values"),
+            Values({"\"a\"", "null", "false", "[]", "{}", "\"b\""}));
+}
+
+TEST(FlowRuntimeTest, ForEachEmptyListHasNoPasses) {
+  const auto outcome = RunFlow(R"(
+flow main {
+  out values: std::json stream
+  for value in [] { value -> values }
+}
+)",
+                               "main");
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_TRUE(outcome.outputs.at("values").empty());
+}
+
+TEST(FlowRuntimeTest, ForEachLiteralEvaluatesExpressionsOnceAndSupportsSpread) {
+  const auto outcome = RunFlow(R"(
+flow main {
+  out values: int stream
+  out final: int
+  int n = 1
+  rest = [3, 4]
+  for value in [n, n + 1, ...rest] {
+    n = n + 1
+    value -> values
+  }
+  n -> final
+}
+)",
+                               "main");
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("values"), Values({"1", "2", "3", "4"}));
+  EXPECT_EQ(outcome.outputs.at("final"), Values({"5"}));
+}
+
+TEST(FlowRuntimeTest, ForEachLiteralUnpacksRowsAndStopsAfterACompletePass) {
+  const auto outcome = RunFlow(R"(
+flow main {
+  out sums: int stream
+  for left, right in [[1, 2], [3, 4], [5, 6]] {
+    left + right -> sums
+  } until left == 3
+}
+)",
+                               "main");
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("sums"), Values({"3", "7"}));
+}
+
+TEST(FlowRuntimeTest, ForEachLiteralSupportsParallelPasses) {
+  const auto outcome = RunFlow(R"(
+flow main {
+  out values: int stream
+  for value in [1, 2, 3] parallel 3 { value -> values }
+}
+)",
+                               "main");
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  auto values = outcome.outputs.at("values");
+  std::sort(values.begin(), values.end());
+  EXPECT_EQ(values, Values({"1", "2", "3"}));
+}
+
+TEST(FlowRuntimeTest, ForEachLiteralFlattensExactlyOneLevel) {
+  for (const auto* source : {"[[1, 2], [], [3]]", "([[1, 2], [], [3]])",
+                             "[[1, 2], [], [3]] | flatten"}) {
+    SCOPED_TRACE(source);
+    const auto outcome = RunFlow(
+        absl::StrCat("flow main { out values: std::json stream\n for row in ",
+                     source, " { row -> values }\n}"),
+        "main");
+    ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+    EXPECT_EQ(outcome.outputs.at("values"), Values({"[1, 2]", "[]", "[3]"}));
+  }
+}
+
+TEST(FlowRuntimeTest, ForEachPreservesListPayloadsOfStreamsAndPipelines) {
+  const auto outcome = RunFlow(R"(
+flow main {
+  in rows: std::list[int] stream
+  out streamed: std::json stream
+  out piped: std::json stream
+  out named: std::json stream
+  saved = [7, 8]
+  for row in rows { row -> streamed }
+  for row in [[1, 2], [3]] | first 1 { row -> piped }
+  for row in saved { row -> named }
+}
+)",
+                               "main", {{"rows", {"[1, 2]", "[]", "[3]"}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("streamed"), Values({"[1, 2]", "[]", "[3]"}));
+  EXPECT_EQ(outcome.outputs.at("piped"), Values({"[[1, 2], [3]]"}));
+  EXPECT_EQ(outcome.outputs.at("named"), Values({"[7, 8]"}));
+}
+
+TEST(FlowRuntimeTest, ParallelCountsAcceptFieldsArithmeticAndBuiltins) {
+  const auto outcome = RunFlow(R"(
+flow main {
+  in workers: int required
+  out looped: int stream
+  out ordered: int stream
+  out unordered: int stream
+  config = {workers: workers}
+  for value in [1, 2, 3] parallel config.workers + 1 { value -> looped }
+  [1, 2, 3] | flatten | map it + 1 parallel workers -> ordered
+  [1, 2, 3] | flatten | map it + 2 parallel std::len([1, 2]) unordered -> unordered
+}
+)",
+                               "main", {{"workers", {"1"}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  auto looped = outcome.outputs.at("looped");
+  auto unordered = outcome.outputs.at("unordered");
+  std::sort(looped.begin(), looped.end());
+  std::sort(unordered.begin(), unordered.end());
+  EXPECT_EQ(looped, Values({"1", "2", "3"}));
+  EXPECT_EQ(outcome.outputs.at("ordered"), Values({"2", "3", "4"}));
+  EXPECT_EQ(unordered, Values({"3", "4", "5"}));
+}
+
+TEST(FlowRuntimeTest, ParallelCountExpressionsAreReadOncePerActivation) {
+  for (const auto* body :
+       {"for value in [1, 2, 3] parallel (take widths) { value -> values }",
+        "[1, 2, 3] | flatten | map it parallel (take widths) -> values"}) {
+    SCOPED_TRACE(body);
+    const auto outcome = RunFlow(
+        absl::StrCat(
+            "flow main { in widths: int stream\n out values: int stream\n",
+            body, "\n}"),
+        "main", {{"widths", {"2"}}});
+    ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+    auto values = outcome.outputs.at("values");
+    std::sort(values.begin(), values.end());
+    EXPECT_EQ(values, Values({"1", "2", "3"}));
+  }
+}
+
+TEST(FlowRuntimeTest, ParallelCountExpressionsRejectInvalidValues) {
+  for (const auto* count :
+       {"0", "-1", "1.5", "true", "null", "\"2\"", "2147483648"}) {
+    for (const auto* body :
+         {"for value in [1, 2] parallel workers { value -> values }",
+          "[1, 2] | flatten | map it parallel workers -> values"}) {
+      SCOPED_TRACE(absl::StrCat(count, ": ", body));
+      const auto outcome =
+          RunFlow(absl::StrCat("flow main { in workers: std::any required\n "
+                               "out values: int stream\n",
+                               body, "\n}"),
+                  "main", {{"workers", {count}}});
+      EXPECT_EQ(outcome.status.code(), absl::StatusCode::kInvalidArgument)
+          << outcome.status;
+      EXPECT_NE(outcome.status.message().find("positive signed 32-bit"),
+                std::string_view::npos)
+          << outcome.status;
+    }
+  }
+}
+
+TEST(FlowRuntimeTest, DynamicParallelismUsesTheRequestedConcurrencyBound) {
+  for (const auto* body :
+       {"for value in [1, 2, 3, 4, 5, 6] parallel workers {\n"
+        " p = run probe(value: value)\n p.out -> values\n}",
+        "[1, 2, 3, 4, 5, 6] | flatten | map (run probe(value: it)).out "
+        "parallel workers -> values"}) {
+    for (const int width : {2, 3}) {
+      std::atomic<int> active = 0;
+      std::atomic<int> peak = 0;
+      auto registry = TestRegistry();
+      actions::ActionSchema schema;
+      schema.name = "probe";
+      schema.inputs["value"] = actions::ActionPortSchema{
+          .name = "value", .type = "int", .required = true, .unary = true};
+      schema.outputs["out"] = actions::ActionPortSchema{
+          .name = "out", .type = "int", .unary = true};
+      ASSERT_TRUE(
+          registry
+              ->Register("probe", schema,
+                         actions::MakeAsyncActionHandler(
+                             [&](const auto& action) -> absl::Status {
+                               ABSL_ASSIGN_OR_RETURN(auto input,
+                                                     action->GetInput("value"));
+                               ABSL_ASSIGN_OR_RETURN(auto output,
+                                                     action->GetOutput("out"));
+                               ABSL_ASSIGN_OR_RETURN(
+                                   auto chunk, input->NextChunk().Await());
+                               const int current = active.fetch_add(1) + 1;
+                               int previous = peak.load();
+                               while (current > previous &&
+                                      !peak.compare_exchange_weak(previous,
+                                                                  current)) {}
+                               thread::SleepFor(absl::Milliseconds(20));
+                               --active;
+                               if (chunk.has_value()) {
+                                 return output->PutChunk(std::move(*chunk))
+                                     .Await()
+                                     .status();
+                               }
+                               return absl::OkStatus();
+                             }))
+              .ok());
+      const auto outcome = RunFlow(
+          absl::StrCat(
+              "flow main { in workers: int required\n out values: int stream\n",
+              body, "\n}"),
+          "main", {{"workers", {absl::StrCat(width)}}}, {}, true, {}, registry);
+      ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+      EXPECT_EQ(peak.load(), width) << body;
+      auto values = outcome.outputs.at("values");
+      std::sort(values.begin(), values.end());
+      EXPECT_EQ(values, Values({"1", "2", "3", "4", "5", "6"}));
+    }
+  }
+}
+
 TEST(FlowRuntimeTest, ForEachSeesTheSameOuterValueEveryPass) {
   // The materialisation rule: `prefix` is read inside the loop, so it is
   // buffered once in the scope that owns it and replayed to every pass.
@@ -2956,6 +3182,131 @@ flow main {
   EXPECT_EQ(outcome.outputs.at("results"),
             Values({"{\"has_value\": true, \"value\": null}",
                     "{\"has_value\": false}"}));
+}
+
+TEST(FlowRuntimeTest, OptionalDefaultPreservesFalseLikeItemsAndReadsOnce) {
+  const auto outcome =
+      RunFlow(R"(
+flow main {
+  in items: std::any stream
+
+  out results: std::any stream
+
+  for index in [1, 2, 3, 4, 5, 6, 7] {
+    item = try take items or "fallback"
+    item -> results
+  }
+}
+)",
+              "main", {{"items", {"null", "false", "0", "\"\"", "[]", "{}"}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("results"),
+            (Values{"null", "false", "0", "\"\"", "[]", "{}", "\"fallback\""}));
+}
+
+TEST(FlowRuntimeTest, OptionalDefaultConstructsTheStructOnlyWhenAbsent) {
+  for (const bool present : {false, true}) {
+    PortValues inputs;
+    if (present) {
+      inputs["options"] = {"{\"workers\": 8}"};
+    }
+    const auto outcome = RunFlow(R"(
+struct Options { workers: int default 4 }
+flow main {
+  in options: Options
+
+  out workers: int
+
+  Options settings = try take options or Options{}
+  settings.workers -> workers
+}
+)",
+                                 "main", inputs);
+    ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+    EXPECT_EQ(outcome.outputs.at("workers"), Values{present ? "8" : "4"});
+  }
+  const auto outcome = RunFlow(R"(
+struct Required { value: int required }
+flow main {
+  out result: int
+
+  chosen = std::option({has_value: true, value: 0})
+  int value = chosen or Required{value: std::len(std::b64decode("!"))}.value
+  value -> result
+}
+)",
+                               "main");
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("result"), Values{"0"});
+}
+
+TEST(FlowRuntimeTest, OptionalDefaultSkipsFallbackCallsAndStreamReads) {
+  const auto outcome = RunFlow(R"(
+flow fallback {
+  out result: int
+
+  if true { fail internal "The fallback must stay inactive." }
+}
+flow main {
+  in spare: int stream
+
+  out results: int stream
+
+  first = std::option({has_value: true, value: 0}) or take (run fallback()).result
+  second = std::option({has_value: true, value: 1}) or take spare
+  third = std::option({has_value: false}) or take spare
+  fourth = take spare
+  [first, second, third, fourth] | flatten -> results
+}
+)",
+                               "main", {{"spare", {"2", "3"}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("results"), (Values{"0", "1", "2", "3"}));
+}
+
+TEST(FlowRuntimeTest, OptionalDefaultPreservesUpstreamErrors) {
+  const auto outcome = RunFlow(R"(
+struct Row { id: string required }
+flow main {
+  out result: string
+
+  row = try take ([{}] | flatten | map it as Row) or Row{id: "fallback"}
+  row.id -> result
+}
+)",
+                               "main");
+  EXPECT_EQ(outcome.status.code(), absl::StatusCode::kInvalidArgument);
+  EXPECT_TRUE(outcome.outputs.at("result").empty());
+}
+
+TEST(FlowRuntimeTest, OptionalDefaultsRetireUnusedAndRepeatedValueReaders) {
+  const auto unused = RunFlow(R"(
+flow main {
+  in spare: int stream
+
+  out result: int
+
+  first = std::option({has_value: true, value: 1}) or take spare
+  second = std::option({has_value: true, value: 2}) or take spare
+  first + second -> result
+}
+)",
+                              "main", {{"spare", {"9"}}});
+  ASSERT_TRUE(unused.status.ok()) << unused.status;
+  EXPECT_EQ(unused.outputs.at("result"), Values{"3"});
+  const auto repeated = RunFlow(R"(
+flow main {
+  in spare: int stream
+
+  out results: int stream
+
+  [std::option({has_value: true, value: 1}), std::option({has_value: false})]
+    | flatten | map (it or take spare) -> results
+}
+)",
+                                "main", {{"spare", {"2"}}});
+  ASSERT_TRUE(repeated.status.ok()) << repeated.status;
+  EXPECT_EQ(repeated.outputs.at("results"), (Values{"1", "2"}));
 }
 
 TEST(FlowRuntimeTest, TrailingLoopConditionRunsTheEntireStoppingPass) {

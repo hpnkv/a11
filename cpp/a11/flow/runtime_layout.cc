@@ -121,6 +121,9 @@ absl::StatusOr<std::shared_ptr<const RuntimeLayouts>> BuildRuntimeLayouts(
                                 layout->capture_slots.size()));
       ABSL_ASSIGN_OR_RETURN(layout->folds,
                             layout->storage.Add<std::optional<Value>>(folds));
+      ABSL_ASSIGN_OR_RETURN(
+          layout->value_consumers,
+          layout->storage.Add<int>(layout->cursors.index.size()));
       ABSL_RETURN_IF_ERROR(layout->calls.Finalize(layout->storage));
       ABSL_RETURN_IF_ERROR(layout->lazies.Finalize(layout->storage));
       ABSL_RETURN_IF_ERROR(layout->buses.Finalize(layout->storage));

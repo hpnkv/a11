@@ -19,6 +19,12 @@
 /** Native pattern for a Flow document inside a host string. */
 export const FLOW_FRAGMENT_PATTERN: string = "(?:(?:(?:declare|DECLARE)\\s+)?(?:(?:flow|FLOW))(?:\\s+(?:[A-Za-z_$][A-Za-z0-9_$-]*(?:\\s*::\\s*[A-Za-z_$][A-Za-z0-9_$-]*)*|\"(?:\\\\.|[^\"\\\\\\n])+\"))?(?:\\s+(?:exported|EXPORTED))?\\s*\\{|(?:(?:declare|DECLARE)\\s+)?(?:(?:mod|MOD)|(?:struct|STRUCT))\\s+[A-Za-z_$][A-Za-z0-9_$-]*(?:\\s*::\\s*[A-Za-z_$][A-Za-z0-9_$-]*)*(?:\\s+(?:exported|EXPORTED))?\\s*\\{|(?:import|IMPORT)\\s+\"[^\"\\n]+\"(?:\\s+(?:as|AS)\\s+[A-Za-z_$][A-Za-z0-9_$-]*)?|(?:from|FROM)\\s+[A-Za-z_$][A-Za-z0-9_$-]*(?:\\s*::\\s*[A-Za-z_$][A-Za-z0-9_$-]*)*\\s+(?:import|IMPORT)\\s+(?:[A-Za-z_$][A-Za-z0-9_$-]*(?:\\s*::\\s*[A-Za-z_$][A-Za-z0-9_$-]*)*|\\*)|(?:export|EXPORT)\\s+[A-Za-z_$][A-Za-z0-9_$-]*(?:\\s*::\\s*[A-Za-z_$][A-Za-z0-9_$-]*)*)";
 
+/** Native string ranges, including incomplete editor input. */
+export const FLOW_STRING_PATTERN: string = "\"\"\"(?:\\\\(?:[\\s\\S]|$)|(?!\"\"\")[^\\\\])*(?:\"\"\"|$)|\"(?:\\\\(?:[^\\n]|(?=\\n|$))|[^\"\\\\\\n])*(?:\"|(?=\\n|$))";
+
+/** Escape spans inside a native string range. */
+export const FLOW_STRING_ESCAPE_PATTERN: string = "\\\\[\\s\\S]";
+
 /** Native Flow KEYWORDS vocabulary. */
 export const FLOW_KEYWORDS: readonly string[] = [
   "abort",

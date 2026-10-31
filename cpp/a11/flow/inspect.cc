@@ -585,6 +585,7 @@ class Inspector {
       case NodeKind::kForEach: {
         const auto* loop = syntax::As<syntax::ForEach>(statement);
         Pipeline(*loop->pipeline);
+        Expression(loop->parallel_expression.get());
         Count(loop->parallel, "parallel", loop->location);
         Guarded([&] { Statements(loop->body); });
         return;
@@ -683,6 +684,7 @@ class Inspector {
         // `| where (x | count) > 0` -- a pipeline inside a stage is a pipeline.
         Expression(stage.argument.get());
       }
+      Expression(stage.parallel_expression.get());
       for (const syntax::NodePtr& argument : stage.log.arguments) {
         Expression(argument.get());
       }

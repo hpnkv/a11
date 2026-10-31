@@ -12,9 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <algorithm>
+#include <limits>
+
 #include "a11/flow/internal/execution.h"
 
 namespace a11::flow::internal {
+
+absl::StatusOr<int> Scope::Parallelism(int count, ExprId expression) {
+  if (expression == kNone) {
+    return std::max(count, 1);
+  }
+  ABSL_ASSIGN_OR_RETURN(Value value, Evaluate(expression));
+  if (value.kind() != Value::Kind::kInteger || value.integer() < 1 ||
+      value.integer() > std::numeric_limits<int>::max()) {
+    return absl::InvalidArgumentError(
+        "parallel requires a positive signed 32-bit integer.");
+  }
+  return static_cast<int>(value.integer());
+}
 
 absl::StatusOr<ItemPtr> Scope::StatusItem(RefId ref) {
   const graph::Ref& one = graph().refs[ref];
@@ -268,10 +284,8 @@ absl::StatusOr<Value> Scope::EvaluateWith(ExprId expr, const Value& it,
   context.shapes = &shapes();
   auto value = flow::Evaluate(*one.node, context);
   for (const RefId ref : one.refs) {
-    if (taken.find(ref) == taken.end()) {
-      SkipRef(ref);
-    } else if (expression_result_ != nullptr &&
-               graph().refs[ref].owner == body_) {
+    if (taken.find(ref) != taken.end() && expression_result_ != nullptr &&
+        graph().refs[ref].owner == body_) {
       const auto cursor = cursors_.find(ref);
       if (cursor != cursors_.end()) {
         cursor->second->Stop();
@@ -279,6 +293,36 @@ absl::StatusOr<Value> Scope::EvaluateWith(ExprId expr, const Value& it,
     }
   }
   return value;
+}
+
+void Scope::RetireValueRef(RefId ref) {
+  if (RetireValueReservation(ref)) {
+    SkipRef(ref);
+  }
+}
+
+bool Scope::RetireValueReservation(RefId ref) {
+  Scope* owner = FindOwner(ref);
+  if (owner == nullptr) {
+    return false;
+  }
+  bool unused = false;
+  {
+    thread::MutexLock lock(&monitor().mu());
+    const auto found = owner->layout_->cursors.index.find(ref);
+    if (found == owner->layout_->cursors.index.end()) {
+      return false;
+    }
+    int& count =
+        owner->frame_->Get(owner->layout_->value_consumers)[found->second];
+    if (count == 0) {
+      return false;
+    }
+    --count;
+    unused = count == 0 && !owner->cursors_.contains(ref) &&
+             !owner->opening_cursors_.contains(ref);
+  }
+  return unused;
 }
 
 void Scope::SkipRef(RefId initial) {
@@ -306,7 +350,9 @@ void Scope::SkipRef(RefId initial) {
       pending.push_back(upstream);
     }
     for (const RefId upstream : graph().ValueRefs(ref)) {
-      pending.push_back(upstream);
+      if (RetireValueReservation(upstream)) {
+        pending.push_back(upstream);
+      }
     }
     const graph::Ref& node = graph().refs[ref];
     if (node.kind == RefKind::kCallPort && node.call != kNone &&
@@ -325,7 +371,9 @@ void Scope::SkipRef(RefId initial) {
           }
         }
         for (const RefId input : graph().ValueSources(node.call)) {
-          pending.push_back(input);
+          if (RetireValueReservation(input)) {
+            pending.push_back(input);
+          }
         }
       }
     }

@@ -37,6 +37,7 @@ namespace a11::flow {
 enum class SemanticKind {
   kComment,
   kString,
+  kStringEscape,
   kNumber,
   kDuration,
   /// `flow`, `in`, `out`, `header`, `node`, `nodes`, `as`, `default`.
@@ -94,7 +95,7 @@ enum class SemanticKind {
   kBad,
 };
 
-/// One token, and what it means.
+/// One nonoverlapping semantic span; string escapes have their own spans.
 struct SemanticToken {
   SemanticKind kind = SemanticKind::kIdentifier;
   size_t start = 0;
@@ -121,7 +122,8 @@ SemanticKind SemanticKindFromName(std::string_view name);
 /// cheap and exact.
 ///
 /// The tokens are expected to include comments (`LexOptions::keep_comments`),
-/// and the result is one entry per input token except the final `end`.
+/// and each string token is split around its escape ranges. Other tokens keep
+/// one entry each, except the final `end`.
 std::vector<SemanticToken> Highlight(absl::Span<const Token> tokens);
 
 /// Refine lexical tokens using parsed type positions and resolved bindings.

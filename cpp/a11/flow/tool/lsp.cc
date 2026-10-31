@@ -86,6 +86,7 @@ constexpr std::array kTokenTypes = {
     std::string_view("variable"),
     // Ports use the standard semantic-token type for parameters.
     std::string_view("parameter"),
+    std::string_view("stringEscape"),
 };
 
 /// Which legend entry a meaning maps to, or `-1` for the ones a semantic
@@ -97,6 +98,8 @@ int TokenTypeOf(SemanticKind kind) {
       return 0;
     case SemanticKind::kString:
       return 1;
+    case SemanticKind::kStringEscape:
+      return 12;
     case SemanticKind::kNumber:
     case SemanticKind::kDuration:
       return 2;

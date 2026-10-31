@@ -1308,7 +1308,8 @@ constexpr std::string_view kVsCodeTemplate = R"JSON({
           "//": "A tripled quote holds line breaks and gives back its indentation, which is how every description longer than a line is written.",
           "name": "string.quoted.triple.a11flow",
           "begin": "\"\"\"",
-          "end": "\"\"\""
+          "end": "\"\"\"",
+          "patterns": [{"name": "constant.character.escape.a11flow", "match": "\\\\."}]
         },
         {
           "name": "string.quoted.double.a11flow",
@@ -1613,6 +1614,16 @@ std::string BrowserVocabulary() {
       "/** Native pattern for a Flow document inside a host string. */\n",
       "export const FLOW_FRAGMENT_PATTERN: string = ",
       nlohmann::json(FragmentPattern()).dump(), ";\n\n");
+  absl::StrAppend(
+      &source,
+      "/** Native string ranges, including incomplete editor input. */\n",
+      "export const FLOW_STRING_PATTERN: string = ",
+      nlohmann::json(
+          R"pattern("""(?:\\(?:[\s\S]|$)|(?!""")[^\\])*(?:"""|$)|"(?:\\(?:[^\n]|(?=\n|$))|[^"\\\n])*(?:"|(?=\n|$)))pattern")
+          .dump(),
+      ";\n\n/** Escape spans inside a native string range. */\n",
+      "export const FLOW_STRING_ESCAPE_PATTERN: string = ",
+      nlohmann::json(R"pattern(\\[\s\S])pattern").dump(), ";\n\n");
   emit("KEYWORDS", keywords);
   emit("TYPES", vocabulary::OrderedTypeNames());
   emit("STAGES", vocabulary::Stages());

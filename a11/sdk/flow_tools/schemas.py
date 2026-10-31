@@ -14,8 +14,7 @@
 
 """Schemas for the three Flow Actions, kept separate from the handlers.
 
-The three form a small protocol an LLM drives as tools, in the order it needs
-them:
+Execution is the default; discovery and compile-only checks are optional:
 
 * ``flow_actions`` says what may be composed, and -- the part a tool definition
   cannot carry -- what each action's *output* ports are called;
@@ -37,20 +36,37 @@ mechanism cares how many values a port carries.
 
 from __future__ import annotations
 
+import json
+
 import a11
 from a11.sdk.llm_tools.adapter import WHOLE_JSON_OUTPUT
-
 
 FLOW_ACTIONS_SCHEMA = a11.ActionSchema(
     name="flow_actions",
     description=(
-        "List the actions a flow may call, with the name, arity and"
-        " description of every input and output port each one has. Call this"
-        " before writing a flow: piping one action into another needs the"
-        " names of the ports on both sides, and an action's output ports are"
-        " not part of the tool definition you were given. The list is the"
-        " actions you are allowed to call, minus the flow tools themselves."
+        "Optionally discover missing contracts for actions a flow may call."
+        " Pass names to request only the actions needed for the next step;"
+        " omit names to list all permitted composable actions. Returns input"
+        " and output ports plus runnable flags. Reuse known contracts in"
+        " flow_run without this lookup."
     ),
+    inputs={
+        "names": a11.ActionPortSchema(
+            "names",
+            "application/json",
+            description="Optional list of up to 12 unique action names.",
+            typeinfo=list,
+            unary=True,
+            json_schema=json.dumps(
+                {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "maxItems": 12,
+                    "uniqueItems": True,
+                }
+            ),
+        ),
+    },
     outputs={
         "actions": a11.ActionPortSchema(
             "actions",
@@ -71,12 +87,9 @@ FLOW_ACTIONS_SCHEMA = a11.ActionSchema(
 FLOW_CHECK_SCHEMA = a11.ActionSchema(
     name="flow_check",
     description=(
-        "Compile a flow without running it, and return the composition it"
-        " resolves to: its ports, and every step in the order they are"
-        " written. Nothing is dispatched and no action is called, so this is"
-        " the safe way to find out whether a flow says what you meant before"
-        " its calls have real effects. A flow that will not compile comes back"
-        " as an error naming the line and column of the problem."
+        "Optionally compile a Flow without dispatching actions. Returns the"
+        " composition or a diagnostic with its location. Use this when"
+        " compiler feedback would help; flow_run also compiles before running."
     ),
     inputs={
         "source": a11.ActionPortSchema(
@@ -105,21 +118,28 @@ FLOW_CHECK_SCHEMA = a11.ActionSchema(
 FLOW_RUN_SCHEMA = a11.ActionSchema(
     name="flow_run",
     description=(
-        "Run a flow: a composition of the actions you may call, written in the"
-        " A11 Flow language, dispatched here as one step. The actions it names"
-        " really run, and their intermediate values move between them without"
-        " passing through you -- which is the point, and the reason to reach"
-        " for a flow when the data between two tools is large or when the same"
-        " shape of work repeats. What comes back is the flow's declared"
-        " outputs, one object keyed by port name, so declare outputs that are"
-        " small enough to read. A flow may only call actions you are allowed"
-        " to call; one that names another is refused before anything runs."
+        "Default execution tool for almost every tool operation, including a"
+        " single read, search, edit, command, or request. Invoke underlying"
+        " tools inside the Flow. Prefer composing specialized non-shell tools"
+        " and Flow stages whenever they can solve the task. Combine"
+        " independent work and known chains;"
+        " use another Flow after a new decision. Compiles, checks permissions,"
+        " and executes permitted actions."
+        " Proactively limit sources, filter and project results, and combine"
+        " item caps with text truncation on returned evidence. Keep full"
+        " intermediates needed by downstream actions inside the Flow."
+        " Returns declared outputs as an object keyed by port name. Discovery"
+        " and a separate flow_check call are optional."
     ),
     inputs={
         "source": a11.ActionPortSchema(
             "source",
             "text/plain",
-            description="The text of one or more flow declarations.",
+            description=(
+                "Raw, unfenced Flow source. A one-action Flow is enough; use"
+                " exact action and port names from known contracts and return"
+                " only bounded evidence needed for the next decision."
+            ),
             typeinfo=str,
             unary=True,
             required=True,
@@ -128,12 +148,9 @@ FLOW_RUN_SCHEMA = a11.ActionSchema(
             "inputs",
             "application/json",
             description=(
-                "Values for the flow's input ports, keyed by port name: the list"
-                " of values to write to that port, or a bare value as shorthand"
-                " for a list of one. How many a port takes is the flow's"
-                " business, not this port's -- a port declared `stream` reads"
-                " every value, an ordinary one reads the first, and a port left"
-                " out here carries none."
+                "Object keyed by input port name. Supply one value for a unary"
+                " port and a list of items for a stream port. Omitted ports"
+                " are closed without values."
             ),
             typeinfo=dict,
             unary=True,

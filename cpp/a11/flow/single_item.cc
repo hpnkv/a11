@@ -56,17 +56,20 @@ class Inference {
       if (!Tick()) {
         break;
       }
-      sensitive |= step.parallel > 1 || step.race || step.deadline != kNone ||
+      sensitive |= step.parallel > 1 || step.parallel_expression != kNone ||
+                   step.race || step.deadline != kNone ||
                    step.timeout_value != kNone || step.timeout.has_value();
     }
     for (const auto& ref : flow_.refs) {
       if (!Tick()) {
         break;
       }
-      sensitive |= ref.kind == RefKind::kMerge ||
-                   (ref.kind == RefKind::kDerived &&
-                    (ref.stage.name == "timeout" || ref.stage.name == "pace" ||
-                     ref.stage.parallel > 1 || !ref.stage.ordered));
+      sensitive |=
+          ref.kind == RefKind::kMerge ||
+          (ref.kind == RefKind::kDerived &&
+           (ref.stage.name == "timeout" || ref.stage.name == "pace" ||
+            ref.stage.parallel > 1 || ref.stage.parallel_expression != kNone ||
+            !ref.stage.ordered));
     }
     for (const auto& expr : flow_.exprs) {
       if (!Tick()) {
@@ -501,7 +504,9 @@ bool CheckSingleItemStructure(const graph::FlowGraph& flow) {
   }
   for (const auto& step : flow.steps) {
     if (!ref_ok(step.source) || !ref_ok(step.destination) ||
-        !ref_ok(step.item) || !step_ok(step.phase_gate)) {
+        !ref_ok(step.item) || !step_ok(step.phase_gate) ||
+        (step.parallel_expression != graph::kNone &&
+         step.parallel_expression >= flow.exprs.size())) {
       return false;
     }
     if (!ref_ok(step.sink)) {
@@ -552,6 +557,8 @@ bool CheckSingleItemStructure(const graph::FlowGraph& flow) {
          (ref.source == graph::kNone ||
           (ref.stage.expr != graph::kNone &&
            ref.stage.expr >= flow.exprs.size()) ||
+          (ref.stage.parallel_expression != graph::kNone &&
+           ref.stage.parallel_expression >= flow.exprs.size()) ||
           !ref_ok(ref.stage.failures) || !ref_ok(ref.stage.stream))) ||
         (ref.kind == graph::RefKind::kNode && ref.id_expr != graph::kNone &&
          ref.id_expr >= flow.exprs.size()) ||

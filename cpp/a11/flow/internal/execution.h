@@ -40,6 +40,8 @@ class Scope {
   absl::Status Prepare();
   absl::Status EnsureStep(StepId step);
   void SkipRef(RefId ref);
+  void RetireValueRef(RefId ref);
+  bool RetireValueReservation(RefId ref);
   absl::Status RunStep(StepId step);
   absl::Status Execute(StepId step);
   absl::Status StepDone(StepId step);
@@ -112,6 +114,7 @@ class Scope {
   absl::StatusOr<Value> ValueOf(RefId ref, bool take = false,
                                 bool optional = false);
   absl::StatusOr<Value> Evaluate(ExprId expr);
+  absl::StatusOr<int> Parallelism(int count, ExprId expression);
   absl::StatusOr<Value> EvaluateWith(ExprId expr, const Value& it,
                                      bool join = true);
   /// What an aggregating stage compares or adds: the value itself, or what its

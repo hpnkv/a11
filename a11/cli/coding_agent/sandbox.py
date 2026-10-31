@@ -22,7 +22,7 @@ import os
 import pathlib
 import tempfile
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Sequence
 from enum import StrEnum
 
 import a11
@@ -97,7 +97,8 @@ def _install_native_json_schemas(registry: a11.ActionRegistry) -> None:
                     "Maximum bytes to read after offset; omit for EOF."
                 ),
                 "max_bytes": integer(
-                    "Safety ceiling for total bytes read from the file."
+                    "Safety ceiling; exceeding it can fail with"
+                    " RESOURCE_EXHAUSTED instead of truncating the read."
                 ),
                 "omit": omit,
                 "encoding": encoding,
@@ -325,7 +326,10 @@ def _install_native_json_schemas(registry: a11.ActionRegistry) -> None:
             " no `result` port: outputs are separate unary `info` and `text`,"
             " streaming `lines` (without newline characters), and streaming"
             " `bytes`. For bounded text use options `{offset, length,"
-            " max_bytes}`; `offset` and `length` are byte counts. In Flow pipe"
+            " max_bytes}`; `offset` and `length` are byte counts. A file larger"
+            " than `max_bytes` can cause RESOURCE_EXHAUSTED; this is a safety"
+            " ceiling, not a truncation limit. Use `length` to request a byte"
+            " range. In Flow pipe"
             " and bound `file.lines`, or consume `file.text` only for a"
             " suitably small file."
         ),
@@ -530,7 +534,6 @@ async def run_native_process(
     output: a11.AsyncNode,
     stdin_data: bytes | None = None,
     environment: dict[str, str] | None = None,
-    on_line: Callable[[str], Awaitable[None]] | None = None,
     max_output_lines: int | None = None,
 ) -> dict[str, object]:
     """Run a confined native process and relay a bounded line stream."""
@@ -547,8 +550,6 @@ async def run_native_process(
             lines += 1
             rendered = f"{prefix}{line}"
             await output.put(rendered)
-            if on_line is not None:
-                await on_line(rendered)
 
     async def unary(name: str, default=None):
         value = await process[name].consume(allow_none=True)

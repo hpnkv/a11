@@ -28,7 +28,11 @@ from a11.cli.coding_agent.sandbox import (
     SandboxMode,
     register_native_actions,
 )
-from a11.cli.coding_agent.tools import CodingContext, install
+from a11.cli.coding_agent.tools import (
+    CodingContext,
+    describe_flow_execution,
+    install,
+)
 from a11.cli.coding_agent.workspace import Workspace
 from a11.sdk import http
 
@@ -71,16 +75,13 @@ class CodingAgent:
             "Fetch an HTTP(S) resource with bounded outputs. This is the"
             " preferred HTTP action; do not use run_command or shell_execute"
             " to run curl, wget, or a language HTTP client when web-fetch is"
-            " available. Put independent requests in one run_flow and filter"
-            " its `text`, `json`, or `items` outputs there so unused bodies"
-            " stay out of model context. Use it after relevant workspace"
+            " available. Use it after relevant workspace"
             " inspection for current external facts or information the"
             " workspace cannot establish. When source URLs are unknown, use"
             " an authoritative search API."
         )
         http.WEB_FETCH_SCHEMA.inputs["url"].description = (
-            "Absolute HTTP(S) URL. Put known independent URLs or API queries"
-            " in one run_flow so their web-fetch calls run concurrently."
+            "Absolute HTTP(S) URL."
         )
         http_options = http.WEB_FETCH_SCHEMA.inputs["options"]
         http_options.description = "Optional request and response bounds."
@@ -138,6 +139,7 @@ class CodingAgent:
             registry=registry,
             sandbox_mode=sandbox_mode,
             command_tools=command_tools,
+            flow_tools=flow_tools,
             native_action_names=native_names,
         )
         names = install(
@@ -148,9 +150,10 @@ class CodingAgent:
         )
         names.extend((http.WEB_FETCH, http.WEB_RENDER))
 
-        prompt = system_prompt(workspace, approval_mode)
+        prompt = system_prompt(workspace, approval_mode, flow_tools=flow_tools)
         context.system_prompt = prompt
         context.model_tool_names = list(names)
+        describe_flow_execution(context)
         return cls(
             context=context,
             tool_names=names,

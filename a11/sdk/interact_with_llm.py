@@ -286,12 +286,13 @@ async def _pump_fragments(source: a11.AsyncNode, target: a11.AsyncNode) -> None:
 async def _forward_logs(
     source: a11.AsyncNode, parent: a11.Action, child: a11.Action
 ) -> None:
-    """Relay the claimed backend log through the router action."""
+    """Relay backend logs while preserving nested tool call identities."""
     async for chunk in source.iter_chunks():
         if chunk.is_null() or _native.is_status_chunk(chunk):
             continue
         try:
             record = _native.log_record_from_chunk(chunk)
+            metadata = chunk.metadata.attributes
             await parent.log(
                 chunk,
                 level=record["level"],
@@ -300,8 +301,12 @@ async def _forward_logs(
                 file=record["file"],
                 lineno=record["lineno"],
                 metadata={
-                    "a11-child-action": child.schema.name,
-                    "a11-child-call-id": child.id,
+                    "a11-child-action": metadata.get(
+                        "a11-child-action", child.schema.name.encode()
+                    ),
+                    "a11-child-call-id": metadata.get(
+                        "a11-child-call-id", child.id.encode()
+                    ),
                 },
             )
         except Exception:

@@ -19,9 +19,10 @@ flow research {
   describe "Search, read the best hits, and answer from them."
 
   in  question: string required "What to find out."
-  out answer:   string          "The model's answer."
-  out sources:  string stream   "The pages it was based on."
-  out read:     number          "Characters the model was actually given."
+
+  out answer:  string        "The model's answer."
+  out sources: string stream "The pages it was based on."
+  out read:    number        "Characters the model was actually given."
 
   header "x-a11-deadline" as deadline
 
@@ -56,7 +57,8 @@ flow headline {
   describe "One line about a question, and nothing else."
 
   in  question: string required
-  out line:     string
+
+  out line: string
 
   found = run research(question: question)
   found.sources | first 2 | join " and " -> line

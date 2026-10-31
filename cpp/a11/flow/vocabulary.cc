@@ -830,12 +830,16 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StatementDocs() {
         "initializers run only when earlier branches were not selected.",
         "if row = try take rows { row.name -> names }"}},
       {"for",
-       {"Runs a block once per value of a stream.",
-        "one or more names, a stream, and optionally `parallel`",
+       {"Runs a block per stream value or bare list literal element.",
+        "one or more names, a stream or list literal, and optionally "
+        "`parallel`",
         "Several names take a tuple apart, which is what `for x, y in zip(a, "
         "b)` reads. A pass that reads none of its variables is reported. This "
-        "is one pass over one stream: a stream of lists is still one value per "
-        "pass, and flattening one is an action's job. `until`/`while` in the "
+        "is one pass per stream value: a stream of lists keeps each list as "
+        "one value. A bare list literal in the header expands one level, so "
+        "`for x in [1, 2, 3] { .. }` visits three items. Empty literals make "
+        "no passes. Named lists and pipelines use `| flatten` to expand list "
+        "values. `until`/`while` in the "
         "body ends it early, as it ends a `repeat`; a `for` carries nothing "
         "between passes, so `<-` is a `repeat`'s and not this one's. Bound to "
         "a "
@@ -1001,12 +1005,16 @@ const absl::flat_hash_map<std::string_view, WordDoc>& ClauseDocs() {
         "if ok { page.text -> body } else { \"\" -> body }"}},
       {"parallel",
        {"How many passes of a `for`, or values of a stage, run at a time.",
-        "a count",
+        "a positive integer expression",
         "Without it they run one after another. The number is a ceiling rather "
         "than a target, and it bounds the passes rather than the work inside "
         "one: a pass waiting on a step it dispatched is still one of the `n`. "
         "On a stage it says how many values may be in hand at once, and what "
-        "follows still reads them in order.",
+        "follows still reads them in order. Variables, field reads, and "
+        "arithmetic expressions are evaluated once when the loop or stage "
+        "starts and must yield a positive signed 32-bit integer. Dynamic loop "
+        "counts retain the restrictions on parallel outer-variable updates "
+        "and trailing conditions.",
         "for hit in search.hits parallel 2 { .. }"}},
       {"unordered",
        {"Lets a parallel stage publish its values as they finish.", "",
@@ -1338,9 +1346,13 @@ const absl::flat_hash_map<std::string_view, WordDoc>& OperatorWordDocs() {
         "whether each of them is there at all.",
         "if code >= 200 and code < 300 { .. }"}},
       {"or",
-       {"True when either side is.", "two conditions",
-        "Each side is asked the question a condition is asked, as with `and`.",
-        "if not code or code >= 500 { cancel fetch }"}},
+       {"Default an option by presence or a value by truthiness.",
+        "two expressions",
+        "Evaluates the right side only when the left is absent or false-like. "
+        "An option tests presence and unwraps its payload, including null, "
+        "false, zero and empty values. Ordinary values test truthiness. "
+        "Upstream failures propagate.",
+        "Settings settings = try take options or Settings{}"}},
       {"not",
        {"True when what follows is not.", "a condition",
         "The one that reads a initializer which bound nothing: `if not code` "

@@ -149,6 +149,37 @@ TEST(FlowLexer, ReadsStringsWithTheirEscapes) {
   EXPECT_TRUE(result.diagnostics.empty());
 }
 
+TEST(FlowLexer, CommonEscapesHaveTheSameValueInBothStringForms) {
+  const std::string escapes = R"(\0\a\b\f\n\r\t\v\"\'\\\/\q)";
+  const std::string expected = std::string("\0\a\b\f\n\r\t\v\"'\\/q", 13);
+  for (const std::string quote : {"\"", "\"\"\""}) {
+    const std::string source = quote + escapes + quote;
+    const auto result = Lex(source);
+    ASSERT_TRUE(result.diagnostics.empty());
+    ASSERT_EQ(result.tokens.size(), 2u);
+    EXPECT_EQ(result.tokens.front().string_value, expected);
+    EXPECT_EQ(result.tokens.front().text, source);
+    EXPECT_EQ(result.tokens.front().string_escapes.size(), 13u);
+  }
+}
+
+TEST(FlowLexer, EscapeRangesKeepOriginalMultilineAndUnicodePositions) {
+  const std::string source = "\"\"\"\n  é\\0\n  \\tend\n  \"\"\" next";
+  const auto result = Lex(source);
+  ASSERT_TRUE(result.diagnostics.empty());
+  ASSERT_EQ(result.tokens.size(), 3u);
+  EXPECT_EQ(result.tokens[0].string_value, std::string("é\0\n\tend", 8));
+  const auto& escapes = result.tokens[0].string_escapes;
+  ASSERT_EQ(escapes.size(), 2u);
+  EXPECT_EQ(escapes[0].start, source.find("\\0"));
+  EXPECT_EQ(escapes[0].line, 2);
+  EXPECT_EQ(escapes[0].column, 4);
+  EXPECT_EQ(escapes[1].start, source.find("\\t"));
+  EXPECT_EQ(escapes[1].line, 3);
+  EXPECT_EQ(escapes[1].column, 3);
+  EXPECT_EQ(result.tokens[1].line, 4);
+}
+
 TEST(FlowLexer, AnUnterminatedStringEndsAtItsLine) {
   // Recovery that matters: reading on to the next quote would swallow whole
   // statements, and an editor would light up half the file.

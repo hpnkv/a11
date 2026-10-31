@@ -37,6 +37,9 @@ their own categories and cannot be reassigned as ordinary values.
 items in source order, and EOF fails. ``try take stream`` returns an option with
 ``has_value`` and, when present, ``value``. Null items remain distinct from EOF;
 upstream failures propagate. Destructuring reads its RHS once.
+``T settings = try take options or T{}`` unwraps a present option and evaluates
+the fallback only on absence. Present null, false, zero and empty values stay
+present. Stored options support the same lazy ``or`` default.
 
 Put loop postconditions after the closing brace:
 
@@ -125,6 +128,8 @@ FAIL_CODES: tuple[str, ...] = tuple(
 #: A compact language reference for models that write flows. Action schemas
 #: provide the remaining information needed to compose available actions.
 REFERENCE = """A11 Flow composes streaming actions into actions.
+Ordinary and triple-quoted strings decode \\0, \\a, \\b, \\f, \\n, \\r, \\t,
+\\v, escaped quotes and backslashes. Other escapes yield the following character.
 Keywords are lower or UPPER
 case. Statements overlap; data and after dependencies determine execution.
 
@@ -146,10 +151,21 @@ A real null item has has_value=true. Prefer if item = try take source { ... }.
 if item = option evaluates once and binds its payload in the success branch.
 EOF is absence; false-like payloads remain present. The name must be fresh.
 Explicit option.has_value and option.value access remains available.
+T settings = try take options or T{} unwraps the option or lazily evaluates T{}.
+Stored std::option[T] values support the same or default. Presence, including
+null, false, zero and empty payloads, skips the fallback. Errors propagate.
+With ordinary values, or keeps its truthiness-based short-circuit behavior.
 Read the RHS of destructuring only once.
 
 for item in source [parallel N] { body }
   [until EXPR | while EXPR] [after subject]
+A bare list literal, for x in [a, b, c] { ... }, iterates its elements once,
+one level deep. Empty literals make no passes. Other sources keep their stream
+values: use | flatten for named lists or list-valued pipelines.
+parallel accepts an integer expression, e.g. parallel workers or
+parallel (workers + 1), evaluated once per loop or stage activation. Dynamic
+counts must be positive signed 32-bit integers and retain parallel safety
+restrictions on loop updates and trailing conditions.
 repeat [state = INITIAL] [max N] {
   body
   state <- NEXT

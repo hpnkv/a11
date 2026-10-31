@@ -171,7 +171,7 @@ async def run_turn(
                 continue
             if record["channel"] == "status":
                 try:
-                    status = Status.model_validate_json(record["data"])
+                    status = Status.model_validate(record["data"])
                 except (TypeError, ValueError):
                     continue
                 reducer.on_tool_finished(call_id, status)

@@ -39,7 +39,8 @@
           "//": "A tripled quote holds line breaks and gives back its indentation, which is how every description longer than a line is written.",
           "name": "string.quoted.triple.a11flow",
           "begin": "\"\"\"",
-          "end": "\"\"\""
+          "end": "\"\"\"",
+          "patterns": [{"name": "constant.character.escape.a11flow", "match": "\\\\."}]
         },
         {
           "name": "string.quoted.double.a11flow",

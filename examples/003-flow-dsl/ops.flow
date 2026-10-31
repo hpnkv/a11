@@ -44,8 +44,9 @@ flow explain-a-command {
   describe "Run a command, and have a model explain what came back."
 
   in  command: string required "What to run on the gateway's host."
-  out lines:   string stream   "What the command printed."
-  out verdict: string          "What the model made of it."
+
+  out lines:   string stream "What the command printed."
+  out verdict: string        "What the model made of it."
 
   header "x-a11-llm-api-key"  as api_key
   header "x-a11-llm-provider" as provider

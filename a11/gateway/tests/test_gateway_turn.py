@@ -219,8 +219,8 @@ async def test_a_turn_runs_a_gateway_tool_and_is_recorded(
     )
     assert len(logs) == 1
     log = next(iter(logs.values()))
-    # Streaming output and the final command status are both preserved.
-    assert _TOKEN in log
+    # Command output stays on its output port; the log carries its summary.
+    assert _TOKEN not in log
     assert "Command exited with 0 after 1 output lines." in log
     # And none of it reached the result the model was given. Asserted against
     # the log actually written, so a reworded narration cannot make this pass

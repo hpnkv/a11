@@ -16,7 +16,8 @@
 # misspelled, so the resolver reports an unknown type and the client shows it.
 flow broken {
   in  question: strig required
-  out answer:   string
+
+  out answer: string
 
   question -> answer
 }

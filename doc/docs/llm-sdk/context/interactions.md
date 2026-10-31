@@ -193,7 +193,8 @@ the direct function.
 
 ```a11flow
 flow project {
-  in request: object
+  in  request: object
+
   out result: object
   nodes scratch
   view = run llm_context_compact_interactions(request: request) via scratch

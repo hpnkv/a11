@@ -20,6 +20,7 @@
 #include <cstddef>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <absl/time/time.h>
 
@@ -83,6 +84,14 @@ enum class TokenKind {
   kEnd,
 };
 
+/// The source range of an escape inside a string token.
+struct StringEscape {
+  size_t start = 0;
+  size_t end = 0;
+  int line = 1;
+  int column = 1;
+};
+
 /// One token: what it is, where it is, and what it holds.
 ///
 /// `text` borrows the source, so a token lives no longer than the text it was
@@ -99,6 +108,8 @@ struct Token {
 
   /// A `kString`'s value, with escapes resolved.
   std::string string_value;
+  /// Escape ranges before multiline indentation is removed.
+  std::vector<StringEscape> string_escapes;
   /// A `kNumber`'s value. `is_integer` says whether it was written without a
   /// fractional part, which is what the counted forms of the grammar require.
   double number = 0.0;

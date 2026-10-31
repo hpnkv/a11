@@ -20,9 +20,10 @@
 flow resilient-read {
   describe "Read the first candidate that works, and report on the rest."
 
-  in  urls:  string stream required "Candidates, best first."
-  out text:  string                 "The first one that could be read."
-  out tried: object stream          "What happened to each candidate."
+  in  urls: string stream required "Candidates, best first."
+
+  out text:  string        "The first one that could be read."
+  out tried: object stream "What happened to each candidate."
 
   bool found = false
   for url in urls {
@@ -44,7 +45,8 @@ flow resilient-read {
 flow annotated-read {
   describe "Read one page, keeping the notes the reader made on the way."
 
-  in  url:      string required
+  in  url: string required
+
   out summary:  string
   out progress: string stream
 
@@ -66,7 +68,8 @@ flow annotated-read {
 flow strict-read {
   describe "Read a page, and translate a failure into the caller's terms."
 
-  in  url:  string required
+  in  url: string required
+
   out text: string
 
   page = try run web-fetch(url: url)

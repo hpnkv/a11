@@ -19,7 +19,9 @@
 
 #include <absl/strings/str_cat.h>
 #include <gtest/gtest.h>
+#include <nlohmann/json.hpp>
 
+#include "a11/flow/emit_json.h"
 #include "a11/flow/highlight.h"
 #include "a11/flow/lexer.h"
 
@@ -262,13 +264,42 @@ TEST(FlowHighlight, ACastNamesAType) {
                                       "punctuation:::", "type:AudioBuffer"}));
 }
 
+TEST(FlowHighlight, StringEscapesAreSeparateNonoverlappingSpans) {
+  const std::string source = R"("a\0b\n\"\\c" "plain")";
+  EXPECT_EQ(Coloured(source),
+            (std::vector<std::string>{
+                "string:\"a", "string-escape:\\0", "string:b",
+                "string-escape:\\n", "string-escape:\\\"", "string-escape:\\\\",
+                "string:c\"", "string:\"plain\""}));
+  EXPECT_EQ(Coloured(R"("\é")"),
+            (std::vector<std::string>{"string:\"", "string-escape:\\é",
+                                      "string:\""}));
+  const std::string multiline = "\"\"\"é\\0\n  \\tend\"\"\"";
+  const auto tokens = Highlight(Lex(multiline).tokens);
+  size_t end = 0;
+  for (const auto& token : tokens) {
+    EXPECT_EQ(token.start, end);
+    EXPECT_GT(token.end, token.start);
+    end = token.end;
+    if (token.kind == SemanticKind::kStringEscape) {
+      EXPECT_EQ(token.line, token.start == multiline.find("\\0") ? 1 : 2);
+      EXPECT_EQ(token.column, token.line == 1 ? 5 : 3);
+    }
+  }
+  EXPECT_EQ(end, multiline.size());
+  const auto envelope = TokensToJsonValue("escape.flow", source);
+  ASSERT_TRUE(envelope["diagnostics"].empty());
+  for (const auto& token : envelope["tokens"]) {
+    EXPECT_EQ(token["lexical"], "string");
+  }
+}
+
 TEST(FlowHighlight, EveryTokenIsClassifiedAndNoneIsInvented) {
   const std::string source =
       "flow t {\n  in q: string\n  q | first 1 -> a  # done\n}\n";
   const LexResult lexed = Lex(source);
   const std::vector<SemanticToken> semantic = Highlight(lexed.tokens);
-  // One entry per token, the closing `end` aside: a frontend pairs them up by
-  // index and by offset.
+  // Tokens without string escapes retain their lexical ranges.
   EXPECT_EQ(semantic.size(), lexed.tokens.size() - 1);
   for (size_t index = 0; index < semantic.size(); ++index) {
     EXPECT_EQ(semantic[index].start, lexed.tokens[index].start);
@@ -280,6 +311,7 @@ TEST(FlowHighlight, EveryTokenIsClassifiedAndNoneIsInvented) {
 TEST(FlowHighlight, SemanticKindNamesRoundTrip) {
   for (const SemanticKind kind : {SemanticKind::kComment,
                                   SemanticKind::kString,
+                                  SemanticKind::kStringEscape,
                                   SemanticKind::kNumber,
                                   SemanticKind::kDuration,
                                   SemanticKind::kDeclarationKeyword,

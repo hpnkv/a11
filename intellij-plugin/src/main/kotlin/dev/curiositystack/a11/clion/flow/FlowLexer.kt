@@ -111,6 +111,7 @@ class FlowLexer : LexerBase() {
     private fun typeOf(kind: String, lexical: String?): IElementType = when (kind) {
         "comment" -> FlowTokens.COMMENT
         "string" -> FlowTokens.STRING
+        "string-escape" -> FlowTokens.STRING_ESCAPE
         "number" -> FlowTokens.NUMBER
         "duration" -> FlowTokens.DURATION
         "declaration-keyword" -> FlowTokens.DECLARATION_KEYWORD

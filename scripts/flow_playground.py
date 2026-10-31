@@ -114,6 +114,7 @@ async def show_what_is_composable(
     """`flow_actions`: what a flow may call, and what its ports are called."""
     called = remote(session, stream, flow_tools.FLOW_ACTIONS_SCHEMA)
     await called.call()
+    await called["names"].close()
     described = await called["actions"].next_object()
     await called.wait()
 

@@ -12,11 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <optional>
+
+#include <absl/cleanup/cleanup.h>
+
 #include "a11/flow/internal/execution.h"
 
 namespace a11::flow::internal {
 
 absl::StatusOr<ItemPtr> Scope::BoundItem(RefId ref) {
+  absl::Cleanup retire = [this, ref] {
+    for (const RefId source : graph().ValueRefs(ref)) {
+      RetireValueRef(source);
+    }
+  };
   const auto& one = graph().refs[ref];
   if (one.role == "initialized-value") {
     ABSL_RETURN_IF_ERROR(StepDone(one.bound_by));
@@ -52,6 +61,13 @@ absl::StatusOr<ItemPtr> Scope::BoundItem(RefId ref) {
 }
 
 absl::Status Scope::Produce(RefId ref, const Sink& sink) {
+  absl::Cleanup retire = [this, ref] {
+    if (graph().refs[ref].kind != RefKind::kBound) {
+      for (const RefId source : graph().ValueRefs(ref)) {
+        RetireValueRef(source);
+      }
+    }
+  };
   if (graph().refs[ref].phase_gate != kNone) {
     ABSL_RETURN_IF_ERROR(StepDone(graph().refs[ref].phase_gate));
   }
@@ -243,7 +259,14 @@ absl::Status Scope::ProduceMerge(RefId ref, const Sink& sink) {
 /// Read a derived ref's source and reshape it with one stage.
 absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
   const graph::Ref& one = graph().refs[ref];
-  const graph::Stage& stage = one.stage;
+  std::optional<graph::Stage> configured;
+  if (one.stage.parallel_expression != kNone) {
+    configured = one.stage;
+    ABSL_ASSIGN_OR_RETURN(
+        configured->parallel,
+        Parallelism(one.stage.parallel, one.stage.parallel_expression));
+  }
+  const graph::Stage& stage = configured.has_value() ? *configured : one.stage;
   ABSL_ASSIGN_OR_RETURN(ReaderPtr source, Subscribe(one.source));
   HostBridge& host = bridge();
   const std::string& name = stage.name;

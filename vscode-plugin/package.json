@@ -45,6 +45,21 @@
     "workspaceContains:**/*.flow"
   ],
   "contributes": {
+    "semanticTokenTypes": [
+      {
+        "id": "stringEscape",
+        "superType": "string",
+        "description": "An escape sequence in a Flow string."
+      }
+    ],
+    "semanticTokenScopes": [
+      {
+        "language": "a11flow",
+        "scopes": {
+          "stringEscape": ["constant.character.escape.a11flow"]
+        }
+      }
+    ],
     "languages": [
       {
         "id": "a11flow",

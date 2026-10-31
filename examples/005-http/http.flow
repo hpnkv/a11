@@ -27,10 +27,11 @@
 flow read-a-page {
   describe "Fetch a URL and hand back its text and its status."
 
-  in  url:  string required "What to fetch."
-  out text: string          "The body, as text."
-  out code: number          "The response's status code."
-  out ok:   bool            "Whether the status is below 400."
+  in  url: string required "What to fetch."
+
+  out text: string "The body, as text."
+  out code: number "The response's status code."
+  out ok:   bool   "Whether the status is below 400."
 
   page = run web-fetch(url: url)
   page.text -> text
@@ -47,7 +48,8 @@ flow read-a-page {
 flow only-if-json {
   describe "Read the body only when the server says it is JSON."
 
-  in  url:      string required
+  in  url: string required
+
   out decoded:  std::json "The body, when it was JSON."
   out declined: string    "What the server sent instead, when it was not."
 
@@ -72,7 +74,8 @@ flow only-if-json {
 flow inspect-a-url {
   describe "Everything the protocol said, on the port that carries it."
 
-  in  url:     string required
+  in  url: string required
+
   out code:    number           "The final status."
   out fields:  std::json stream "Every header field, in wire order."
   out hops:    std::json stream "The redirects that were followed."
@@ -105,9 +108,10 @@ flow inspect-a-url {
 flow send-a-stream {
   describe "POST a body assembled as it goes."
 
-  in  url:    string required
-  in  parts:  string stream required "The body, piece by piece."
-  out answer: string                 "What the server said."
+  in  url:   string required
+  in  parts: string stream required "The body, piece by piece."
+
+  out answer: string "What the server said."
 
   http = run make_http_request(
     url: url,

@@ -114,6 +114,10 @@ absl::Status Scope::Prepare() {
   analysis_ = &layout_->analysis;
   ABSL_ASSIGN_OR_RETURN(frame_, runner_->AcquireFrame(body_));
   frame_->Initialize();
+  for (const auto& [ref, count] : analysis_->value_consumers) {
+    frame_->Get(layout_->value_consumers)[layout_->cursors.index.at(ref)] =
+        count;
+  }
   calls_.Bind(*frame_, layout_->calls);
   lazies_.Bind(*frame_, layout_->lazies);
   buses_.Bind(*frame_, layout_->buses);
@@ -919,6 +923,9 @@ absl::Status Scope::CompleteStep(StepId step, absl::Status status) {
     }
   }
   WatchVirtual(step, nullptr);
+  for (const RefId ref : graph().ValueSources(step)) {
+    RetireValueRef(ref);
+  }
   MarkDone(step, status);
   if (held != analysis_->held.end()) {
     for (const auto ref : held->second) {

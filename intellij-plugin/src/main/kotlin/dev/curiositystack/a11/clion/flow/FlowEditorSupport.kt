@@ -94,6 +94,7 @@ class FlowColorSettingsPage : ColorSettingsPage {
         val DESCRIPTORS = arrayOf(
             AttributesDescriptor("Comment", FlowColors.COMMENT),
             AttributesDescriptor("String", FlowColors.STRING),
+            AttributesDescriptor("String escape", FlowColors.STRING_ESCAPE),
             AttributesDescriptor("Number", FlowColors.NUMBER),
             AttributesDescriptor("Duration", FlowColors.DURATION),
             AttributesDescriptor("Keyword//Statement", FlowColors.KEYWORD),

@@ -20,6 +20,7 @@ not compile, and a check that must not run anything.
 """
 
 import asyncio
+import pathlib
 import re
 
 import pytest
@@ -168,6 +169,36 @@ async def test_flow_actions_lists_only_what_the_caller_may_call(registry):
         "text-size",
         "text-upper",
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("names", [["text-upper"], []])
+async def test_flow_actions_selects_only_requested_contracts(registry, names):
+    action = await drive(
+        registry, "flow_actions", names=names, allowed="text-.*"
+    )
+    described = await result_of(action, "actions")
+    assert [entry["action"] for entry in described] == names
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["missing", "launch-missiles", "text-.*"])
+async def test_flow_actions_selection_respects_permissions_and_exact_names(
+    registry, name
+):
+    with pytest.raises(StatusException) as raised:
+        await drive(registry, "flow_actions", names=[name], allowed="text-.*")
+    assert raised.value.status.code == StatusCode.NOT_FOUND
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "names", [["text-upper", "text-upper"], [42], [str(i) for i in range(13)]]
+)
+async def test_flow_actions_rejects_invalid_selection(registry, names):
+    with pytest.raises(StatusException) as raised:
+        await drive(registry, "flow_actions", names=names)
+    assert raised.value.status.code == StatusCode.INVALID_ARGUMENT
 
 
 # --- flow_run -----------------------------------------------------------------
@@ -521,10 +552,12 @@ async def test_the_source_is_required(registry, tool: str):
 # --- the skill ----------------------------------------------------------------
 
 
-def test_the_skill_teaches_the_language_that_is_implemented():
+def test_the_skill_embeds_the_shared_compact_reference():
+    from a11.flow.reference import short_reference
+
     text = flow_tools.get_system_prompt()
-    # The reference is the language's own, not a second copy of it.
-    assert flow.REFERENCE.strip() in text
+    assert short_reference() in text
+    assert text.count(short_reference()) == 1
     for tool in flow_tools.FLOW_TOOL_NAMES:
         assert tool in text
     # What the skill does *not* teach: filling a port by node id, which needs a
@@ -532,10 +565,27 @@ def test_the_skill_teaches_the_language_that_is_implemented():
     assert "input_streams" not in text
 
 
+def test_compact_reference_documentation_matches_the_packaged_prompt():
+    from a11.flow.reference import short_reference
+
+    documented = (
+        pathlib.Path(__file__).resolve().parents[4]
+        / "doc/docs/guides/flow-reference-short.md"
+    )
+    reference = short_reference()
+    for source, target in (
+        ("doc/docs/guides/flow.md", "flow.md"),
+        ("doc/docs/api/flow.md", "../api/flow.md"),
+        ("doc/docs/guides/flow-tooling.md", "flow-tooling.md"),
+    ):
+        reference = reference.replace(source, target)
+    assert documented.read_text(encoding="utf-8") == reference
+
+
 def test_every_flow_the_skill_shows_compiles():
     """A skill that teaches a flow the compiler rejects is worse than none."""
     blocks = re.findall(
-        r"```(?:a11flow)?\n(flow [\s\S]*?)```",
+        r"```a11flow\n([\s\S]*?)```",
         flow_tools.get_system_prompt(),
     )
     assert blocks, "the skill shows no example flow"

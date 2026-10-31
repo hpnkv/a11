@@ -111,7 +111,7 @@ def verify_calls(program: Program, patterns: list[str]) -> None:
 
 
 def describe_composable_actions(
-    registry: Any, patterns: list[str]
+    registry: Any, patterns: list[str], *, names: list[str] | None = None
 ) -> list[dict[str, Any]]:
     """The actions a flow may name, each with its ports and its verb.
 
@@ -131,16 +131,21 @@ def describe_composable_actions(
     Autofilled inputs are omitted because the runtime supplies them before the
     handler runs. Action logs use
     :meth:`a11.actions.action.Action.log` and are not schema ports.
+
+    ``names`` selects exact action names within the caller's permitted set.
     """
     document = describe.registry_to_json(
         registry, {"names": list(patterns)} if patterns else None
     )
     described: list[dict[str, Any]] = []
+    selected = None if names is None else set(names)
     for entry in describe.schemas_in_document(document):
         name = entry.get("name", "")
         # Exclude Flow tools to prevent recursive composition through
         # `flow_run`.
-        if name in FLOW_TOOL_NAMES:
+        if name in FLOW_TOOL_NAMES or (
+            selected is not None and name not in selected
+        ):
             continue
         described.append(
             {
@@ -175,9 +180,29 @@ def _describe_port(port: dict[str, Any]) -> dict[str, Any]:
 
 async def flow_actions(action: a11.Action) -> None:
     """Report the actions this caller may compose, and their ports."""
+    names = await action["names"].consume(list, allow_none=True)
+    if names is not None and (
+        len(names) > 12
+        or any(not isinstance(name, str) for name in names)
+        or len(set(names)) != len(names)
+    ):
+        raise Status(
+            code=StatusCode.INVALID_ARGUMENT,
+            message="names must contain at most 12 unique action-name strings.",
+        ).to_exception()
     described = describe_composable_actions(
-        action.get_registry(), get_allowed_llm_action_patterns(action)
+        action.get_registry(),
+        get_allowed_llm_action_patterns(action),
+        names=names,
     )
+    if names is not None:
+        missing = set(names) - {entry["action"] for entry in described}
+        if missing:
+            raise Status(
+                code=StatusCode.NOT_FOUND,
+                message="Actions unavailable for composition: "
+                + ", ".join(sorted(missing)),
+            ).to_exception()
     await action["actions"].finalize(described)
     names = ", ".join(one["action"] for one in described) or "none"
     await action.log(

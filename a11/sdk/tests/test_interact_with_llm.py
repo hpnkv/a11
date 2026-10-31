@@ -18,6 +18,7 @@ These exercise routing and stream-node forwarding without any provider SDK or
 network: a fake provider handler is registered in place of a real backend.
 """
 
+import asyncio
 import sys
 import types
 
@@ -308,9 +309,7 @@ async def test_provider_logs_are_claimed_and_forwarded(monkeypatch):
         illm._Provider("a11.sdk._fake_logging", "fake_handler", "ollama"),
     )
 
-    chunks = await _run(
-        {LlmHeaders.PROVIDER.value: "ollama"}, read="log"
-    )
+    chunks = await _run({LlmHeaders.PROVIDER.value: "ollama"}, read="log")
     forwarded = next(
         chunk
         for chunk in chunks
@@ -320,6 +319,49 @@ async def test_provider_logs_are_claimed_and_forwarded(monkeypatch):
 
     assert record["level"] == "warning"
     assert record["channel"] == "model"
-    assert (
-        forwarded.metadata.attributes["a11-child-action"] == b"fake_handler"
+    assert forwarded.metadata.attributes["a11-child-action"] == b"fake_handler"
+
+
+@pytest.mark.asyncio
+async def test_tool_completion_keeps_its_identity_while_provider_is_running(
+    monkeypatch,
+):
+    release = asyncio.Event()
+
+    async def fake_handler(action):
+        await action.log(
+            {"code": 0, "message": ""},
+            channel="status",
+            metadata={
+                "a11-child-action": "read_file",
+                "a11-child-call-id": "read-1",
+            },
+        )
+        await release.wait()
+        for name in INTERACT_WITH_LLM_SCHEMA.outputs:
+            await action[name].finalize()
+
+    monkeypatch.setattr(illm, "_load_handler", lambda provider: fake_handler)
+    action = a11.Action(INTERACT_WITH_LLM_SCHEMA).bind_handler(
+        interact_with_llm
     )
+    action.set_header(LlmHeaders.PROVIDER.value, "ollama")
+    logs = action.get_log_node()
+    action.run()
+    for name in INTERACT_WITH_LLM_SCHEMA.inputs:
+        await action[name].finalize()
+    try:
+
+        async def completion():
+            async for chunk in logs.iter_chunks():
+                if _native.log_record_from_chunk(chunk)["channel"] == "status":
+                    return chunk
+
+        chunk = await asyncio.wait_for(completion(), timeout=2)
+        assert not action.is_done()
+        assert a11.from_chunk(chunk) == {"code": 0, "message": ""}
+        assert chunk.metadata.attributes["a11-child-action"] == b"read_file"
+        assert chunk.metadata.attributes["a11-child-call-id"] == b"read-1"
+    finally:
+        release.set()
+        await action.wait()

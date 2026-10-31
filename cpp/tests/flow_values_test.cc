@@ -233,6 +233,36 @@ TEST(FlowValues, EvaluatesComparisonsWithoutDyingOnMixedTypes) {
   EXPECT_EQ(TextOf(R"("here" and "there")"), "there");
 }
 
+TEST(FlowValues, OptionDefaultsTestPresenceAndEvaluateTheFallbackLazily) {
+  for (const Value& payload :
+       {Value::Null(), Value::Bool(false), Value::Integer(0), Value::String(""),
+        Value::List({}), Value::Object({})}) {
+    const auto result =
+        EvaluatedIn("it or b64decode(\"!\")", Value::Option(payload));
+    ASSERT_TRUE(result.ok()) << result.status();
+    EXPECT_EQ(*result, payload);
+    EXPECT_FALSE(result->is_option());
+  }
+  EXPECT_EQ(TextOf("it or 42", Value::Option(std::nullopt)), "42");
+  EXPECT_FALSE(
+      EvaluatedIn("it or b64decode(\"!\")", Value::Option(std::nullopt)).ok());
+  const auto record = EvaluatedIn("{has_value: false} or 42");
+  ASSERT_TRUE(record.ok()) << record.status();
+  EXPECT_EQ(record->kind(), Value::Kind::kObject);
+  const Value nested = Value::Option(Value::Integer(7));
+  const auto result = EvaluatedIn("it or 42", Value::Option(nested));
+  ASSERT_TRUE(result.ok()) << result.status();
+  EXPECT_TRUE(result->is_option());
+  EXPECT_EQ(*result, nested);
+}
+
+TEST(FlowValues, StringEscapesPreserveNulThroughEvaluation) {
+  const auto value = EvaluatedIn(R"("before\0after")");
+  ASSERT_TRUE(value.ok()) << value.status();
+  EXPECT_EQ(*value, Value::String(std::string("before\0after", 12)));
+  EXPECT_EQ(TextOf(R"(len("\0\a\b\f\n\r\t\v"))"), "8");
+}
+
 TEST(FlowValues, ArithmeticIsThereForTimes) {
   EXPECT_EQ(TextOf("1 + 2"), "3");
   EXPECT_EQ(TextOf("1.5 + 1"), "2.5");

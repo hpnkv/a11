@@ -163,7 +163,20 @@ async def test_narration_is_taken_out_of_the_tool_result():
 
 
 @pytest.mark.asyncio
-async def test_structured_child_log_reaches_parent_before_child_finishes():
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        Status(),
+        Status(
+            code=StatusCode.PERMISSION_DENIED,
+            message="Access denied",
+            details=[{"path": "private.txt"}],
+        ),
+    ],
+)
+async def test_structured_child_log_reaches_parent_before_child_finishes(
+    outcome,
+):
     import asyncio
 
     logged = asyncio.Event()
@@ -182,6 +195,8 @@ async def test_structured_child_log_reaches_parent_before_child_finishes():
         logged.set()
         await release.wait()
         await action["done"].finalize({"ok": True})
+        if not outcome.is_ok():
+            raise outcome.to_exception()
 
     registry = ActionRegistry()
     registry.register(schema.name, schema, slow)
@@ -218,7 +233,9 @@ async def test_structured_child_log_reaches_parent_before_child_finishes():
     completion = await asyncio.wait_for(parent_log.next_chunk(), timeout=1)
     assert completion is not None
     status = json.loads(completion.data)
-    assert status == {"code": 0, "message": ""}
+    assert status == outcome.model_dump(mode="json")
+    assert not a11._native.is_status_chunk(completion)
+    assert a11._native.log_record_from_chunk(completion)["channel"] == "status"
     assert completion.metadata.get_attribute("a11-child-action") == b"slow_tool"
     assert completion.metadata.get_attribute("a11-child-call-id") == b"slow-1"
     await host.wait()

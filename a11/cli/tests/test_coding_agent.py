@@ -32,6 +32,7 @@ from a11.cli.coding_agent import ApprovalMode, CodingAgent, SandboxMode
 from a11.cli.coding_agent import tools as tools_mod
 from a11.cli.coding_agent.sandbox import run_native_process, safe_environment
 from a11.cli.coding_agent.session import SessionRecord, SessionStore
+from a11.flow.reference import short_reference
 from a11.sdk.llm import Interaction, Role
 from a11.status import StatusCode, StatusException
 
@@ -40,8 +41,7 @@ async def _invoke(
     registry: a11.ActionRegistry, name: str, inputs: dict[str, object]
 ) -> object:
     action = (
-        a11
-        .Action(registry.get_schema(name))
+        a11.Action(registry.get_schema(name))
         .bind_registry(registry)
         .bind_handler(registry.get_handler(name))
         .run()
@@ -79,7 +79,7 @@ def test_prompt_names_instruction_files_without_embedding_repository_state(
 
     _, agent = _agent(tmp_path)
 
-    assert "Repository instruction files may apply" in agent.prompt
+    assert "Repository instructions are scoped" in agent.prompt
     assert str(tmp_path) not in agent.prompt
     assert "AGENTS.md" in agent.prompt
     assert instructions not in agent.prompt
@@ -103,6 +103,104 @@ def test_prompt_includes_the_current_date(tmp_path):
     assert "stale or tangential" in agent.prompt
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("flow_tools", [True, False])
+async def test_compact_flow_reference_follows_tool_setting_and_reconfiguration(
+    tmp_path, flow_tools
+):
+    registry = a11.ActionRegistry()
+    agent = CodingAgent.install(
+        registry,
+        cwd=str(tmp_path),
+        add_dirs=(),
+        approval_mode=ApprovalMode.AUTO,
+        sandbox_mode=SandboxMode.WORKSPACE_WRITE,
+        approve=None,
+        flow_tools=flow_tools,
+    )
+    reference = short_reference()
+    assert (reference in agent.prompt) is flow_tools
+    assert ("run_flow" in agent.tool_names) is flow_tools
+    assert ("flow_guide" in agent.tool_names) is flow_tools
+    if flow_tools:
+        assert agent.prompt.count(reference) == 1
+        assert "Use the compact Flow reference below" in agent.prompt
+        assert "Discovery and guide lookups are optional" in agent.prompt
+    else:
+        assert "run_flow" not in agent.prompt
+        assert "flow_guide" not in agent.prompt
+
+    hint = "Execute this action inside run_flow, even for one operation. "
+    for name in ("read_file", "workspace_info", "list_files", "web-fetch"):
+        assert (
+            registry.get_schema(name).description.startswith(hint) is flow_tools
+        )
+    for name in ("discover_actions", "request_user_input", "report_completion"):
+        assert not registry.get_schema(name).description.startswith(hint)
+
+    await _invoke(
+        registry,
+        "configure_coding_agent",
+        {"approval_mode": "suggest", "sandbox_mode": "unrestricted"},
+    )
+    info = await _invoke(registry, "coding_agent_info", {})
+    assert (reference in info["system_prompt"]) is flow_tools
+    assert agent.context.policy.mode == ApprovalMode.SUGGEST
+    for name in ("read_file", "workspace_info", "list_files", "web-fetch"):
+        description = registry.get_schema(name).description
+        assert description.count(hint) == int(flow_tools)
+    if not flow_tools:
+        assert "run_flow" not in info["system_prompt"]
+
+
+@pytest.mark.asyncio
+async def test_run_flow_single_read_example_executes(tmp_path):
+    (tmp_path / "README.md").write_text("first\nsecond\n", encoding="utf-8")
+    registry, _ = _agent(tmp_path)
+    source = (
+        registry.get_schema("run_flow")
+        .inputs["source"]
+        .description.split("Example:\n", 1)[1]
+    )
+    result = await _invoke(registry, "run_flow", {"source": source})
+    assert result == {"lines": ["first", "second"]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("workers", [1, 2])
+async def test_run_flow_iterates_literal_paths_for_directory_actions(
+    tmp_path, workers
+):
+    for name in ("one", "two"):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / f"{name}.txt").write_text("content")
+    registry, _ = _agent(tmp_path)
+    result = await _invoke(
+        registry,
+        "run_flow",
+        {
+            "source": (
+                """
+flow components {
+  in workers: int required
+  out directories: object stream
+  for path in ["one", "two"] parallel workers {
+    d = run list_directory(path: path, options: {max_entries: 55})
+    names = d.entries | map it.name | collect
+    {path: path, entries: names} -> directories
+  }
+}
+"""
+            ),
+            "inputs": {"workers": workers},
+        },
+    )
+    assert sorted(result["directories"], key=lambda item: item["path"]) == [
+        {"path": "one", "entries": ["one.txt"]},
+        {"path": "two", "entries": ["two.txt"]},
+    ]
+
+
 def test_structured_action_inputs_have_json_schemas(tmp_path):
     registry, agent = _agent(tmp_path)
 
@@ -114,9 +212,8 @@ def test_structured_action_inputs_have_json_schemas(tmp_path):
     )
     assert fetch_options["properties"]["max_body_bytes"]["description"]
     fetch_schema = registry.get_schema("web-fetch")
-    assert "independent requests in one run_flow" in fetch_schema.description
+    assert "Execute this action inside run_flow" in fetch_schema.description
     assert "do not use run_command or shell_execute" in fetch_schema.description
-    assert "known independent URLs" in fetch_schema.inputs["url"].description
     for name in (
         "shell_start",
         "shell_execute",
@@ -168,45 +265,30 @@ def test_structured_action_inputs_have_json_schemas(tmp_path):
     assert process_arguments["oneOf"][1]["items"] == {"type": "string"}
     assert flow_inputs == {"type": "object", "additionalProperties": True}
     flow_schema = registry.get_schema("run_flow")
-    assert "independent operations benefit from concurrency" in (
-        flow_schema.description
-    )
-    assert "Use direct actions for small or adaptive operations" in (
-        flow_schema.description
-    )
-    assert "step = run action(port: value)" in flow_schema.description
-    assert "not `flow NAME() {`" in flow_schema.inputs["source"].description
+    assert "this runner has no peer stream" in flow_schema.description
     assert (
-        "out lines: string stream" in flow_schema.inputs["source"].description
-    )
-    assert (
-        "Never spell that `[string]`"
+        "first named flow is invoked"
         in flow_schema.inputs["source"].description
     )
     assert (
-        "only declared outputs reach the model"
+        "Only declared outputs are returned"
         in flow_schema.inputs["source"].description
     )
-    assert "Flow call syntax is not shell syntax" in agent.prompt
     assert "use the available tools to achieve the goal" in agent.prompt
-    assert "declare and route only what the next decision needs" in agent.prompt
-    assert "Use flow_guide for advanced syntax" in agent.prompt
-    assert "The first declared flow is the entry flow" in agent.prompt
+    assert "return only the small result" in agent.prompt
     assert "<repo-root>/.a11/flows/" in agent.prompt
     assert "flow-name.flow" in agent.prompt
     assert "flow-name.md" in agent.prompt
     assert "each input and output" in agent.prompt
     assert "which reusable Flows are available" in agent.prompt
     assert "Filesystem actions accept relative paths" in agent.prompt
-    assert "Treat each tool invocation as a meaningful decision point" in (
+    assert "Plan the next bounded unit of work before executing it" in (
         agent.prompt
     )
     assert "Avoid repeating successful reads" in agent.prompt
     assert "A successful\nfocused check may suffice" in agent.prompt
     assert "Stop when the requested behavior is implemented" in agent.prompt
     assert "Do not run curl, wget" in agent.prompt
-    assert "Put known independent URLs" in agent.prompt
-    assert "run_flow so the web-fetch calls run concurrently" in agent.prompt
     assert "Use web-render when scripts or browser lifecycle" in agent.prompt
     assert "Start with the configured workspace" in agent.prompt
     assert "authoritative remote sources after local evidence" in agent.prompt
@@ -214,9 +296,6 @@ def test_structured_action_inputs_have_json_schemas(tmp_path):
     assert "Source selection starts with relevant workspace evidence" in (
         agent.prompt
     )
-    assert "Common coding outputs" in flow_schema.description
-    assert "`list_files.result.files`" in flow_schema.description
-    assert "For workspace research" in flow_schema.description
     assert "coherent bounded sequence" in (
         registry.get_schema("run_command").description
     )
@@ -298,9 +377,9 @@ def test_structured_action_inputs_have_json_schemas(tmp_path):
         action_schema = registry.get_schema(action_name)
         for port in action_schema.inputs.values():
             if port.type == "application/json":
-                assert port.json_schema, (
-                    f"{action_name}.{port.name} has no JSON Schema"
-                )
+                assert (
+                    port.json_schema
+                ), f"{action_name}.{port.name} has no JSON Schema"
                 assert isinstance(json.loads(port.json_schema), dict)
 
     random_options = json.loads(
@@ -382,9 +461,11 @@ async def test_ui_can_enable_and_restore_sandbox(tmp_path):
         registry,
         "run_flow",
         {
-            "source": "flow inspect {\n in path: string required\n"
-            "out result: string required\n"
-            "file = run read_file(path: path)\n file.text -> result\n}",
+            "source": (
+                "flow inspect {\n in path: string required\n"
+                "out result: string required\n"
+                "file = run read_file(path: path)\n file.text -> result\n}"
+            ),
             "inputs": {"path": str(outside)},
         },
     )
@@ -408,8 +489,10 @@ async def test_ui_can_enable_and_restore_sandbox(tmp_path):
             registry,
             "run_flow",
             {
-                "source": "flow change { w = run write_file("
-                'path: "forbidden.txt", bytes: "blocked") }',
+                "source": (
+                    "flow change { w = run write_file("
+                    'path: "forbidden.txt", bytes: "blocked") }'
+                ),
             },
         )
     assert denied.value.status.code == StatusCode.NOT_FOUND
@@ -771,7 +854,7 @@ async def test_flow_infers_effectful_run_command_and_registers_it(tmp_path):
             "source": (
                 """
                 flow command {
-                  out result: any required
+                  out result: std::any required
                   command = run run_command(command: "printf flow-ok")
                   command.result -> result
                 }
@@ -801,10 +884,12 @@ async def test_file_tools_fall_back_when_ripgrep_is_unavailable(
                 "exit_code": 127
             }
         if program == "git":
-            return ["src/example.py"], {"exit_code": 0}
-        assert program == "grep"
-        assert arguments[:4] == ["-R", "-n", "-I", "-F"]
-        return [f"{tmp_path}/src/example.py:1:needle"], {"exit_code": 0}
+            if "ls-files" in arguments:
+                return ["src/example.py"], {"exit_code": 0}
+            assert "--untracked" in arguments
+            assert "--exclude-standard" in arguments
+            return ["src/example.py:1:needle"], {"exit_code": 0}
+        pytest.fail(f"Unexpected fallback: {program}")
 
     monkeypatch.setattr(tools_mod, "_native_lines", native_lines)
     registry, _ = _agent(tmp_path)
@@ -818,37 +903,65 @@ async def test_file_tools_fall_back_when_ripgrep_is_unavailable(
 
     assert listed["files"] == ["src/example.py"]
     assert matches["matches"] == [f"{tmp_path}/src/example.py:1:needle"]
-    assert calls == ["rg", "git", "rg", "grep"]
+    assert calls == ["rg", "git", "rg", "git"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("git_repo", [True, False])
+async def test_search_without_ripgrep_skips_dependencies_and_symlinks(
+    tmp_path, monkeypatch, git_repo
+):
+    if git_repo:
+        subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / ".gitignore").write_text(
+        "ignored/\nnode_modules/\nbuild/\n.venv/\n"
+    )
+    for directory in ("src", "ignored", "node_modules", "build", ".venv"):
+        (tmp_path / directory).mkdir()
+        (tmp_path / directory / "example.txt").write_text("needle\n")
+    (tmp_path / "link").symlink_to(tmp_path / "build", target_is_directory=True)
+    (tmp_path / "src" / "dash.txt").write_text("-needle\n")
+    native_lines = tools_mod._native_lines
+
+    async def without_ripgrep(context, program, arguments, cwd, **kwargs):
+        if program == "rg":
+            return [], {"exit_code": 127}
+        return await native_lines(context, program, arguments, cwd, **kwargs)
+
+    monkeypatch.setattr(tools_mod, "_native_lines", without_ripgrep)
+    registry, _ = _agent(tmp_path)
+    result = await _invoke(
+        registry, "search_text", {"query": "-needle", "path": "src"}
+    )
+    assert result["matches"] == [f"{tmp_path}/src/dash.txt:1:-needle"]
+
+    result = await _invoke(registry, "search_text", {"query": "needle"})
+    matches = result["matches"]
+    assert f"{tmp_path}/src/example.txt:1:needle" in matches
+    for directory in ("node_modules", "build", ".venv", "link"):
+        assert not any(f"/{directory}/" in match for match in matches)
+    assert (
+        f"{tmp_path}/ignored/example.txt:1:needle" in matches
+    ) is not git_repo
 
 
 @pytest.mark.asyncio
 async def test_flow_guide_supports_progressive_syntax_discovery(tmp_path):
     registry, _ = _agent(tmp_path)
 
-    guide = await _invoke(registry, "flow_guide", {"topic": "slicing"})
-
-    assert "file.lines | drop 3 | first 9 -> lines" in guide
-    assert "There is no generic `lines` or `slice`" in guide
-    assert "stage and no `slice A..B` form" in guide
-    quickstart = await _invoke(registry, "flow_guide", {"topic": "quickstart"})
-    assert "step = run action(port: value)" in quickstart
-    assert "`run action port: value` is invalid" in quickstart
     schema = registry.get_schema("flow_guide")
+    assert schema.inputs["topic"].required
     topic = json.loads(schema.inputs["topic"].json_schema)
-    assert topic["enum"] == [
-        "quickstart",
-        "programs",
-        "permissions",
-        "slicing",
-        "concurrency",
-        "control",
-    ]
+    assert topic["enum"] == ["programs", "permissions", "language"]
     for choice in topic["enum"]:
         assert choice in schema.description
 
     programs = await _invoke(registry, "flow_guide", {"topic": "programs"})
     assert "first declaration is the entry flow" in programs
     assert "part = run helper" in programs
+    assert "Current permission mode" not in programs
+    language = await _invoke(registry, "flow_guide", {"topic": "language"})
+    assert language == flow.REFERENCE
     source = programs.split("```a11flow\n", 1)[1].split("\n```", 1)[0]
     program = flow.loads(source, "guide.flow")
     assert program.main.name == "main"
@@ -949,7 +1062,8 @@ async def test_apply_patch_infers_counts_preserves_content_and_is_atomic(
             registry,
             "apply_patch",
             {
-                "patch": """diff --git a/first.txt b/first.txt
+                "patch": (
+                    """diff --git a/first.txt b/first.txt
 --- a/first.txt
 +++ b/first.txt
 @@ -1 +1 @@
@@ -962,6 +1076,7 @@ diff --git a/second.txt b/second.txt
 -not-gamma
 +GAMMA
 """
+                )
             },
         )
     assert first.read_text(encoding="utf-8") == "alpha\nbeta\n"
@@ -979,7 +1094,8 @@ async def test_apply_patch_creates_deletes_and_renames_files(tmp_path):
         registry,
         "apply_patch",
         {
-            "patch": """diff --git a/created.txt b/created.txt
+            "patch": (
+                """diff --git a/created.txt b/created.txt
 new file mode 100644
 --- /dev/null
 +++ b/created.txt
@@ -996,6 +1112,7 @@ similarity index 100%
 rename from before.txt
 rename to after.txt
 """
+            )
         },
     )
 
@@ -1007,9 +1124,7 @@ rename to after.txt
             "deleted.txt",
         ]
     }
-    assert (tmp_path / "created.txt").read_text(encoding="utf-8") == (
-        "created\n"
-    )
+    assert (tmp_path / "created.txt").read_text(encoding="utf-8") == "created\n"
     assert not deleted.exists()
     assert not renamed.exists()
     assert (tmp_path / "after.txt").read_text(encoding="utf-8") == "kept\n"
@@ -1025,7 +1140,8 @@ async def test_apply_patch_canonicalizes_common_dev_null_spellings(tmp_path):
         registry,
         "apply_patch",
         {
-            "patch": """diff --git a/created.txt b/created.txt
+            "patch": (
+                """diff --git a/created.txt b/created.txt
 new file mode 100644
 --- a/dev/null
 +++ b/created.txt
@@ -1037,6 +1153,7 @@ deleted file mode 100644
 +++ b/dev/null
 @@ -1 +0,0 @@
 -gone"""
+            )
         },
     )
 
@@ -1055,11 +1172,13 @@ async def test_apply_patch_adds_missing_git_file_mode_for_created_file(
         registry,
         "apply_patch",
         {
-            "patch": """diff --git a/created.txt b/created.txt
+            "patch": (
+                """diff --git a/created.txt b/created.txt
 --- /dev/null
 +++ b/created.txt
 @@ -0,0 +1 @@
 +created"""
+            )
         },
     )
 
@@ -1087,3 +1206,127 @@ def test_session_round_trip_is_private_and_preserves_interactions(tmp_path):
     assert path.stat().st_mode & 0o777 == 0o600
     assert restored.task == "task"
     assert restored.history[0].role == Role.USER
+
+
+@pytest.mark.asyncio
+async def test_completion_returns_only_acknowledgement_with_large_history(
+    tmp_path,
+):
+    registry, agent = _agent(tmp_path)
+    history = [{"command": "debug-script-" + "x" * 10000, "exit_code": 0}] * 100
+    agent.context.workspace.checks.extend(history)
+    agent.context.workspace.changed_files.update({"one.py", "two.py"})
+    checks = "verification-output-" + "y" * 10000
+    result = await _invoke(
+        registry,
+        "report_completion",
+        {"summary": "Implemented.", "checks": checks, "remaining": ""},
+    )
+    assert result == {"reported": True, "changed_file_count": 2}
+    assert len(json.dumps(result)) < 100
+    assert agent.context.completion == {
+        "summary": "Implemented.",
+        "changed_files": ["one.py", "two.py"],
+        "checks": checks,
+        "remaining": "",
+    }
+    assert agent.context.workspace.checks == history
+    assert agent.status()["checks"] == history
+    assert "recorded_checks" not in agent.context.action_log[-1]
+
+
+@pytest.mark.asyncio
+async def test_workspace_info_defaults_to_bounded_metadata_without_history(
+    tmp_path,
+):
+    text = "INSTRUCTION-BODY " * 3000
+    (tmp_path / "AGENTS.md").write_text(text)
+    registry, agent = _agent(tmp_path)
+    agent.context.workspace.checks.append(
+        {"command": "debug-script-" + "x" * 10000}
+    )
+    agent.context.workspace.initial_status = "M file.py\n" * 1000
+    agent.context.workspace.changed_files.update(
+        f"file-{i}.py" for i in range(60)
+    )
+    result = await _invoke(registry, "workspace_info", {})
+    assert "checks" not in result
+    assert result["check_count"] == 1
+    assert result["instructions"] == [
+        {
+            "path": "AGENTS.md",
+            "text_chars": len(text),
+            "text_truncated": True,
+        }
+    ]
+    assert len(result["initial_git_status"]) == 2000
+    assert len(result["agent_changed_files"]) == 50
+    assert set(result["truncated_fields"]) == {
+        "initial_git_status",
+        "agent_changed_files",
+    }
+    assert len(json.dumps(result)) < 6000
+    assert agent.status()["instructions"][0]["text"] == text
+    assert "debug-script" in agent.status()["checks"][0]["command"]
+
+
+@pytest.mark.asyncio
+async def test_workspace_info_projects_fields_and_budgets_instruction_text(
+    tmp_path,
+):
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / "AGENTS.md").write_text("a" * 3000)
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    (nested / "AGENTS.md").write_text("b" * 3000)
+    registry, _ = _agent(nested)
+    result = await _invoke(registry, "workspace_info", {"fields": ["root"]})
+    assert result == {"root": str(tmp_path)}
+    result = await _invoke(
+        registry,
+        "workspace_info",
+        {
+            "fields": ["instructions"],
+            "instruction_chars": 4000,
+        },
+    )
+    assert set(result) == {"instructions"}
+    instructions = result["instructions"]
+    assert [len(item["text"]) for item in instructions] == [3000, 1000]
+    assert [item["text_truncated"] for item in instructions] == [False, True]
+    result = await _invoke(
+        registry,
+        "run_flow",
+        {
+            "source": (
+                """
+flow inspect {
+  out root: string required
+  info = run workspace_info(fields: ["root"])
+  info.result.root -> root
+}
+"""
+            )
+        },
+    )
+    assert result == {"root": str(tmp_path)}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "inputs",
+    [
+        {"fields": ["checks"]},
+        {"fields": ["root", "root"]},
+        {"fields": [42]},
+        {"instruction_chars": -1},
+        {"instruction_chars": 8001},
+    ],
+)
+async def test_workspace_info_rejects_invalid_projection_and_budget(
+    tmp_path, inputs
+):
+    registry, _ = _agent(tmp_path)
+    with pytest.raises(StatusException) as raised:
+        await _invoke(registry, "workspace_info", inputs)
+    assert raised.value.status.code == StatusCode.INVALID_ARGUMENT

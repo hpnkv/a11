@@ -149,6 +149,7 @@ struct Stage {
   RefId failures = kNone;
   /// `parallel n`: how many values this stage may work on at once.
   int parallel = 1;
+  ExprId parallel_expression = kNone;
   /// Whether values leave in the order they arrived. A parallel stage puts them
   /// back in order unless `unordered` said not to.
   bool ordered = true;
@@ -371,6 +372,7 @@ struct Step {
   RefId item = kNone;
   RefId index = kNone;
   int parallel = 1;
+  ExprId parallel_expression = kNone;
   /// `kRepeat`: what it carries, where the next pass's value comes from, and
   /// when it stops.
   RefId carry = kNone;
@@ -483,6 +485,8 @@ struct Analysis {
   std::vector<RefId> refs;
   /// How many readers each of them has.
   absl::flat_hash_map<RefId, int> readers;
+  /// Consumers sharing each value cursor; retire it after the last consumer.
+  absl::flat_hash_map<RefId, int> value_consumers;
   // The ones read from inside a nested body, which are buffered once and
   // replayed to each reader:
   /// Refs read inside a nested body. They are buffered once and replayed so

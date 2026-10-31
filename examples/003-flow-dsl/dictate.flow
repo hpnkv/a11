@@ -24,11 +24,12 @@ from std import endswith, join, to_chunk, trim
 flow live-captions {
   describe "Turn the microphone into sentences, until the caller says stop."
 
-  in  asr:       object required        "Recognition options; model required."
-  in  capture:   object required        "Which input to open."
-  in  control:   object stream required "Send {command: stop} to finish."
-  out sentences: string stream          "What was said, a sentence at a time."
-  out pieces:    string stream          "The raw utterances, as decoded."
+  in  asr:     object required        "Recognition options; model required."
+  in  capture: object required        "Which input to open."
+  in  control: object stream required "Send {command: stop} to finish."
+
+  out sentences: string stream "What was said, a sentence at a time."
+  out pieces:    string stream "The raw utterances, as decoded."
 
   mic = call capture_audio(options: capture) timeout 600s
 
@@ -59,8 +60,9 @@ flow dictate-a-note {
   in  asr:     object required
   in  capture: object required
   in  control: object stream required
-  out said:    string stream "Each sentence, as it lands."
-  out note:    string        "The model's tidy version of the lot."
+
+  out said: string stream "Each sentence, as it lands."
+  out note: string        "The model's tidy version of the lot."
 
   header "x-a11-llm-api-key"  as api_key
   header "x-a11-llm-provider" as provider

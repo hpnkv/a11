@@ -650,6 +650,8 @@ std::string_view SemanticKindName(SemanticKind kind) {
       return "comment";
     case SemanticKind::kString:
       return "string";
+    case SemanticKind::kStringEscape:
+      return "string-escape";
     case SemanticKind::kNumber:
       return "number";
     case SemanticKind::kDuration:
@@ -712,6 +714,7 @@ SemanticKind SemanticKindFromName(std::string_view name) {
   static constexpr SemanticKind kAll[] = {
       SemanticKind::kComment,
       SemanticKind::kString,
+      SemanticKind::kStringEscape,
       SemanticKind::kNumber,
       SemanticKind::kDuration,
       SemanticKind::kDeclarationKeyword,
@@ -749,7 +752,31 @@ SemanticKind SemanticKindFromName(std::string_view name) {
 }
 
 std::vector<SemanticToken> Highlight(absl::Span<const Token> tokens) {
-  return Classifier(tokens).Run();
+  const auto classified = Classifier(tokens).Run();
+  std::vector<SemanticToken> result;
+  result.reserve(classified.size());
+  for (size_t index = 0; index < classified.size(); ++index) {
+    SemanticToken part = classified[index];
+    for (const auto& escape : tokens[index].string_escapes) {
+      if (part.start < escape.start) {
+        result.push_back(
+            {part.kind, part.start, escape.start, part.line, part.column});
+      }
+      result.push_back({SemanticKind::kStringEscape, escape.start, escape.end,
+                        escape.line, escape.column});
+      part.start = escape.end;
+      part.line = escape.line;
+      part.column = escape.column + 2;
+      if (tokens[index].text[escape.end - tokens[index].start - 1] == '\n') {
+        ++part.line;
+        part.column = 1;
+      }
+    }
+    if (part.start < part.end) {
+      result.push_back(part);
+    }
+  }
+  return result;
 }
 
 void RefinePorts(std::string_view source,
@@ -768,7 +795,8 @@ void RefinePorts(std::string_view source,
     }
     auto found = at(location.start);
     if (found != semantic.end() && found->start == location.start &&
-        found->kind != SemanticKind::kString) {
+        found->kind != SemanticKind::kString &&
+        found->kind != SemanticKind::kStringEscape) {
       found->kind = kind;
     }
   };
@@ -789,7 +817,8 @@ void RefinePorts(std::string_view source,
              token != semantic.end() && token->start < current->location.end;
              ++token) {
           if (token->kind == SemanticKind::kPunctuation ||
-              token->kind == SemanticKind::kString) {
+              token->kind == SemanticKind::kString ||
+              token->kind == SemanticKind::kStringEscape) {
             continue;
           }
           token->kind = token->end == current->location.end

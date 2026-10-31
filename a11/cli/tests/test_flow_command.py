@@ -44,7 +44,8 @@ EXAMPLES = ROOT / "examples" / "003-flow-dsl"
 
 GOOD = """
 flow shout {
-  in  words:   string stream
+  in  words: string stream
+
   out loudest: string
 
   say = run text-upper(text: words)
@@ -292,7 +293,8 @@ UNFORMATTED = (
 
 FORMATTED = (
     "flow shout {\n"
-    "  in  words:   string stream\n"
+    "  in  words: string stream\n"
+    "\n"
     "  out loudest: string\n"
     "  words | first 1 -> loudest\n"
     "}\n"

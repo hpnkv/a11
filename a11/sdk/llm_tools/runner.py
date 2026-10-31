@@ -430,7 +430,7 @@ async def wait_and_report_status(
         status = _status_of(error)
     if parent.has_been_run() and not parent.is_done():
         await parent.log(
-            status,
+            status.model_dump(mode="json"),
             channel="status",
             metadata={
                 "a11-child-action": action_name,

@@ -92,6 +92,22 @@ test('every character comes back exactly once', () => {
   }
 });
 
+test('native string patterns split escapes in ordinary and triple quotes', () => {
+  const source = String.raw`"é\0\n\"\\tail" """a\"""b\t
+c""" flow`;
+  const tokens = tokenizeFlow(source);
+  assert.equal(tokens.map((token) => token.text).join(''), source);
+  assert.deepEqual(
+    tokens.filter((token) => token.kind === 'string-escape').map((token) => token.text),
+    ['\\0', '\\n', '\\"', '\\\\', '\\"', '\\t'],
+  );
+  assert.equal(tokens.at(-1).kind, 'keyword');
+  for (const incomplete of ['"a\\', '"""é\\0', '"a\\é"']) {
+    const spans = tokenizeFlow(incomplete);
+    assert.equal(spans.map((token) => token.text).join(''), incomplete);
+  }
+});
+
 test('a word is read as what it stands for where it stands', () => {
   const kindOf = (source, text) =>
     tokenizeFlow(source).find((token) => token.text === text)?.kind;

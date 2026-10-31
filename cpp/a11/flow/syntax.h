@@ -423,6 +423,8 @@ struct Stage : NodeOf<NodeKind::kStage> {
   /// `parallel n`: how many values this stage may be working on at once. One
   /// means the stage sees them one at a time, which is the default.
   int parallel = 1;
+  /// A nonliteral concurrency count, evaluated once when the stage starts.
+  NodePtr parallel_expression;
   /// Whether the values leave in the order they arrived. True unless
   /// `unordered` was written: a parallel stage finishes its values out of
   /// order and puts them back in order on the way out, so everything after it
@@ -639,6 +641,8 @@ struct ForEach : NodeOf<NodeKind::kForEach> {
   std::vector<Word> variables;
   PipelinePtr pipeline;
   int parallel = 1;
+  /// A nonliteral concurrency count, evaluated once before iteration.
+  NodePtr parallel_expression;
   std::vector<NodePtr> body;
   /// Optional postcondition, evaluated after a complete pass.
   NodePtr termination;

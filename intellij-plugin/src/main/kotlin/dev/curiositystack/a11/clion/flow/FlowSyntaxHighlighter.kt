@@ -40,6 +40,7 @@ import com.intellij.psi.tree.IElementType
 object FlowColors {
     val COMMENT = key("A11FLOW_COMMENT", DefaultLanguageHighlighterColors.LINE_COMMENT)
     val STRING = key("A11FLOW_STRING", DefaultLanguageHighlighterColors.STRING)
+    val STRING_ESCAPE = key("A11FLOW_STRING_ESCAPE", DefaultLanguageHighlighterColors.VALID_STRING_ESCAPE)
     val NUMBER = key("A11FLOW_NUMBER", DefaultLanguageHighlighterColors.NUMBER)
     val DURATION = key("A11FLOW_DURATION", DefaultLanguageHighlighterColors.NUMBER)
     val KEYWORD = key("A11FLOW_KEYWORD", DefaultLanguageHighlighterColors.KEYWORD)
@@ -119,6 +120,7 @@ class FlowSyntaxHighlighter : SyntaxHighlighterBase() {
         val ATTRIBUTES: Map<IElementType, TextAttributesKey> = mapOf(
             FlowTokens.COMMENT to FlowColors.COMMENT,
             FlowTokens.STRING to FlowColors.STRING,
+            FlowTokens.STRING_ESCAPE to FlowColors.STRING_ESCAPE,
             FlowTokens.NUMBER to FlowColors.NUMBER,
             FlowTokens.DURATION to FlowColors.DURATION,
             FlowTokens.DECLARATION_KEYWORD to FlowColors.DECLARATION,

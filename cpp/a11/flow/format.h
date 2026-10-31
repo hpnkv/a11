@@ -28,6 +28,7 @@ namespace a11::flow {
 
 /// What the formatter is allowed to decide.
 ///
+/// Input and output declarations form separate groups with a blank line.
 /// The fixed style keeps formatting consistent across projects.
 struct FormatOptions {
   /// Spaces per block level. Repository Flow files use two.

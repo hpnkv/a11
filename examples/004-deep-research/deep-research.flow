@@ -59,8 +59,9 @@ flow investigate-with-notes {
 
   in  whole_research_brief: string stream required
   in  investigation_brief:  string stream required
-  out investigation:        string stream required
-  out annotated:            string stream "One line per source, with its note."
+
+  out investigation: string stream required
+  out annotated:     string stream "One line per source, with its note."
 
   found = node()
   notes = node()

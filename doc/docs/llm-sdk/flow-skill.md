@@ -66,9 +66,9 @@ answer, not every fetched page or transfer step.
 
 Skills and Flow can work together. `a11.sdk.flow_tools` publishes its compact
 language reference as an Agent Skill, helping a model decide when and how to
-write a composition. `flow_check` then validates the document, and `flow_run`
-executes the checked semantics. The skill supplies judgment; Flow supplies the
-data path and control flow.
+write a composition. An optional `flow_check` provides compiler feedback;
+`flow_run` compiles and executes it. The skill supplies judgment; Flow supplies
+the data path and control flow.
 
 When a model chooses whether to call `flow_run`, that choice is still model
 judgment. Once the document is submitted, completing its declared procedure no
@@ -121,7 +121,7 @@ schema)` per action.
 
 | Tool           | What the model does with it                                                                                                                                                         |
 |----------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `flow_actions` | Asks what it may compose. Returns each action with its **input and output ports** — the part a tool definition cannot carry, and exactly what a pipe needs on both sides of a `->`. |
+| `flow_actions` | Optionally retrieves missing action contracts, including input and output ports. Pass `names` for selected actions; omit it to list all permitted composable actions. |
 | `flow_check`   | Compiles a flow and describes what it resolves to, without dispatching anything. A syntax error comes back with its line and column.                                                |
 | `flow_run`     | Compiles, checks the call targets, runs the flow, and returns its declared outputs as one object.                                                                                   |
 
@@ -176,11 +176,50 @@ flow_tools.get_system_prompt()  # for composing into a larger system prompt
 flow_tools.get_skill()  # the same words as an a11.sdk.skill.Skill
 ```
 
-The text embeds `a11.flow.REFERENCE`, the compact
-[language reference](../api/flow.md), so prompts use the implemented syntax.
-`a11/sdk/flow_tools/SKILL.md` is generated from the same constants and checked
-in, for a host that loads skills from disk; a test fails when the file and the
-code disagree.
+The text embeds the [compact agent reference](../guides/flow-reference-short.md)
+from `a11/flow/reference_short.md`. Coding-agent sessions include the same
+reference when Flow tools are enabled. The default is to execute almost every
+tool operation through the runner, including a single read, search, edit,
+command, or request. Return bounded evidence for a new decision, then run the
+next operation in another Flow. Direct calls serve discovery, user interaction,
+session controls, completion reporting, tools unavailable through Flow, and
+explicit user requests. Discovery and compile-only checks are optional;
+execution compiles and checks permissions before dispatch. Request contracts
+only when they are missing from context.
+
+Agents choose output budgets before execution: bound sources, filter and
+project results, and combine item limits with text truncation. Full data needed
+by downstream actions stays inside the Flow; the model receives bounded
+evidence with identifiers and available truncation indicators.
+
+Agents prefer composing specialized non-shell actions and Flow stages for file
+access, search, HTTP, and transformations. Process tools serve actual programs
+such as tests and builds or missing capabilities; direct executables are
+preferred over Bash when shell syntax is unnecessary.
+
+Test runs, builds, installs, lint, and diagnostics use filtered Flow outputs.
+Successful checks return exit status and summary counts; failures add a
+selection of relevant errors, failed tests, and causal trace or stack sections
+with context. Relevance filtering comes before size limits; complete diagnostic
+units and necessary structured details are preserved. Complete logs can be
+saved to files and inspected further for specific gaps.
+
+The coding agent's `workspace_info` returns instruction paths and sizes by
+default. `fields` selects metadata and `instruction_chars` sets a total excerpt
+budget of 0–8000 characters. Git status text is capped at 2000 characters and
+lists at 50 entries, with truncation indicators. It returns a check count
+instead of command history. `report_completion` returns only
+`{reported: true, changed_file_count: N}`; session state stores completion details
+and the command audit records.
+
+The coding agent's optional `flow_guide` exposes runner details (`programs`),
+current policy (`permissions`), and the extended native reference (`language`).
+Each lookup returns the requested topic. The compact reference stays in the
+system prompt; extended guidance is loaded for a specific unanswered question.
+
+`a11/sdk/flow_tools/SKILL.md` is generated from the same prompt and packaged
+reference for hosts that load skills from disk. Tests check that the generated
+skill and documentation copy stay in sync.
 
 ## Composed step
 
@@ -190,11 +229,12 @@ question can send this as one `flow_run` call:
 ```a11flow
 flow answer-from-the-web {
   in  question: string required
-  out answer:   string
-  out sources:  string stream
+
+  out answer:  string
+  out sources: string stream
 
   search = run web-search(query: question, limit: 3)
-  brief  = run summarize(question: question)
+  brief = run summarize(question: question)
 
   nodes fetched {
     for hit in search.hits parallel 2 {

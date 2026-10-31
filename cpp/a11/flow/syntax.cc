@@ -540,6 +540,7 @@ void VisitChildren(const Node& node,
     case NodeKind::kStage: {
       const auto& stage = static_cast<const Stage&>(node);
       one(stage.argument);
+      one(stage.parallel_expression);
       all(stage.log.arguments);
       return;
     }
@@ -648,6 +649,7 @@ void VisitChildren(const Node& node,
       return;
     case NodeKind::kForEach: {
       const auto& loop = static_cast<const ForEach&>(node);
+      one(loop.parallel_expression);
       if (loop.pipeline != nullptr) {
         visit(*loop.pipeline);
       }

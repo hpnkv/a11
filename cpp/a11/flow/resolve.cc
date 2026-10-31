@@ -632,11 +632,14 @@ std::string StageLabel(const syntax::Stage& stage) {
     return Unparse(stage.argument.get());
   }
   std::string tail;
-  if (stage.parallel > 1) {
+  if (stage.parallel_expression != nullptr) {
+    absl::StrAppend(&tail, " parallel ",
+                    Unparse(stage.parallel_expression.get()));
+  } else if (stage.parallel > 1) {
     absl::StrAppend(&tail, " parallel ", stage.parallel);
-    if (!stage.ordered) {
-      absl::StrAppend(&tail, " unordered");
-    }
+  }
+  if (!stage.ordered) {
+    absl::StrAppend(&tail, " unordered");
   }
   if (stage.failures != nullptr) {
     absl::StrAppend(&tail, " into ", Unparse(stage.failures.get()));
@@ -2187,7 +2190,22 @@ class FlowResolver {
         return ResolveNodes(syntax::As<syntax::Nodes>(statement), scope, steps);
       case NodeKind::kForEach: {
         const auto* loop = syntax::As<syntax::ForEach>(statement);
-        const Ref source = ResolvePipeline(*loop->pipeline, scope);
+        const bool concurrent =
+            loop->parallel > 1 || loop->parallel_expression != nullptr;
+        const auto parallel_expression =
+            ResolveExpression(loop->parallel_expression.get(), scope, false);
+        Ref source = ResolvePipeline(*loop->pipeline, scope);
+        const bool literal_items = loop->pipeline->stages.empty() &&
+                                   syntax::As<syntax::ListLiteral>(
+                                       loop->pipeline->source.get()) != nullptr;
+        if (literal_items) {
+          // Bare list headers iterate one level through the flatten stage.
+          graph::Stage flatten;
+          flatten.name = "flatten";
+          absl::StrAppend(&source.label, " | flatten");
+          source.node = Derive(source.node, std::move(flatten), source.label);
+          source.kind = Ref::Kind::kDerived;
+        }
         StepPlan step;
         step.kind = "for";
         step.label = Label("for");
@@ -2202,6 +2220,7 @@ class FlowResolver {
           graph::Step& one = builder_->step(made);
           one.source = source.node;
           one.parallel = loop->parallel;
+          one.parallel_expression = parallel_expression;
           one.bodies.push_back(inner_body);
         }
         const graph::RefId item = BoundRef(inner_body, made, "item");
@@ -2221,7 +2240,9 @@ class FlowResolver {
           variable.name = loop->variables[at].text;
           variable.location = loop->variables[at].location;
           if (loop->variables.size() == 1) {
-            variable.value_type = InferredType(loop->pipeline.get(), scope);
+            if (!literal_items) {
+              variable.value_type = InferredType(loop->pipeline.get(), scope);
+            }
             if (variable.value_type.has_value()) {
               variable.shape = variable.value_type->ToString();
             }
@@ -2243,7 +2264,7 @@ class FlowResolver {
         state.label = step.label;
         state.step = made;
         state.carries_a_value = false;
-        state.parallel = std::max(loop->parallel, 1);
+        state.parallel = concurrent ? std::max(loop->parallel, 2) : 1;
         loops_.push_back(state);
         step.bodies.push_back(
             ResolveStatements(loop->body, inner, inner_body, true));
@@ -2255,7 +2276,7 @@ class FlowResolver {
         }
         loops_.pop_back();
         step.after = ResolveAfter(loop->after, scope, made);
-        JoinVariables(scope, {{&inner, inner_body}}, made, loop->parallel > 1);
+        JoinVariables(scope, {{&inner, inner_body}}, made, concurrent);
         steps.push_back(std::move(step));
         return;
       }
@@ -3922,7 +3943,8 @@ class FlowResolver {
         expr = ResolveExpression(stage->argument.get(), scope, true);
         it_pattern_ = outer;
       }
-      if (stage->parallel > 1 && stage->argument != nullptr) {
+      if ((stage->parallel > 1 || stage->parallel_expression != nullptr) &&
+          stage->argument != nullptr) {
         syntax::VisitSubtree(*stage->argument, [&](const Node& node) {
           const auto* take = syntax::As<syntax::PipelineValue>(&node);
           if (take != nullptr && take->take) {
@@ -3955,6 +3977,8 @@ class FlowResolver {
       graph::Stage made =
           GraphStage(*stage, stream, expr, std::move(log), failures);
       made.carry = carry;
+      made.parallel_expression =
+          ResolveExpression(stage->parallel_expression.get(), scope, false);
       ref.node = Derive(source, std::move(made), ref.label);
       if (stage->name == "map") {
         const auto mapped = DescribeExpression(stage->argument.get(), scope);
@@ -4310,7 +4334,20 @@ class FlowResolver {
           info.type = "number";
         }
       } else if (binary->op == "and" || binary->op == "or") {
-        if (left == right) {
+        std::string payload = left;
+        const bool option =
+            binary->op == "or" &&
+            (left == "option" || left == "std::option" ||
+             left.starts_with("option[") || left.starts_with("std::option["));
+        if (option) {
+          const size_t bracket = left.find('[');
+          payload = bracket == std::string::npos
+                        ? ""
+                        : left.substr(bracket + 1, left.size() - bracket - 2);
+        }
+        if (option && (payload.empty() || payload == right)) {
+          info.type = right;
+        } else if (!option && left == right) {
           info.type = left;
         }
       } else {

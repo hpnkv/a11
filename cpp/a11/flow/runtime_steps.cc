@@ -865,9 +865,10 @@ absl::StatusOr<bool> Scope::PassCondition(const graph::Step& one,
 absl::Status Scope::RunForEach(StepId step) {
   const graph::Step& one = graph().steps[step];
   const BodyId body = one.bodies.front();
+  ABSL_ASSIGN_OR_RETURN(const int parallel,
+                        Parallelism(one.parallel, one.parallel_expression));
   ABSL_ASSIGN_OR_RETURN(ReaderPtr reader, Subscribe(one.source));
   Group group(monitor(), work_);
-  const int parallel = std::max(one.parallel, 1);
   std::int64_t index = 0;
   Monitor& monitor = this->monitor();
   auto running = std::make_shared<int>(0);

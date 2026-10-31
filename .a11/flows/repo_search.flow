@@ -1,5 +1,6 @@
 flow repo_search {
-  in  QUERY:  string required
+  in  QUERY: string required
+
   out python: string stream
   out native: string stream
   out docs:   string stream

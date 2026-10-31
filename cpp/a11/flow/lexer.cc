@@ -262,6 +262,37 @@ class Lexer {
     return value;
   }
 
+  StringEscape EscapeAt(size_t start) {
+    size_t end = start + 2;
+    while (end < source_.size() && utf8::IsContinuation(source_[end])) {
+      ++end;
+    }
+    return {start, end, line_, Column(start)};
+  }
+
+  static char DecodeEscape(char escaped) {
+    switch (escaped) {
+      case '0':
+        return '\0';
+      case 'a':
+        return '\a';
+      case 'b':
+        return '\b';
+      case 'f':
+        return '\f';
+      case 'n':
+        return '\n';
+      case 'r':
+        return '\r';
+      case 't':
+        return '\t';
+      case 'v':
+        return '\v';
+      default:
+        return escaped;
+    }
+  }
+
   /// Escapes resolved, the way a single-line string resolves them.
   static std::string Unescape(std::string_view text) {
     std::string value;
@@ -271,20 +302,7 @@ class Lexer {
         value.push_back(text[at]);
         continue;
       }
-      switch (const char escaped = text[++at]) {
-        case 'n':
-          value.push_back('\n');
-          break;
-        case 't':
-          value.push_back('\t');
-          break;
-        case 'r':
-          value.push_back('\r');
-          break;
-        default:
-          value.push_back(escaped);
-          break;
-      }
+      value.push_back(DecodeEscape(text[++at]));
     }
     return value;
   }
@@ -303,9 +321,15 @@ class Lexer {
     const size_t inner_start = index_;
     size_t inner_end = 0;
     bool terminated = false;
+    std::vector<StringEscape> escapes;
     while (index_ < source_.size()) {
       if (source_[index_] == '\\' && index_ + 1 < source_.size()) {
-        index_ += 2;
+        escapes.push_back(EscapeAt(index_));
+        if (source_[index_ + 1] == '\n') {
+          ++line_;
+          line_start_ = index_ + 2;
+        }
+        index_ = escapes.back().end;
         continue;
       }
       if (source_.compare(index_, 3, R"(""")") == 0) {
@@ -337,6 +361,7 @@ class Lexer {
     Token& token = Push(TokenKind::kString, start, index_);
     token.string_value =
         Unescape(Dedent(source_.substr(inner_start, inner_end - inner_start)));
+    token.string_escapes = std::move(escapes);
     line_ = ending_line;
     line_start_ = ending_line_start;
   }
@@ -348,6 +373,7 @@ class Lexer {
     const size_t start = index_;
     ++index_;
     std::string value;
+    std::vector<StringEscape> escapes;
     bool terminated = false;
     while (index_ < source_.size()) {
       const char letter = source_[index_];
@@ -360,26 +386,14 @@ class Lexer {
         break;
       }
       if (letter == '\\') {
+        if (index_ + 1 < source_.size() && source_[index_ + 1] != '\n') {
+          escapes.push_back(EscapeAt(index_));
+        }
         ++index_;
         if (index_ >= source_.size()) {
           break;
         }
-        switch (const char escaped = source_[index_]) {
-          case 'n':
-            value.push_back('\n');
-            break;
-          case 't':
-            value.push_back('\t');
-            break;
-          case 'r':
-            value.push_back('\r');
-            break;
-          default:
-            // An unknown escape is the character itself, which is what the
-            // Python lexer does: `\"` and `\\` come out of this too.
-            value.push_back(escaped);
-            break;
-        }
+        value.push_back(DecodeEscape(source_[index_]));
         ++index_;
         continue;
       }
@@ -392,7 +406,9 @@ class Lexer {
       Report("flow.syntax.unterminated-string", "Unterminated string.", start,
              index_);
     }
-    Push(TokenKind::kString, start, index_).string_value = std::move(value);
+    Token& token = Push(TokenKind::kString, start, index_);
+    token.string_value = std::move(value);
+    token.string_escapes = std::move(escapes);
   }
 
   void ReadNumber() {

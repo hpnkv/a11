@@ -2277,6 +2277,12 @@ absl::StatusOr<Value> Evaluate(const syntax::Node& node,
         // The value, not a boolean: `a or b` is `a` when `a` holds, which is
         // what makes `name or "unknown"` read as a default.
         ABSL_ASSIGN_OR_RETURN(Value left, Evaluate(*binary.left, context));
+        if (binary.op == "or" && left.is_option()) {
+          if (left.Get("has_value")->boolean()) {
+            return *left.Get("value");
+          }
+          return Evaluate(*binary.right, context);
+        }
         const bool holds = Truthy(left);
         if ((binary.op == "and") != holds) {
           return left;

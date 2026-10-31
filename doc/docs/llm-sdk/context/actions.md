@@ -67,7 +67,8 @@ Configure its header before running it. For Flow, register the same handlers:
 
 ```a11flow
 flow shrink {
-  in request: object
+  in  request: object
+
   out result: object
   nodes scratch
   compact = run llm_context_compress(request: request) via scratch

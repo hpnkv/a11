@@ -618,6 +618,31 @@ bool Unary(const ResolvedFlow& flow, std::string_view label) {
   return false;
 }
 
+TEST(FlowResolve, BareListLoopLowersToFlattenWithoutChangingTheSyntaxTree) {
+  const std::string source =
+      "flow main { out value: string stream\n"
+      "for word in [\"a\", \"b\"] { word -> value }\n}";
+  const auto parsed = Parse(source);
+  const auto resolved = Resolve(source, parsed, true);
+  ASSERT_FALSE(resolved.HasErrors()) << Messages(resolved);
+  ASSERT_EQ(resolved.flows.size(), 1);
+  const auto& graph = resolved.flows.front().graph;
+  bool found = false;
+  for (const auto& step : graph.steps) {
+    if (step.kind != graph::StepKind::kForEach) {
+      continue;
+    }
+    const auto& input = graph.refs.at(step.source);
+    EXPECT_EQ(input.kind, graph::RefKind::kDerived);
+    EXPECT_EQ(input.stage.name, "flatten");
+    found = true;
+  }
+  EXPECT_TRUE(found);
+  const auto again = Resolve(source, parsed, true);
+  ASSERT_FALSE(again.HasErrors()) << Messages(again);
+  EXPECT_EQ(again.flows.front().graph.refs.size(), graph.refs.size());
+}
+
 TEST(FlowResolve, WorksOutWhichStreamsCarryAtMostOneValue) {
   // What a value read is allowed to *consume*. A claim, so the interesting half
   // is what is not claimed: a node the flow writes from anywhere, and a port
@@ -649,6 +674,25 @@ TEST(FlowResolve, WorksOutWhichStreamsCarryAtMostOneValue) {
   // every source has at most one value.
   EXPECT_TRUE(Unary(flow, "zip(one, one)"));
   EXPECT_FALSE(Unary(flow, "zip(one, many)"));
+}
+
+TEST(FlowResolve, DynamicParallelismRetainsParallelSafetyChecks) {
+  for (const auto* body :
+       {"for n in [1, 2] parallel width { x = n }",
+        "for n in [1, 2] parallel width { n -> result } until n == 2",
+        "rows | sort parallel width -> result",
+        "rows | take until it == 2 parallel width -> result",
+        "rows | map (take rows) parallel width -> result",
+        "rows | map it parallel it -> result"}) {
+    const auto source = absl::StrCat(
+        "flow main { in rows: int stream\n out result: int stream\n"
+        "width = 2\n x = 0\n",
+        body, "\n}");
+    EXPECT_TRUE(Check(source).HasErrors()) << source;
+  }
+  EXPECT_FALSE(Check("flow main { out result: int stream\n width = 2\n"
+                     "for n in [1, 2] parallel width { n -> result }\n}")
+                   .HasErrors());
 }
 
 TEST(FlowResolve, ReassignmentRejectsProtectedBindingsAndParallelUpdates) {
@@ -918,6 +962,35 @@ flow main { in rows: Row stream
   EXPECT_EQ(found->value_type->name, "Row");
   EXPECT_GT(found->visibility.end, found->visibility.start);
   EXPECT_EQ(result.flows.front().plan.steps.back().optional_binding, "row");
+}
+
+TEST(FlowResolve, OptionalDefaultsInferThePayloadType) {
+  const auto result = Check(R"(
+struct Row { name: string default "unknown" }
+flow main {
+  in rows: Row stream
+  in stored: std::option[Row]
+
+  direct = try take rows or Row{}
+  candidate = take stored
+  reused = candidate or Row{}
+  untyped = std::option({has_value: false}) or Row{}
+  direct.name -> _
+  reused.name -> _
+  untyped.name -> _
+}
+)");
+  ASSERT_FALSE(result.HasErrors()) << Messages(result);
+  int checked = 0;
+  for (const auto& symbol : result.flows.front().symbols) {
+    if (symbol.name == "direct" || symbol.name == "reused" ||
+        symbol.name == "untyped") {
+      ASSERT_TRUE(symbol.value_type.has_value()) << symbol.name;
+      EXPECT_EQ(symbol.value_type->name, "Row") << symbol.name;
+      ++checked;
+    }
+  }
+  EXPECT_EQ(checked, 3);
 }
 
 TEST(FlowResolve, ExplicitOptionFieldsRetainTheirTypes) {

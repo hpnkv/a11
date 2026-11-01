@@ -301,6 +301,7 @@ struct StorageService {
 /// Logical namespace with optional host-interpreted backend access information.
 struct StorageIdentity {
   std::string id{};  ///< Logical namespace resolved by host configuration.
+  std::optional<StorageCredentials> credentials{};  ///< Namespace access.
   std::vector<StorageService>
       services{};  ///< Optional backend access metadata.
   /// Validate the namespace and its service metadata.
@@ -334,6 +335,10 @@ struct NodeRef {
   [[nodiscard]] std::string DebugString() const;
   /// Validate the referenced node id and requested slice.
   absl::Status Validate() const;
+  /// Return a qualified copy with the selected access fields.
+  absl::StatusOr<NodeRef> WithCredentials(
+      StorageCredentials credentials,
+      std::optional<std::string_view> service = std::nullopt) const;
 
   /** @brief Encodes this reference as MessagePack bytes. */
   absl::StatusOr<Bytes> ToMsgpack() const;

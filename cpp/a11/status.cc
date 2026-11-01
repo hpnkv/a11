@@ -171,9 +171,9 @@ std::uint16_t StatusCodeToWebSocket(absl::StatusCode code) {
   return 4001;
 }
 
-absl::Status MakeStatus(absl::StatusCode code, const std::string& message,
+absl::Status MakeStatus(absl::StatusCode code, std::string_view message,
                         const nlohmann::json& details) {
-  absl::Status status(code, std::move(message));
+  absl::Status status(code, message);
   if (details.is_array() && !details.empty()) {
     // Details reach here from a peer or from an application, so a string in
     // them may not be valid UTF-8 -- which is a bad payload rather than a bug,

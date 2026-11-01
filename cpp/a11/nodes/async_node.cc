@@ -14,17 +14,21 @@
 
 #include "a11/nodes/async_node.h"
 
+#include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <absl/log/log.h>
 #include <absl/status/status.h>
 #include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
+#include <absl/time/clock.h>
 #include <absl/time/time.h>
 
 #include "a11/concurrency/callback_scheduler.h"
@@ -32,6 +36,7 @@
 #include "a11/concurrency/future.h"
 #include "a11/data/serialization.h"
 #include "a11/data/types.h"
+#include "a11/nodes/node_map.h"
 #include "a11/stores/chunk_store.h"
 #include "a11/stores/chunk_store_reader.h"
 #include "a11/stores/chunk_store_writer.h"
@@ -225,6 +230,52 @@ absl::StatusOr<std::string> AsyncNode::GetId() const {
   return store_->GetId();
 }
 
+void AsyncNode::SetOwner(const std::shared_ptr<NodeMap>& owner) {
+  thread::MutexLock lock(&mu_);
+  owner_ = owner;
+}
+
+std::shared_ptr<NodeMap> AsyncNode::Owner() const {
+  thread::MutexLock lock(&mu_);
+  return owner_.lock();
+}
+
+absl::StatusOr<data::NodeRef> AsyncNode::Ref(
+    std::uint32_t offset, std::optional<std::uint64_t> length,
+    std::shared_ptr<NodeMap> destination, ReferenceStoragePolicy policy) const {
+  ABSL_ASSIGN_OR_RETURN(auto id, GetId());
+  std::shared_ptr<NodeMap> source;
+  {
+    thread::MutexLock lock(&mu_);
+    source = owner_.lock();
+  }
+  bool same = destination == nullptr;
+  if (destination != nullptr) {
+    ABSL_ASSIGN_OR_RETURN(auto found, destination->GetIfExists(id));
+    same = found.get() == this;
+  }
+  if (policy == ReferenceStoragePolicy::kOmit && !same) {
+    return absl::FailedPreconditionError(
+        "Destination cannot resolve the unqualified source node");
+  }
+  std::optional<data::StorageIdentity> storage;
+  if (policy == ReferenceStoragePolicy::kInclude ||
+      (policy == ReferenceStoragePolicy::kAuto && !same)) {
+    if (source == nullptr || !source->Storage().has_value()) {
+      return absl::FailedPreconditionError(
+          "Source has no portable storage identity");
+    }
+    storage = data::StorageIdentity{
+        .id = source->Storage()->id, .credentials = {}, .services = {}};
+  }
+  data::NodeRef result{.id = std::move(id),
+                       .offset = offset,
+                       .length = length,
+                       .storage = std::move(storage)};
+  ABSL_RETURN_IF_ERROR(result.Validate());
+  return result;
+}
+
 std::shared_ptr<stores::ChunkStore> AsyncNode::GetChunkStore() const {
   return store_;
 }
@@ -258,6 +309,62 @@ absl::StatusOr<std::shared_ptr<stores::ChunkStoreReader>> AsyncNode::reader() {
   return reader_;
 }
 
+namespace {
+class NodeMapReferenceResolver final : public stores::ReferenceResolver {
+ public:
+  explicit NodeMapReferenceResolver(std::weak_ptr<NodeMap> context)
+      : context_(std::move(context)) {}
+
+  absl::StatusOr<stores::ResolvedReference> Resolve(
+      const data::NodeRef& reference) override {
+    const auto context = context_.lock();
+    if (context == nullptr) {
+      return absl::NotFoundError("Reference source has no node map");
+    }
+    ABSL_ASSIGN_OR_RETURN(auto target, context->ResolveForRead(reference));
+    auto next_context = target->Owner();
+    if (next_context == nullptr) {
+      next_context = context;
+    }
+    return stores::ResolvedReference{
+        .store = target->GetChunkStore(),
+        .resolver = std::make_shared<NodeMapReferenceResolver>(
+            std::move(next_context))};
+  }
+
+ private:
+  std::weak_ptr<NodeMap> context_;
+};
+}  // namespace
+
+absl::StatusOr<std::shared_ptr<stores::ChunkStoreReader>>
+AsyncNode::logical_reader() {
+  thread::MutexLock lock(&mu_);
+  if (logical_reader_ == nullptr) {
+    ABSL_RETURN_IF_ERROR(reader_options_.Validate());
+    auto created = stores::ChunkStoreReader::Create(
+        store_, reader_options_,
+        std::make_shared<NodeMapReferenceResolver>(owner_));
+    if (!created.ok()) {
+      return created.status();
+    }
+    logical_reader_ = std::move(*created);
+  }
+  return logical_reader_;
+}
+
+absl::StatusOr<std::shared_ptr<stores::ChunkStoreReader>> AsyncNode::OpenReader(
+    stores::ChunkStoreReaderOptions options) const {
+  ABSL_RETURN_IF_ERROR(options.Validate());
+  std::weak_ptr<NodeMap> owner;
+  {
+    thread::MutexLock lock(&mu_);
+    owner = owner_;
+  }
+  return stores::ChunkStoreReader::Create(
+      store_, options, std::make_shared<NodeMapReferenceResolver>(owner));
+}
+
 absl::StatusOr<std::shared_ptr<stores::ChunkStoreWriter>> AsyncNode::writer() {
   thread::MutexLock lock(&mu_);
   if (writer_ == nullptr) {
@@ -284,6 +391,10 @@ absl::Status AsyncNode::SetReaderOptions(
     return absl::FailedPreconditionError(
         "Reader options cannot change after reader creation");
   }
+  if (logical_reader_ != nullptr) {
+    return absl::FailedPreconditionError(
+        "Reader options cannot change after reader creation");
+  }
   reader_options_ = options;
   return absl::OkStatus();
 }
@@ -294,15 +405,20 @@ absl::Status AsyncNode::ResetReader(
     ABSL_RETURN_IF_ERROR(options->Validate());
   }
   std::shared_ptr<stores::ChunkStoreReader> reader;
+  std::shared_ptr<stores::ChunkStoreReader> logical;
   {
     thread::MutexLock lock(&mu_);
     reader = std::move(reader_);
+    logical = std::move(logical_reader_);
     if (options.has_value()) {
       reader_options_ = *options;
     }
   }
   if (reader != nullptr) {
     reader->Cancel();
+  }
+  if (logical != nullptr) {
+    logical->Cancel();
   }
   return absl::OkStatus();
 }
@@ -326,9 +442,14 @@ absl::Status AsyncNode::SetWriterOptions(
 
 absl::Status AsyncNode::GetReaderStatus() const {
   std::shared_ptr<stores::ChunkStoreReader> reader;
+  std::shared_ptr<stores::ChunkStoreReader> logical;
   {
     thread::MutexLock lock(&mu_);
     reader = reader_;
+    logical = logical_reader_;
+  }
+  if (logical != nullptr && !logical->GetStatus().ok()) {
+    return logical->GetStatus();
   }
   return reader != nullptr ? reader->GetStatus() : absl::OkStatus();
 }
@@ -405,10 +526,19 @@ a11::Future<std::uint32_t> AsyncNode::PutChunk(data::Chunk chunk,
 a11::Future<std::uint32_t> AsyncNode::PutFragment(data::NodeFragment fragment) {
   absl::StatusOr<data::Chunk*> chunk = fragment.GetChunk();
   if (!chunk.ok()) {
-    return a11::FailedFuture<std::uint32_t>(absl::UnimplementedError(
-        "AsyncNode does not resolve NodeRef payloads"));
+    return PutReference(std::get<data::NodeRef>(std::move(fragment.data)),
+                        fragment.seq, !fragment.continued);
   }
   return PutChunk(std::move(**chunk), fragment.seq, !fragment.continued);
+}
+
+a11::Future<std::uint32_t> AsyncNode::PutReference(
+    data::NodeRef reference, std::optional<std::uint32_t> seq, bool final) {
+  absl::StatusOr<std::shared_ptr<stores::ChunkStoreWriter>> output = writer();
+  if (!output.ok()) {
+    return a11::FailedFuture<std::uint32_t>(output.status());
+  }
+  return (*output)->PutReference(std::move(reference), seq, final);
 }
 
 a11::Task AsyncNode::Finalize(FinalizeOptions options) {
@@ -454,6 +584,38 @@ a11::Task AsyncNode::Finalize(data::Chunk chunk, FinalizeOptions options) {
                    });
 }
 
+a11::Task AsyncNode::Finalize(data::NodeRef reference,
+                              FinalizeOptions options) {
+  absl::StatusOr<std::shared_ptr<stores::ChunkStoreWriter>> output = writer();
+  if (!output.ok()) {
+    return a11::FailedTask(output.status());
+  }
+  stores::ChunkStoreWrite write = (*output)->EnqueueReference(
+      std::move(reference), options.seq, /*final=*/true,
+      /*ensure_started=*/false);
+  (*output)->Flush();
+  a11::Task closed =
+      options.close ? (*output)->DrainAndClose() : a11::ReadyTask();
+  if (!options.wait) {
+    LogIfFailed(write.confirmation, "final reference write");
+    if (options.close) {
+      LogIfFailed(closed, "close");
+    }
+    return a11::ReadyTask();
+  }
+  if (options.close) {
+    return closed;
+  }
+  return a11::Then(write.confirmation,
+                   [](const absl::StatusOr<std::uint32_t>& stored)
+                       -> absl::StatusOr<a11::Unit> {
+                     if (!stored.ok()) {
+                       return stored.status();
+                     }
+                     return a11::Unit{};
+                   });
+}
+
 a11::Future<std::vector<std::optional<data::NodeFragment>>>
 AsyncNode::NextFragments(size_t limit, absl::Duration timeout) {
   using Batch = std::vector<std::optional<data::NodeFragment>>;
@@ -471,6 +633,34 @@ a11::Future<std::optional<data::NodeFragment>> AsyncNode::NextFragmentRaw(
     return a11::FailedFuture<std::optional<data::NodeFragment>>(input.status());
   }
   return (*input)->Next(timeout);
+}
+
+a11::Future<std::optional<data::NodeFragment>> AsyncNode::NextLogicalFragment(
+    absl::Duration timeout) {
+  auto input = logical_reader();
+  if (!input.ok()) {
+    return a11::FailedFuture<std::optional<data::NodeFragment>>(input.status());
+  }
+  return (*input)->NextLogical(timeout);
+}
+
+a11::Future<std::vector<std::optional<data::NodeFragment>>>
+AsyncNode::NextLogicalFragments(size_t limit, absl::Duration timeout) {
+  using Batch = std::vector<std::optional<data::NodeFragment>>;
+  auto input = logical_reader();
+  if (!input.ok()) {
+    return a11::FailedFuture<Batch>(input.status());
+  }
+  return (*input)->NextLogicalMany(limit, timeout);
+}
+
+bool AsyncNode::LogicalSawFinal() const {
+  std::shared_ptr<stores::ChunkStoreReader> logical;
+  {
+    thread::MutexLock lock(&mu_);
+    logical = logical_reader_;
+  }
+  return logical != nullptr && logical->LogicalSawFinal();
 }
 
 a11::Future<std::optional<data::NodeFragment>> AsyncNode::NextFragment(
@@ -501,7 +691,7 @@ a11::Future<std::optional<data::Chunk>> AsyncNode::NextChunk(
   // fiber whose whole life is "await one future, unwrap it" is a fiber spent
   // on nothing.
   return a11::Then(
-      NextFragment(timeout),
+      NextLogicalFragment(timeout),
       [](const absl::StatusOr<std::optional<data::NodeFragment>>& fragment)
           -> absl::StatusOr<std::optional<data::Chunk>> {
         if (!fragment.ok()) {
@@ -514,7 +704,9 @@ a11::Future<std::optional<data::Chunk>> AsyncNode::NextChunk(
         if (!chunk.ok()) {
           return chunk.status();
         }
-        return std::optional<data::Chunk>(**chunk);
+        data::Chunk value = **chunk;
+        ABSL_RETURN_IF_ERROR(value.Materialize());
+        return std::optional<data::Chunk>(std::move(value));
       });
 }
 
@@ -540,11 +732,17 @@ a11::Task AsyncNode::AbortWithStatus(absl::Status status) {
 }
 
 absl::Status AsyncNode::AttachStream(std::shared_ptr<net::WireStream> stream) {
+  return AttachStream(std::move(stream), {});
+}
+
+absl::Status AsyncNode::AttachStream(
+    std::shared_ptr<net::WireStream> stream,
+    stores::ChunkStoreWriter::ReferenceRewriter rewrite) {
   absl::StatusOr<std::shared_ptr<stores::ChunkStoreWriter>> value = writer();
   if (!value.ok()) {
     return value.status();
   }
-  return (*value)->AttachStream(std::move(stream));
+  return (*value)->AttachStream(std::move(stream), std::move(rewrite));
 }
 
 absl::Status AsyncNode::DetachStream(
@@ -558,12 +756,17 @@ absl::Status AsyncNode::DetachStream(
 
 void AsyncNode::CancelReader() {
   std::shared_ptr<stores::ChunkStoreReader> reader;
+  std::shared_ptr<stores::ChunkStoreReader> logical;
   {
     thread::MutexLock lock(&mu_);
     reader = reader_;
+    logical = logical_reader_;
   }
   if (reader != nullptr) {
     reader->Cancel();
+  }
+  if (logical != nullptr) {
+    logical->Cancel();
   }
 }
 

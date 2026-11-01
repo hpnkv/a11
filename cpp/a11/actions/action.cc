@@ -35,12 +35,14 @@
 #include <absl/strings/str_cat.h>
 #include <absl/strings/str_format.h>
 #include <absl/strings/str_join.h>
+#include <absl/strings/str_split.h>
 #include <absl/time/clock.h>
 #include <absl/time/time.h>
 
 #include "a11/actions/authorization.h"
 #include "a11/actions/internal/exception_guarded_handlers.h"
 #include "a11/actions/log.h"
+#include "a11/actions/reference_mirror.h"
 #include "a11/actions/registry.h"
 #include "a11/actions/schema.h"
 #include "a11/concurrency/executor.h"
@@ -383,15 +385,45 @@ std::shared_ptr<nodes::NodeMap> Action::GetNodeMap() const {
 
 absl::Status Action::BindStream(std::shared_ptr<net::WireStream> stream) {
   std::shared_ptr<net::WireStream> previous;
+  std::shared_ptr<ReferenceMirrorRegistry> previous_registry;
+  std::vector<std::string> direct;
   std::vector<std::shared_ptr<nodes::AsyncNode>> nodes;
   {
     thread::MutexLock lock(&mu_);
     previous = stream_;
+    previous_registry = reference_mirrors_;
     if (previous == stream) {
       return absl::OkStatus();
     }
     nodes.assign(stream_bound_nodes_.begin(), stream_bound_nodes_.end());
+    if (mode_ == Mode::kRun && parent_.expired()) {
+      const auto found = headers_.find(std::string(kStreamStorageHeader));
+      if (found != headers_.end()) {
+        for (const auto id : absl::StrSplit(found->second, ',')) {
+          if (!id.empty()) {
+            direct.emplace_back(id);
+          }
+        }
+      }
+    }
   }
+  auto next_registry = stream == nullptr
+                           ? std::shared_ptr<ReferenceMirrorRegistry>()
+                           : std::make_shared<ReferenceMirrorRegistry>(
+                                 stream, std::move(direct));
+  const auto attach =
+      [](const std::shared_ptr<nodes::AsyncNode>& node,
+         const std::shared_ptr<net::WireStream>& wire,
+         const std::shared_ptr<ReferenceMirrorRegistry>& registry)
+      -> absl::Status {
+    std::weak_ptr<nodes::NodeMap> source_map = node->Owner();
+    return node->AttachStream(
+        wire,
+        [registry, source_map](
+            const data::NodeRef& reference) -> absl::StatusOr<data::NodeRef> {
+          return registry->Rewrite(reference, source_map.lock());
+        });
+  };
   std::vector<std::shared_ptr<nodes::AsyncNode>> rebound;
   for (const auto& node : nodes) {
     absl::Status status;
@@ -399,7 +431,7 @@ absl::Status Action::BindStream(std::shared_ptr<net::WireStream> stream) {
       status = node->DetachStream(previous);
     }
     if (status.ok() && stream != nullptr) {
-      status = node->AttachStream(stream);
+      status = attach(node, stream, next_registry);
     }
     if (!status.ok()) {
       for (const auto& completed : rebound) {
@@ -407,7 +439,11 @@ absl::Status Action::BindStream(std::shared_ptr<net::WireStream> stream) {
           completed->DetachStream(stream).IgnoreError();
         }
         if (previous != nullptr) {
-          completed->AttachStream(previous).IgnoreError();
+          if (previous_registry != nullptr) {
+            attach(completed, previous, previous_registry).IgnoreError();
+          } else {
+            completed->AttachStream(previous).IgnoreError();
+          }
         }
       }
       return status;
@@ -419,6 +455,7 @@ absl::Status Action::BindStream(std::shared_ptr<net::WireStream> stream) {
     return absl::AbortedError("Action stream changed concurrently");
   }
   stream_ = std::move(stream);
+  reference_mirrors_ = std::move(next_registry);
   return absl::OkStatus();
 }
 
@@ -580,8 +617,8 @@ absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> Action::GetPort(
   bool output = false;
   {
     thread::MutexLock lock(&mu_);
-    input = input_ids_.find(std::string(name)) != input_ids_.end();
-    output = output_ids_.find(std::string(name)) != output_ids_.end();
+    input = input_ids_.find(name) != input_ids_.end();
+    output = output_ids_.find(name) != output_ids_.end();
   }
   if (input && output) {
     return absl::FailedPreconditionError(
@@ -598,8 +635,8 @@ absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> Action::GetPort(
 
 bool Action::ContainsPort(std::string_view name) const {
   thread::MutexLock lock(&mu_);
-  return input_ids_.find(std::string(name)) != input_ids_.end() ||
-         output_ids_.find(std::string(name)) != output_ids_.end();
+  return input_ids_.find(name) != input_ids_.end() ||
+         output_ids_.find(name) != output_ids_.end();
 }
 
 absl::Status Action::Log(data::Chunk chunk, const LogOptions& options) {
@@ -1047,6 +1084,14 @@ a11::Future<std::shared_ptr<Action>> Action::Call(data::ByteMap wire_headers) {
     thread::MutexLock lock(&mu_);
     span_.InjectContext(headers_).IgnoreError();
   }
+  if (const auto node_map = GetNodeMap(); node_map != nullptr) {
+    const auto accessible = node_map->StorageIds();
+    if (!accessible.empty()) {
+      thread::MutexLock lock(&mu_);
+      headers_.try_emplace(std::string(kStreamStorageHeader),
+                           absl::StrJoin(accessible, ","));
+    }
+  }
   std::shared_ptr<service::Session> session = GetSession();
   if (session != nullptr) {
     status = TrackInSession(session);
@@ -1420,6 +1465,26 @@ absl::Status Action::RemapDefaultPorts() {
   return absl::OkStatus();
 }
 
+std::shared_ptr<ReferenceMirrorRegistry> Action::MirrorRegistry() {
+  thread::MutexLock lock(&mu_);
+  if (reference_mirrors_ == nullptr) {
+    std::vector<std::string> direct;
+    if (mode_ == Mode::kRun && parent_.expired()) {
+      const auto found = headers_.find(std::string(kStreamStorageHeader));
+      if (found != headers_.end()) {
+        for (const auto id : absl::StrSplit(found->second, ',')) {
+          if (!id.empty()) {
+            direct.emplace_back(id);
+          }
+        }
+      }
+    }
+    reference_mirrors_ =
+        std::make_shared<ReferenceMirrorRegistry>(stream_, std::move(direct));
+  }
+  return reference_mirrors_;
+}
+
 absl::Status Action::AttachStreamIfRequested(
     const std::shared_ptr<nodes::AsyncNode>& node, bool bind) {
   if (!bind) {
@@ -1433,7 +1498,14 @@ absl::Status Action::AttachStreamIfRequested(
   if (stream == nullptr) {
     return absl::OkStatus();
   }
-  ABSL_RETURN_IF_ERROR(node->AttachStream(stream));
+  const auto registry = MirrorRegistry();
+  std::weak_ptr<nodes::NodeMap> source_map = node->Owner();
+  ABSL_RETURN_IF_ERROR(node->AttachStream(
+      stream,
+      [registry, source_map](
+          const data::NodeRef& reference) -> absl::StatusOr<data::NodeRef> {
+        return registry->Rewrite(reference, source_map.lock());
+      }));
 
   thread::MutexLock lock(&mu_);
   stream_bound_nodes_.insert(node);

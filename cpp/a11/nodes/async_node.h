@@ -65,6 +65,9 @@ class WireStream;
 }  // namespace a11::net
 
 namespace a11::nodes {
+class NodeMap;
+
+enum class ReferenceStoragePolicy { kAuto, kInclude, kOmit };
 
 /**
  * @brief How an `AsyncNode::Finalize()` call ends the stream.
@@ -266,6 +269,9 @@ class AsyncNode : public std::enable_shared_from_this<AsyncNode> {
    * @return An awaitable that resolves to the stored sequence number.
    */
   a11::Future<std::uint32_t> PutFragment(data::NodeFragment fragment);
+  a11::Future<std::uint32_t> PutReference(
+      data::NodeRef reference, std::optional<std::uint32_t> seq = std::nullopt,
+      bool final = false);
 
   /** Serialize and write a typed value to the stream. */
   /**
@@ -355,6 +361,7 @@ class AsyncNode : public std::enable_shared_from_this<AsyncNode> {
    * @return An awaitable resolving as described by Finalize(FinalizeOptions).
    */
   a11::Task Finalize(data::Chunk chunk, FinalizeOptions options = {});
+  a11::Task Finalize(data::NodeRef reference, FinalizeOptions options = {});
 
   /**
    * @brief Serialize `value` as the stream's final data, then end the stream.
@@ -414,6 +421,13 @@ class AsyncNode : public std::enable_shared_from_this<AsyncNode> {
    */
   a11::Future<std::optional<data::NodeFragment>> NextFragmentRaw(
       absl::Duration timeout = absl::InfiniteDuration());
+  a11::Future<std::optional<data::NodeFragment>> NextLogicalFragment(
+      absl::Duration timeout = absl::InfiniteDuration());
+  a11::Future<std::vector<std::optional<data::NodeFragment>>>
+  NextLogicalFragments(size_t limit,
+                       absl::Duration timeout = absl::InfiniteDuration());
+  /// Whether the logical source has supplied a final raw fragment.
+  bool LogicalSawFinal() const;
 
   /**
    * @brief Read the next raw chunk.
@@ -446,7 +460,7 @@ class AsyncNode : public std::enable_shared_from_this<AsyncNode> {
           // NextFragment() would have materialised it, which is right for every
           // caller that wants bytes and is exactly what this one does not.
           absl::StatusOr<std::optional<data::NodeFragment>> fragment =
-              self->NextFragmentRaw(timeout).Await();
+              self->NextLogicalFragment(timeout).Await();
           if (!fragment.ok()) {
             return fragment.status();
           }
@@ -556,6 +570,9 @@ class AsyncNode : public std::enable_shared_from_this<AsyncNode> {
    * @return OK, or an error status on failure.
    */
   absl::Status AttachStream(std::shared_ptr<net::WireStream> stream);
+  absl::Status AttachStream(
+      std::shared_ptr<net::WireStream> stream,
+      stores::ChunkStoreWriter::ReferenceRewriter rewrite);
 
   /**
    * @brief Stop mirroring chunks over a previously attached wire stream.
@@ -580,7 +597,22 @@ class AsyncNode : public std::enable_shared_from_this<AsyncNode> {
    */
   void Cancel();
 
+  /// Link a node created by a map to its owning resolution context.
+  void SetOwner(const std::shared_ptr<NodeMap>& owner);
+  [[nodiscard]] std::shared_ptr<NodeMap> Owner() const;
+  /// Return a fragment reference using the destination's resolution context.
+  absl::StatusOr<data::NodeRef> Ref(
+      std::uint32_t offset = 0,
+      std::optional<std::uint64_t> length = std::nullopt,
+      std::shared_ptr<NodeMap> destination = nullptr,
+      ReferenceStoragePolicy policy = ReferenceStoragePolicy::kAuto) const;
+  /// Open an independent cursor with this node's reference resolution context.
+  absl::StatusOr<std::shared_ptr<stores::ChunkStoreReader>> OpenReader(
+      stores::ChunkStoreReaderOptions options) const;
+
  private:
+  absl::StatusOr<std::shared_ptr<stores::ChunkStoreReader>> logical_reader();
+
   AsyncNode(std::shared_ptr<stores::ChunkStore> store,
             std::shared_ptr<data::SerializationRegistry> registry,
             stores::ChunkStoreReaderOptions reader_options,
@@ -597,7 +629,10 @@ class AsyncNode : public std::enable_shared_from_this<AsyncNode> {
   stores::ChunkStoreReaderOptions reader_options_ ABSL_GUARDED_BY(mu_);
   stores::ChunkStoreWriterOptions writer_options_ ABSL_GUARDED_BY(mu_);
   std::shared_ptr<stores::ChunkStoreReader> reader_ ABSL_GUARDED_BY(mu_);
+  std::shared_ptr<stores::ChunkStoreReader> logical_reader_
+      ABSL_GUARDED_BY(mu_);
   std::shared_ptr<stores::ChunkStoreWriter> writer_ ABSL_GUARDED_BY(mu_);
+  std::weak_ptr<NodeMap> owner_ ABSL_GUARDED_BY(mu_);
 };
 
 }  // namespace a11::nodes

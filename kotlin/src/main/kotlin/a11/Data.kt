@@ -220,6 +220,27 @@ class NodeRef internal constructor(handle: Long) : NativeObject(handle), NodePay
             }
         }
 
+    fun withCredentials(
+        credentials: StorageCredentials,
+        service: String? = null,
+    ): StatusOr<NodeRef> {
+        val current =
+            storage
+                ?: return failedPrecondition("Credentials require a storage-qualified reference.")
+        val selected = current.services.map { it.copy() }.toMutableList()
+        if (service != null) {
+            val index = selected.indexOfFirst { it.role == service }
+            if (index < 0) return invalidArgument("Unknown storage service role.")
+            selected[index] = selected[index].copy(credentials = credentials)
+        }
+        val updated =
+            current.copy(
+                services = selected,
+                credentials = if (service == null) credentials else current.credentials,
+            )
+        return Ok(NodeRef(id, offset, length, updated))
+    }
+
     var offset: UInt
         get() = NativeData.nodeRefOffset(this).toUInt()
         set(value) = NativeData.nodeRefOffsetSet(this, value.toLong())

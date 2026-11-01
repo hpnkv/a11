@@ -71,3 +71,49 @@ def test_storage_namespaces_and_credential_resolver():
         host.resolve(
             a11.NodeRef("missing", storage=a11.StorageIdentity("unavailable"))
         )
+
+
+def test_reference_credentials_are_copy_returning_and_typed():
+    original = a11.NodeRef(
+        "target",
+        storage=a11.StorageIdentity(
+            "shared", [a11.StorageService("payload", "https://storage.example")]
+        ),
+    )
+    namespace = original.with_credentials(
+        a11.StorageCredentials("bearer", {"token": "namespace-secret"})
+    )
+    service = namespace.with_credentials(
+        a11.StorageCredentials("bearer", {"token": "service-secret"}),
+        service="payload",
+    )
+    assert original.storage.credentials is None
+    assert namespace.storage.credentials.fields["token"] == "namespace-secret"
+    assert namespace.storage.services[0].credentials is None
+    assert (
+        service.storage.services[0].credentials.fields["token"]
+        == "service-secret"
+    )
+    assert a11.NodeRef.from_msgpack(service.to_msgpack()) == service
+    assert a11.NodeRef.model_validate_json(service.model_dump_json()) == service
+    assert "namespace-secret" not in repr(service)
+    assert "service-secret" not in repr(service)
+    with pytest.raises(StatusException):
+        original.with_credentials(
+            a11.StorageCredentials("bearer"), service="missing"
+        )
+    with pytest.raises(StatusException):
+        a11.NodeRef("local").with_credentials(a11.StorageCredentials("bearer"))
+
+
+def test_read_resolution_opens_uncached_targets_only_when_host_allows_it():
+    backend = a11.NodeMap(storage=a11.StorageIdentity("durable"))
+    host = a11.NodeMap()
+    host.register_storage("durable", backend)
+    reference = a11.NodeRef(
+        "uncached", storage=a11.StorageIdentity("durable")
+    )
+    with pytest.raises(StatusException):
+        host.resolve_for_read(reference)
+    backend.set_allow_lazy_read_resolution(True)
+    assert host.resolve_for_read(reference) is backend.get("uncached")

@@ -17,7 +17,7 @@
 import { statusToChunk } from './action_schema.js';
 import { Deferred, storeCallbackScheduler } from './concurrency.js';
 import { cloneChunk, hasChunkStoreShape, type ChunkStore } from './chunk_store.js';
-import { Chunk, NodeFragment, WireMessage } from './data.js';
+import { Chunk, NodeFragment, NodeRef, WireMessage } from './data.js';
 import {
   abortedError,
   dataLossError,
@@ -97,10 +97,20 @@ export interface WritableWireStream {
   getId(): string;
   /** Admit a wire message for asynchronous delivery. */
   send(message: WireMessage): Status;
+  /** Optional terminal status for long-running mirror cursors. */
+  getStatus?(): Status;
+}
+
+export type ReferenceRewriter =
+  (reference: NodeRef) => Promise<StatusOr<NodeRef>> | StatusOr<NodeRef>;
+
+interface StreamAttachment {
+  stream: WritableWireStream;
+  rewrite?: ReferenceRewriter;
 }
 
 interface WriteElement {
-  chunk: Chunk;
+  chunk: Chunk | NodeRef;
   seq: number | null;
   continued: boolean;
   admission: Deferred<Status>;
@@ -146,7 +156,7 @@ export class ChunkStoreWriter {
   private lifecycle: Lifecycle = 'none';
   private lifecycleDone: Deferred<Status> | null = null;
   private readonly drainWaiters: Array<Deferred<Status>> = [];
-  private readonly streams: WritableWireStream[] = [];
+  private readonly streams: StreamAttachment[] = [];
   private operation: 'none' | 'write' | 'close' = 'none';
   private queued = false;
   private generation = 0;
@@ -189,7 +199,7 @@ export class ChunkStoreWriter {
 
   /** Enqueue a chunk and expose admission and persistence as separate promises. */
   enqueueChunk(
-    chunk: Chunk,
+    chunk: Chunk | NodeRef,
     seq: number | null = null,
     final = false,
     ensureStarted = true,
@@ -201,7 +211,7 @@ export class ChunkStoreWriter {
       confirmation.resolve(status);
       return { admitted: admission.promise, confirmation: confirmation.promise };
     };
-    if (!(chunk instanceof Chunk)) return failed(invalidArgumentError('chunk must be a Chunk.'));
+    if (!(chunk instanceof Chunk) && !(chunk instanceof NodeRef)) return failed(invalidArgumentError('chunk must be a Chunk or NodeRef.'));
     const validation = chunk.validate();
     if (!isOk(validation)) return failed(validation);
     if (seq !== null && (!Number.isSafeInteger(seq) || seq < 0 || seq > UINT32_MAX)) {
@@ -217,7 +227,7 @@ export class ChunkStoreWriter {
       if (this.nextOffsetSeq > UINT32_MAX) return failed(resourceExhaustedError('Maximum writer sequence number exceeded'));
       seq = this.nextOffsetSeq++;
     }
-    if (this.options.stickyMimetype) {
+    if (this.options.stickyMimetype && chunk instanceof Chunk) {
       chunk = cloneChunk(chunk);
       const explicitSequenceGap = requestedSeq !== null && requestedSeq !== this.nextStickySeq;
       const mimetype = chunk.mimetype;
@@ -251,7 +261,7 @@ export class ChunkStoreWriter {
 
   /** Apply backpressure, persist a chunk, and return its confirmed sequence. */
   async putChunk(
-    chunk: Chunk,
+    chunk: Chunk | NodeRef,
     seq: number | null = null,
     final = false,
   ): Promise<StatusOr<number>> {
@@ -262,7 +272,7 @@ export class ChunkStoreWriter {
   }
 
   /** Alias for {@link putChunk}. */
-  put(chunk: Chunk, seq: number | null = null, final = false): Promise<StatusOr<number>> {
+  put(chunk: Chunk | NodeRef, seq: number | null = null, final = false): Promise<StatusOr<number>> {
     return this.putChunk(chunk, seq, final);
   }
 
@@ -288,7 +298,7 @@ export class ChunkStoreWriter {
    * visible through {@link getStatus}. {@link AsyncNode.finalize} is the entry
    * point application code wants -- it serializes values for you.
    */
-  finalize(chunk: Chunk, seq: number | null = null, wait = false, close = true): Promise<Status> {
+  finalize(chunk: Chunk | NodeRef, seq: number | null = null, wait = false, close = true): Promise<Status> {
     const write = this.enqueueChunk(chunk, seq, true, true);
     const closed = close ? this.drainAndClose() : Promise.resolve(okStatus());
     if (wait) {
@@ -368,7 +378,7 @@ export class ChunkStoreWriter {
   }
 
   /** Tee stored fragments to a stream; a send failure stops later writes. */
-  attachStream(stream: WritableWireStream): Status {
+  attachStream(stream: WritableWireStream, rewrite?: ReferenceRewriter): Status {
     try {
       if (
         stream === null ||
@@ -385,13 +395,15 @@ export class ChunkStoreWriter {
     } catch (error) {
       return statusFromUnknown(error, 'WireStream getId raised an exception');
     }
-    if (!this.streams.includes(stream)) this.streams.push(stream);
+    if (!this.streams.some((attached) => attached.stream === stream)) {
+      this.streams.push({stream, rewrite});
+    }
     return okStatus();
   }
 
   /** Stop teeing future stored fragments to a previously attached stream. */
   detachStream(stream: WritableWireStream): Status {
-    const index = this.streams.indexOf(stream);
+    const index = this.streams.findIndex((attached) => attached.stream === stream);
     if (index >= 0) this.streams.splice(index, 1);
     return okStatus();
   }
@@ -479,10 +491,9 @@ export class ChunkStoreWriter {
     return okStatus();
   }
 
-  private writeDone(generation: number, result: unknown): void {
+  private async writeDone(generation: number, result: unknown): Promise<void> {
     try {
       if (this.operation !== 'write' || generation !== this.generation) return;
-      this.operation = 'none';
       let operationStatus: Status = okStatus();
       if (isStatus(result) && !isOk(result)) operationStatus = result;
       else if (!Array.isArray(result)) operationStatus = dataLossError('ChunkStore putMany returned a value that is not an array');
@@ -508,17 +519,23 @@ export class ChunkStoreWriter {
           teeStatus = dataLossError('ChunkStore getId returned an invalid node id');
         }
         else {
-          const message = new WireMessage({
-            nodeFragments: this.activeBatch.map((element, index) => new NodeFragment({
-              id,
-              data: element.chunk,
-              seq: result[index]!,
-              continued: element.continued,
-            })),
-          });
-          for (const stream of this.streams) {
+          for (const attached of this.streams) {
             try {
-              const returned = stream.send(message);
+              const fragments: NodeFragment[] = [];
+              for (let index = 0; index < this.activeBatch.length; ++index) {
+                const element = this.activeBatch[index]!;
+                let data = element.chunk;
+                if (data instanceof NodeRef && attached.rewrite) {
+                  const rewritten = await attached.rewrite(data);
+                  if (!isOk(rewritten)) { teeStatus = rewritten; break; }
+                  data = rewritten;
+                }
+                fragments.push(new NodeFragment({
+                  id, data, seq: result[index]!, continued: element.continued,
+                }));
+              }
+              if (!isOk(teeStatus)) break;
+              const returned = attached.stream.send(new WireMessage({nodeFragments: fragments}));
               teeStatus = isStatus(returned)
                 ? returned
                 : dataLossError('WireStream send returned an invalid status');
@@ -528,6 +545,7 @@ export class ChunkStoreWriter {
           }
         }
       }
+      this.operation = 'none';
       const completed = this.activeBatch.splice(0);
       this.outstanding -= completed.length;
       if (isOk(operationStatus) && Array.isArray(result)) {
@@ -580,9 +598,9 @@ export class ChunkStoreWriter {
     const message = new WireMessage({
       nodeFragments: [new NodeFragment({ id, data: marker, seq: 0, continued: false })],
     });
-    for (const stream of this.streams) {
+    for (const attached of this.streams) {
       try {
-        const returned = stream.send(message);
+        const returned = attached.stream.send(message);
         if (isStatus(returned) && !isOk(returned)) return returned;
       } catch (error) {
         return statusFromUnknown(error, 'WireStream send raised an exception');

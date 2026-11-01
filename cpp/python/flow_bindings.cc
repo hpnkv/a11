@@ -483,6 +483,16 @@ py::object ValueToPython(const flow::Value& value) {
     case flow::Value::Kind::kChunk:
       return py::cast(value.chunk());
     case flow::Value::Kind::kHost: {
+      if (const auto* fragment =
+              dynamic_cast<const flow::NodeFragmentObject*>(&value.host());
+          fragment != nullptr) {
+        return py::cast(fragment->fragment());
+      }
+      if (const auto* reference =
+              dynamic_cast<const flow::NodeReferenceObject*>(&value.host());
+          reference != nullptr) {
+        return py::cast(reference->reference());
+      }
       const auto* object = dynamic_cast<const PythonObject*>(&value.host());
       if (object != nullptr) {
         return object->object();
@@ -1446,7 +1456,7 @@ void BindFlow(py::module_& module) {
                   type.exported = exported;
                 }
                 return ValueOrThrow(self.UpsertDeclaration(
-                    declaration.interface, declaration.types,
+                    std::move(declaration.interface), declaration.types,
                     std::move(symbol)));
               },
               py::arg("schema"), py::arg("symbol") = std::nullopt,

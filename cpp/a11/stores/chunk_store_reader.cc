@@ -46,6 +46,14 @@ namespace a11::stores {
 
 absl::Status ChunkStoreReaderOptions::Validate() const {
   constexpr std::uint64_t kMaximum = std::uint64_t{1} << 32U;
+  if (follow_node_refs && (!ordered || pop_chunks)) {
+    return absl::InvalidArgumentError(
+        "Following references requires ordered, non-destructive reads");
+  }
+  if (max_ref_depth == 0 || max_ref_depth > 64 || max_ref_breadth == 0 ||
+      max_ref_breadth > 64) {
+    return absl::OutOfRangeError("Reference depth and breadth must be 1..64");
+  }
   if (num_chunks_to_buffer > kMaximum) {
     return absl::OutOfRangeError("num_chunks_to_buffer exceeds 2^32");
   }
@@ -708,7 +716,8 @@ struct ChunkStoreReader::State
 };
 
 absl::StatusOr<std::shared_ptr<ChunkStoreReader>> ChunkStoreReader::Create(
-    std::shared_ptr<ChunkStore> store, ChunkStoreReaderOptions options) {
+    std::shared_ptr<ChunkStore> store, ChunkStoreReaderOptions options,
+    std::shared_ptr<ReferenceResolver> resolver) {
   if (store == nullptr) {
     return absl::InvalidArgumentError("store must not be null");
   }
@@ -725,6 +734,7 @@ absl::StatusOr<std::shared_ptr<ChunkStoreReader>> ChunkStoreReader::Create(
   std::shared_ptr<ChunkStoreReader> reader =
       std::make_shared<MakeSharedEnabler>(
           std::make_shared<State>(std::move(store), options));
+  reader->resolver_ = std::move(resolver);
   reader->EnsureStarted();
   return reader;
 }
@@ -734,10 +744,15 @@ void ChunkStoreReader::EnsureStarted() {
 }
 
 void ChunkStoreReader::Cancel() {
+  CancelLogical();
   state_->Cancel();
 }
 
 absl::Status ChunkStoreReader::GetStatus() const {
+  absl::Status logical_status = GetLogicalStatus();
+  if (!logical_status.ok()) {
+    return logical_status;
+  }
   thread::MutexLock lock(&state_->mu);
   return state_->status.value_or(absl::OkStatus());
 }

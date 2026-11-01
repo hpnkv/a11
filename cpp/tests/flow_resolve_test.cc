@@ -86,6 +86,23 @@ std::string ReadFile(const std::filesystem::path& path) {
   return buffer.str();
 }
 
+TEST(FlowResolve, ChecksLiteralReferenceStageOptionsBeforeExecution) {
+  const ResolveResult result = Check(R"(
+flow inspect {
+  in words: string stream
+  out selected: string stream
+  words | read_with {max_ref_depth: 0, mystery: true} -> selected
+  words | read_with {ordered: false} -> selected
+  words | ref {offset: "bad"} -> selected
+}
+)");
+  const std::string messages = Messages(result);
+  EXPECT_NE(messages.find("max_ref_depth"), std::string::npos);
+  EXPECT_NE(messages.find("mystery"), std::string::npos);
+  EXPECT_NE(messages.find("offset"), std::string::npos);
+  EXPECT_NE(messages.find("non-destructive"), std::string::npos);
+}
+
 TEST(FlowResolve, ResolvesAFlowIntoWhatACallerSees) {
   const ResolveResult result = Check(
       "flow research {\n"

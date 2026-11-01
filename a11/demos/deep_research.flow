@@ -136,6 +136,11 @@ flow synthesise-findings {
   # finish, which is the only barrier in the whole composition.
   asked = node()
   findings
+    | read_with {
+        max_ref_depth: 2,
+        max_ref_breadth: 3,
+        num_chunks_to_buffer: 8
+      }
     | collect
     | map join([
       strformat("The research topic is: %s", topic),
@@ -167,21 +172,7 @@ flow synthesise-findings {
 }
 
 flow deep-research {
-  describe """
-    Research a topic: plan it, investigate the parts of it at the same time,
-    and write one report out of what came back.
-
-    The run narrates itself to the action's **log**, not to an output port: a
-    client shows those lines while it waits for `report`, and it does not have
-    to have been told this composition's name for a narration port to know
-    where to look. Every A11 action has a log; only this one would have had a
-    `user_log`.
-
-    The lines are logged *here* rather than by the steps that write them,
-    because a nested action's log is its own -- it reaches the server's log and
-    not the caller's. So each step hands its lines up on a `narration` port,
-    which is plumbing between these flows and no part of what a caller sees.
-    """
+  describe "Plan a topic, investigate its parts concurrently, and write a report."
 
   in  topic: string required "What to research."
 
@@ -192,16 +183,14 @@ flow deep-research {
   for line in planned.narration {
     log info line
   }
-  planned.briefs -> plan
+  planned.briefs | ref -> plan
 
-  # Nothing in here is the caller's: the intermediate reports are written,
-  # read and dropped on this side, and only the final report crosses back.
   nodes research {
     findings = node()
 
     for brief in planned.briefs parallel 3 {
       one = run investigate(topic: topic, brief: brief)
-      one.report -> findings
+      one.report | ref -> findings
       for line in one.narration {
         log info line
       }
@@ -212,7 +201,7 @@ flow deep-research {
       brief: planned.synthesis,
       findings: findings,
     )
-    written.report -> report
+    written.report | ref -> report
     for line in written.narration {
       log info line
     }

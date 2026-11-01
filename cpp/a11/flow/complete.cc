@@ -169,9 +169,7 @@ class Completer {
   Completer(std::string_view source, size_t offset,
             const catalogue::Catalogue& known, CompilationLimits limits,
             CompilationBudget* budget, const LinkedModule* linked = nullptr)
-      : source_(source),
-        offset_(std::min(offset, source.size())),
-        known_(known) {
+      : source_(source), offset_(std::min(offset, source.size())) {
     auto lexed = Lex(
         source_,
         LexOptions{.keep_comments = true, .limits = limits, .budget = budget});
@@ -184,9 +182,10 @@ class Completer {
     linked_ = linked;
     documentation_ = internal::EditorDocumentation(
         linked->source, linked->parsed, limits, budget);
-    const auto local =
+    auto local =
         documentation_.CatalogueAt(*linked, offset_, true, limits, budget);
-    known_ = linked->SelectingImport(offset_) ? local : known.MergedWith(local);
+    known_ = linked->SelectingImport(offset_) ? std::move(local)
+                                              : known.MergedWith(local);
     const auto evidence = known_.SchemaProgram();
     resolved_ = Resolve(linked->source, linked->parsed, false, &evidence,
                         limits, budget);

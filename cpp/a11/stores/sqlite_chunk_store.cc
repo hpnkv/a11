@@ -896,8 +896,6 @@ a11::Future<std::vector<std::uint32_t>> SQLiteChunkStore::PutMany(
             return absl::InvalidArgumentError(absl::StrCat(
                 "Explicit seq ", *fragment.seq, " occurs more than once"));
           }
-          // Unlike the in-memory and Redis backends, a NodeRef is a first-class
-          // payload here: it becomes indexed columns rather than being refused.
         }
         if (any_explicit != all_explicit) {
           return absl::InvalidArgumentError(

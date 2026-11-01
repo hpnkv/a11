@@ -42,7 +42,11 @@ NameString = Annotated[
 
 from a11._native import ChunkMetadata
 from a11._native import Chunk
-from a11._native import StorageCredentials, StorageService, StorageIdentity
+from a11._native import (
+    StorageCredentials,
+    StorageService,
+    StorageIdentity,
+)
 from a11._native import NodeRef
 from a11._native import NodeFragment
 from a11._native import Port
@@ -207,6 +211,11 @@ def _validate_storage_identity(value, *, json_mode=False):
         services=[
             _validate_storage_service(item) for item in data.get("services", [])
         ],
+        credentials=(
+            _validate_storage_credentials(data["credentials"])
+            if data.get("credentials") is not None
+            else None
+        ),
     )
 
 
@@ -441,6 +450,11 @@ _DUMPERS = {
     StorageIdentity: lambda value, mode: {
         "id": value.id,
         **(
+            {"credentials": value.credentials.model_dump(mode=mode)}
+            if value.credentials is not None
+            else {}
+        ),
+        **(
             {
                 "services": [
                     item.model_dump(mode=mode) for item in value.services
@@ -543,6 +557,7 @@ _SCHEMAS: dict[type, dict[str, Any]] = {
         "required": ["id"],
         "properties": {
             "id": {"type": "string"},
+            "credentials": {"$ref": "#/$defs/StorageCredentials"},
             "services": {
                 "type": "array",
                 "items": {"$ref": "#/$defs/StorageService"},
@@ -702,7 +717,11 @@ _ANNOTATIONS = {
         "endpoint": str,
         "credentials": StorageCredentials | None,
     },
-    StorageIdentity: {"id": NameString, "services": list[StorageService]},
+    StorageIdentity: {
+        "id": NameString,
+        "credentials": StorageCredentials | None,
+        "services": list[StorageService],
+    },
     ChunkMetadata: {
         "mimetype": str,
         "timestamp": datetime.datetime | None,

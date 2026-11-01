@@ -29,6 +29,7 @@ import {
   statusToChunk,
 } from './action_schema.js';
 import { NodeMap } from './async_node.js';
+import { REFERENCE_MIRROR_PREFIX } from './reference_mirror.js';
 import {
   copyByteMap,
   randomId,
@@ -39,6 +40,7 @@ import {
 import { Deferred } from './concurrency.js';
 import {
   NodeFragment,
+  NodeRef,
   WireMessage,
   validateName,
 } from './data.js';
@@ -824,6 +826,12 @@ export class Session {
       }
       const validation = fragment.validate();
       if (!isOk(validation)) return validation;
+      if (fragment.data instanceof NodeRef && fragment.data.storage === null &&
+          fragment.data.length !== 0 &&
+          fragment.data.id.startsWith(REFERENCE_MIRROR_PREFIX)) {
+        const expected = await this.nodeMap.get(fragment.data.id);
+        if (!isOk(expected)) return expected;
+      }
       const special = specialActionNode(fragment.id);
       const chunk = fragment.getChunk();
       let protocolStatus: Status | null = null;

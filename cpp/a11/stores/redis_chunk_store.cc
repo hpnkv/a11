@@ -199,6 +199,16 @@ absl::StatusOr<data::NodeFragment> DecodeItemFields(
         "S3-backed chunk access is not implemented (reference: ", payload,
         ")"));
   }
+  if (storage == "node_ref") {
+    ABSL_ASSIGN_OR_RETURN(data::NodeRef reference,
+                          data::NodeRef::FromMsgpack(payload));
+    return data::NodeFragment{
+        .id = node_id,
+        .data = std::move(reference),
+        .seq = seq,
+        .continued = !final_seq.has_value() || seq < *final_seq,
+    };
+  }
   if (storage != "inline" && storage != "redis" && storage != "tombstone") {
     return ProtocolError(absl::StrCat("unknown chunk storage kind ", storage));
   }
@@ -606,10 +616,6 @@ a11::Future<std::vector<std::uint32_t>> RedisChunkStore::PutMany(
             return absl::InvalidArgumentError(absl::StrCat(
                 "Explicit seq ", *fragment.seq, " occurs more than once"));
           }
-          if (!std::holds_alternative<data::Chunk>(fragment.data)) {
-            return absl::UnimplementedError(
-                "RedisChunkStore supports Chunk payloads, not NodeRef");
-          }
         }
         if (any_explicit != all_explicit) {
           return absl::InvalidArgumentError(
@@ -617,6 +623,18 @@ a11::Future<std::vector<std::uint32_t>> RedisChunkStore::PutMany(
         }
 
         for (const data::NodeFragment& fragment : fragments) {
+          if (const auto* reference =
+                  std::get_if<data::NodeRef>(&fragment.data)) {
+            ABSL_ASSIGN_OR_RETURN(data::Bytes encoded, reference->ToMsgpack());
+            arguments.push_back(fragment.seq.has_value()
+                                    ? std::to_string(*fragment.seq)
+                                    : std::string());
+            arguments.emplace_back(fragment.continued ? "0" : "1");
+            arguments.emplace_back("node_ref");
+            arguments.push_back(std::move(encoded));
+            arguments.emplace_back();
+            continue;
+          }
           const auto& chunk = std::get<data::Chunk>(fragment.data);
           ABSL_ASSIGN_OR_RETURN(data::Bytes encoded, chunk.ToMsgpack());
           data::Chunk tombstone{

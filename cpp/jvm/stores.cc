@@ -51,6 +51,15 @@ absl::StatusOr<stores::ChunkStoreReaderOptions> ReaderOptions(
   ABSL_ASSIGN_OR_RETURN(
       options.sticky_mimetype,
       DefaultArg<bool>(args, "sticky_mimetype", options.sticky_mimetype));
+  ABSL_ASSIGN_OR_RETURN(
+      options.follow_node_refs,
+      DefaultArg<bool>(args, "follow_node_refs", options.follow_node_refs));
+  ABSL_ASSIGN_OR_RETURN(
+      options.max_ref_depth,
+      DefaultArg<std::uint32_t>(args, "max_ref_depth", options.max_ref_depth));
+  ABSL_ASSIGN_OR_RETURN(options.max_ref_breadth,
+                        DefaultArg<std::uint32_t>(args, "max_ref_breadth",
+                                                  options.max_ref_breadth));
   if (args.find("max_chunks_to_read") != args.end() &&
       !args.at("max_chunks_to_read").is_null()) {
     ABSL_ASSIGN_OR_RETURN(options.max_chunks_to_read,
@@ -90,7 +99,10 @@ void BindStores(absl::flat_hash_map<std::string, Operation>* operations) {
         {"pop_chunks", options.pop_chunks},
         {"num_chunks_to_buffer", options.num_chunks_to_buffer},
         {"offset", options.offset},
-        {"sticky_mimetype", options.sticky_mimetype}};
+        {"sticky_mimetype", options.sticky_mimetype},
+        {"follow_node_refs", options.follow_node_refs},
+        {"max_ref_depth", options.max_ref_depth},
+        {"max_ref_breadth", options.max_ref_breadth}};
   };
   (*operations)["reader.validateOptions"] =
       [](std::int64_t,

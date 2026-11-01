@@ -1099,9 +1099,9 @@ class Server {
     if (!params.is_object()) {
       return;
     }
-    const catalogue::Catalogue given = catalogue::Catalogue::FromJson(params);
+    auto given = catalogue::Catalogue::FromJson(params);
     known_ = params.value("replace", false)
-                 ? given
+                 ? std::move(given)
                  : catalogue::Catalogue::Builtin().MergedWith(given);
   }
 

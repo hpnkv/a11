@@ -26,6 +26,7 @@ import {
 import { Deferred } from './concurrency.js';
 import {wireValueCodecByTag} from './wire_values.js';
 import {NODE_REF_TAG} from './serial_tags.js';
+import { ReferenceMirrorRegistry } from './reference_mirror.js';
 
 /// One encoder for the log attributes, which are written on every log line.
 const encoder = new TextEncoder();
@@ -288,6 +289,7 @@ export class Action {
   private readonly inputNodes = new Set<AsyncNode>();
   private readonly outputNodes = new Set<AsyncNode>();
   private readonly boundNodes = new Set<AsyncNode>();
+  private referenceMirrors: ReferenceMirrorRegistry | null = null;
   private mode: ActionMode = 'none';
   private completionStatus: Status | null = null;
   private dispatchStatus: Status | null = null;
@@ -543,21 +545,43 @@ export class Action {
   bindStream(stream: WireStream | null): Status {
     if (stream === this.stream) return okStatus();
     const previous = this.stream;
+    const previousRegistry = this.referenceMirrors;
+    const nextRegistry = stream === null ? null : this.makeReferenceMirrors(stream);
     const rebound: AsyncNode[] = [];
     for (const node of this.boundNodes) {
       let status = previous === null ? okStatus() : node.detachStream(previous);
-      if (isOk(status) && stream !== null) status = node.attachStream(stream);
+      if (isOk(status) && stream !== null && nextRegistry !== null) {
+        status = node.attachStream(stream,
+          (reference) => nextRegistry.rewrite(reference, node.nodeMap));
+      }
       if (!isOk(status)) {
         for (const completed of rebound) {
           if (stream !== null) completed.detachStream(stream);
-          if (previous !== null) completed.attachStream(previous);
+          if (previous !== null) completed.attachStream(previous,
+            previousRegistry === null ? undefined
+              : (reference) => previousRegistry.rewrite(reference, completed.nodeMap));
         }
         return status;
       }
       rebound.push(node);
     }
     this.stream = stream;
+    this.referenceMirrors = nextRegistry;
     return okStatus();
+  }
+
+  private makeReferenceMirrors(stream: WireStream): ReferenceMirrorRegistry {
+    const advertised = this.mode === 'run' && this.parent === null
+      ? this.headers.get(STREAM_STORAGE_HEADER) : undefined;
+    const decoded = advertised === undefined ? '' : utf8Decode(advertised);
+    const direct = isOk(decoded) ? decoded.split(',').filter(Boolean) : [];
+    return new ReferenceMirrorRegistry(stream, direct);
+  }
+
+  private getReferenceMirrors(): ReferenceMirrorRegistry | null {
+    if (this.stream === null) return null;
+    this.referenceMirrors ??= this.makeReferenceMirrors(this.stream);
+    return this.referenceMirrors;
   }
 
   /** Open any node by its concrete id. */
@@ -653,18 +677,23 @@ export class Action {
         if (!isOk(capabilities)) return capabilities;
         const direct = reference.node.storage !== null && capabilities.split(',').includes(reference.node.storage.id);
         if (remote && direct) current.directStreamIds.add(reference.node.id);
+        let publishedChunk = chunk;
         if (remote && !direct) {
-          const transport = await sourceMap.get(reference.node.id);
-          if (!isOk(transport)) return transport;
-          const attached = current.attachStreamIfRequested(transport, true);
-          if (!isOk(attached)) return attached;
+          const registry = current.getReferenceMirrors();
+          if (registry === null) return failedPreconditionError('No stream for reference mirror.');
+          const rewritten = await registry.rewrite(reference.node, sourceMap);
+          if (!isOk(rewritten)) return rewritten;
+          const published = await toChunk({...reference, node: rewritten}, 'application/json');
+          if (!isOk(published)) return published;
+          published.metadata!.attributes.set('a11-stream-reference', encoder.encode('1'));
+          publishedChunk = published;
         }
         const ports = [ACTION_STREAMS_OUTPUT, ...[...current.streamSourcePorts]
           .filter(([, purpose]) => purpose === reference.purpose).map(([port]) => port)];
         for (const port of ports) {
           const output = await current.getOutput(port, remote);
           if (!isOk(output)) return output;
-          const written = await output.putChunk(chunk);
+          const written = await output.putChunk(publishedChunk);
           if (!isOk(written)) return written;
           if (remote && port === ACTION_STREAMS_OUTPUT) {
             const drained = await output.waitForBufferToDrain();
@@ -917,6 +946,11 @@ export class Action {
   ): Promise<StatusOr<Action>> {
     const headers = normalizeWireHeaders(wireHeaders);
     if (!isOk(headers)) return headers;
+    const accessible = this.nodeMap.storageIds();
+    if (!this.headers.has(STREAM_STORAGE_HEADER) && accessible.length > 0) {
+      const capability = this.setHeader(STREAM_STORAGE_HEADER, accessible.join(','));
+      if (!isOk(capability)) return capability;
+    }
     const begun = this.begin('call');
     if (!isOk(begun)) return begun;
     const tracked = this.trackInSession();
@@ -1297,7 +1331,9 @@ export class Action {
 
   private attachStreamIfRequested(node: AsyncNode, bind: boolean): Status {
     if (!bind || this.stream === null) return okStatus();
-    const attached = node.attachStream(this.stream);
+    const registry = this.getReferenceMirrors()!;
+    const attached = node.attachStream(this.stream,
+      (reference) => registry.rewrite(reference, node.nodeMap));
     if (isOk(attached)) this.boundNodes.add(node);
     return attached;
   }

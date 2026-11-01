@@ -26,8 +26,10 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
+#include <variant>
 
 #include <absl/status/status.h>
 #include <absl/status/statusor.h>
@@ -99,6 +101,8 @@ struct ChunkStoreWrite {
  */
 class ChunkStoreWriter {
  public:
+  using ReferenceRewriter =
+      std::function<absl::StatusOr<data::NodeRef>(const data::NodeRef&)>;
   /** @brief
    *    Create a writer over `store`.
    *
@@ -169,6 +173,9 @@ class ChunkStoreWriter {
   ChunkStoreWrite EnqueueChunk(data::Chunk chunk,
                                std::optional<std::uint32_t> seq = std::nullopt,
                                bool final = false, bool ensure_started = true);
+  ChunkStoreWrite EnqueueReference(
+      data::NodeRef reference, std::optional<std::uint32_t> seq = std::nullopt,
+      bool final = false, bool ensure_started = true);
 
   /** @brief
    *    Write a chunk and await backing-store confirmation.
@@ -188,6 +195,9 @@ class ChunkStoreWriter {
    */
   a11::Future<std::uint32_t> PutChunk(
       data::Chunk chunk, std::optional<std::uint32_t> seq = std::nullopt,
+      bool final = false);
+  a11::Future<std::uint32_t> PutReference(
+      data::NodeRef reference, std::optional<std::uint32_t> seq = std::nullopt,
       bool final = false);
 
   /// @return The writer's terminal status, or empty while still open.
@@ -269,6 +279,8 @@ class ChunkStoreWriter {
    *    OK if the stream was attached, otherwise an error status.
    */
   absl::Status AttachStream(std::shared_ptr<net::WireStream> stream);
+  absl::Status AttachStream(std::shared_ptr<net::WireStream> stream,
+                            ReferenceRewriter rewrite);
 
   /** @brief
    *    Stop mirroring fragments to a previously attached wire stream.
@@ -289,6 +301,9 @@ class ChunkStoreWriter {
 
  private:
   struct State;
+  ChunkStoreWrite EnqueuePayload(
+      std::variant<data::Chunk, data::NodeRef> payload,
+      std::optional<std::uint32_t> seq, bool final, bool ensure_started);
 
   explicit ChunkStoreWriter(std::shared_ptr<State> state)
       : state_(std::move(state)) {}

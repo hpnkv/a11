@@ -173,6 +173,9 @@ data class ChunkStoreReaderOptions(
     val offset: Long = readerDefaults.long("offset"),
     val maxChunksToRead: Long? = null,
     val stickyMimetype: Boolean = readerDefaults.boolean("sticky_mimetype"),
+    val followNodeRefs: Boolean = readerDefaults.boolean("follow_node_refs"),
+    val maxRefDepth: Long = readerDefaults.long("max_ref_depth"),
+    val maxRefBreadth: Long = readerDefaults.long("max_ref_breadth"),
 ) {
     internal fun fields(): Map<String, Any?> =
         mapOf(
@@ -182,6 +185,9 @@ data class ChunkStoreReaderOptions(
             "offset" to offset,
             "max_chunks_to_read" to maxChunksToRead,
             "sticky_mimetype" to stickyMimetype,
+            "follow_node_refs" to followNodeRefs,
+            "max_ref_depth" to maxRefDepth,
+            "max_ref_breadth" to maxRefBreadth,
         )
 
     fun validate(): Status = NativeBridge.status("reader.validateOptions", args = fields())

@@ -20,6 +20,7 @@
 #include <string_view>
 
 #include <absl/status/statusor.h>
+#include <absl/time/time.h>
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
@@ -305,9 +306,137 @@ TEST(NodeMap, ImportsWholeNodeReferencesWithoutCopyingTheirStreams) {
   auto other = *NodeMap::Create();
   EXPECT_EQ(target->ImportReference(reference, other).status().code(),
             absl::StatusCode::kAlreadyExists);
+  ASSERT_TRUE(source->Discard("shared", original).ok());
+  source.reset();
+  EXPECT_EQ(*target->ResolveForRead(reference), original);
+  EXPECT_EQ(*target->Get("shared"), original);
   reference.offset = 1;
   EXPECT_EQ(target->Resolve(reference).status().code(),
             absl::StatusCode::kUnimplemented);
+}
+
+TEST(AsyncNodeReferences, ReadsFragmentWindowsInSourceOrder) {
+  auto map = *NodeMap::Create();
+  auto target = *map->Get("target");
+  auto destination = *map->Get("destination");
+  for (const auto* value : {"one", "two", "three"}) {
+    ASSERT_TRUE(target->PutChunk(data::Chunk{.data = value}).Await().ok());
+  }
+  ASSERT_TRUE(target->Close().Await().ok());
+  ASSERT_TRUE(
+      destination->PutChunk(data::Chunk{.data = "before"}).Await().ok());
+  auto reference = target->Ref(1, 2, map);
+  ASSERT_TRUE(reference.ok()) << reference.status();
+  ASSERT_FALSE(reference->storage.has_value());
+  ASSERT_TRUE(destination->PutReference(*reference).Await().ok());
+  ASSERT_TRUE(destination
+                  ->Finalize(data::Chunk{.data = "after"},
+                             FinalizeOptions{.wait = true})
+                  .Await()
+                  .ok());
+  for (const auto* expected : {"before", "two", "three", "after"}) {
+    auto chunk = destination->NextChunk().Await();
+    ASSERT_TRUE(chunk.ok()) << chunk.status();
+    ASSERT_TRUE(chunk->has_value());
+    EXPECT_EQ((*chunk)->data, expected);
+  }
+  EXPECT_FALSE(destination->NextChunk().Await()->has_value());
+}
+
+TEST(AsyncNodeReferences, DisabledFollowingLeavesRawReferenceReadable) {
+  auto map = *NodeMap::Create();
+  auto target = *map->Get("target");
+  auto destination = *map->Get("destination");
+  auto reference = *target->Ref();
+  ASSERT_TRUE(destination->PutReference(reference, {}, true).Await().ok());
+  ASSERT_TRUE(destination->Close().Await().ok());
+  auto options = destination->GetReaderOptions();
+  options.follow_node_refs = false;
+  ASSERT_TRUE(destination->SetReaderOptions(options).ok());
+  auto raw = destination->NextFragment().Await();
+  ASSERT_TRUE(raw.ok());
+  ASSERT_TRUE(raw->has_value());
+  EXPECT_EQ(std::get<data::NodeRef>((*raw)->data), reference);
+  auto logical = destination->NextChunk().Await();
+  EXPECT_EQ(logical.status().code(), absl::StatusCode::kUnimplemented);
+  EXPECT_EQ(destination->GetReaderStatus().code(),
+            absl::StatusCode::kUnimplemented);
+}
+
+TEST(AsyncNodeReferences, LeafLimitDoesNotCountReferenceFragments) {
+  auto map = *NodeMap::Create();
+  auto target = *map->Get("target");
+  auto destination = *map->Get("destination");
+  ASSERT_TRUE(target->PutChunk(data::Chunk{.data = "first"}).Await().ok());
+  ASSERT_TRUE(
+      target->PutChunk(data::Chunk{.data = "second"}, {}, true).Await().ok());
+  ASSERT_TRUE(destination->PutReference(*target->Ref(), {}, true).Await().ok());
+  auto options = destination->GetReaderOptions();
+  options.max_chunks_to_read = 2;
+  ASSERT_TRUE(destination->SetReaderOptions(options).ok());
+  EXPECT_EQ(destination->NextChunk().Await()->value().data, "first");
+  EXPECT_EQ(destination->NextChunk().Await()->value().data, "second");
+  EXPECT_FALSE(destination->NextChunk().Await()->has_value());
+}
+
+TEST(AsyncNodeReferences, MissingTargetAndCycleHaveDistinctStatuses) {
+  auto map = *NodeMap::Create();
+  auto destination = *map->Get("destination");
+  ASSERT_TRUE(
+      destination->PutReference(data::NodeRef{.id = "missing"}, {}, true)
+          .Await()
+          .ok());
+  EXPECT_EQ(destination->NextChunk().Await().status().code(),
+            absl::StatusCode::kNotFound);
+
+  auto cyclic = *map->Get("cyclic");
+  ASSERT_TRUE(cyclic->PutReference(*cyclic->Ref(), {}, true).Await().ok());
+  EXPECT_EQ(cyclic->NextChunk().Await().status().code(),
+            absl::StatusCode::kFailedPrecondition);
+}
+
+TEST(AsyncNodeReferences, TimedOutDescendantResumesAtItsPosition) {
+  auto map = *NodeMap::Create();
+  auto target = *map->Get("target");
+  auto destination = *map->Get("destination");
+  ASSERT_TRUE(destination->PutReference(*target->Ref(), {}, true).Await().ok());
+  EXPECT_EQ(
+      destination->NextChunk(absl::Milliseconds(1)).Await().status().code(),
+      absl::StatusCode::kDeadlineExceeded);
+  ASSERT_TRUE(
+      target->PutChunk(data::Chunk{.data = "resumed"}, {}, true).Await().ok());
+  auto chunk = destination->NextChunk().Await();
+  ASSERT_TRUE(chunk.ok()) << chunk.status();
+  ASSERT_TRUE(chunk->has_value());
+  EXPECT_EQ((*chunk)->data, "resumed");
+  EXPECT_FALSE(destination->NextChunk().Await()->has_value());
+}
+
+TEST(AsyncNodeReferences, EmptyWindowNeedsNoTargetResolution) {
+  auto map = *NodeMap::Create();
+  auto destination = *map->Get("destination");
+  ASSERT_TRUE(
+      destination->PutReference(data::NodeRef{.id = "missing", .length = 0})
+          .Await()
+          .ok());
+  ASSERT_TRUE(destination->Finalize(data::Chunk{.data = "after"}).Await().ok());
+  auto chunk = destination->NextChunk().Await();
+  ASSERT_TRUE(chunk.ok()) << chunk.status();
+  EXPECT_EQ((*chunk)->data, "after");
+}
+
+TEST(AsyncNodeReferences, HostMayOpenUncachedDurableTargets) {
+  auto backend = *NodeMap::Create({}, data::StorageIdentity{.id = "durable"});
+  auto host = *NodeMap::Create();
+  ASSERT_TRUE(host->RegisterStorage("durable", backend).ok());
+  const data::NodeRef reference{
+      .id = "uncached", .storage = data::StorageIdentity{.id = "durable"}};
+  EXPECT_EQ(host->ResolveForRead(reference).status().code(),
+            absl::StatusCode::kNotFound);
+  backend->SetAllowLazyReadResolution(true);
+  auto opened = host->ResolveForRead(reference);
+  ASSERT_TRUE(opened.ok()) << opened.status();
+  EXPECT_EQ(*opened, *backend->Get("uncached"));
 }
 
 }  // namespace

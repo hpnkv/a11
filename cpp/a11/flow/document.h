@@ -126,6 +126,8 @@ class Statement {
 
   const std::string& source() const { return source_; }
 
+  std::string TakeSource() && { return std::move(source_); }
+
  private:
   explicit Statement(std::string source) : source_(std::move(source)) {}
 
@@ -144,17 +146,17 @@ class FlowBuilder {
   const FlowPlan& interface() const { return plan_; }
 
   absl::Status AddPort(
-      std::string name, const syntax::TypeExpression& type,
+      std::string name, syntax::TypeExpression type,
       syntax::PortDirection direction = syntax::PortDirection::kInput,
       bool unary = true, bool required = false, std::string description = {});
-  absl::Status AddStatement(const Statement& statement);
+  absl::Status AddStatement(Statement statement);
   absl::Status AddInitialize(std::string name, const Expression& value,
                              std::optional<syntax::TypeExpression> type = {});
   absl::Status AddPipe(const Expression& value, const Expression& destination);
   absl::Status AddImport(std::string reference, std::string alias,
                          std::string symbol = {});
   absl::Status AddDeclaration(const FlowPlan& interface);
-  absl::Status AddStruct(const DtoPlan& shape);
+  absl::Status AddStruct(DtoPlan shape);
   absl::StatusOr<std::string> Emit() const;
 
  private:
@@ -168,11 +170,13 @@ class StructBuilder {
  public:
   explicit StructBuilder(std::string name) { plan_.name = std::move(name); }
 
+  explicit StructBuilder(DtoPlan shape) : plan_(std::move(shape)) {}
+
   DtoPlan& shape() { return plan_; }
 
   const DtoPlan& shape() const { return plan_; }
 
-  absl::Status AddField(std::string name, const syntax::TypeExpression& type,
+  absl::Status AddField(std::string name, syntax::TypeExpression type,
                         bool required = false,
                         std::optional<Expression> default_value = {},
                         std::string description = {});
@@ -223,9 +227,9 @@ class ModuleDocument {
   absl::StatusOr<DocumentChange> Apply(uint64_t revision,
                                        std::vector<Edit> edits);
   absl::StatusOr<DocumentChange> Insert(const FlowBuilder& flow);
-  absl::StatusOr<DocumentChange> InsertStruct(const DtoPlan& shape);
+  absl::StatusOr<DocumentChange> InsertStruct(DtoPlan shape);
   absl::StatusOr<DocumentChange> UpsertDeclaration(
-      const FlowPlan& interface, const std::vector<DtoPlan>& types = {},
+      FlowPlan interface, const std::vector<DtoPlan>& types = {},
       std::optional<DocumentSymbolHandle> symbol = {});
   absl::StatusOr<DocumentChange> Update(const DocumentSymbolHandle& symbol,
                                         const FlowBuilder& flow);

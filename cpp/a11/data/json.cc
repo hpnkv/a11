@@ -442,6 +442,14 @@ absl::StatusOr<Chunk> ChunkFromJsonValue(const Json& value) {
 absl::StatusOr<Json> StorageIdentityToJsonValue(const StorageIdentity& value) {
   ABSL_RETURN_IF_ERROR(value.Validate());
   Json result = {{"id", value.id}};
+  if (value.credentials.has_value()) {
+    Json fields = Json::object();
+    for (const auto& [name, field] : value.credentials->fields) {
+      fields[name] = field;
+    }
+    result["credentials"] = {{"scheme", value.credentials->scheme},
+                             {"fields", std::move(fields)}};
+  }
   if (!value.services.empty()) {
     auto services = Json::array();
     for (const auto& service : value.services) {
@@ -467,7 +475,33 @@ absl::StatusOr<StorageIdentity> StorageIdentityFromJsonValue(
     return absl::InvalidArgumentError("Storage identity must be an object");
   }
   ABSL_ASSIGN_OR_RETURN(auto id, GetString(value, "id", "", "StorageIdentity"));
-  StorageIdentity result{.id = std::move(id), .services = {}};
+  StorageIdentity result{
+      .id = std::move(id), .credentials = {}, .services = {}};
+  const auto namespace_access = value.find("credentials");
+  if (namespace_access != value.end() && !namespace_access->is_null()) {
+    if (!namespace_access->is_object()) {
+      return absl::InvalidArgumentError(
+          "Storage credentials must be an object");
+    }
+    ABSL_ASSIGN_OR_RETURN(auto scheme, GetString(*namespace_access, "scheme",
+                                                 "", "StorageCredentials"));
+    StorageCredentials credentials{.scheme = std::move(scheme), .fields = {}};
+    const auto fields = namespace_access->find("fields");
+    if (fields != namespace_access->end()) {
+      if (!fields->is_object()) {
+        return absl::InvalidArgumentError(
+            "Credential fields must be an object");
+      }
+      for (auto field = fields->begin(); field != fields->end(); ++field) {
+        if (!field->is_string()) {
+          return absl::InvalidArgumentError(
+              "Credential fields must be strings");
+        }
+        credentials.fields.emplace(field.key(), field->get<std::string>());
+      }
+    }
+    result.credentials = std::move(credentials);
+  }
   const auto services = value.find("services");
   if (services != value.end()) {
     if (!services->is_array()) {

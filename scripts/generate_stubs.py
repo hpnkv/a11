@@ -422,6 +422,9 @@ def _normalise_annotations(stub: str, submodule: str | None = None) -> str:
         "resolve(self, reference: NodeRef) -> ...": (
             "resolve(self, reference: NodeRef) -> AsyncNode"
         ),
+        "resolve_for_read(self, reference: NodeRef) -> ...": (
+            "resolve_for_read(self, reference: NodeRef) -> AsyncNode"
+        ),
         "import_reference(self, reference: NodeRef, source: NodeMap) -> ...": (
             "import_reference(self, reference: NodeRef, source: NodeMap) ->"
             " AsyncNode"

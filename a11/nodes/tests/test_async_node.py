@@ -99,6 +99,7 @@ async def test_put_accepts_raw_chunks_and_fragments():
     chunk_write = await chunk_node.put_chunk(chunk, final=True)
     assert await chunk_write == 0
     assert await chunk_node.next_chunk() == chunk
+    assert (await chunk_node.next_fragment()).get_chunk() == chunk
     assert await chunk_node.next_fragment() is None
 
     fragment_node = AsyncNode(LocalChunkStore("raw-fragment"))
@@ -303,6 +304,9 @@ async def test_consume_accepts_both_valid_terminal_shapes(trailing_null):
         await node.finalize(wait=True)
 
     assert await node.consume() == {"value": 1}
+    assert await node.next_fragment() is not None
+    if trailing_null:
+        assert (await node.next_fragment()).get_chunk().is_null()
     assert await node.next_fragment() is None
 
 
@@ -383,7 +387,9 @@ async def test_consume_rejects_invalid_terminal_shapes():
 async def test_consume_rejects_unordered_reader():
     node = AsyncNode(
         LocalChunkStore("unordered-consume"),
-        reader_options=ChunkStoreReaderOptions(ordered=False),
+        reader_options=ChunkStoreReaderOptions(
+            ordered=False, follow_node_refs=False
+        ),
     )
     assert await (await node.put("value", final=True)) == 0
 
@@ -406,14 +412,38 @@ async def test_invalid_operations_raise_status_exceptions():
     assert raised.value.status.code == StatusCode.NOT_FOUND
 
     node_ref = types.NodeRef(id="another-node")
-    with pytest.raises(StatusException) as raised:
-        await node.put_fragment(
-            types.NodeFragment(data=node_ref, continued=False)
+    assert (
+        await (
+            await node.put_fragment(
+                types.NodeFragment(data=node_ref, continued=False)
+            )
         )
-    assert raised.value.status.code == StatusCode.UNIMPLEMENTED
+        == 0
+    )
 
     node.cancel_reader()
     await node.reader.wait()
+
+
+@pytest.mark.asyncio
+async def test_references_expand_values_and_preserve_raw_fragments():
+    nodes = NodeMap()
+    source = nodes.get("reference-source")
+    destination = nodes.get("reference-destination")
+    await (await source.put("one"))
+    await (await source.put("two"))
+    await source.finalize("three")
+    await (await destination.put("before"))
+    reference = source.ref(offset=1, length=2, for_node=destination)
+    await (await destination.put(reference))
+    await destination.finalize("after")
+
+    assert [value async for value in destination.iter_values()] == [
+        "before", "two", "three", "after"
+    ]
+    raw = [fragment async for fragment in destination.iter_fragments()]
+    assert len(raw) == 3
+    assert raw[1].data == reference
 
 
 def test_node_map_caches_nodes_and_uses_its_factory():

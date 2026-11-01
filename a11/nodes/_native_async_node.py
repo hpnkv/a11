@@ -77,6 +77,11 @@ _native_reader_options = AsyncNode.__dict__["reader_options"]
 _native_writer_options = AsyncNode.__dict__["writer_options"]
 _native_reset_reader = AsyncNode.reset_reader
 _native_finalize = AsyncNode.finalize
+_native_put_reference = AsyncNode.put_reference
+_native_finalize_reference = AsyncNode.finalize_reference
+_native_next_logical_fragment = AsyncNode.next_logical_fragment
+_native_next_logical_fragments = AsyncNode.next_logical_fragments
+_native_logical_saw_final = AsyncNode.logical_saw_final
 _native_close = AsyncNode.close
 _native_writer_enqueue = _native.ChunkStoreWriter.enqueue_chunk
 
@@ -119,6 +124,8 @@ async def _next_value_fragment(
     node: AsyncNode,
     converted_timeout: timing.Duration,
     started_at: timing.Time,
+    *,
+    raw: bool = False,
 ) -> types.NodeFragment | None:
     """The next fragment carrying a value, or ``None`` once the node ends.
 
@@ -128,15 +135,54 @@ async def _next_value_fragment(
     or rejected — which is what lets a node be closed with nothing in it.
     """
     while True:
-        fragment = await node.next_fragment(
-            _remaining_timeout(converted_timeout, started_at)
+        remaining = _remaining_timeout(converted_timeout, started_at)
+        fragment = await (
+            node.next_fragment(remaining)
+            if raw
+            else _native_next_logical_fragment(node, remaining)
         )
         if fragment is None:
             return None
+        if raw and isinstance(fragment.data, types.NodeRef):
+            return fragment
         if not fragment.get_chunk().is_null():
             return fragment
         if not fragment.continued:
             return None
+
+
+async def _consume_logical_fragment(
+    node: AsyncNode,
+    timeout: timing.Duration | None,
+    allow_none: bool,
+) -> types.NodeFragment | None:
+    if not _reader_is_ordered(node):
+        raise Status(
+            code=StatusCode.FAILED_PRECONDITION,
+            message="consume() requires an ordered reader.",
+        ).to_exception()
+    converted = _read_timeout(timeout)
+    started = timing.now()
+    first = await _next_value_fragment(node, converted, started)
+    if first is None:
+        if allow_none:
+            return None
+        raise Status(
+            code=StatusCode.FAILED_PRECONDITION,
+            message="AsyncNode is empty at the current reader offset.",
+        ).to_exception()
+    second = await _next_value_fragment(node, converted, started)
+    if second is not None:
+        raise Status(
+            code=StatusCode.FAILED_PRECONDITION,
+            message="A consumed node contains more than one logical value.",
+        ).to_exception()
+    if not _native_logical_saw_final(node):
+        raise Status(
+            code=StatusCode.FAILED_PRECONDITION,
+            message="A consumed node requires a final fragment.",
+        ).to_exception()
+    return first
 
 
 def _reader_is_ordered(node: AsyncNode) -> bool:
@@ -520,11 +566,13 @@ class _AsyncNodeProtocol:
                 code=StatusCode.INVALID_ARGUMENT,
                 message="fragment must be a NodeFragment.",
             ).to_exception()
-        if not isinstance(fragment.data, types.Chunk):
-            raise Status(
-                code=StatusCode.UNIMPLEMENTED,
-                message="AsyncNode writers do not resolve NodeRef payloads.",
-            ).to_exception()
+        if isinstance(fragment.data, types.NodeRef):
+            return cast(
+                asyncio.Future[int],
+                _native_put_reference(
+                    self, fragment.data, fragment.seq, not fragment.continued
+                ),
+            )
         return await self.put_chunk(
             fragment.data,
             seq=fragment.seq,
@@ -574,6 +622,16 @@ class _AsyncNodeProtocol:
                     message="mimetype cannot be supplied with a raw Chunk.",
                 ).to_exception()
             return await self.put_chunk(value, seq=seq, final=final)
+        if isinstance(value, types.NodeRef):
+            if mimetype:
+                raise Status(
+                    code=StatusCode.INVALID_ARGUMENT,
+                    message="mimetype cannot be supplied with a NodeRef.",
+                ).to_exception()
+            return cast(
+                asyncio.Future[int],
+                _native_put_reference(self, value, seq, final),
+            )
 
         chunk = await _get_serialization_registry(self).to_chunk_async(
             value, mimetype
@@ -641,13 +699,11 @@ class _AsyncNodeProtocol:
                         "cannot be supplied separately."
                     ),
                 ).to_exception()
-            if not isinstance(value.data, types.Chunk):
-                raise Status(
-                    code=StatusCode.UNIMPLEMENTED,
-                    message=(
-                        "AsyncNode writers do not resolve NodeRef payloads."
-                    ),
-                ).to_exception()
+            if isinstance(value.data, types.NodeRef):
+                await _native_finalize_reference(
+                    self, value.data, seq=value.seq, wait=wait, close=close
+                )
+                return
             chunk = value.data
             seq = value.seq
         elif isinstance(value, types.Chunk):
@@ -657,6 +713,16 @@ class _AsyncNodeProtocol:
                     message="mimetype cannot be supplied with a raw Chunk.",
                 ).to_exception()
             chunk = value
+        elif isinstance(value, types.NodeRef):
+            if mimetype:
+                raise Status(
+                    code=StatusCode.INVALID_ARGUMENT,
+                    message="mimetype cannot be supplied with a NodeRef.",
+                ).to_exception()
+            await _native_finalize_reference(
+                self, value, seq=seq, wait=wait, close=close
+            )
+            return
         else:
             chunk = await _get_serialization_registry(self).to_chunk_async(
                 value, mimetype
@@ -685,7 +751,9 @@ class _AsyncNodeProtocol:
         self, timeout: timing.Duration | None = None
     ) -> types.Chunk | None:
         """Read the next raw chunk, or ``None`` at end of stream."""
-        fragment = await self.next_fragment(timeout)
+        fragment = await _native_next_logical_fragment(
+            self, _read_timeout(timeout)
+        )
         return None if fragment is None else fragment.get_chunk()
 
     async def next_object(
@@ -749,7 +817,7 @@ class _AsyncNodeProtocol:
         converted_timeout = _read_timeout(timeout)
         started_at = timing.now()
         fragment = await _next_value_fragment(
-            self, converted_timeout, started_at
+            self, converted_timeout, started_at, raw=True
         )
         if fragment is None:
             if not allow_none:
@@ -790,7 +858,7 @@ class _AsyncNodeProtocol:
         allow_none: bool = False,
     ) -> types.Chunk | None:
         """Consume exactly one whole value and return its raw chunk."""
-        fragment = await self.consume_fragment(timeout, allow_none=allow_none)
+        fragment = await _consume_logical_fragment(self, timeout, allow_none)
         if fragment is None:
             return None
         return fragment.get_chunk()
@@ -815,13 +883,17 @@ class _AsyncNodeProtocol:
             customer = await action["customer"].consume(obj_type=Customer)
             ```
         """
-        fragment = await self.consume_fragment(timeout, allow_none=allow_none)
-        if fragment is None:
-            return None
-
         mimetype_patterns, obj_type = _resolve_expected_types(
             self, mimetype_patterns, obj_type
         )
+        fragment = (
+            await self.consume_fragment(timeout, allow_none=allow_none)
+            if obj_type is types.NodeFragment
+            else await _consume_logical_fragment(self, timeout, allow_none)
+        )
+        if fragment is None:
+            return None
+
         if obj_type is types.NodeFragment:
             return fragment
         if obj_type is types.Chunk:
@@ -870,10 +942,19 @@ class _AsyncNodeProtocol:
             self, mimetype_patterns, obj_type
         )
         while True:
-            batch = await self.next_fragments(self.ITER_BATCH, timeout)
+            batch = await (
+                self.next_fragments(self.ITER_BATCH, timeout)
+                if resolved_type is types.NodeFragment
+                else _native_next_logical_fragments(
+                    self, self.ITER_BATCH, _read_timeout(timeout)
+                )
+            )
             for fragment in batch:
                 if fragment is None:
                     return
+                if resolved_type is types.NodeFragment:
+                    yield fragment
+                    continue
                 # The same rule `_next_value_fragment` applies one at a time: a
                 # null chunk is a marker rather than a value, and a *final* one
                 # ends the stream. Yielding them is how the first version of
@@ -882,9 +963,7 @@ class _AsyncNodeProtocol:
                     if not fragment.continued:
                         return
                     continue
-                if resolved_type is types.NodeFragment:
-                    yield fragment
-                elif resolved_type is types.Chunk:
+                if resolved_type is types.Chunk:
                     yield fragment.get_chunk()
                 else:
                     yield await _deserialize_fragment(
@@ -895,8 +974,8 @@ class _AsyncNodeProtocol:
         self, timeout: timing.Duration | None = None
     ) -> AsyncIterator[types.Chunk]:
         """Async-iterate raw chunks until the stream ends."""
-        async for fragment in self.iter_fragments(timeout):
-            yield fragment.get_chunk()
+        while (chunk := await self.next_chunk(timeout)) is not None:
+            yield chunk
 
     async def iter_with_deadline(self, deadline: timing.Time):
         """Async-iterate deserialized values until ``deadline`` or end of

@@ -29,9 +29,16 @@ data class StorageService(
 )
 
 /** Logical namespace with optional backend access information. */
-data class StorageIdentity(val id: String, val services: List<StorageService> = emptyList()) {
+data class StorageIdentity(
+    val id: String,
+    val services: List<StorageService> = emptyList(),
+    val credentials: StorageCredentials? = null,
+) {
     internal fun toFields(): Map<String, Any?> =
         mapOf("id" to id) +
+            (credentials?.let {
+                mapOf("credentials" to mapOf("scheme" to it.scheme, "fields" to it.fields))
+            } ?: emptyMap()) +
             if (services.isEmpty()) emptyMap()
             else
                 mapOf(
@@ -81,7 +88,26 @@ data class StorageIdentity(val id: String, val services: List<StorageService> = 
                 }
                 services.add(StorageService(role, endpoint, credentials))
             }
-            return Ok(StorageIdentity(id, services))
+            var namespaceAccess: StorageCredentials? = null
+            val rawNamespace = fields["credentials"]
+            if (rawNamespace != null) {
+                val access =
+                    rawNamespace as? Map<*, *>
+                        ?: return invalidArgument("Invalid namespace credentials.")
+                val scheme =
+                    access["scheme"] as? String
+                        ?: return invalidArgument("Invalid namespace scheme.")
+                val values = access["fields"] ?: emptyMap<String, String>()
+                if (values !is Map<*, *>) return invalidArgument("Invalid credential fields.")
+                val attributes = LinkedHashMap<String, String>()
+                for ((key, item) in values) {
+                    if (key !is String || item !is String)
+                        return invalidArgument("Credential fields must be strings.")
+                    attributes[key] = item
+                }
+                namespaceAccess = StorageCredentials(scheme, attributes)
+            }
+            return Ok(StorageIdentity(id, services, namespaceAccess))
         }
     }
 }

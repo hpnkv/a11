@@ -128,12 +128,12 @@ MODIFIERS = _keywords(
 
 #: Every pipeline stage.
 STAGES = _keywords(
-    "take while", "take until", "first", "last", "drop", "truncate",
-    "batch", "window", "context", "flatten", "group", "sort", "where",
-    "map", "scan", "match", "distinct", "then", "log", "logf", "mime",
-    "strformat", "chunk", "collect", "consume", "count", "sum", "min",
-    "max", "avg", "fold", "join", "text", "json", "packb", "timeout",
-    "pace"
+    "read_with", "ref", "take while", "take until", "first", "last",
+    "drop", "truncate", "batch", "window", "context", "flatten", "group",
+    "sort", "where", "map", "scan", "match", "distinct", "then", "log",
+    "logf", "mime", "strformat", "chunk", "collect", "consume", "count",
+    "sum", "min", "max", "avg", "fold", "join", "text", "json", "packb",
+    "timeout", "pace"
 )
 
 #: The stages that may be written without their leading ``|``.

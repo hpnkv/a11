@@ -1759,6 +1759,17 @@ class AsyncNode:
             ```
         """
 
+    def finalize_reference(
+        self,
+        reference: NodeRef,
+        seq: typing.SupportsInt | None = None,
+        wait: bool = False,
+        close: bool = True,
+    ) -> asyncio.Future[None]:
+        """
+        Finish a node with a typed reference fragment.
+        """
+
     def get_chunk_store(self) -> ChunkStore:
         """
         Returns the underlying chunk store backing this node. The chunk store is the ordered storage boundary that the node's reader and writer stream through; reach for it when you need lower-level access than the async put/next API provides.
@@ -1842,6 +1853,11 @@ class AsyncNode:
         stream.
         """
 
+    def logical_saw_final(self) -> bool:
+        """
+        Whether the logical source has received a final fragment.
+        """
+
     async def next(
         self,
         obj_type: type[T] | None = None,
@@ -1878,6 +1894,20 @@ class AsyncNode:
     ) -> asyncio.Future[list[NodeFragment | None]]:
         """
         Returns a future resolving to a list of up to `limit` fragments, with a trailing None at end-of-stream. The batched counterpart to next_fragment, and the one to prefer when draining: every await costs an event-loop turn, so reading a hundred values one await at a time is a hundred turns. It returns whatever is already buffered and waits only when nothing is, so a live stream still yields each value as soon as it arrives.
+        """
+
+    def next_logical_fragment(
+        self, timeout: Duration | None = None
+    ) -> asyncio.Future[NodeFragment | None]:
+        """
+        Read a leaf fragment after expanding references.
+        """
+
+    def next_logical_fragments(
+        self, limit: typing.SupportsInt, timeout: Duration | None = None
+    ) -> asyncio.Future[list[NodeFragment | None]]:
+        """
+        Read a batch of leaf fragments after expanding references.
         """
 
     async def next_object(
@@ -1946,6 +1976,27 @@ class AsyncNode:
         """
         Enqueue a [NodeFragment][a11.data.types.NodeFragment] (carrying its
         seq/final).
+        """
+
+    def put_reference(
+        self,
+        reference: NodeRef,
+        seq: typing.SupportsInt | None = None,
+        final: bool = False,
+    ) -> asyncio.Future[int]:
+        """
+        Write a typed node reference without materializing its target.
+        """
+
+    def ref(
+        self,
+        offset: typing.SupportsInt = 0,
+        length: typing.SupportsInt | None = None,
+        for_node: typing.Any | None = None,
+        storage: str = "auto",
+    ) -> NodeRef:
+        """
+        Form a typed fragment reference using a destination hint.
         """
 
     def reset_reader(
@@ -3087,6 +3138,9 @@ class ChunkStoreReaderOptions:
         offset: typing.SupportsInt | None = 0,
         max_chunks_to_read: typing.SupportsInt | None = None,
         sticky_mimetype: bool = False,
+        follow_node_refs: bool = True,
+        max_ref_depth: typing.SupportsInt = 8,
+        max_ref_breadth: typing.SupportsInt = 2,
     ) -> None:
         """
         Construct validated options for a ChunkStoreReader.
@@ -3106,12 +3160,36 @@ class ChunkStoreReaderOptions:
         """
 
     @property
+    def follow_node_refs(self) -> bool:
+        """
+        Expand references in value reads.
+        """
+    @follow_node_refs.setter
+    def follow_node_refs(self, arg0: bool) -> None: ...
+
+    @property
     def max_chunks_to_read(self) -> int | None:
         """
         Optional cap on the total number of chunks to read.
         """
     @max_chunks_to_read.setter
     def max_chunks_to_read(self, arg0: typing.SupportsInt | None) -> None: ...
+
+    @property
+    def max_ref_breadth(self) -> int:
+        """
+        Maximum prefetched siblings at one level.
+        """
+    @max_ref_breadth.setter
+    def max_ref_breadth(self, arg0: typing.SupportsInt) -> None: ...
+
+    @property
+    def max_ref_depth(self) -> int:
+        """
+        Maximum active reference edges.
+        """
+    @max_ref_depth.setter
+    def max_ref_depth(self, arg0: typing.SupportsInt) -> None: ...
 
     @property
     def num_chunks_to_buffer(self) -> int:
@@ -4835,6 +4913,16 @@ class NodeMap:
         Resolve a whole-node reference in this scope.
         """
 
+    def resolve_for_read(self, reference: NodeRef) -> AsyncNode:
+        """
+        Resolve an existing target, honoring the host's lazy-read policy.
+        """
+
+    def set_allow_lazy_read_resolution(self, allowed: bool) -> None:
+        """
+        Permit references to open uncached nodes through this map's factory.
+        """
+
     def set_storage_resolver(
         self,
         resolver: typing.Any,
@@ -4944,6 +5032,13 @@ class NodeRef:
     def validate(self) -> None:
         """
         Raise if the value fails structural validation.
+        """
+
+    def with_credentials(
+        self, credentials: StorageCredentials, service: str | None = None
+    ) -> NodeRef:
+        """
+        Return a qualified copy with selected access fields.
         """
 
     @property
@@ -7711,7 +7806,10 @@ class StorageIdentity:
         """
 
     def __init__(
-        self, id: str, services: collections.abc.Sequence[StorageService] = []
+        self,
+        id: str,
+        services: collections.abc.Sequence[StorageService] = [],
+        credentials: StorageCredentials | None = None,
     ) -> None:
         """
         Create a storage identity.
@@ -7729,6 +7827,14 @@ class StorageIdentity:
         self, *, mode: str = "python", **_: typing.Any
     ) -> dict[str, typing.Any]: ...
     def model_dump_json(self, **kwargs: typing.Any) -> str: ...
+
+    @property
+    def credentials(self) -> StorageCredentials | None:
+        """
+        Optional namespace-level access information.
+        """
+    @credentials.setter
+    def credentials(self, arg0: StorageCredentials | None) -> None: ...
 
     @property
     def id(self) -> str:

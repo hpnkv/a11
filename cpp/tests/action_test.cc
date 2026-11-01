@@ -18,6 +18,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <variant>
 
 #include <absl/status/status.h>
 #include <absl/status/status_macros.h>
@@ -27,6 +28,7 @@
 #include <gtest/gtest.h>
 
 #include "a11/actions/authorization.h"
+#include "a11/actions/reference_mirror.h"
 #include "a11/actions/registry.h"
 #include "a11/actions/schema.h"
 #include "a11/concurrency/executor.h"
@@ -411,6 +413,225 @@ TEST(ActionTest, RemoteCallHasSymmetricInputOutputAndStatus) {
   EXPECT_EQ(received->value().data, "over-wire");
 }
 
+TEST(ActionTest, RemoteReferenceReplaysEarlierAndLaterFragments) {
+  auto registry = std::make_shared<ActionRegistry>();
+  ASSERT_TRUE(
+      registry
+          ->Register(
+              "echo", EchoSchema(),
+              [](std::shared_ptr<Action> action) {
+                return a11::SubmitTask([action]() -> absl::Status {
+                  ABSL_ASSIGN_OR_RETURN(
+                      auto target_id,
+                      Action::MakeNodeId(action->GetId(), "target"));
+                  ABSL_ASSIGN_OR_RETURN(auto target,
+                                        action->GetNode(target_id));
+                  ABSL_ASSIGN_OR_RETURN(auto output,
+                                        action->GetOutput("output"));
+                  ABSL_RETURN_IF_ERROR(
+                      target->PutChunk(data::Chunk{.data = "before"})
+                          .Await()
+                          .status());
+                  ABSL_ASSIGN_OR_RETURN(auto reference, target->Ref());
+                  ABSL_RETURN_IF_ERROR(
+                      output->PutReference(reference).Await().status());
+                  ABSL_RETURN_IF_ERROR(
+                      output->WaitForBufferToDrain().Await().status());
+                  ABSL_RETURN_IF_ERROR(
+                      target->PutChunk(data::Chunk{.data = "after"})
+                          .Await()
+                          .status());
+                  return target->Finalize({.wait = true}).Await().status();
+                });
+              })
+          .ok());
+  service::SessionOptions options;
+  options.no_stream_timeout = absl::InfiniteDuration();
+  auto client = *service::Session::Create("client", {}, {}, {}, options);
+  auto server = *service::Session::Create("server", {}, {}, {}, options,
+                                          nullptr, registry);
+  auto pair = *net::InProcessWireStream::CreatePair();
+  ASSERT_TRUE(
+      client->AddStream(pair.first, service::StreamMode::kStart)->Await().ok());
+  ASSERT_TRUE(server->AddStream(pair.second, service::StreamMode::kAccept)
+                  ->Await()
+                  .ok());
+  auto call =
+      *Action::Create(EchoSchema(), "remote", {}, nullptr, pair.first, client);
+  auto output = *call->GetOutput("output", false);
+  ASSERT_TRUE(call->Call().Await().ok());
+  auto input = *call->GetInput("input");
+  ASSERT_TRUE(
+      input->Finalize(data::Chunk{.data = "go"}, {.wait = true}).Await().ok());
+  ASSERT_TRUE(call->Wait(absl::Seconds(5)).Await().ok());
+  auto before = output->NextChunk().Await(absl::Now() + absl::Seconds(5));
+  ASSERT_TRUE(before.ok()) << before.status();
+  ASSERT_TRUE(before->has_value());
+  EXPECT_EQ((**before).data, "before");
+  auto after = output->NextChunk().Await(absl::Now() + absl::Seconds(5));
+  ASSERT_TRUE(after.ok()) << after.status();
+  ASSERT_TRUE(after->has_value());
+  EXPECT_EQ((**after).data, "after");
+  EXPECT_FALSE(output->NextChunk().Await()->has_value());
+}
+
+TEST(ActionTest, MirrorReuseChecksEachReferenceWithTheHostResolver) {
+  auto backend =
+      *nodes::NodeMap::Create({}, data::StorageIdentity{.id = "secured"});
+  auto target = *backend->Get("target");
+  ASSERT_TRUE(target->Finalize(data::Chunk{.data = "value"}).Await().ok());
+  auto host = *nodes::NodeMap::Create();
+  ASSERT_TRUE(host->SetStorageResolver(
+                      [backend](data::StorageIdentity identity)
+                          -> absl::StatusOr<std::shared_ptr<nodes::NodeMap>> {
+                        if (!identity.credentials.has_value()) {
+                          return absl::PermissionDeniedError("Access denied");
+                        }
+                        const auto token =
+                            identity.credentials->fields.find("token");
+                        if (token == identity.credentials->fields.end() ||
+                            token->second != "ok") {
+                          return absl::PermissionDeniedError("Access denied");
+                        }
+                        return backend;
+                      })
+                  .ok());
+  auto pair = *net::InProcessWireStream::CreatePair();
+  ReferenceMirrorRegistry mirrors(pair.first, {});
+  data::NodeRef allowed{
+      .id = "target",
+      .storage = data::StorageIdentity{
+          .id = "secured",
+          .credentials = data::StorageCredentials{
+              .scheme = "bearer", .fields = {{"token", "ok"}}}}};
+  auto first = mirrors.Rewrite(allowed, host);
+  ASSERT_TRUE(first.ok()) << first.status();
+  allowed.storage->credentials->fields["token"] = "denied";
+  auto second = mirrors.Rewrite(allowed, host);
+  EXPECT_TRUE(absl::IsPermissionDenied(second.status()));
+}
+
+TEST(ActionTest, RemoteReferenceWindowsReuseOneMirror) {
+  auto registry = std::make_shared<ActionRegistry>();
+  ASSERT_TRUE(
+      registry
+          ->Register("echo", EchoSchema(),
+                     [](std::shared_ptr<Action> action) {
+                       return a11::SubmitTask([action]() -> absl::Status {
+                         ABSL_ASSIGN_OR_RETURN(
+                             auto target_id,
+                             Action::MakeNodeId(action->GetId(), "target"));
+                         ABSL_ASSIGN_OR_RETURN(auto target,
+                                               action->GetNode(target_id));
+                         ABSL_ASSIGN_OR_RETURN(auto output,
+                                               action->GetOutput("output"));
+                         ABSL_RETURN_IF_ERROR(
+                             target->PutChunk(data::Chunk{.data = "a"})
+                                 .Await()
+                                 .status());
+                         ABSL_RETURN_IF_ERROR(
+                             target->Finalize(data::Chunk{.data = "b"})
+                                 .Await()
+                                 .status());
+                         ABSL_ASSIGN_OR_RETURN(auto first, target->Ref(0, 1));
+                         ABSL_ASSIGN_OR_RETURN(auto second, target->Ref(1, 1));
+                         ABSL_RETURN_IF_ERROR(
+                             output->PutReference(first).Await().status());
+                         return output->Finalize(second).Await().status();
+                       });
+                     })
+          .ok());
+  service::SessionOptions options;
+  options.no_stream_timeout = absl::InfiniteDuration();
+  auto client = *service::Session::Create("client", {}, {}, {}, options);
+  auto server = *service::Session::Create("server", {}, {}, {}, options,
+                                          nullptr, registry);
+  auto pair = *net::InProcessWireStream::CreatePair();
+  ASSERT_TRUE(
+      client->AddStream(pair.first, service::StreamMode::kStart)->Await().ok());
+  ASSERT_TRUE(server->AddStream(pair.second, service::StreamMode::kAccept)
+                  ->Await()
+                  .ok());
+  auto call =
+      *Action::Create(EchoSchema(), "remote", {}, nullptr, pair.first, client);
+  auto output = *call->GetOutput("output", false);
+  ASSERT_TRUE(call->Call().Await().ok());
+  auto input = *call->GetInput("input");
+  ASSERT_TRUE(input->Finalize(data::Chunk{.data = "go"}).Await().ok());
+  ASSERT_TRUE(call->Wait(absl::Seconds(5)).Await().ok());
+  auto first = output->NextFragment().Await();
+  auto second = output->NextFragment().Await();
+  ASSERT_TRUE(first.ok() && second.ok());
+  ASSERT_TRUE(first->has_value() && second->has_value());
+  const auto* first_ref = std::get_if<data::NodeRef>(&(**first).data);
+  const auto* second_ref = std::get_if<data::NodeRef>(&(**second).data);
+  ASSERT_NE(first_ref, nullptr);
+  ASSERT_NE(second_ref, nullptr);
+  EXPECT_EQ(first_ref->id, second_ref->id);
+  EXPECT_TRUE(first_ref->id.starts_with("a11_mirror_"));
+  auto a = output->NextChunk().Await(absl::Now() + absl::Seconds(5));
+  auto b = output->NextChunk().Await(absl::Now() + absl::Seconds(5));
+  ASSERT_TRUE(a.ok() && b.ok());
+  ASSERT_TRUE(a->has_value() && b->has_value());
+  EXPECT_EQ((**a).data, "a");
+  EXPECT_EQ((**b).data, "b");
+}
+
+TEST(ActionTest, RemoteNestedReferencesStartDescendantMirrors) {
+  auto registry = std::make_shared<ActionRegistry>();
+  ASSERT_TRUE(
+      registry
+          ->Register("echo", EchoSchema(),
+                     [](std::shared_ptr<Action> action) {
+                       return a11::SubmitTask([action]() -> absl::Status {
+                         ABSL_ASSIGN_OR_RETURN(
+                             auto leaf_id,
+                             Action::MakeNodeId(action->GetId(), "leaf"));
+                         ABSL_ASSIGN_OR_RETURN(
+                             auto middle_id,
+                             Action::MakeNodeId(action->GetId(), "middle"));
+                         ABSL_ASSIGN_OR_RETURN(auto leaf,
+                                               action->GetNode(leaf_id));
+                         ABSL_ASSIGN_OR_RETURN(auto middle,
+                                               action->GetNode(middle_id));
+                         ABSL_ASSIGN_OR_RETURN(auto output,
+                                               action->GetOutput("output"));
+                         ABSL_RETURN_IF_ERROR(
+                             leaf->Finalize(data::Chunk{.data = "inside"})
+                                 .Await()
+                                 .status());
+                         ABSL_ASSIGN_OR_RETURN(auto leaf_ref, leaf->Ref());
+                         ABSL_RETURN_IF_ERROR(
+                             middle->Finalize(leaf_ref).Await().status());
+                         ABSL_ASSIGN_OR_RETURN(auto middle_ref, middle->Ref());
+                         return output->Finalize(middle_ref).Await().status();
+                       });
+                     })
+          .ok());
+  service::SessionOptions options;
+  options.no_stream_timeout = absl::InfiniteDuration();
+  auto client = *service::Session::Create("client", {}, {}, {}, options);
+  auto server = *service::Session::Create("server", {}, {}, {}, options,
+                                          nullptr, registry);
+  auto pair = *net::InProcessWireStream::CreatePair();
+  ASSERT_TRUE(
+      client->AddStream(pair.first, service::StreamMode::kStart)->Await().ok());
+  ASSERT_TRUE(server->AddStream(pair.second, service::StreamMode::kAccept)
+                  ->Await()
+                  .ok());
+  auto call =
+      *Action::Create(EchoSchema(), "remote", {}, nullptr, pair.first, client);
+  auto output = *call->GetOutput("output", false);
+  ASSERT_TRUE(call->Call().Await().ok());
+  auto input = *call->GetInput("input");
+  ASSERT_TRUE(input->Finalize(data::Chunk{.data = "go"}).Await().ok());
+  ASSERT_TRUE(call->Wait(absl::Seconds(5)).Await().ok());
+  auto value = output->NextChunk().Await(absl::Now() + absl::Seconds(5));
+  ASSERT_TRUE(value.ok()) << value.status();
+  ASSERT_TRUE(value->has_value());
+  EXPECT_EQ((**value).data, "inside");
+}
+
 TEST(Action, CancellingAnUnstartedChildReleasesItsParentRegistration) {
   auto parent = Action::Create(EchoSchema());
   ASSERT_TRUE(parent.ok()) << parent.status();
@@ -637,11 +858,8 @@ TEST(ActionStreamsTest, ReferencesAndPayloadCrossTwoSessionHops) {
       ASSERT_TRUE(value->has_value());
       EXPECT_EQ((**value).data, "progress");
       EXPECT_FALSE(node->NextChunk().Await()->has_value());
-      EXPECT_TRUE(reference->node.storage.has_value());
-      auto mirror = *middle->GetNodeMap()->Get(reference->node.id);
-      auto mirrored_fragments = mirror->GetChunkStore()->Size().Await();
-      ASSERT_TRUE(mirrored_fragments.ok()) << mirrored_fragments.status();
-      EXPECT_EQ(*mirrored_fragments, direct ? 0 : 1);
+      EXPECT_EQ(reference->node.storage.has_value(), direct);
+      EXPECT_EQ(reference->node.id.starts_with("a11_mirror_"), !direct);
       ++count;
     }
     EXPECT_EQ(count, 16);

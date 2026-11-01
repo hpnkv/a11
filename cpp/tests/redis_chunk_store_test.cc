@@ -20,6 +20,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <absl/container/flat_hash_set.h>
@@ -134,6 +135,33 @@ TEST(RedisChunkStoreTest, ImplementsOrderingAtomicityAndMetadata) {
   EXPECT_GT(metadata->revision, 0);
 
   ASSERT_TRUE(DeleteStore(client, store->keys()).ok());
+}
+
+TEST(RedisChunkStoreTest, PersistsTypedNodeReferences) {
+  auto connected = ConnectForTest();
+  if (!connected.ok()) {
+    GTEST_SKIP() << "Redis is unavailable";
+  }
+  RedisChunkStoreOptions options;
+  options.key_prefix =
+      "a11:ref:" + std::to_string(absl::ToUnixNanos(absl::Now())) + ":";
+  auto store = *RedisChunkStore::Create("refs", *connected, options);
+  ASSERT_TRUE(store->Initialize().Await().ok());
+  data::NodeRef reference{.id = "target",
+                          .offset = 2,
+                          .length = 3,
+                          .storage = data::StorageIdentity{.id = "shared"}};
+  auto written = store
+                     ->PutMany({data::NodeFragment{
+                         .data = reference, .seq = 0, .continued = false}})
+                     .Await();
+  ASSERT_TRUE(written.ok()) << written.status();
+  auto read = store->Get(0).Await();
+  ASSERT_TRUE(read.ok()) << read.status();
+  EXPECT_EQ(std::get<data::NodeRef>(read->data), reference);
+  EXPECT_EQ(store->ClearData(0).Await().status().code(),
+            absl::StatusCode::kUnimplemented);
+  ASSERT_TRUE(DeleteStore(*connected, store->keys()).ok());
 }
 
 TEST(RedisChunkStoreTest, WaitsForWritesAndPropagatesCloseStatus) {

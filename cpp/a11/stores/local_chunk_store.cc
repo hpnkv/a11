@@ -296,7 +296,8 @@ struct LocalChunkStore::State
       ABSL_GUARDED_BY(mu);
   absl::flat_hash_map<std::uint64_t, std::uint32_t> arrival_order_to_seq
       ABSL_GUARDED_BY(mu);
-  absl::flat_hash_map<std::uint32_t, data::Chunk> chunks ABSL_GUARDED_BY(mu);
+  absl::flat_hash_map<std::uint32_t, std::variant<data::Chunk, data::NodeRef>>
+      chunks ABSL_GUARDED_BY(mu);
   std::optional<std::uint32_t> final_seq ABSL_GUARDED_BY(mu);
   std::uint64_t total_chunks_put ABSL_GUARDED_BY(mu) = 0;
   std::uint64_t total_chunks_read ABSL_GUARDED_BY(mu) = 0;
@@ -401,10 +402,6 @@ a11::Future<std::vector<std::uint32_t>> LocalChunkStore::PutMany(
             return absl::InvalidArgumentError(absl::StrCat(
                 "Explicit seq ", *fragment.seq, " occurs more than once"));
           }
-          if (!std::holds_alternative<data::Chunk>(fragment.data)) {
-            return absl::UnimplementedError(
-                "LocalChunkStore supports Chunk payloads, not NodeRef");
-          }
         }
         if (any_explicit != all_explicit) {
           return absl::InvalidArgumentError(
@@ -496,14 +493,15 @@ a11::Future<std::vector<std::uint32_t>> LocalChunkStore::PutMany(
           // Stage all values and reserve the destination tables before
           // publishing the batch. This keeps the commit compact and avoids
           // growth allocations once mutation begins.
-          absl::flat_hash_map<std::uint32_t, data::Chunk> chunk_nodes;
+          absl::flat_hash_map<std::uint32_t,
+                              std::variant<data::Chunk, data::NodeRef>>
+              chunk_nodes;
           absl::flat_hash_map<std::uint64_t, std::uint32_t> arrival_nodes;
           absl::flat_hash_map<std::uint32_t, std::uint64_t> reverse_nodes;
           for (size_t index = 0; index < fragments.size(); ++index) {
             const std::uint64_t arrival = state->total_chunks_put + index;
-            chunk_nodes.emplace(
-                assigned[index],
-                std::get<data::Chunk>(std::move(fragments[index].data)));
+            chunk_nodes.emplace(assigned[index],
+                                std::move(fragments[index].data));
             arrival_nodes.emplace(arrival, assigned[index]);
             reverse_nodes.emplace(assigned[index], arrival);
           }
@@ -537,9 +535,14 @@ a11::Future<data::NodeFragment> LocalChunkStore::ClearData(std::uint32_t seq) {
           return absl::NotFoundError(
               absl::StrCat("No fragment with seq ", seq, " exists"));
         }
-        data::Chunk original = found->second;
-        found->second.data.clear();
-        found->second.ref = "__tombstone__";
+        data::Chunk* chunk = std::get_if<data::Chunk>(&found->second);
+        if (chunk == nullptr) {
+          return absl::UnimplementedError(
+              "Clearing a reference fragment is unsupported");
+        }
+        data::Chunk original = *chunk;
+        chunk->data.clear();
+        chunk->ref = "__tombstone__";
         return data::NodeFragment{
             .id = state->node_id,
             .data = std::move(original),

@@ -114,6 +114,8 @@ export const FLOW_TYPES: readonly string[] = [
 
 /** Native Flow STAGES vocabulary. */
 export const FLOW_STAGES: readonly string[] = [
+  "read_with",
+  "ref",
   "take while",
   "take until",
   "first",

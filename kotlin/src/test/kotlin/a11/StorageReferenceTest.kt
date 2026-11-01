@@ -26,6 +26,47 @@ import kotlin.test.assertTrue
 
 class StorageReferenceTest {
     @Test
+    fun readResolutionOpensUncachedTargetsOnlyWhenAllowed() {
+        val backend = NodeMap(StorageIdentity("durable"))
+        val host = NodeMap()
+        assertTrue(host.registerStorage("durable", backend).ok())
+        val reference = NodeRef("uncached", storage = StorageIdentity("durable"))
+        assertEquals(StatusCode.NOT_FOUND, host.resolveForRead(reference).status.code)
+        backend.setAllowLazyReadResolution(true)
+        assertSame(backend.get("uncached").value(), host.resolveForRead(reference).value())
+    }
+
+    @Test
+    fun credentialsAreCopyReturningAndTyped() {
+        val original =
+            NodeRef(
+                "target",
+                storage = StorageIdentity("shared", listOf(StorageService("payload"))),
+            )
+        val namespace =
+            original
+                .withCredentials(StorageCredentials("bearer", mapOf("token" to "namespace-secret")))
+                .value()
+        val service =
+            namespace
+                .withCredentials(
+                    StorageCredentials("bearer", mapOf("token" to "service-secret")),
+                    "payload",
+                )
+                .value()
+        assertEquals(null, original.storage!!.credentials)
+        assertEquals("namespace-secret", namespace.storage!!.credentials!!.fields["token"])
+        assertEquals(null, namespace.storage!!.services[0].credentials)
+        assertEquals("service-secret", service.storage!!.services[0].credentials!!.fields["token"])
+        assertEquals(service, NodeRef.fromMsgpack(service.toMsgpack().value()).value())
+        assertFalse(service.toString().contains("namespace-secret"))
+        assertEquals(
+            StatusCode.FAILED_PRECONDITION,
+            NodeRef("local").withCredentials(StorageCredentials("bearer")).status.code,
+        )
+    }
+
+    @Test
     fun sharedWireFixtures() {
         var directory: Path? = Path.of("").toAbsolutePath()
         while (

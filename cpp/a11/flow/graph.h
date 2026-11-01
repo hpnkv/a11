@@ -111,6 +111,8 @@ struct LogTail {
 
 struct Stage {
   std::string name;
+  /// Destination context used by a terminal reference stage.
+  RefId destination = kNone;
   bool optional = false;
   std::optional<syntax::TypeExpression> type;
   vocabulary::StageArgument takes = vocabulary::StageArgument::kNone;
@@ -433,6 +435,14 @@ struct Expr {
   bool materialized = false;
   const syntax::Node* absl_nullable node = nullptr;
   std::vector<std::pair<const syntax::Node* absl_nonnull, RefId>> bound;
+
+  struct ReferenceBinding {
+    const syntax::Builtin* absl_nonnull node;
+    RefId source = kNone;
+    RefId destination = kNone;
+  };
+
+  std::vector<ReferenceBinding> references;
   /// The same refs, in the order they were first mentioned, for the analysis.
   std::vector<RefId> refs;
   BodyId activation = kNone;

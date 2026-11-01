@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <optional>
 #include <ranges>
@@ -2783,6 +2784,21 @@ class FlowResolver {
                             ? Ref{Ref::Kind::kUnknown, "_"}
                             : ResolveDestination(target.get(), scope));
     }
+    if (serial.size() == 1 && !sources.empty() &&
+        sources.front().node != graph::kNone &&
+        builder_->ref(sources.front().node).kind == graph::RefKind::kDerived &&
+        builder_->ref(sources.front().node).stage.name == "ref") {
+      if (targets.size() != 1 || targets.front().node == graph::kNone ||
+          (targets.front().kind != Ref::Kind::kNode &&
+           targets.front().kind != Ref::Kind::kCallPort &&
+           targets.front().kind != Ref::Kind::kPort)) {
+        Report("flow.sequence.conflicting-access",
+               "'ref' requires one node or port destination.", pipe.location);
+      } else {
+        builder_->ref(sources.front().node).stage.destination =
+            targets.front().node;
+      }
+    }
     if (targets.size() > 1 &&
         std::any_of(targets.begin(), targets.end(), [&](const Ref& ref) {
           return ref.node != graph::kNone &&
@@ -3908,7 +3924,162 @@ class FlowResolver {
     if (!pipeline.stages.empty()) {
       previous_pattern.clear();
     }
-    for (const syntax::StagePtr& stage : pipeline.stages) {
+    for (size_t stage_index = 0; stage_index < pipeline.stages.size();
+         ++stage_index) {
+      const syntax::StagePtr& stage = pipeline.stages[stage_index];
+      const auto validate_options = [&](const syntax::ObjectLiteral& options,
+                                        bool reader) {
+        absl::flat_hash_set<std::string> seen;
+        bool fragments = false;
+        bool follow_given = false;
+        std::optional<bool> follow = true;
+        std::optional<bool> ordered = true;
+        std::optional<bool> pop = false;
+        for (const auto& [name, value] : options.pairs) {
+          if (!seen.insert(name).second) {
+            Report("flow.form.stage-argument",
+                   absl::StrCat("Duplicate option '", name, "'."),
+                   value->location);
+          }
+          const bool boolean = name == "ordered" || name == "pop_chunks" ||
+                               name == "sticky_mimetype" ||
+                               name == "follow_node_refs";
+          const bool number =
+              name == "offset" || name == "num_chunks_to_buffer" ||
+              name == "max_ref_depth" || name == "max_ref_breadth" ||
+              name == "max_chunks_to_read";
+          const bool valid = reader ? name == "view" || boolean || number
+                                    : name == "offset" || name == "length" ||
+                                          name == "credentials";
+          if (!valid) {
+            Report("flow.form.stage-argument",
+                   absl::StrCat("Unknown '", stage->name, "' option '", name,
+                                "'."),
+                   value->location);
+            continue;
+          }
+          const auto* literal = syntax::As<syntax::Literal>(value.get());
+          if (literal == nullptr) {
+            if (name == "follow_node_refs") {
+              follow_given = true;
+              follow.reset();
+            } else if (name == "ordered") {
+              ordered.reset();
+            } else if (name == "pop_chunks") {
+              pop.reset();
+            } else if (name == "view") {
+              follow.reset();
+            }
+            continue;
+          }
+          const auto& constant = literal->value;
+          bool type_ok = true;
+          if (name == "view") {
+            type_ok =
+                constant.kind == syntax::Constant::Kind::kString &&
+                (constant.text == "values" || constant.text == "fragments");
+            fragments = constant.text == "fragments";
+          } else if (boolean) {
+            type_ok = constant.kind == syntax::Constant::Kind::kBool;
+            if (name == "follow_node_refs") {
+              follow_given = true;
+            }
+            std::optional<bool>* selected = name == "follow_node_refs" ? &follow
+                                            : name == "ordered"    ? &ordered
+                                            : name == "pop_chunks" ? &pop
+                                                                   : nullptr;
+            if (selected != nullptr) {
+              *selected =
+                  type_ok ? std::optional(constant.boolean) : std::nullopt;
+            }
+          } else if (number || name == "length") {
+            type_ok = constant.kind == syntax::Constant::Kind::kInteger &&
+                      constant.integer >= 0;
+            if (name == "max_chunks_to_read" &&
+                constant.kind == syntax::Constant::Kind::kNull) {
+              type_ok = true;
+            }
+            if (type_ok && constant.kind == syntax::Constant::Kind::kInteger) {
+              const auto count = static_cast<std::uint64_t>(constant.integer);
+              const std::uint64_t limit =
+                  name == "offset" ? std::numeric_limits<std::uint32_t>::max()
+                  : name == "max_ref_depth" || name == "max_ref_breadth" ? 64
+                  : name == "length" ? std::numeric_limits<std::uint64_t>::max()
+                                     : std::uint64_t{1} << 32U;
+              type_ok =
+                  count <= limit &&
+                  ((name != "max_ref_depth" && name != "max_ref_breadth") ||
+                   count > 0);
+            }
+          } else if (name == "credentials") {
+            type_ok = false;
+          }
+          if (!type_ok) {
+            Report("flow.form.stage-argument",
+                   absl::StrCat("Invalid '", stage->name, "' value for '", name,
+                                "'."),
+                   value->location);
+          }
+        }
+        if (fragments && follow_given) {
+          Report("flow.form.stage-argument",
+                 "Fragment view cannot set 'follow_node_refs'.",
+                 stage->location);
+        }
+        if (reader && !follow_given && fragments) {
+          follow = false;
+        }
+        if (reader && follow == true && (ordered == false || pop == true)) {
+          Report("flow.form.stage-argument",
+                 "Following references requires ordered, non-destructive "
+                 "reads.",
+                 stage->location);
+        }
+        if (reader && pop == true && ref.kind != Ref::Kind::kNode) {
+          Report("flow.sequence.conflicting-access",
+                 "Destructive 'read_with' requires a Flow-owned node.",
+                 stage->location);
+        }
+      };
+      if (stage->name == "read_with") {
+        if (stage_index != 0 ||
+            (ref.kind != Ref::Kind::kNode && ref.kind != Ref::Kind::kCallPort &&
+             ref.kind != Ref::Kind::kPort)) {
+          Report("flow.sequence.conflicting-access",
+                 "'read_with' requires a direct node or port source and must "
+                 "be the first stage.",
+                 stage->location);
+        }
+        if (const auto* options =
+                syntax::As<syntax::ObjectLiteral>(stage->argument.get());
+            options == nullptr) {
+          Report("flow.form.stage-argument",
+                 "'read_with' requires a reader option record.",
+                 stage->location);
+        } else {
+          validate_options(*options, true);
+        }
+      }
+      if (stage->name == "ref") {
+        if (stage_index != 0 || stage_index + 1 != pipeline.stages.size() ||
+            (ref.kind != Ref::Kind::kNode && ref.kind != Ref::Kind::kCallPort &&
+             ref.kind != Ref::Kind::kPort)) {
+          Report("flow.sequence.conflicting-access",
+                 "'ref' requires a direct node or port source and must be "
+                 "the final stage.",
+                 stage->location);
+        }
+        if (stage->argument != nullptr) {
+          if (const auto* options =
+                  syntax::As<syntax::ObjectLiteral>(stage->argument.get());
+              options == nullptr) {
+            Report("flow.form.stage-argument",
+                   "'ref' requires a fragment window record.", stage->location);
+          } else {
+            validate_options(*options, false);
+          }
+        }
+      }
       if (const auto* call =
               syntax::As<syntax::CallExpression>(stage->argument.get());
           call != nullptr && (stage->name == "run" || stage->name == "call")) {
@@ -4288,7 +4459,9 @@ class FlowResolver {
       info.unary = true;
       info.cardinality_known = true;
       const auto& name = function->name;
-      if (name == "now" || name == "time" || name == "parse_time") {
+      if (name == "ref") {
+        info.type = "a11.NodeRef";
+      } else if (name == "now" || name == "time" || name == "parse_time") {
         info.type = "time";
       } else if (name == "duration" || name == "parse_duration") {
         info.type = "duration";
@@ -5621,6 +5794,51 @@ class FlowResolver {
         return;
       case NodeKind::kBuiltin: {
         const auto* function = syntax::As<syntax::Builtin>(expression);
+        if (function->name == "ref") {
+          if (function->args.empty() || function->args.size() > 2) {
+            Report("flow.form.stage-argument",
+                   "'ref' requires one node source and optional named options.",
+                   expression->location);
+            return;
+          }
+          const auto source = AsStream(function->args.front().get(), scope);
+          if (!source.has_value() || (source->kind != Ref::Kind::kNode &&
+                                      source->kind != Ref::Kind::kCallPort &&
+                                      source->kind != Ref::Kind::kPort)) {
+            Report("flow.sequence.conflicting-access",
+                   "'ref' requires a direct node or port source.",
+                   function->args.front()->location);
+            return;
+          }
+          graph::RefId destination = graph::kNone;
+          if (function->args.size() == 2) {
+            const auto* options =
+                syntax::As<syntax::ObjectLiteral>(function->args[1].get());
+            if (options == nullptr) {
+              Report("flow.form.stage-argument",
+                     "'ref' options must be named fields.",
+                     function->args[1]->location);
+              return;
+            }
+            for (const auto& [key, value] : options->pairs) {
+              if (key == "for") {
+                const Ref target = ResolveDestination(value.get(), scope);
+                destination = target.node;
+              } else if (key == "offset" || key == "length" ||
+                         key == "credentials") {
+                WalkExpression(value.get(), scope, allow_it, out);
+              } else {
+                Report("flow.form.stage-argument",
+                       absl::StrCat("Unknown 'ref' option '", key, "'."),
+                       value->location);
+              }
+            }
+          }
+          if (out != nullptr) {
+            out->references.push_back({function, source->node, destination});
+          }
+          return;
+        }
         if (function->name == "zip" || function->name == "interleave") {
           Remember(out, expression,
                    ResolveStreams(function->name, function->args, scope).node);

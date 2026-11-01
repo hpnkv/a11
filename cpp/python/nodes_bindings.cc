@@ -221,6 +221,11 @@ void BindNodes(py::module_& module) {
           "Identity of this map's backend, or None for local storage.")
       .def("storage_ids", &nodes::NodeMap::StorageIds,
            "Return the host's directly accessible storage identities.")
+      .def("set_allow_lazy_read_resolution",
+           &nodes::NodeMap::SetAllowLazyReadResolution,
+           "Permit references to open uncached nodes through this map's "
+           "factory.",
+           py::arg("allowed"))
       .def(
           "register_storage",
           [](nodes::NodeMap& self, std::string identity,
@@ -239,6 +244,14 @@ void BindNodes(py::module_& module) {
                 WithoutGil([&] { return self.Resolve(reference); }));
           },
           "Resolve a whole-node reference in this scope.", py::arg("reference"))
+      .def(
+          "resolve_for_read",
+          [](nodes::NodeMap& self, const data::NodeRef& reference) {
+            return ValueOrThrow(
+                WithoutGil([&] { return self.ResolveForRead(reference); }));
+          },
+          "Resolve an existing target, honoring the host's lazy-read policy.",
+          py::arg("reference"))
       .def(
           "import_reference",
           [](nodes::NodeMap& self, const data::NodeRef& reference,
@@ -313,6 +326,42 @@ void BindNodes(py::module_& module) {
             return ValueOrThrow(self.GetId());
           },
           "The node's stable identifier (see get_id).")
+      .def(
+          "ref",
+          [](const nodes::AsyncNode& self, std::uint32_t offset,
+             std::optional<std::uint64_t> length, py::object for_node,
+             std::string storage) {
+            std::shared_ptr<nodes::NodeMap> destination;
+            if (!for_node.is_none()) {
+              if (py::isinstance<nodes::NodeMap>(for_node)) {
+                destination = for_node.cast<std::shared_ptr<nodes::NodeMap>>();
+              } else if (py::isinstance<nodes::AsyncNode>(for_node)) {
+                destination =
+                    for_node.cast<std::shared_ptr<nodes::AsyncNode>>()->Owner();
+                if (destination == nullptr) {
+                  ThrowStatus(absl::FailedPreconditionError(
+                      "Destination node has no owning node map"));
+                }
+              } else {
+                ThrowStatus(absl::InvalidArgumentError(
+                    "for_node must be an AsyncNode or NodeMap"));
+              }
+            }
+            nodes::ReferenceStoragePolicy policy =
+                nodes::ReferenceStoragePolicy::kAuto;
+            if (storage == "include") {
+              policy = nodes::ReferenceStoragePolicy::kInclude;
+            } else if (storage == "omit") {
+              policy = nodes::ReferenceStoragePolicy::kOmit;
+            } else if (storage != "auto") {
+              ThrowStatus(absl::InvalidArgumentError(
+                  "storage must be auto, include, or omit"));
+            }
+            return ValueOrThrow(self.Ref(offset, length, destination, policy));
+          },
+          "Form a typed fragment reference using a destination hint.",
+          py::arg("offset") = 0, py::arg("length") = std::nullopt,
+          py::arg("for_node") = py::none(), py::arg("storage") = "auto")
       .def("get_chunk_store", &nodes::AsyncNode::GetChunkStore,
            "Returns the underlying chunk store backing this node. The chunk "
            "store is the ordered storage boundary that the node's reader and "
@@ -463,6 +512,33 @@ void BindNodes(py::module_& module) {
           "already in hand (one forwarded from another node, say).",
           py::arg("fragment"))
       .def(
+          "put_reference",
+          [](const std::shared_ptr<nodes::AsyncNode>& self,
+             data::NodeRef reference, std::optional<std::uint32_t> seq,
+             bool final) {
+            return FutureToPython(WithoutGil([&] {
+              return self->PutReference(std::move(reference), seq, final);
+            }));
+          },
+          "Write a typed node reference without materializing its target.",
+          py::arg("reference"), py::arg("seq") = std::nullopt,
+          py::arg("final") = false)
+      .def(
+          "finalize_reference",
+          [](const std::shared_ptr<nodes::AsyncNode>& self,
+             data::NodeRef reference, std::optional<std::uint32_t> seq,
+             bool wait, bool close) {
+            return FutureToPython(WithoutGil([&] {
+              return self->Finalize(
+                  std::move(reference),
+                  nodes::FinalizeOptions{
+                      .wait = wait, .close = close, .seq = seq});
+            }));
+          },
+          "Finish a node with a typed reference fragment.",
+          py::arg("reference"), py::arg("seq") = std::nullopt,
+          py::arg("wait") = false, py::arg("close") = true)
+      .def(
           "finalize",
           [](const std::shared_ptr<nodes::AsyncNode>& self,
              const std::optional<data::Chunk>& chunk,
@@ -505,6 +581,36 @@ void BindNodes(py::module_& module) {
           "incrementally as it arrives. The optional timeout bounds how long "
           "the future waits for the next fragment.",
           py::arg("timeout") = py::none())
+      .def(
+          "next_logical_fragment",
+          [](const std::shared_ptr<nodes::AsyncNode>& self,
+             const py::typing::Optional<NativeDuration>& timeout) {
+            absl::StatusOr<absl::Duration> converted =
+                DurationFromPython(timeout);
+            if (!converted.ok()) {
+              ThrowStatus(converted.status());
+            }
+            return FutureToPython(WithoutGil(
+                [&] { return self->NextLogicalFragment(*converted); }));
+          },
+          "Read a leaf fragment after expanding references.",
+          py::arg("timeout") = py::none())
+      .def(
+          "next_logical_fragments",
+          [](const std::shared_ptr<nodes::AsyncNode>& self, size_t limit,
+             const py::typing::Optional<NativeDuration>& timeout) {
+            absl::StatusOr<absl::Duration> converted =
+                DurationFromPython(timeout);
+            if (!converted.ok()) {
+              ThrowStatus(converted.status());
+            }
+            return FutureToPython(WithoutGil(
+                [&] { return self->NextLogicalFragments(limit, *converted); }));
+          },
+          "Read a batch of leaf fragments after expanding references.",
+          py::arg("limit"), py::arg("timeout") = py::none())
+      .def("logical_saw_final", &nodes::AsyncNode::LogicalSawFinal,
+           "Whether the logical source has received a final fragment.")
       .def(
           "next_fragments",
           [](const std::shared_ptr<nodes::AsyncNode>& self, size_t limit,

@@ -34,6 +34,7 @@ import {
   cancelledError,
   isOk,
   okStatus,
+  parseStreamReference,
   statusFromChunk,
   unavailableError,
 } from '../dist/index.js';
@@ -272,6 +273,76 @@ test('sessions call an Action with streaming input and output', async () => {
   assert.equal(await output.next(2000), 'reply:request');
   assert.equal(pair.client.actions().length, 0);
   assert.equal(pair.server.actions().length, 0);
+  await closePair(pair.client, pair.server);
+});
+
+test('remote references replay stored fragments and follow later writes', async () => {
+  const schema = outputSchema('references');
+  const serverRegistry = new ActionRegistry();
+  assert.ok(isOk(serverRegistry.register('references', schema, async (action) => {
+    const id = Action.makeNodeId(action.getId(), 'target');
+    if (!isOk(id)) return id;
+    const target = await action.getNode(id);
+    if (!isOk(target)) return target;
+    const output = await action.getOutput('result');
+    if (!isOk(output)) return output;
+    const before = await target.put('before');
+    if (!isOk(before)) return before;
+    const reference = await target.ref();
+    if (!isOk(reference)) return reference;
+    const published = await output.put(reference);
+    if (!isOk(published)) return published;
+    const drained = await output.waitForBufferToDrain();
+    if (!isOk(drained)) return drained;
+    const after = await target.finalize('after');
+    return isOk(after) ? okStatus() : after;
+  })));
+  const clientRegistry = new ActionRegistry();
+  assert.ok(isOk(clientRegistry.register('references', schema)));
+  const pair = await sessionPair(serverRegistry, clientRegistry);
+  const action = clientRegistry.makeAction('references', {
+    nodeMap: pair.client.getNodeMap(), stream: pair.clientStream, session: pair.client,
+  });
+  assert.ok(isOk(action));
+  const output = await action.getOutput('result', false);
+  assert.ok(isOk(output));
+  assert.ok(isOk(await action.call()));
+  assert.ok(isOk(await action.wait(2000)));
+  assert.equal(await output.next(2000), 'before');
+  assert.equal(await output.next(2000), 'after');
+  assert.equal(await output.next(2000), null);
+  await closePair(pair.client, pair.server);
+});
+
+test('remote usage stream references replay without future-write gaps', async () => {
+  const schema = outputSchema('usage-source');
+  const serverRegistry = new ActionRegistry();
+  assert.ok(isOk(serverRegistry.register('usage-source', schema, async (action) => {
+    const reference = await action.registerStream('llm_usage', {type: 'external_tool'}, 'producer');
+    if (!isOk(reference)) return reference;
+    const source = await action.getNode(reference.node.id);
+    if (!isOk(source)) return source;
+    const ended = await source.finalize('tokens');
+    return isOk(ended) ? okStatus() : ended;
+  })));
+  const clientRegistry = new ActionRegistry();
+  assert.ok(isOk(clientRegistry.register('usage-source', schema)));
+  const pair = await sessionPair(serverRegistry, clientRegistry);
+  const action = clientRegistry.makeAction('usage-source', {
+    nodeMap: pair.client.getNodeMap(), stream: pair.clientStream, session: pair.client,
+  });
+  assert.ok(isOk(action));
+  const sources = await action.getStreamSourcesNode(true);
+  assert.ok(isOk(sources));
+  assert.ok(isOk(await action.call()));
+  assert.ok(isOk(await action.wait(2000)));
+  const reference = parseStreamReference(await sources.next(2000));
+  assert.ok(isOk(reference));
+  assert.equal(reference.node.storage, null);
+  const node = await action.getNode(reference.node.id);
+  assert.ok(isOk(node));
+  assert.equal(await node.next(2000), 'tokens');
+  assert.equal(await node.next(2000), null);
   await closePair(pair.client, pair.server);
 });
 

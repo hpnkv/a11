@@ -948,15 +948,18 @@ void BindData(py::module_& module) {
   py::class_<data::StorageIdentity>(
       module, "StorageIdentity",
       "Logical storage namespace with optional service access information.")
-      .def(py::init(
-               [](std::string id, std::vector<data::StorageService> services) {
-                 data::StorageIdentity value{.id = std::move(id),
-                                             .services = std::move(services)};
-                 ValidateOrThrow(value);
-                 return value;
-               }),
+      .def(py::init([](std::string id,
+                       std::vector<data::StorageService> services,
+                       std::optional<data::StorageCredentials> credentials) {
+             data::StorageIdentity value{.id = std::move(id),
+                                         .credentials = std::move(credentials),
+                                         .services = std::move(services)};
+             ValidateOrThrow(value);
+             return value;
+           }),
            "Create a storage identity.", py::arg("id"),
-           py::arg("services") = std::vector<data::StorageService>{})
+           py::arg("services") = std::vector<data::StorageService>{},
+           py::arg("credentials") = std::nullopt)
       .def(
           "__copy__", [](const data::StorageIdentity& self) { return self; },
           "Copy this native value.")
@@ -972,6 +975,8 @@ void BindData(py::module_& module) {
           "Compare storage access information.", py::arg("other"))
       .def_readwrite("id", &data::StorageIdentity::id,
                      "Logical namespace interpreted by the host resolver.")
+      .def_readwrite("credentials", &data::StorageIdentity::credentials,
+                     "Optional namespace-level access information.")
       .def_readwrite("services", &data::StorageIdentity::services,
                      "Optional service access information.")
       .def("__repr__", &data::StorageIdentity::DebugString,
@@ -1011,6 +1016,15 @@ void BindData(py::module_& module) {
                              "Approximate in-memory size of the ref in bytes.")
       .def("debug_string", &data::NodeRef::DebugString,
            "Return a human-readable debug string.")
+      .def(
+          "with_credentials",
+          [](const data::NodeRef& self, data::StorageCredentials selected,
+             const std::optional<std::string>& service) {
+            return ValueOrThrow(
+                self.WithCredentials(std::move(selected), service));
+          },
+          "Return a qualified copy with selected access fields.",
+          py::arg("credentials"), py::arg("service") = std::nullopt)
       .def("__repr__", &data::NodeRef::DebugString,
            "Return a human-readable debug string.");
   BindValueProtocol(node_ref);

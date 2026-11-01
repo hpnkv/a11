@@ -289,6 +289,14 @@ endpoint and bearer credential. The host resolver decides which supplied access
 fields it accepts. A bare identity uses host configuration. Native diagnostic
 representations omit credential values.
 
+`StorageIdentity.credentials` carries namespace-level access fields when a
+single credential covers the backend. `NodeRef.with_credentials(credentials)`
+returns a qualified copy with those fields;
+`with_credentials(credentials, service="payload")` sets one existing service.
+Call `source.ref(storage="include")` before adding credentials to a local
+reference. A backend map can opt into opening uncached durable targets with
+`set_allow_lazy_read_resolution(True)`; local maps resolve existing nodes only.
+
 `NodeRef.offset` identifies the first fragment sequence and `length` counts
 fragments. Storage qualification preserves those units. Usage producers expose
 whole-node references. Referenced producer nodes remain addressable after action

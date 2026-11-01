@@ -78,7 +78,9 @@ std::vector<RefId> FlowGraph::Upstreams(RefId ref) const {
   }
   const Ref& one = refs[ref];
   if (one.kind == RefKind::kDerived) {
-    Push(found, one.source);
+    if (one.stage.name != "read_with" && one.stage.name != "ref") {
+      Push(found, one.source);
+    }
     // `then` takes a stream rather than a value, and the plan has to know it is
     // read so that whatever produces it is run and counted.
     Push(found, one.stage.stream);

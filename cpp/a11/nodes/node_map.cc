@@ -76,6 +76,10 @@ absl::StatusOr<std::shared_ptr<AsyncNode>> NodeMap::Get(std::string node_id) {
     if (found != nodes_.end()) {
       return found->second;
     }
+    const auto retained = retained_refs_.find(node_id);
+    if (retained != retained_refs_.end()) {
+      return retained->second;
+    }
   }
 
   // A factory may cross a language boundary. Never invoke it while holding
@@ -91,6 +95,7 @@ absl::StatusOr<std::shared_ptr<AsyncNode>> NodeMap::Get(std::string node_id) {
   }
   ABSL_ASSIGN_OR_RETURN(std::shared_ptr<AsyncNode> node,
                         AsyncNode::Create(*store));
+  node->SetOwner(shared_from_this());
   {
     thread::MutexLock lock(&mu_);
     const auto iterator = nodes_.emplace(std::move(node_id), node).first;
@@ -105,11 +110,23 @@ absl::StatusOr<std::shared_ptr<AsyncNode>> NodeMap::GetIfExists(
     std::string_view node_id) const {
   ABSL_RETURN_IF_ERROR(data::ValidateName(node_id));
   thread::MutexLock lock(&mu_);
-  const auto found = nodes_.find(std::string(node_id));
-  if (found == nodes_.end()) {
-    return std::shared_ptr<AsyncNode>();
+  const auto found = nodes_.find(node_id);
+  if (found != nodes_.end()) {
+    return found->second;
   }
-  return found->second;
+  const auto retained = retained_refs_.find(std::string(node_id));
+  return retained == retained_refs_.end() ? std::shared_ptr<AsyncNode>()
+                                          : retained->second;
+}
+
+void NodeMap::SetAllowLazyReadResolution(bool allowed) {
+  thread::MutexLock lock(&mu_);
+  allow_lazy_read_resolution_ = allowed;
+}
+
+bool NodeMap::AllowsLazyReadResolution() const {
+  thread::MutexLock lock(&mu_);
+  return allow_lazy_read_resolution_;
 }
 
 // NOLINTNEXTLINE(performance-unnecessary-value-param)
@@ -167,6 +184,13 @@ absl::StatusOr<std::shared_ptr<AsyncNode>> NodeMap::Resolve(
   }
   if (!reference.storage.has_value() ||
       (storage_.has_value() && reference.storage->id == storage_->id)) {
+    {
+      thread::MutexLock lock(&mu_);
+      const auto retained = retained_refs_.find(reference.id);
+      if (retained != retained_refs_.end()) {
+        return retained->second;
+      }
+    }
     return Get(reference.id);
   }
   std::shared_ptr<NodeMap> storage;
@@ -208,6 +232,70 @@ absl::StatusOr<std::shared_ptr<AsyncNode>> NodeMap::Resolve(
   return absl::NotFoundError("Storage identity is not configured on this host");
 }
 
+absl::StatusOr<std::shared_ptr<AsyncNode>> NodeMap::ResolveForRead(
+    const data::NodeRef& reference) {
+  ABSL_RETURN_IF_ERROR(reference.Validate());
+  const auto existing =
+      [&](NodeMap* map) -> absl::StatusOr<std::shared_ptr<AsyncNode>> {
+    {
+      thread::MutexLock lock(&map->mu_);
+      const auto retained = map->retained_refs_.find(reference.id);
+      if (retained != map->retained_refs_.end()) {
+        return retained->second;
+      }
+    }
+    if (map->AllowsLazyReadResolution()) {
+      return map->Get(reference.id);
+    }
+    ABSL_ASSIGN_OR_RETURN(auto target, map->GetIfExists(reference.id));
+    if (target == nullptr) {
+      return absl::NotFoundError("Referenced node is absent from this map");
+    }
+    return target;
+  };
+  if (!reference.storage.has_value() ||
+      (storage_.has_value() && reference.storage->id == storage_->id)) {
+    return existing(this);
+  }
+  std::shared_ptr<NodeMap> storage;
+  std::shared_ptr<AsyncNode> imported;
+  StorageResolver resolver;
+  {
+    thread::MutexLock lock(&mu_);
+    const auto found = storages_.find(reference.storage->id);
+    if (found != storages_.end()) {
+      storage = found->second;
+    }
+    const auto group = imported_.find(reference.storage->id);
+    if (group != imported_.end()) {
+      const auto found_node = group->second.find(reference.id);
+      if (found_node != group->second.end()) {
+        imported = found_node->second;
+      }
+    }
+    resolver = storage_resolver_;
+  }
+  if (storage != nullptr) {
+    return existing(storage.get());
+  }
+  if (resolver) {
+    auto resolved = resolver(*reference.storage);
+    if (resolved.ok()) {
+      if (*resolved == nullptr) {
+        return absl::InternalError("Storage resolver returned null");
+      }
+      return existing(resolved->get());
+    }
+    if (!absl::IsNotFound(resolved.status())) {
+      return resolved.status();
+    }
+  }
+  if (imported != nullptr) {
+    return imported;
+  }
+  return absl::NotFoundError("Storage identity is not configured on this host");
+}
+
 absl::StatusOr<std::shared_ptr<AsyncNode>> NodeMap::ImportReference(
     const data::NodeRef& reference, const std::shared_ptr<NodeMap>& source) {
   if (source == nullptr) {
@@ -241,6 +329,14 @@ absl::StatusOr<std::shared_ptr<AsyncNode>> NodeMap::ImportReference(
   }
   ABSL_ASSIGN_OR_RETURN(auto node, source->Resolve(reference));
   ABSL_RETURN_IF_ERROR(Insert(node));
+  {
+    thread::MutexLock lock(&mu_);
+    const auto [found, inserted] = retained_refs_.emplace(reference.id, node);
+    if (!inserted && found->second != node) {
+      return absl::AlreadyExistsError(
+          "A different node has this referenced id");
+    }
+  }
   return node;
 }
 
@@ -250,6 +346,10 @@ absl::Status NodeMap::Insert(const std::shared_ptr<AsyncNode>& node) {
   }
   ABSL_ASSIGN_OR_RETURN(std::string id, node->GetId());
   thread::MutexLock lock(&mu_);
+  const auto retained = retained_refs_.find(id);
+  if (retained != retained_refs_.end() && retained->second != node) {
+    return absl::AlreadyExistsError("A different node has this referenced id");
+  }
   const auto [found, inserted] = nodes_.emplace(std::move(id), node);
   if (!inserted && found->second != node) {
     return absl::AlreadyExistsError("A different node has this id");
@@ -261,7 +361,7 @@ absl::StatusOr<std::shared_ptr<AsyncNode>> NodeMap::Discard(
     std::string_view node_id, const std::shared_ptr<AsyncNode>& expected) {
   ABSL_RETURN_IF_ERROR(data::ValidateName(node_id));
   thread::MutexLock lock(&mu_);
-  const auto found = nodes_.find(std::string(node_id));
+  const auto found = nodes_.find(node_id);
   if (found == nodes_.end() ||
       (expected != nullptr && found->second != expected)) {
     return std::shared_ptr<AsyncNode>();
@@ -273,7 +373,7 @@ absl::StatusOr<std::shared_ptr<AsyncNode>> NodeMap::Discard(
 
 bool NodeMap::Contains(std::string_view node_id) const {
   thread::MutexLock lock(&mu_);
-  return nodes_.find(std::string(node_id)) != nodes_.end();
+  return nodes_.find(node_id) != nodes_.end();
 }
 
 size_t NodeMap::Size() const {

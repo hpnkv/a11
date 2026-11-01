@@ -149,7 +149,7 @@ std::vector<nghttp2_nv> MakeNv(
 std::vector<std::pair<std::string, std::string>> RequestHeaders(
     std::string_view method, std::string_view scheme,
     std::string_view authority, std::string_view path,
-    std::string_view protocol, const HttpHeaders& headers) {
+    std::string_view protocol, HttpHeaders headers) {
   std::vector<std::pair<std::string, std::string>> values;
   values.reserve(headers.size() + 4 + (protocol.empty() ? 0 : 1));
   values.emplace_back(":method", method);
@@ -159,8 +159,8 @@ std::vector<std::pair<std::string, std::string>> RequestHeaders(
   values.emplace_back(":scheme", scheme);
   values.emplace_back(":authority", authority);
   values.emplace_back(":path", path);
-  for (const auto& header : headers) {
-    values.push_back(header);
+  for (auto& header : headers) {
+    values.push_back(std::move(header));
   }
   return values;
 }
@@ -989,7 +989,8 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
       stream->outbound.push_back(std::move(body));
     }
     stream->outbound_finished = true;
-    auto values = RequestHeaders(method, scheme, authority, path, {}, headers);
+    auto values =
+        RequestHeaders(method, scheme, authority, path, {}, std::move(headers));
     auto fields = MakeNv(values);
     nghttp2_data_provider provider{};
     nghttp2_data_provider* provider_pointer = nullptr;
@@ -1114,8 +1115,8 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
     stream->duplex = true;
     stream->response = std::make_shared<Http2ResponseStream::State>(
         options_.max_buffered_response_bytes);
-    auto values =
-        RequestHeaders(method, scheme, authority, path, protocol, headers);
+    auto values = RequestHeaders(method, scheme, authority, path, protocol,
+                                 std::move(headers));
     auto fields = MakeNv(values);
     nghttp2_data_provider provider{};
     provider.source.ptr = stream.get();
@@ -1316,7 +1317,7 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
           "The request being answered has no authority to push against");
     }
     auto values = RequestHeaders(method, scheme, associated->origin_authority,
-                                 path, /*protocol=*/{}, headers);
+                                 path, /*protocol=*/{}, std::move(headers));
     auto fields = MakeNv(values);
     const std::int32_t promised_id =
         nghttp2_submit_push_promise(session_, NGHTTP2_FLAG_NONE, stream_id,

@@ -17,6 +17,8 @@
 package a11
 
 import a11.net.WireStream
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** One decoded value or the clean end of a node, including nullable values. */
 sealed interface NodeRead<out T> {
@@ -32,11 +34,59 @@ sealed interface NodeRead<out T> {
  * and abort carries a non-OK status to readers. Suspended reads release the monitor and resume on
  * writes, closure, or cancellation.
  */
-class AsyncNode private constructor(val id: String, private var registry: SerializationRegistry) {
+class AsyncNode
+private constructor(
+    val id: String,
+    private var registry: SerializationRegistry,
+    @Volatile private var readerOptions: ChunkStoreReaderOptions,
+) {
+    internal var owner: NodeMap? = null
+
+    private data class LogicalFrame(val node: AsyncNode, var position: Long, var remaining: ULong?)
+
+    private val logicalLock = Mutex()
+    private var logicalFrames: MutableList<LogicalFrame>? = null
+    private var logicalEnded = false
+    private var logicalFailure: Err? = null
+    private var logicalRootFinal = false
+    private var logicalEmitted = 0L
+    private var logicalMimetype = ""
+
+    fun ref(
+        offset: UInt = 0u,
+        length: ULong? = null,
+        forNode: AsyncNode? = null,
+        forMap: NodeMap? = null,
+        storage: String = "auto",
+    ): StatusOr<NodeRef> {
+        val destination = forMap ?: forNode?.owner
+        if (forNode != null && destination == null)
+            return failedPrecondition("Destination node has no owning node map.")
+        val found =
+            destination?.getIfExists(id)?.orElse {
+                return it
+            }
+        val same = destination == null || found === this
+        if (storage !in listOf("auto", "include", "omit"))
+            return invalidArgument("storage must be auto, include, or omit.")
+        if (storage == "omit" && !same)
+            return failedPrecondition("Destination cannot resolve the unqualified source node.")
+        val identity =
+            if (storage == "include" || (storage == "auto" && !same)) {
+                val source =
+                    owner?.storage
+                        ?: return failedPrecondition("Source has no portable storage identity.")
+                StorageIdentity(source.id)
+            } else null
+        return Ok(NodeRef(id, offset, length, identity))
+    }
+
     private val lock = Any()
     private val bySeq = HashMap<Long, NodeFragment>()
     private var nextWriteSeq = 0L
     private var nextReadSeq = 0L
+    private var rawReadStarted = false
+    private var logicalReadStarted = false
     private var finalSeq: Long? = null
     private var writerClosed = false
     @Volatile private var abortStatus: Err? = null
@@ -49,6 +99,21 @@ class AsyncNode private constructor(val id: String, private var registry: Serial
 
     val serializationRegistry: SerializationRegistry
         get() = registry
+
+    fun getReaderOptions(): ChunkStoreReaderOptions = synchronized(lock) { readerOptions.copy() }
+
+    fun setReaderOptions(options: ChunkStoreReaderOptions): Status {
+        options.validate().orElse {
+            return it
+        }
+        synchronized(lock) {
+            if (rawReadStarted || logicalReadStarted)
+                return failedPrecondition("Reader options cannot change after reading starts.")
+            readerOptions = options.copy()
+            nextReadSeq = options.offset
+        }
+        return Status.ok()
+    }
 
     fun setSerializationRegistry(registry: SerializationRegistry): Status {
         this.registry = registry
@@ -67,7 +132,15 @@ class AsyncNode private constructor(val id: String, private var registry: Serial
     // --- producing half ------------------------------------------------------
 
     suspend fun putChunk(chunk: Chunk, seq: Long? = null, final: Boolean = false): StatusOr<Long> {
-        chunk.validate().orElse { status ->
+        return putPayload(chunk, seq, final)
+    }
+
+    private suspend fun putPayload(
+        payload: NodePayload,
+        seq: Long?,
+        final: Boolean,
+    ): StatusOr<Long> {
+        payload.validate().orElse { status ->
             return status
         }
         val fragment: NodeFragment
@@ -96,7 +169,7 @@ class AsyncNode private constructor(val id: String, private var registry: Serial
             }
             nextWriteSeq++
             fragment =
-                NodeFragment(id = id, data = chunk, seq = actualSeq.toUInt(), continued = !final)
+                NodeFragment(id = id, data = payload, seq = actualSeq.toUInt(), continued = !final)
                     .copy()
             bySeq[actualSeq] = fragment
             if (final) finalSeq = actualSeq
@@ -115,11 +188,7 @@ class AsyncNode private constructor(val id: String, private var registry: Serial
         fragment.validate().orElse { status ->
             return status
         }
-        val chunk =
-            fragment.getChunk().orElse {
-                return unimplemented("AsyncNode writers do not resolve NodeRef payloads.")
-            }
-        return putChunk(chunk, fragment.seq?.toLong(), !fragment.continued)
+        return putPayload(fragment.data, fragment.seq?.toLong(), !fragment.continued)
     }
 
     /** Serialize and persist one application value. */
@@ -132,6 +201,7 @@ class AsyncNode private constructor(val id: String, private var registry: Serial
         when (value) {
             is NodeFragment -> return putFragment(value)
             is Chunk -> return putChunk(value, seq, final)
+            is NodeRef -> return putPayload(value, seq, final)
             else -> {
                 val chunk =
                     registry.toChunk(value, mimetype).orElse { status ->
@@ -163,15 +233,9 @@ class AsyncNode private constructor(val id: String, private var registry: Serial
     ): Status {
         when (value) {
             null -> putChunk(makeNullChunk(), seq, final = true)
-            is NodeFragment ->
-                putChunk(
-                    value.getChunk().orElse { status ->
-                        return status
-                    },
-                    value.seq?.toLong(),
-                    final = true,
-                )
+            is NodeFragment -> putPayload(value.data, value.seq?.toLong(), final = true)
             is Chunk -> putChunk(value, seq, final = true)
+            is NodeRef -> putPayload(value, seq, final = true)
             else -> put(value, seq, final = true, mimetype = mimetype)
         }.orElse { status ->
             return status
@@ -265,6 +329,7 @@ class AsyncNode private constructor(val id: String, private var registry: Serial
         while (true) {
             val waiter: Deferred<Unit>
             synchronized(lock) {
+                rawReadStarted = true
                 if (readerCancelled) return aborted("ChunkStoreReader was cancelled")
                 val fin = finalSeq
                 if (fin != null && nextReadSeq > fin) return Ok(null)
@@ -305,9 +370,144 @@ class AsyncNode private constructor(val id: String, private var registry: Serial
         }
     }
 
+    private suspend fun fragmentAt(position: Long, timeoutMs: Long?): StatusOr<NodeFragment?> {
+        val started = System.nanoTime()
+        while (true) {
+            val waiter: Deferred<Unit>
+            synchronized(lock) {
+                if (readerCancelled) return aborted("ChunkStoreReader was cancelled")
+                val fin = finalSeq
+                if (fin != null && position > fin) return Ok(null)
+                bySeq[position]?.let { value ->
+                    return Ok(value.copy().also { it.continued = fin == null || position < fin })
+                }
+                abortStatus?.let {
+                    return it
+                }
+                if (writerClosed) {
+                    if (position >= nextWriteSeq && bySeq.keys.none { it >= position })
+                        return Ok(null)
+                    return notFound("The closed node has no fragment at sequence $position.")
+                }
+                waiter = Deferred<Unit>().also { changeWaiters.add(it) }
+            }
+            try {
+                val remaining =
+                    timeoutMs?.let { maxOf(0L, it - (System.nanoTime() - started) / 1_000_000) }
+                waitFor(remaining) { waiter.await() }
+                    .orElse {
+                        return it
+                    }
+            } finally {
+                synchronized(lock) { changeWaiters.remove(waiter) }
+            }
+        }
+    }
+
+    private suspend fun nextLogicalFragment(timeoutMs: Long? = null): StatusOr<NodeFragment?> =
+        logicalLock.withLock {
+            synchronized(lock) { logicalReadStarted = true }
+            logicalFailure?.let {
+                return@withLock it
+            }
+            if (logicalEnded) return@withLock Ok(null)
+            val frames =
+                logicalFrames
+                    ?: mutableListOf(LogicalFrame(this, readerOptions.offset, null)).also {
+                        logicalFrames = it
+                    }
+            if (readerOptions.maxChunksToRead == 0L) {
+                logicalEnded = true
+                return@withLock Ok(null)
+            }
+            val started = System.nanoTime()
+            var steps = 0
+            while (frames.isNotEmpty()) {
+                if (++steps % 128 == 0) kotlinx.coroutines.yield()
+                val frame = frames.last()
+                if (frame.remaining == 0uL) {
+                    frames.removeAt(frames.lastIndex)
+                    continue
+                }
+                val remainingTime =
+                    timeoutMs?.let { maxOf(0L, it - (System.nanoTime() - started) / 1_000_000) }
+                val fragment =
+                    frame.node.fragmentAt(frame.position, remainingTime).orElse { status ->
+                        if (status.code != StatusCode.DEADLINE_EXCEEDED) logicalFailure = status
+                        return@withLock status
+                    }
+                if (fragment == null) {
+                    if (frame.remaining != null) {
+                        val failure = dataLoss("Referenced node ended before its fragment window.")
+                        logicalFailure = failure
+                        return@withLock failure
+                    }
+                    frames.removeAt(frames.lastIndex)
+                    continue
+                }
+                frame.position++
+                frame.remaining = frame.remaining?.minus(1uL)
+                if (frames.size == 1 && !fragment.continued) logicalRootFinal = true
+                val reference = fragment.data as? NodeRef
+                if (reference != null) {
+                    if (!readerOptions.followNodeRefs) {
+                        val failure = unimplemented("Reference following is disabled.")
+                        logicalFailure = failure
+                        return@withLock failure
+                    }
+                    if (reference.length == 0uL) continue
+                    if (frames.size > readerOptions.maxRefDepth) {
+                        val failure = resourceExhausted("Reference depth exceeded.")
+                        logicalFailure = failure
+                        return@withLock failure
+                    }
+                    val context =
+                        frame.node.owner
+                            ?: return@withLock notFound("Reference source has no node map.")
+                    val target =
+                        context.resolveForRead(reference).orElse { status ->
+                            logicalFailure = status
+                            return@withLock status
+                        }
+                    if (frames.any { it.node === target }) {
+                        val failure = failedPrecondition("Reference cycle detected.")
+                        logicalFailure = failure
+                        return@withLock failure
+                    }
+                    frames.add(LogicalFrame(target, reference.offset.toLong(), reference.length))
+                    continue
+                }
+                val chunk = fragment.data as Chunk
+                if (chunk.isNull) {
+                    if (!fragment.continued && frames.size == 1) {
+                        logicalEnded = true
+                        return@withLock Ok(null)
+                    }
+                    continue
+                }
+                if (readerOptions.stickyMimetype) {
+                    if (chunk.mimetype.isNotEmpty()) logicalMimetype = chunk.mimetype
+                    else if (logicalMimetype.isNotEmpty()) {
+                        val metadata = chunk.metadata ?: ChunkMetadata()
+                        metadata.mimetype = logicalMimetype
+                        chunk.metadata = metadata
+                    }
+                }
+                logicalEmitted++
+                if (
+                    readerOptions.maxChunksToRead != null &&
+                        logicalEmitted >= readerOptions.maxChunksToRead!!
+                )
+                    logicalEnded = true
+                return@withLock Ok(fragment)
+            }
+            logicalEnded = true
+            Ok(null)
+        }
+
     suspend fun nextChunk(timeoutMs: Long? = null): StatusOr<Chunk?> {
         val fragment =
-            nextFragment(timeoutMs).orElse { status ->
+            nextLogicalFragment(timeoutMs).orElse { status ->
                 return status
             } ?: return Ok(null)
         return fragment.getChunk()
@@ -331,7 +531,7 @@ class AsyncNode private constructor(val id: String, private var registry: Serial
                     maxOf(0L, value - ((System.nanoTime() - started) / 1_000_000))
                 }
             val fragment =
-                nextFragment(remaining).orElse { status ->
+                nextLogicalFragment(remaining).orElse { status ->
                     return status
                 } ?: return Ok(null)
             val chunk =
@@ -391,6 +591,7 @@ class AsyncNode private constructor(val id: String, private var registry: Serial
         mimetypePatterns: List<String>? = null,
         expectedTag: String? = null,
     ): StatusOr<Any?> {
+        val started = System.nanoTime()
         val first =
             nextValueFragment(timeoutMs).orElse { status ->
                 return status
@@ -401,25 +602,15 @@ class AsyncNode private constructor(val id: String, private var registry: Serial
             first.getChunk().orElse { status ->
                 return status
             }
-        if (first.continued) {
-            val terminator =
-                nextFragment(timeoutMs).orElse { status ->
-                    return status
-                }
-                    ?: return failedPrecondition(
-                        "A continued consumed value must be followed by a null final chunk."
-                    )
-
-            val terminatorChunk =
-                terminator.getChunk().orElse { status ->
-                    return status
-                }
-            if (terminator.continued || !terminatorChunk.isNull) {
-                return failedPrecondition(
-                    "The only fragment allowed after a consumed value is a null final chunk."
-                )
+        val remaining = timeoutMs?.let { maxOf(0L, it - (System.nanoTime() - started) / 1_000_000) }
+        val second =
+            nextLogicalFragment(remaining).orElse {
+                return it
             }
-        }
+        if (second != null)
+            return failedPrecondition("A consumed node contains more than one value.")
+        if (!logicalRootFinal)
+            return failedPrecondition("A consumed node requires a final fragment.")
         return registry.fromChunk(
             chunk,
             mimetypePatterns ?: expectedPatterns,
@@ -437,17 +628,27 @@ class AsyncNode private constructor(val id: String, private var registry: Serial
         fun create(
             id: String,
             registry: SerializationRegistry = SerializationRegistry.getGlobal(),
+            readerOptions: ChunkStoreReaderOptions = ChunkStoreReaderOptions(),
         ): StatusOr<AsyncNode> {
             validateName(id).orElse { status ->
                 return status
             }
-            return Ok(AsyncNode(id, registry))
+            readerOptions.validate().orElse {
+                return it
+            }
+            return Ok(AsyncNode(id, registry, readerOptions.copy()))
         }
     }
 }
 
 /** Registry of lazily created [AsyncNode]s keyed by stable node id. */
 class NodeMap(val storage: StorageIdentity? = null) {
+    @Volatile private var allowLazyReadResolution = false
+
+    fun setAllowLazyReadResolution(allowed: Boolean) {
+        allowLazyReadResolution = allowed
+    }
+
     private val storages = java.util.concurrent.ConcurrentHashMap<String, NodeMap>()
     private val imported =
         java.util.concurrent.ConcurrentHashMap<
@@ -499,6 +700,7 @@ class NodeMap(val storage: StorageIdentity? = null) {
                 AsyncNode.create(nodeId).orElse { status ->
                     return status
                 }
+            node.owner = this
             nodes[nodeId] = node
             return Ok(node)
         }
@@ -509,6 +711,43 @@ class NodeMap(val storage: StorageIdentity? = null) {
             return status
         }
         return Ok(synchronized(lock) { nodes[nodeId] })
+    }
+
+    /** Resolve an existing reference target without creating an empty node. */
+    fun resolveForRead(reference: NodeRef): StatusOr<AsyncNode> {
+        reference.validate().orElse {
+            return it
+        }
+        val identity = reference.storage
+        val local = identity == null || identity.id == storage?.id
+        val registered = if (local) this else storages[identity!!.id]
+        if (registered != null) {
+            if (registered.allowLazyReadResolution) return registered.get(reference.id)
+            val target =
+                registered.getIfExists(reference.id).orElse {
+                    return it
+                }
+            return target?.let { Ok(it) } ?: notFound("Referenced node does not exist.")
+        }
+        if (identity != null && storageResolver != null) {
+            val resolved =
+                try {
+                    storageResolver!!.invoke(identity)
+                } catch (error: Exception) {
+                    Status.fromException(error)
+                }
+            if (resolved is Ok) {
+                if (resolved.value.allowLazyReadResolution) return resolved.value.get(reference.id)
+                val target =
+                    resolved.value.getIfExists(reference.id).orElse {
+                        return it
+                    }
+                return target?.let { Ok(it) } ?: notFound("Referenced node does not exist.")
+            }
+            if (resolved.status.code != StatusCode.NOT_FOUND) return resolved as Err
+        }
+        return imported[identity!!.id]?.get(reference.id)?.let { Ok(it) }
+            ?: notFound("Storage identity is not configured on this host.")
     }
 
     /** Resolve a whole-node reference; windows require a fragment-window reader. */

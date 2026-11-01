@@ -452,7 +452,25 @@ export interface StorageCredentials { scheme: string; fields?: Record<string, st
 /** One named service participating in a storage backend. */
 export interface StorageService { role: string; endpoint?: string; credentials?: StorageCredentials | null; }
 /** Logical namespace with optional backend access information. */
-export interface StorageIdentity { id: string; services?: StorageService[]; }
+export interface StorageIdentity { id: string; credentials?: StorageCredentials | null; services?: StorageService[]; }
+
+function storageCredentialsFromValue(value: unknown): StatusOr<StorageCredentials> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return invalidArgumentError('Invalid storage credentials.');
+  const raw = value as Record<string, unknown>;
+  const scheme = asString(raw.scheme, 'StorageCredentials.scheme');
+  if (!isOk(scheme)) return scheme;
+  const valid = validateName(scheme);
+  if (!isOk(valid)) return valid;
+  if (raw.fields != null && (typeof raw.fields !== 'object' || Array.isArray(raw.fields))) return invalidArgumentError('Invalid credential fields.');
+  const fields: Record<string, string> = Object.create(null);
+  for (const [key, item] of Object.entries(raw.fields ?? {}).sort(([a], [b]) => a.localeCompare(b))) {
+    const keyStatus = validateName(key);
+    if (!isOk(keyStatus)) return keyStatus;
+    if (typeof item !== 'string') return invalidArgumentError('Credential fields must be strings.');
+    fields[key] = item;
+  }
+  return {scheme, fields};
+}
 
 /** Decode the structured access fields at the serialization boundary. */
 export function storageIdentityFromValue(value: unknown): StatusOr<StorageIdentity> {
@@ -463,6 +481,11 @@ export function storageIdentityFromValue(value: unknown): StatusOr<StorageIdenti
   const valid = validateName(id);
   if (!isOk(valid)) return valid;
   const result: StorageIdentity = {id};
+  if (source.credentials != null) {
+    const access = storageCredentialsFromValue(source.credentials);
+    if (!isOk(access)) return access;
+    result.credentials = access;
+  }
   if (source.services !== undefined) {
     if (!Array.isArray(source.services)) return invalidArgumentError('Storage services must be an array.');
     const services: StorageService[] = [];
@@ -476,21 +499,9 @@ export function storageIdentityFromValue(value: unknown): StatusOr<StorageIdenti
       if (!isOk(endpoint)) return endpoint;
       const service: StorageService = {role, endpoint};
       if (item.credentials != null) {
-        const raw = item.credentials;
-        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return invalidArgumentError('Invalid storage credentials.');
-        const scheme = asString(raw.scheme, 'StorageCredentials.scheme');
-        if (!isOk(scheme)) return scheme;
-        const schemeStatus = validateName(scheme);
-        if (!isOk(schemeStatus)) return schemeStatus;
-        if (raw.fields != null && (typeof raw.fields !== 'object' || Array.isArray(raw.fields))) return invalidArgumentError('Invalid credential fields.');
-        const fields: Record<string, string> = {};
-        for (const [key, value] of Object.entries(raw.fields ?? {}).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) {
-          const keyStatus = validateName(key);
-          if (!isOk(keyStatus)) return keyStatus;
-          if (typeof value !== 'string') return invalidArgumentError('Credential fields must be strings.');
-          fields[key] = value;
-        }
-        service.credentials = {fields, scheme};
+        const access = storageCredentialsFromValue(item.credentials);
+        if (!isOk(access)) return access;
+        service.credentials = access;
       }
       services.push(service.credentials ? {credentials: service.credentials, endpoint, role} : {endpoint, role});
     }
@@ -574,6 +585,25 @@ export class NodeRef {
     } catch (error) {
       return invalidArgumentError('Invalid NodeRef value.', [], error);
     }
+  }
+
+  /** Return a qualified copy with namespace or named-service credentials. */
+  withCredentials(credentials: StorageCredentials, service?: string): StatusOr<NodeRef> {
+    if (!this.storage) return failedPreconditionError('Credentials require a storage-qualified reference.');
+    const storage = storageIdentityFromValue(this.storage);
+    if (!isOk(storage)) return storage;
+    const copy: StorageIdentity = {id: storage.id, ...(storage.credentials ? {credentials: storage.credentials} : {}),
+      services: storage.services?.map(item => ({...item, ...(item.credentials ? {credentials: {...item.credentials, fields: {...item.credentials.fields}}} : {})})) ?? []};
+    const parsed = storageCredentialsFromValue(credentials);
+    if (!isOk(parsed)) return parsed;
+    if (service === undefined) {
+      copy.credentials = parsed;
+    } else {
+      const selected = copy.services?.find(item => item.role === service);
+      if (!selected) return invalidArgumentError('Unknown storage service role.');
+      selected.credentials = parsed;
+    }
+    return NodeRef.create({id: this.id, offset: this.offset, length: this.length, storage: copy});
   }
 
   /** Encode the concatenated MessagePack node-reference record. */

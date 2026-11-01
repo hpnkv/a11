@@ -574,6 +574,14 @@ absl::Status Runner::StartCall(Scope& scope, StepId step, CallHandle& handle) {
   absl::flat_hash_set<std::string> read;
   for (const RefId ref : scope.analysis_->refs) {
     const graph::Ref& port = graph().refs[ref];
+    if (port.kind == RefKind::kDerived &&
+        (port.stage.name == "read_with" || port.stage.name == "ref")) {
+      const graph::Ref& direct = graph().refs[port.source];
+      if (direct.kind == RefKind::kCallPort && direct.call == step &&
+          direct.direction == syntax::PortDirection::kOutput) {
+        read.insert(direct.name);
+      }
+    }
     if (port.kind != RefKind::kCallPort || port.call != step) {
       continue;
     }

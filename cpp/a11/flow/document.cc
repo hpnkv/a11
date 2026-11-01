@@ -583,12 +583,12 @@ absl::StatusOr<Statement> Statement::Block(const std::vector<Statement>& body,
   return Validated(absl::StrCat(tolerant ? "try " : "", Body(body)));
 }
 
-absl::Status FlowBuilder::AddStatement(const Statement& statement) {
+absl::Status FlowBuilder::AddStatement(Statement statement) {
   if (plan_.interface_only) {
     return absl::InvalidArgumentError(
         "An interface contains no executable statements.");
   }
-  statements_.push_back(statement.source());
+  statements_.push_back(std::move(statement).TakeSource());
   return absl::OkStatus();
 }
 
@@ -597,16 +597,15 @@ FlowBuilder::FlowBuilder(std::string name, bool interface_only) {
   plan_.interface_only = interface_only;
 }
 
-absl::Status FlowBuilder::AddPort(std::string name,
-                                  const syntax::TypeExpression& type,
+absl::Status FlowBuilder::AddPort(std::string name, syntax::TypeExpression type,
                                   syntax::PortDirection direction, bool unary,
                                   bool required, std::string description) {
   ABSL_RETURN_IF_ERROR(Name(name));
   ABSL_RETURN_IF_ERROR(type.ToSource().status());
   PortPlan port;
   port.name = std::move(name);
-  port.syntax_type = type;
   port.type = type.ToString();
+  port.syntax_type = std::move(type);
   port.declared = port.type;
   port.direction = direction;
   port.unary = unary;
@@ -622,7 +621,7 @@ absl::Status FlowBuilder::AddInitialize(
   ABSL_ASSIGN_OR_RETURN(
       auto statement,
       Statement::Initialize(std::move(name), value, std::move(type)));
-  return AddStatement(statement);
+  return AddStatement(std::move(statement));
 }
 
 absl::Status FlowBuilder::AddPipe(const Expression& value,
@@ -671,13 +670,12 @@ absl::Status FlowBuilder::AddDeclaration(const FlowPlan& interface) {
   return absl::OkStatus();
 }
 
-absl::Status FlowBuilder::AddStruct(const DtoPlan& shape) {
+absl::Status FlowBuilder::AddStruct(DtoPlan shape) {
   if (plan_.interface_only || shape.exported) {
     return absl::InvalidArgumentError(
         "Local structs require an implemented flow and cannot be exported.");
   }
-  StructBuilder builder(shape.name);
-  builder.shape() = shape;
+  StructBuilder builder(std::move(shape));
   ABSL_ASSIGN_OR_RETURN(auto text, builder.Emit());
   statements_.push_back(std::move(text));
   return absl::OkStatus();
@@ -713,8 +711,7 @@ absl::StatusOr<std::string> DeclarationSource(const FlowPlan& plan) {
 }
 
 absl::Status StructBuilder::AddField(std::string name,
-                                     const syntax::TypeExpression& type,
-                                     bool required,
+                                     syntax::TypeExpression type, bool required,
                                      std::optional<Expression> default_value,
                                      std::string description) {
   ABSL_RETURN_IF_ERROR(Name(name));
@@ -727,7 +724,7 @@ absl::Status StructBuilder::AddField(std::string name,
   field.name = std::move(name);
   field.type = type.name;
   field.declared = type.ToString();
-  field.syntax_type = type;
+  field.syntax_type = std::move(type);
   field.required = required;
   field.description = std::move(description);
   if (default_value.has_value()) {
@@ -739,14 +736,14 @@ absl::Status StructBuilder::AddField(std::string name,
     }
     const auto* binding =
         syntax::As<syntax::Bind>(parsed.flows.front()->body.front().get());
-    const auto constant = binding == nullptr
-                              ? std::optional<syntax::Constant>{}
-                              : syntax::ConstantValue(binding->value.get());
+    auto constant = binding == nullptr
+                        ? std::optional<syntax::Constant>{}
+                        : syntax::ConstantValue(binding->value.get());
     if (!constant.has_value()) {
       return absl::InvalidArgumentError("A field default must be a constant.");
     }
     field.has_default = true;
-    field.default_value = *constant;
+    field.default_value = std::move(*constant);
   }
   plan_.fields.push_back(std::move(field));
   return absl::OkStatus();
@@ -894,10 +891,8 @@ absl::StatusOr<DocumentChange> ModuleDocument::Insert(const FlowBuilder& flow) {
                      text)}});
 }
 
-absl::StatusOr<DocumentChange> ModuleDocument::InsertStruct(
-    const DtoPlan& shape) {
-  StructBuilder builder(shape.name);
-  builder.shape() = shape;
+absl::StatusOr<DocumentChange> ModuleDocument::InsertStruct(DtoPlan shape) {
+  StructBuilder builder(std::move(shape));
   ABSL_ASSIGN_OR_RETURN(auto text, builder.Emit());
   return Apply(
       revision_,
@@ -907,17 +902,17 @@ absl::StatusOr<DocumentChange> ModuleDocument::InsertStruct(
 }
 
 absl::StatusOr<DocumentChange> ModuleDocument::UpsertDeclaration(
-    const FlowPlan& interface, const std::vector<DtoPlan>& types,
+    FlowPlan interface, const std::vector<DtoPlan>& types,
     std::optional<DocumentSymbolHandle> symbol) {
   if (!interface.interface_only) {
     return absl::InvalidArgumentError("Expected an interface declaration.");
   }
-  FlowPlan updated = interface;
+  FlowPlan updated = std::move(interface);
   size_t start = source_.size(), end = start;
   const auto parsed = Parse(source_);
   if (symbol.has_value()) {
     ABSL_RETURN_IF_ERROR(Validate(*symbol));
-    if (symbol->kind != "declaration" || symbol->name != interface.name) {
+    if (symbol->kind != "declaration" || symbol->name != updated.name) {
       return absl::InvalidArgumentError(
           "Upsert requires the owned interface declaration of this action.");
     }

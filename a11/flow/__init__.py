@@ -219,6 +219,12 @@ try pipe to tolerate transfer errors too. No item is dropped.
 Stages include map EXPR, where EXPR, first N, drop N, collect, flatten,
 scan INITIAL as state, EXPR, fold INITIAL as state, EXPR, sum, count,
 take while EXPR, take until EXPR, as TYPE, json, packb, timeout DURATION.
+Use ``node | read_with {max_ref_depth: 2, max_ref_breadth: 3}`` to open an
+independent reader with explicit options. ``view: "fragments"`` exposes raw
+fragments; the default value view follows node references. The stage must come
+first, directly after a node or port. ``source | ref -> destination`` writes a
+reference to the source node, and ``ref(source, for: destination, offset: 1,
+length: 2)`` produces a reference value. Reference windows count fragments.
 first, last, drop, truncate, batch, window and chunk accept scalar integer
 expressions as their counts, including fields and grouped calculations. Counts
 evaluate once per pipeline activation, outside it.

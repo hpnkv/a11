@@ -80,6 +80,7 @@ namespace a11::actions {
 
 class Action;
 class ActionRegistry;
+class ReferenceMirrorRegistry;
 struct VerifiedAuthorization;
 
 /** @brief Default cap on concurrently running nested actions. */
@@ -495,6 +496,7 @@ class Action : public std::enable_shared_from_this<Action> {
   absl::Status RemapDefaultPorts() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
   absl::Status AttachStreamIfRequested(
       const std::shared_ptr<nodes::AsyncNode>& node, bool bind);
+  std::shared_ptr<ReferenceMirrorRegistry> MirrorRegistry();
   absl::Status ValidateMessagePorts(
       const std::vector<data::Port>& ports,
       const absl::flat_hash_map<std::string, ActionPortSchema>& schema_ports,
@@ -567,6 +569,8 @@ class Action : public std::enable_shared_from_this<Action> {
   absl::flat_hash_set<std::shared_ptr<nodes::AsyncNode>> output_nodes_
       ABSL_GUARDED_BY(mu_);
   absl::flat_hash_set<std::shared_ptr<nodes::AsyncNode>> stream_bound_nodes_
+      ABSL_GUARDED_BY(mu_);
+  std::shared_ptr<ReferenceMirrorRegistry> reference_mirrors_
       ABSL_GUARDED_BY(mu_);
   Mode mode_ ABSL_GUARDED_BY(mu_) = Mode::kNone;
   bool input_autofills_applied_ ABSL_GUARDED_BY(mu_) = false;

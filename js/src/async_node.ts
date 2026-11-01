@@ -18,11 +18,13 @@ import { hasChunkStoreShape, LocalChunkStore, type ChunkStore } from './chunk_st
 import {
   ChunkStoreReader,
   type ChunkStoreReaderOptions,
+  type ReferenceResolver,
 } from './chunk_store_reader.js';
 import {
   ChunkStoreWriter,
   type ChunkStoreWriterOptions,
   type WritableWireStream,
+  type ReferenceRewriter,
 } from './chunk_store_writer.js';
 import { Chunk, NodeFragment, NodeRef, type StorageIdentity, makeNullChunk, validateName } from './data.js';
 import {
@@ -90,10 +92,33 @@ export class AsyncNode {
   readonly chunkStore: ChunkStore;
   /** Owning node map, or `null` for a standalone node. */
   readonly nodeMap: NodeMap | null;
+
+  /** Form a typed fragment reference using the destination's resolution context. */
+  async ref(options: {offset?: number; length?: number | null; forNode?: AsyncNode | NodeMap;
+    storage?: 'auto' | 'include' | 'omit'} = {}): Promise<StatusOr<NodeRef>> {
+    const id = this.getId();
+    if (!isOk(id)) return id;
+    const destination = options.forNode instanceof AsyncNode ? options.forNode.nodeMap : options.forNode;
+    if (options.forNode instanceof AsyncNode && destination === null) {
+      return failedPreconditionError('Destination node has no owning node map.');
+    }
+    const found = destination?.getIfExists(id);
+    if (found !== undefined && !isOk(found)) return found;
+    const same = destination === undefined ? true : found === this;
+    const policy = options.storage ?? 'auto';
+    if (policy === 'omit' && !same) return failedPreconditionError('Destination cannot resolve the unqualified source node.');
+    let storage: StorageIdentity | null = null;
+    if (policy === 'include' || (policy === 'auto' && !same)) {
+      if (!this.nodeMap?.storage) return failedPreconditionError('Source has no portable storage identity.');
+      storage = {id: this.nodeMap.storage.id};
+    }
+    return NodeRef.create({id, offset: options.offset, length: options.length, storage});
+  }
   private registry: SerializationRegistry;
   private readerOptions: ChunkStoreReaderOptions;
   private writerOptions: ChunkStoreWriterOptions;
   private readerInternal: ChunkStoreReader;
+  private logicalReaderInternal: ChunkStoreReader | null = null;
   private writerInternal: ChunkStoreWriter;
   private expectedMimetypePatterns: string | readonly string[] = '';
   private expectedTag: string | undefined;
@@ -216,6 +241,8 @@ export class AsyncNode {
       const reader = ChunkStoreReader.create(this.chunkStore, nextOptions);
       if (!isOk(reader)) return reader;
       this.readerInternal.cancel();
+      this.logicalReaderInternal?.cancel();
+      this.logicalReaderInternal = null;
       this.readerInternal = reader;
       this.readerOptions = { ...reader.options };
       return okStatus();
@@ -247,7 +274,30 @@ export class AsyncNode {
   }
 
   /** Current independent read-cursor status. */
-  getReaderStatus(): Status { return this.readerInternal.getStatus(); }
+  getReaderStatus(): Status {
+    const logical = this.logicalReaderInternal?.getStatus();
+    return logical && !isOk(logical) ? logical : this.readerInternal.getStatus();
+  }
+
+  private referenceResolverFor(node: AsyncNode): ReferenceResolver {
+    return async reference => {
+      const context = node.nodeMap;
+      if (!context) return notFoundError('Reference source has no node map.');
+      const target = await context.resolveForRead(reference);
+      if (!isOk(target)) return target;
+      return {store: target.chunkStore, resolver: this.referenceResolverFor(target)};
+    };
+  }
+
+  private nextLogicalFragment(timeoutMs?: number): Promise<StatusOr<NodeFragment | null>> {
+    if (this.logicalReaderInternal === null) {
+      const reader = ChunkStoreReader.create(this.chunkStore, this.readerOptions);
+      if (!isOk(reader)) return Promise.resolve(reader);
+      this.logicalReaderInternal = reader;
+    }
+    return this.logicalReaderInternal.nextLogical(this.referenceResolverFor(this), timeoutMs);
+  }
+
   /** Current buffered writer status. */
   getWriterStatus(): Status { return this.writerInternal.getStatus() ?? okStatus(); }
   /** Structured writer-abort status, or `null`. */
@@ -256,14 +306,13 @@ export class AsyncNode {
   async isWritable(): Promise<StatusOr<boolean>> { return this.writerInternal.isWritable(); }
 
   /** Persist a raw chunk, optionally at an explicit sequence and/or as final. */
-  putChunk(chunk: Chunk, seq: number | null = null, final = false): Promise<StatusOr<number>> {
+  putChunk(chunk: Chunk | NodeRef, seq: number | null = null, final = false): Promise<StatusOr<number>> {
     return this.writerInternal.putChunk(chunk, seq, final);
   }
 
   /** Persist a fragment carrying its own sequence and continuation marker. */
   putFragment(fragment: NodeFragment): Promise<StatusOr<number>> {
     if (!(fragment instanceof NodeFragment)) return Promise.resolve(invalidArgumentError('fragment must be a NodeFragment.'));
-    if (!(fragment.data instanceof Chunk)) return Promise.resolve(unimplementedError('AsyncNode writers do not resolve NodeRef payloads.'));
     return this.putChunk(fragment.data, fragment.seq, !fragment.continued);
   }
 
@@ -288,6 +337,10 @@ export class AsyncNode {
       }
       if (value instanceof Chunk) {
         if (mimetype !== '') return invalidArgumentError('mimetype cannot be supplied with a raw Chunk.');
+        return this.putChunk(value, seq, final);
+      }
+      if (value instanceof NodeRef) {
+        if (mimetype !== '') return invalidArgumentError('mimetype cannot be supplied with a NodeRef.');
         return this.putChunk(value, seq, final);
       }
       const chunk = await this.registry.toChunk(value, mimetype);
@@ -324,7 +377,7 @@ export class AsyncNode {
       const close = options.close ?? true;
       const wait = options.wait ?? false;
       let seq = options.seq ?? null;
-      let chunk: Chunk;
+      let chunk: Chunk | NodeRef;
       if (value === undefined || value === null) {
         if (options.mimetype) return invalidArgumentError('mimetype cannot be supplied without a value.');
         chunk = makeNullChunk();
@@ -332,11 +385,13 @@ export class AsyncNode {
         if (seq !== null || options.mimetype) {
           return invalidArgumentError('seq and mimetype are carried by a NodeFragment and cannot be supplied separately.');
         }
-        if (!(value.data instanceof Chunk)) return unimplementedError('AsyncNode writers do not resolve NodeRef payloads.');
         chunk = value.data;
         seq = value.seq;
       } else if (value instanceof Chunk) {
         if (options.mimetype) return invalidArgumentError('mimetype cannot be supplied with a raw Chunk.');
+        chunk = value;
+      } else if (value instanceof NodeRef) {
+        if (options.mimetype) return invalidArgumentError('mimetype cannot be supplied with a NodeRef.');
         chunk = value;
       } else {
         const encoded = await this.registry.toChunk(value, options.mimetype ?? '');
@@ -356,7 +411,7 @@ export class AsyncNode {
 
   /** Read the next inline chunk without deserializing its payload. */
   async nextChunk(timeoutMs?: number): Promise<StatusOr<Chunk | null>> {
-    const fragment = await this.nextFragment(timeoutMs);
+    const fragment = await this.nextLogicalFragment(timeoutMs);
     if (!isOk(fragment) || fragment === null) return fragment;
     return fragment.getChunk();
   }
@@ -371,14 +426,16 @@ export class AsyncNode {
    */
   private async nextValueFragment(
     timeoutMs?: number,
+    raw = false,
   ): Promise<StatusOr<NodeFragment | null>> {
     const started = Date.now();
     for (;;) {
       const remaining = timeoutMs === undefined
         ? undefined
         : Math.max(0, timeoutMs - (Date.now() - started));
-      const fragment = await this.nextFragment(remaining);
+      const fragment = await (raw ? this.nextFragment(remaining) : this.nextLogicalFragment(remaining));
       if (!isOk(fragment) || fragment === null) return fragment;
+      if (raw && fragment.data instanceof NodeRef) return fragment;
       const chunk = fragment.getChunk();
       if (!isOk(chunk)) return chunk;
       if (!chunk.isNull) return fragment;
@@ -440,7 +497,7 @@ export class AsyncNode {
     }
     if ((this.readerOptions.ordered ?? true) !== true) return failedPreconditionError('consume() requires an ordered reader.');
     const started = Date.now();
-    const first = await this.nextValueFragment(options.timeoutMs);
+    const first = await this.nextValueFragment(options.timeoutMs, true);
     if (!isOk(first)) return first;
     if (first === null) return options.allowNone
       ? null
@@ -464,9 +521,23 @@ export class AsyncNode {
   async consumeChunk(
     options: { timeoutMs?: number; allowNone?: boolean } = {},
   ): Promise<StatusOr<Chunk | null>> {
-    const fragment = await this.consumeFragment(options);
+    const fragment = await this.consumeLogicalFragment(options);
     if (!isOk(fragment) || fragment === null) return fragment;
     return fragment.getChunk();
+  }
+
+  private async consumeLogicalFragment(options: {timeoutMs?: number; allowNone?: boolean}): Promise<StatusOr<NodeFragment | null>> {
+    const started = Date.now();
+    const first = await this.nextValueFragment(options.timeoutMs);
+    if (!isOk(first)) return first;
+    if (first === null) return options.allowNone ? null : failedPreconditionError('AsyncNode is empty at the current reader offset.');
+    const remaining = options.timeoutMs === undefined ? undefined : Math.max(0, options.timeoutMs - (Date.now() - started));
+    const second = await this.nextValueFragment(remaining);
+    if (!isOk(second)) return second;
+    if (second !== null) return failedPreconditionError('A consumed node contains more than one logical value.');
+    if (!this.logicalReaderInternal?.logicalSawFinal())
+      return failedPreconditionError('A consumed node requires a final fragment.');
+    return first;
   }
 
   /** Consume and deserialize exactly one whole unary value. */
@@ -480,7 +551,9 @@ export class AsyncNode {
     } = {},
   ): Promise<StatusOr<T | NodeFragment | Chunk | null>> {
     try {
-      const fragment = await this.consumeFragment(options);
+      const fragment = options.raw === 'fragment'
+        ? await this.consumeFragment(options)
+        : await this.consumeLogicalFragment(options);
       if (!isOk(fragment) || fragment === null) return fragment;
       if (
         options.raw !== undefined &&
@@ -533,16 +606,22 @@ export class AsyncNode {
   /** Fail the producing half so readers observe a structured terminal error. */
   abortWithStatus(status: Status): Promise<Status> { return this.writerInternal.abortWithStatus(status); }
   /** Tee stored writes to a transport; `send` admission is not peer delivery. */
-  attachStream(stream: WritableWireStream): Status { return this.writerInternal.attachStream(stream); }
+  attachStream(stream: WritableWireStream, rewrite?: ReferenceRewriter): Status {
+    return this.writerInternal.attachStream(stream, rewrite);
+  }
   /** Stop mirroring writes to one transport. */
   detachStream(stream: WritableWireStream): Status { return this.writerInternal.detachStream(stream); }
   /** Stop this node's independent consuming cursor. */
-  cancelReader(): Status { return this.readerInternal.cancel(); }
+  cancelReader(): Status {
+    this.logicalReaderInternal?.cancel();
+    return this.readerInternal.cancel();
+  }
   /** Abandon queued writes and stop the producing cursor. */
   cancelWriter(): Promise<Status> { return this.writerInternal.cancel(); }
   /** Cancel both halves of this local node object. */
   async cancel(): Promise<Status> {
     this.readerInternal.cancel();
+    this.logicalReaderInternal?.cancel();
     return this.writerInternal.cancel();
   }
 }
@@ -562,6 +641,7 @@ export class NodeMap {
   private readonly imported = new Map<string, Map<string, AsyncNode>>();
   private storageResolver: ((identity: StorageIdentity) => StatusOr<NodeMap> | Promise<StatusOr<NodeMap>>) | null = null;
   private accessibleIds: string[] = [];
+  private allowLazyReadResolution = false;
   constructor(private readonly factory: ChunkStoreFactory = (id) => LocalChunkStore.create(id),
               readonly storage: StorageIdentity | null = null) {}
 
@@ -587,6 +667,12 @@ export class NodeMap {
   storageIds(): string[] { return [...new Set([...this.storages.keys(), ...this.accessibleIds,
     ...(this.storage ? [this.storage.id] : [])])].sort(); }
 
+  setAllowLazyReadResolution(allowed: boolean): Status {
+    if (typeof allowed !== 'boolean') return invalidArgumentError('allowed must be boolean.');
+    this.allowLazyReadResolution = allowed;
+    return okStatus();
+  }
+
   /** Return the canonical node, creating its store on first access. */
   async get(nodeId: string): Promise<StatusOr<AsyncNode>> {
     const validation = validateName(nodeId);
@@ -611,6 +697,34 @@ export class NodeMap {
   getIfExists(nodeId: string): StatusOr<AsyncNode | null> {
     const validation = validateName(nodeId);
     return isOk(validation) ? this.nodes.get(nodeId) ?? null : validation;
+  }
+
+  /** Resolve an existing local target without creating an empty node. */
+  async resolveForRead(reference: NodeRef): Promise<StatusOr<AsyncNode>> {
+    const valid = reference.validate();
+    if (!isOk(valid)) return valid;
+    const existingIn = (map: NodeMap): StatusOr<AsyncNode> => {
+      const existing = map.getIfExists(reference.id);
+      if (!isOk(existing)) return existing;
+      return existing ?? notFoundError('Referenced node is absent from this map.');
+    };
+    const resolveIn = async (map: NodeMap): Promise<StatusOr<AsyncNode>> =>
+      map.allowLazyReadResolution ? map.get(reference.id) : existingIn(map);
+    if (reference.storage === null || reference.storage.id === this.storage?.id)
+      return resolveIn(this);
+    const storage = this.storages.get(reference.storage.id);
+    if (storage) return resolveIn(storage);
+    if (this.storageResolver) {
+      try {
+        const resolved = await this.storageResolver(reference.storage);
+        if (isOk(resolved)) return resolveIn(resolved);
+        if (resolved.code !== 5) return resolved;
+      } catch (error) {
+        return statusFromUnknown(error, 'Storage resolver raised an exception.');
+      }
+    }
+    return this.imported.get(reference.storage.id)?.get(reference.id) ??
+      notFoundError('Storage identity is not configured on this host.');
   }
 
   /** Resolve a whole-node reference; windows require a fragment-window reader. */

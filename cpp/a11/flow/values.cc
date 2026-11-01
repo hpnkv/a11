@@ -36,6 +36,7 @@
 #include <cmath>
 #include <nlohmann/json.hpp>
 
+#include "a11/data/serial_tags.h"
 #include "a11/data/serialization.h"
 #include "a11/flow/vocabulary.h"
 #include "a11/internal/regex.h"
@@ -388,6 +389,20 @@ class NativeBridge final : public HostBridge {
     if (value.native_status() != nullptr) {
       return data::MakeStatusChunk(*value.native_status());
     }
+    if (value.kind() == Value::Kind::kHost) {
+      if (const auto* fragment =
+              dynamic_cast<const NodeFragmentObject*>(&value.host());
+          fragment != nullptr) {
+        return data::GlobalSerializationRegistry().ToChunk(fragment->fragment(),
+                                                           mimetype);
+      }
+      if (const auto* reference =
+              dynamic_cast<const NodeReferenceObject*>(&value.host());
+          reference != nullptr) {
+        return data::GlobalSerializationRegistry().ToChunk(
+            reference->reference(), mimetype);
+      }
+    }
     data::Chunk chunk;
     data::ChunkMetadata metadata;
     if (value.kind() == Value::Kind::kBytes) {
@@ -405,6 +420,95 @@ class NativeBridge final : public HostBridge {
 };
 
 }  // namespace
+
+std::string NodeReferenceObject::Tag() const {
+  return std::string(data::kNodeRefTag);
+}
+
+std::string NodeReferenceObject::Text() const {
+  return reference_.DebugString();
+}
+
+bool NodeReferenceObject::Truthy() const {
+  return true;
+}
+
+std::optional<size_t> NodeReferenceObject::Size() const {
+  return 4;
+}
+
+Value NodeReferenceObject::Field(std::string_view name) const {
+  if (name == "id") {
+    return Value::String(reference_.id);
+  }
+  if (name == "offset") {
+    return Value::Integer(reference_.offset);
+  }
+  if (name == "length") {
+    return reference_.length.has_value()
+               ? Value::Integer(static_cast<std::int64_t>(*reference_.length))
+               : Value::Null();
+  }
+  if (name == "storage" && reference_.storage.has_value()) {
+    return Value::String(reference_.storage->id);
+  }
+  return Value::Null();
+}
+
+Value NodeReferenceObject::Element(const Value& key) const {
+  return key.kind() == Value::Kind::kString ? Field(key.text()) : Value::Null();
+}
+
+bool NodeReferenceObject::Equals(const HostObject& other) const {
+  const auto* reference = dynamic_cast<const NodeReferenceObject*>(&other);
+  return reference != nullptr && reference_ == reference->reference_;
+}
+
+std::string NodeFragmentObject::Tag() const {
+  return std::string(data::kNodeFragmentTag);
+}
+
+std::string NodeFragmentObject::Text() const {
+  return fragment_.DebugString();
+}
+
+bool NodeFragmentObject::Truthy() const {
+  return true;
+}
+
+std::optional<size_t> NodeFragmentObject::Size() const {
+  return 4;
+}
+
+Value NodeFragmentObject::Field(std::string_view name) const {
+  if (name == "id") {
+    return Value::String(fragment_.id);
+  }
+  if (name == "seq") {
+    return fragment_.seq.has_value() ? Value::Integer(*fragment_.seq)
+                                     : Value::Null();
+  }
+  if (name == "continued") {
+    return Value::Bool(fragment_.continued);
+  }
+  if (name == "data") {
+    if (const auto* chunk = std::get_if<data::Chunk>(&fragment_.data)) {
+      return Value::Chunk(*chunk);
+    }
+    return Value::Host(std::make_shared<NodeReferenceObject>(
+        std::get<data::NodeRef>(fragment_.data)));
+  }
+  return Value::Null();
+}
+
+Value NodeFragmentObject::Element(const Value& key) const {
+  return key.kind() == Value::Kind::kString ? Field(key.text()) : Value::Null();
+}
+
+bool NodeFragmentObject::Equals(const HostObject& other) const {
+  const auto* fragment = dynamic_cast<const NodeFragmentObject*>(&other);
+  return fragment != nullptr && fragment_ == fragment->fragment_;
+}
 
 // --- Value -------------------------------------------------------------------
 
@@ -2245,6 +2349,11 @@ absl::StatusOr<Value> Evaluate(const syntax::Node& node,
     }
     case syntax::NodeKind::kBuiltin: {
       const auto& builtin = static_cast<const syntax::Builtin&>(node);
+      if (builtin.name == "ref") {
+        return context.reference ? context.reference(builtin)
+                                 : absl::InvalidArgumentError(
+                                       "'ref' requires a runtime node context");
+      }
       std::vector<Value> arguments;
       arguments.reserve(builtin.args.size());
       for (const syntax::NodePtr& argument : builtin.args) {
@@ -2393,9 +2502,9 @@ absl::Status StatusOfRecord(const Value& record) {
   const auto* details = record.Get("details");
   nlohmann::json payload = nlohmann::json::array();
   if (details != nullptr) {
-    const auto parsed = a11::ParseJson(AsText(*details), "status details");
+    auto parsed = a11::ParseJson(AsText(*details), "status details");
     if (parsed.ok()) {
-      payload = *parsed;
+      payload = std::move(*parsed);
     }
   }
   return a11::MakeStatus(resolved.value_or(absl::StatusCode::kUnknown),

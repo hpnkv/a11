@@ -66,7 +66,8 @@ TEST(ChunkStoreReaderTest, PopReplacesStoredPayloadWithTombstone) {
           .Await()
           .ok());
   auto reader = *ChunkStoreReader::Create(
-      store, ChunkStoreReaderOptions{.pop_chunks = true});
+      store,
+      ChunkStoreReaderOptions{.pop_chunks = true, .follow_node_refs = false});
   auto fragment = reader->Next(absl::Seconds(1)).Await();
   ASSERT_TRUE(fragment.ok());
   EXPECT_EQ(std::get<data::Chunk>((*fragment)->data).data, "payload");
@@ -216,9 +217,10 @@ TEST(ChunkStoreReaderTest, UnorderedReaderDoesNotExpandStickyMimetype) {
                   .Await()
                   .ok());
   auto reader = *ChunkStoreReader::Create(
-      store,
-      ChunkStoreReaderOptions{
-          .ordered = false, .max_chunks_to_read = 2, .sticky_mimetype = true});
+      store, ChunkStoreReaderOptions{.ordered = false,
+                                     .max_chunks_to_read = 2,
+                                     .sticky_mimetype = true,
+                                     .follow_node_refs = false});
 
   ASSERT_TRUE(reader->Next(absl::Seconds(1)).Await()->has_value());
   auto second = reader->Next(absl::Seconds(1)).Await();

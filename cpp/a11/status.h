@@ -81,7 +81,7 @@ std::uint16_t StatusCodeToWebSocket(absl::StatusCode code);
  * @param details Arbitrary structured detail payload.
  * @return A status combining @p code, @p message and @p details.
  */
-absl::Status MakeStatus(absl::StatusCode code, const std::string& message,
+absl::Status MakeStatus(absl::StatusCode code, std::string_view message,
                         const nlohmann::json& details);
 /**
  * @brief Extracts the structured-details payload from a status.

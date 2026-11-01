@@ -183,8 +183,21 @@ std::shared_ptr<Item> Item::OfChunk(data::Chunk chunk) {
   return item;
 }
 
+std::shared_ptr<Item> Item::OfReference(data::NodeRef reference) {
+  auto item = std::make_shared<Item>();
+  item->reference_ = std::move(reference);
+  return item;
+}
+
 std::shared_ptr<Item> Item::Of(Value value) {
   auto item = std::make_shared<Item>();
+  if (value.kind() == Value::Kind::kHost) {
+    if (const auto* reference =
+            dynamic_cast<const NodeReferenceObject*>(&value.host());
+        reference != nullptr) {
+      item->reference_ = reference->reference();
+    }
+  }
   item->result_ = std::move(value);
   item->decoded_ = true;
   return item;

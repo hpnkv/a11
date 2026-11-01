@@ -23,6 +23,7 @@
 #include <absl/strings/str_split.h>
 
 #include "a11/actions/action.h"
+#include "a11/actions/reference_mirror.h"
 #include "a11/nodes/async_node.h"
 #include "a11/nodes/node_map.h"
 #include "a11/uuid.h"
@@ -205,18 +206,20 @@ absl::Status Action::PublishStreamReference(const StreamReference& reference) {
       }
       ABSL_RETURN_IF_ERROR(
           node_map->ImportReference(reference.node, source_map).status());
-      // Call mirrors receive bytes from their peer; only run-side ancestors
-      // forward producer data to an upstream peer.
+      data::Chunk published_chunk = chunk;
       if (remote_run && !direct_storage) {
-        ABSL_ASSIGN_OR_RETURN(auto transport_node,
-                              source_map->Get(reference.node.id));
-        ABSL_RETURN_IF_ERROR(
-            current->AttachStreamIfRequested(transport_node, true));
+        StreamReference published = reference;
+        ABSL_ASSIGN_OR_RETURN(
+            published.node,
+            current->MirrorRegistry()->Rewrite(reference.node, source_map));
+        ABSL_ASSIGN_OR_RETURN(published_chunk,
+                              StreamReferenceToChunk(published));
       }
       for (const std::string& port : ports) {
         ABSL_ASSIGN_OR_RETURN(auto output,
                               current->GetOutput(port, remote_run));
-        ABSL_RETURN_IF_ERROR(output->PutChunk(chunk).Await().status());
+        ABSL_RETURN_IF_ERROR(
+            output->PutChunk(published_chunk).Await().status());
         if (remote_run && port == kActionStreamsOutput) {
           ABSL_RETURN_IF_ERROR(output->WaitForBufferToDrain().Await().status());
         }

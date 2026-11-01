@@ -121,15 +121,16 @@ absl::Status Destination::WriteRange(absl::Span<const ItemPtr> items,
   // Serialize writers so shared destinations append complete values. Encode
   // computed batches in one host crossing where supported.
   std::vector<absl::StatusOr<data::Chunk>> encoded;
-  const size_t computed_count = static_cast<size_t>(std::count_if(
-      items.begin(), items.end(),
-      [](const auto& item) { return !item->chunk().has_value(); }));
+  const size_t computed_count = static_cast<size_t>(
+      std::count_if(items.begin(), items.end(), [](const auto& item) {
+        return !item->chunk().has_value() && !item->reference().has_value();
+      }));
   if (computed_count > 1) {
     std::vector<const Value*> values;
     std::vector<absl::StatusOr<Value>> read;
     read.reserve(computed_count);
     for (const ItemPtr& item : items) {
-      if (item->chunk().has_value()) {
+      if (item->chunk().has_value() || item->reference().has_value()) {
         continue;
       }
       read.push_back(item->Read(bridge));
@@ -160,6 +161,15 @@ absl::Status Destination::WriteRange(absl::Span<const ItemPtr> items,
   absl::Status status;
   size_t computed = 0;
   for (const ItemPtr& item : items) {
+    if (item->reference().has_value()) {
+      stores::ChunkStoreWrite write =
+          (*writer)->EnqueueReference(*item->reference());
+      status = write.admitted.Await().status();
+      if (!status.ok()) {
+        break;
+      }
+      continue;
+    }
     data::Chunk chunk;
     if (item->chunk().has_value()) {
       chunk = *item->chunk();

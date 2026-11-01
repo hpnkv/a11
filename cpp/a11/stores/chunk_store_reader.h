@@ -38,6 +38,20 @@
 #include "a11/stores/chunk_store.h"
 
 namespace a11::stores {
+class ReferenceResolver;
+
+struct ResolvedReference {
+  std::shared_ptr<ChunkStore> store;
+  std::shared_ptr<ReferenceResolver> resolver;
+};
+
+/// Supplies a target store and the target's own resolution context.
+class ReferenceResolver {
+ public:
+  virtual ~ReferenceResolver() = default;
+  virtual absl::StatusOr<ResolvedReference> Resolve(
+      const data::NodeRef& reference) = 0;
+};
 
 /**
  * @brief
@@ -61,6 +75,12 @@ struct ChunkStoreReaderOptions {
   std::optional<std::uint64_t> max_chunks_to_read = {};
   /// Whether ordered reads inherit the last explicitly set chunk mimetype.
   bool sticky_mimetype = false;
+  /// Expand references in logical chunk and value reads.
+  bool follow_node_refs = true;
+  /// Maximum active reference edges.
+  std::uint32_t max_ref_depth = 8;
+  /// Maximum sibling followers prefetched at one level.
+  std::uint32_t max_ref_breadth = 2;
 
   /** @brief
    *    Validate that the options are internally consistent.
@@ -96,7 +116,8 @@ class ChunkStoreReader {
    *    invalid.
    */
   static absl::StatusOr<std::shared_ptr<ChunkStoreReader>> Create(
-      std::shared_ptr<ChunkStore> store, ChunkStoreReaderOptions options = {});
+      std::shared_ptr<ChunkStore> store, ChunkStoreReaderOptions options = {},
+      std::shared_ptr<ReferenceResolver> resolver = nullptr);
 
   ~ChunkStoreReader() = default;
 
@@ -171,6 +192,14 @@ class ChunkStoreReader {
    */
   a11::Future<std::vector<std::optional<data::NodeFragment>>> NextMany(
       size_t limit, absl::Duration timeout = absl::InfiniteDuration());
+  /// Read a leaf fragment after following references with this reader's policy.
+  a11::Future<std::optional<data::NodeFragment>> NextLogical(
+      absl::Duration timeout = absl::InfiniteDuration());
+  /// Read available logical leaf fragments without waiting to fill the batch.
+  a11::Future<std::vector<std::optional<data::NodeFragment>>> NextLogicalMany(
+      size_t limit, absl::Duration timeout = absl::InfiniteDuration());
+  /// Whether the logical source has supplied a final raw fragment.
+  bool LogicalSawFinal() const;
 
   /// @return The store this reader draws fragments from.
   [[nodiscard]] std::shared_ptr<ChunkStore> store() const;
@@ -181,11 +210,18 @@ class ChunkStoreReader {
 
  private:
   struct State;
+  struct LogicalState;
+  absl::StatusOr<std::shared_ptr<LogicalState>> GetLogical();
+  void CancelLogical();
+  absl::Status GetLogicalStatus() const;
 
   explicit ChunkStoreReader(std::shared_ptr<State> state)
       : state_(std::move(state)) {}
 
   std::shared_ptr<State> state_;
+  std::shared_ptr<ReferenceResolver> resolver_;
+  mutable thread::Mutex logical_mu_;
+  std::shared_ptr<LogicalState> logical_ ABSL_GUARDED_BY(logical_mu_);
 };
 
 }  // namespace a11::stores

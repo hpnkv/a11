@@ -349,6 +349,113 @@ flow shape {
   EXPECT_EQ(outcome.outputs.at("total"), Values({"3"}));
 }
 
+TEST(FlowRuntimeTest, ReadWithOpensAnIndependentNodeCursor) {
+  const Outcome outcome =
+      RunFlow(R"(
+flow inspect {
+  in words: string stream
+  out all: string stream
+  out selected: string stream
+  words -> all
+  words | read_with {offset: 1, max_chunks_to_read: 1} -> selected
+}
+)",
+              "inspect", {{"words", {"\"a\"", "\"b\"", "\"c\""}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("all"), Values({"\"a\"", "\"b\"", "\"c\""}));
+  EXPECT_EQ(outcome.outputs.at("selected"), Values({"\"b\""}));
+}
+
+TEST(FlowRuntimeTest, ReadWithFragmentViewExposesRawFragmentFields) {
+  const Outcome outcome = RunFlow(R"(
+flow inspect {
+  in words: string stream
+  out indexes: int stream
+  words | read_with {view: "fragments"} | first 2 | map it.seq -> indexes
+}
+)",
+                                  "inspect", {{"words", {"\"a\"", "\"b\""}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("indexes"), Values({"0", "1"}));
+}
+
+TEST(FlowRuntimeTest, DestructiveReadRequiresAnExclusiveFlowNode) {
+  const Outcome outcome = RunFlow(R"(
+flow inspect {
+  in words: string stream
+  out selected: string stream
+  owned = node()
+  words -> owned
+  owned | read_with {pop_chunks: true, follow_node_refs: false} -> selected
+  owned | read_with {follow_node_refs: false} -> _
+}
+)",
+                                  "inspect", {{"words", {"\"a\""}}});
+  EXPECT_EQ(outcome.status.code(), absl::StatusCode::kFailedPrecondition);
+}
+
+TEST(FlowRuntimeTest, RefExpressionUsesDestinationAndFragmentWindow) {
+  const Outcome outcome = RunFlow(R"(
+flow archive {
+  in words: string stream
+  out saved: string stream
+  ref(words, for: saved, offset: 1, length: 1) -> saved
+}
+)",
+                                  "archive", {{"words", {"\"a\"", "\"b\""}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("saved"), Values({"\"b\""}));
+}
+
+TEST(FlowRuntimeTest, RefStageWritesAReadableNodeReference) {
+  const Outcome outcome = RunFlow(R"(
+flow archive {
+  in words: string stream
+  out saved: string stream
+  words | ref -> saved
+}
+)",
+                                  "archive", {{"words", {"\"a\"", "\"b\""}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("saved"), Values({"\"a\"", "\"b\""}));
+}
+
+TEST(FlowRuntimeTest, RefStageRetainsANestedRunOutput) {
+  const Outcome outcome = RunFlow(R"(
+flow archive {
+  in words: string stream
+  out saved: string stream
+  say = run twice(text: words)
+  say.out | ref -> saved
+}
+)",
+                                  "archive", {{"words", {"\"hi\""}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("saved"), Values({"\"HI\"", "\"HI\""}));
+}
+
+TEST(FlowRuntimeTest, ResearchScopeReadsReferencedNestedReports) {
+  const Outcome outcome = RunFlow(R"(
+flow gather {
+  in words: string stream
+  out saved: string stream
+  nodes research {
+    findings = node()
+    one = run twice(text: words)
+    one.out | ref -> findings
+    findings | read_with {
+      max_ref_depth: 2,
+      max_ref_breadth: 3,
+      num_chunks_to_buffer: 8
+    } -> saved
+  }
+}
+)",
+                                  "gather", {{"words", {"\"hi\""}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("saved"), Values({"\"HI\"", "\"HI\""}));
+}
+
 TEST(FlowRuntimeTest, RunsACallAndReadsItsOutput) {
   const Outcome outcome = RunFlow(R"(
 flow shout {

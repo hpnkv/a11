@@ -28,10 +28,13 @@ namespace a11::flow::internal {
 class Item {
  public:
   static std::shared_ptr<Item> OfChunk(data::Chunk chunk);
+  static std::shared_ptr<Item> OfReference(data::NodeRef reference);
 
   static std::shared_ptr<Item> Of(Value value);
 
   const std::optional<data::Chunk>& chunk() const { return chunk_; }
+
+  const std::optional<data::NodeRef>& reference() const { return reference_; }
 
   std::string Mimetype() const;
 
@@ -53,6 +56,7 @@ class Item {
 
  private:
   std::optional<data::Chunk> chunk_;
+  std::optional<data::NodeRef> reference_;
   mutable thread::Mutex mu_;
   mutable absl::StatusOr<Value> result_;
   mutable bool decoded_ = false;

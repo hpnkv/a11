@@ -83,5 +83,39 @@ TEST(DataTypesTest, StorageQualifiedNodeReferencesRoundTrip) {
   EXPECT_EQ(*NodeRef::FromMsgpack(*local_bytes), original);
 }
 
+TEST(DataTypesTest, NodeReferenceCredentialsRemainTypedAndOptional) {
+  const NodeRef local{.id = "local"};
+  auto local_bytes = local.ToMsgpack();
+  ASSERT_TRUE(local_bytes.ok()) << local_bytes.status();
+  auto decoded_local = NodeRef::FromMsgpack(*local_bytes);
+  ASSERT_TRUE(decoded_local.ok()) << decoded_local.status();
+  EXPECT_FALSE(decoded_local->storage.has_value());
+  EXPECT_EQ(local.WithCredentials(StorageCredentials{.scheme = "bearer"})
+                .status()
+                .code(),
+            absl::StatusCode::kFailedPrecondition);
+
+  const NodeRef qualified{
+      .id = "remote",
+      .storage = StorageIdentity{
+          .id = "shared",
+          .services = {StorageService{.role = "payload",
+                                      .endpoint = "https://storage.example"}}}};
+  auto with_namespace = qualified.WithCredentials(
+      StorageCredentials{.scheme = "bearer", .fields = {{"token", "secret"}}});
+  ASSERT_TRUE(with_namespace.ok()) << with_namespace.status();
+  EXPECT_FALSE(qualified.storage->credentials.has_value());
+  EXPECT_EQ(with_namespace->storage->credentials->fields.at("token"), "secret");
+  auto with_service = with_namespace->WithCredentials(
+      StorageCredentials{.scheme = "bearer", .fields = {{"token", "other"}}},
+      "payload");
+  ASSERT_TRUE(with_service.ok()) << with_service.status();
+  auto encoded = with_service->ToMsgpack();
+  ASSERT_TRUE(encoded.ok()) << encoded.status();
+  EXPECT_EQ(*NodeRef::FromMsgpack(*encoded), *with_service);
+  EXPECT_EQ(with_service->DebugString().find("secret"), std::string::npos);
+  EXPECT_EQ(with_service->DebugString().find("other"), std::string::npos);
+}
+
 }  // namespace
 }  // namespace a11::data

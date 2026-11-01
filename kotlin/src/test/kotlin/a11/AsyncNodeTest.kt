@@ -38,6 +38,42 @@ class AsyncNodeTest {
         }
 
     @Test
+    fun referencesExpandFragmentWindowsAndLeaveRawFragments() = runBlocking {
+        val map = NodeMap()
+        val target = ok(map.get("target"))
+        val destination = ok(map.get("destination"))
+        ok(target.putChunk(Chunk(data = "one".toByteArray())))
+        ok(target.putChunk(Chunk(data = "two".toByteArray())))
+        ok(target.putChunk(Chunk(data = "three".toByteArray()), final = true))
+        ok(destination.putChunk(Chunk(data = "before".toByteArray())))
+        val reference = ok(target.ref(offset = 1u, length = 2uL, forNode = destination))
+        ok(destination.put(reference))
+        assertTrue(destination.finalize(Chunk(data = "after".toByteArray())).ok())
+        assertEquals("before", String(ok(destination.nextChunk())!!.data))
+        assertEquals("two", String(ok(destination.nextChunk())!!.data))
+        assertEquals("three", String(ok(destination.nextChunk())!!.data))
+        assertEquals("after", String(ok(destination.nextChunk())!!.data))
+        assertNull(ok(destination.nextChunk()))
+        assertEquals("before", String(ok(ok(destination.nextFragment())!!.getChunk()).data))
+        assertEquals(reference, ok(destination.nextFragment())!!.data)
+    }
+
+    @Test
+    fun disabledFollowingKeepsRawReferencesReadable() = runBlocking {
+        val node =
+            ok(
+                AsyncNode.create(
+                    "disabled-ref",
+                    readerOptions = ChunkStoreReaderOptions(followNodeRefs = false),
+                )
+            )
+        val reference = NodeRef("target")
+        assertTrue(node.finalize(reference).ok())
+        assertEquals(StatusCode.UNIMPLEMENTED, node.nextChunk().status.code)
+        assertEquals(reference, ok(node.nextFragment())!!.data)
+    }
+
+    @Test
     fun consumeAcceptsBothSpellingsOfASingleValue() = runBlocking {
         val asFinal = ok(AsyncNode.create("consume-final"))
         assertTrue(asFinal.finalize("value").ok())

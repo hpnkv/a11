@@ -40,6 +40,7 @@
 #include <nlohmann/json.hpp>
 
 #include "a11/actions/action.h"
+#include "a11/actions/reference_mirror.h"
 #include "a11/actions/registry.h"
 #include "a11/actions/schema.h"
 #include "a11/concurrency/executor.h"
@@ -601,6 +602,15 @@ a11::Future<std::uint32_t> Session::DispatchNodeFragment(
   absl::Status validation = fragment.Validate();
   if (!validation.ok()) {
     return a11::FailedFuture<std::uint32_t>(validation);
+  }
+  if (const auto* reference = std::get_if<data::NodeRef>(&fragment.data);
+      reference != nullptr && !reference->storage.has_value() &&
+      reference->length != 0 &&
+      reference->id.starts_with(actions::kReferenceMirrorPrefix)) {
+    auto expected = GetNodeMap()->Get(reference->id);
+    if (!expected.ok()) {
+      return a11::FailedFuture<std::uint32_t>(expected.status());
+    }
   }
 
   const std::string references_suffix =

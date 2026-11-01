@@ -100,6 +100,11 @@ class Scope {
 
   /// Read a node as items, each keeping the producer's own chunk.
   absl::Status ReadNode(const NodePtr& node, const Sink& sink);
+  absl::Status ReadConfiguredNode(
+      const std::shared_ptr<stores::ChunkStoreReader>& reader, const Sink& sink,
+      bool fragments);
+  absl::StatusOr<data::NodeRef> MakeReference(RefId source, RefId destination,
+                                              const Value& options);
 
   /// Run a per-value stage with the requested fixed concurrency.
   ///

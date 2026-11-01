@@ -239,7 +239,8 @@ void BindStores(py::module_& module) {
                  const py::typing::Optional<py::int_>& num_chunks_to_buffer,
                  const py::typing::Optional<py::int_>& offset,
                  const py::typing::Optional<py::int_>& max_chunks_to_read,
-                 bool sticky_mimetype) {
+                 bool sticky_mimetype, bool follow_node_refs,
+                 std::uint32_t max_ref_depth, std::uint32_t max_ref_breadth) {
                 constexpr std::uint64_t kMaximum = std::uint64_t{1} << 32U;
                 stores::ChunkStoreReaderOptions options{
                     .ordered = ordered,
@@ -251,7 +252,10 @@ void BindStores(py::module_& module) {
                         "offset")),
                     .max_chunks_to_read = OptionalUnsignedOption(
                         max_chunks_to_read, kMaximum, "max_chunks_to_read"),
-                    .sticky_mimetype = sticky_mimetype};
+                    .sticky_mimetype = sticky_mimetype,
+                    .follow_node_refs = follow_node_refs,
+                    .max_ref_depth = max_ref_depth,
+                    .max_ref_breadth = max_ref_breadth};
                 ValidateReaderOptions(options);
                 return options;
               }),
@@ -259,7 +263,9 @@ void BindStores(py::module_& module) {
           py::arg("ordered") = true, py::arg("pop_chunks") = false,
           py::arg("num_chunks_to_buffer") = 32, py::arg("offset") = 0,
           py::arg("max_chunks_to_read") = py::none(),
-          py::arg("sticky_mimetype") = false)
+          py::arg("sticky_mimetype") = false,
+          py::arg("follow_node_refs") = true, py::arg("max_ref_depth") = 8,
+          py::arg("max_ref_breadth") = 2)
       .def_readwrite("ordered", &stores::ChunkStoreReaderOptions::ordered,
                      "Whether chunks are delivered strictly in sequence order.")
       .def_readwrite("pop_chunks", &stores::ChunkStoreReaderOptions::pop_chunks,
@@ -276,6 +282,15 @@ void BindStores(py::module_& module) {
       .def_readwrite(
           "sticky_mimetype", &stores::ChunkStoreReaderOptions::sticky_mimetype,
           "Whether ordered chunks inherit the last explicitly set mimetype.")
+      .def_readwrite("follow_node_refs",
+                     &stores::ChunkStoreReaderOptions::follow_node_refs,
+                     "Expand references in value reads.")
+      .def_readwrite("max_ref_depth",
+                     &stores::ChunkStoreReaderOptions::max_ref_depth,
+                     "Maximum active reference edges.")
+      .def_readwrite("max_ref_breadth",
+                     &stores::ChunkStoreReaderOptions::max_ref_breadth,
+                     "Maximum prefetched siblings at one level.")
       .def("validate", &ValidateReaderOptions,
            "Raise if the options are not internally consistent.");
 

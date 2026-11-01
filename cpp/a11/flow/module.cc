@@ -1072,6 +1072,9 @@ LinkedModule LinkModules(std::string source, std::string identity,
         }
         if (auto* function = syntax::As<syntax::Builtin>(&node);
             function != nullptr) {
+          if (function->name == "ref") {
+            return;
+          }
           const auto binding = Lookup(units, index, env, function->name);
           if (!binding.has_value() || binding->unit != kBuiltin) {
             Problem(unit, "flow.form.unknown-builtin",

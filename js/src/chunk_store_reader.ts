@@ -16,18 +16,22 @@
 
 import { Deferred, storeCallbackScheduler } from './concurrency.js';
 import { hasChunkStoreShape, type ChunkStore } from './chunk_store.js';
-import { Chunk, ChunkMetadata, NodeFragment } from './data.js';
+import { Chunk, ChunkMetadata, NodeFragment, NodeRef } from './data.js';
 import {
   abortedError,
   dataLossError,
   deadlineExceededError,
+  failedPreconditionError,
   invalidArgumentError,
+  isDeadlineExceededError,
   isNotFoundError,
   isOk,
   isStatus,
   okStatus,
   outOfRangeError,
+  resourceExhaustedError,
   statusFromUnknown,
+  unimplementedError,
   type Status,
   type StatusOr,
 } from './status.js';
@@ -49,6 +53,9 @@ export interface ChunkStoreReaderOptions {
   maxChunksToRead?: number | null;
   /** Expand omitted MIME types from the preceding contiguous chunk. */
   stickyMimetype?: boolean;
+  followNodeRefs?: boolean;
+  maxRefDepth?: number;
+  maxRefBreadth?: number;
 }
 
 interface NormalizedReaderOptions {
@@ -58,6 +65,9 @@ interface NormalizedReaderOptions {
   offset: number;
   maxChunksToRead: number | null;
   stickyMimetype: boolean;
+  followNodeRefs: boolean;
+  maxRefDepth: number;
+  maxRefBreadth: number;
 }
 
 function normalizeOptions(options: ChunkStoreReaderOptions): StatusOr<NormalizedReaderOptions> {
@@ -72,14 +82,22 @@ function normalizeOptions(options: ChunkStoreReaderOptions): StatusOr<Normalized
       offset: options.offset ?? 0,
       maxChunksToRead: options.maxChunksToRead ?? null,
       stickyMimetype: options.stickyMimetype ?? false,
+      followNodeRefs: options.followNodeRefs ?? true,
+      maxRefDepth: options.maxRefDepth ?? 8,
+      maxRefBreadth: options.maxRefBreadth ?? 2,
     };
     if (
       typeof result.ordered !== 'boolean' ||
       typeof result.popChunks !== 'boolean' ||
-      typeof result.stickyMimetype !== 'boolean'
+      typeof result.stickyMimetype !== 'boolean' ||
+      typeof result.followNodeRefs !== 'boolean'
     ) {
       return invalidArgumentError('Reader ordered, popChunks, and stickyMimetype options must be boolean.');
     }
+    if (result.followNodeRefs && (!result.ordered || result.popChunks))
+      return invalidArgumentError('Following references requires ordered, non-destructive reads.');
+    if (![result.maxRefDepth, result.maxRefBreadth].every(value => Number.isInteger(value) && value >= 1 && value <= 64))
+      return outOfRangeError('Reference depth and breadth must be 1..64.');
     if (!Number.isSafeInteger(result.numChunksToBuffer) || result.numChunksToBuffer < 0 || result.numChunksToBuffer > UINT32_RANGE) {
       return outOfRangeError('numChunksToBuffer must be between 0 and 2^32.');
     }
@@ -103,6 +121,26 @@ interface ReadRequest {
   active: boolean;
   deferred: Deferred<StatusOr<NodeFragment | null>>;
   timer: ReturnType<typeof setTimeout> | null;
+}
+
+export interface ReferenceTarget {
+  store: ChunkStore;
+  resolver: ReferenceResolver;
+}
+
+export type ReferenceResolver = (reference: NodeRef) => Promise<StatusOr<ReferenceTarget>>;
+
+interface LogicalFrame {
+  store: ChunkStore;
+  reader: ChunkStoreReader;
+  resolver: ReferenceResolver;
+  remaining: number | null;
+}
+
+interface PendingReference {
+  frame: LogicalFrame;
+  reference: NodeRef;
+  target: Promise<StatusOr<ReferenceTarget>>;
 }
 
 /**
@@ -139,6 +177,15 @@ export class ChunkStoreReader {
   private queued = false;
   private generation = 0;
   private readonly done = new Deferred<Status>();
+  private logicalFrames: LogicalFrame[] | null = null;
+  private logicalStatus: Status = okStatus();
+  private logicalEnded = false;
+  private logicalEmitted = 0;
+  private logicalMimetype = '';
+  private logicalRootFinal = false;
+  private logicalGate: Promise<void> = Promise.resolve();
+  private pendingReference: PendingReference | null = null;
+  private readonly logicalCancelled = new Deferred<void>();
 
   private constructor(store: ChunkStore, options: NormalizedReaderOptions) {
     this.store = store;
@@ -169,13 +216,20 @@ export class ChunkStoreReader {
   get bufferSize(): number { return this.buffer.length; }
 
   /** Reader terminal status, or OK while it is healthy and still running. */
-  getStatus(): Status { return this.status ?? okStatus(); }
+  getStatus(): Status { return isOk(this.logicalStatus) ? this.status ?? okStatus() : this.logicalStatus; }
+
+  logicalSawFinal(): boolean { return this.logicalRootFinal; }
 
   /** Schedule fetching before the first `next()`; safe to call repeatedly. */
   ensureStarted(): Status { return this.wake(); }
 
   /** Stop fetching and release pending readers with cancellation. */
   cancel(): Status {
+    for (const frame of this.logicalFrames ?? []) frame.reader.cancel();
+    this.logicalFrames = null;
+    this.pendingReference = null;
+    this.logicalCancelled.resolve();
+    this.logicalStatus = abortedError('ChunkStoreReader was cancelled');
     if (this.status === null) this.status = abortedError('ChunkStoreReader was cancelled');
     this.collectAvailable();
     this.completeDone();
@@ -184,6 +238,141 @@ export class ChunkStoreReader {
 
   /** Await end-of-sequence, cancellation, or a store error. */
   wait(): Promise<Status> { return this.done.promise; }
+
+  private async awaitReference(
+    target: Promise<StatusOr<ReferenceTarget>>,
+    deadline: number | null,
+  ): Promise<StatusOr<ReferenceTarget>> {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const cancelled = this.logicalCancelled.promise.then(
+      () => abortedError('ChunkStoreReader was cancelled'),
+    );
+    const candidates: Promise<StatusOr<ReferenceTarget>>[] = [target, cancelled];
+    if (deadline !== null) {
+      candidates.push(new Promise(resolve => {
+        timer = setTimeout(
+          () => resolve(deadlineExceededError('Reference resolution timed out')),
+          Math.max(0, deadline - performance.now()),
+        );
+      }));
+    }
+    try {
+      return await Promise.race(candidates);
+    } finally {
+      if (timer !== null) clearTimeout(timer);
+    }
+  }
+
+  /** Read the next leaf fragment, expanding typed references in source order. */
+  async nextLogical(
+    resolver: ReferenceResolver,
+    timeoutMs?: number,
+  ): Promise<StatusOr<NodeFragment | null>> {
+    if (timeoutMs !== undefined && (!Number.isFinite(timeoutMs) || timeoutMs < 0))
+      return invalidArgumentError('timeoutMs must be non-negative or omitted.');
+    let release!: () => void;
+    const previous = this.logicalGate;
+    this.logicalGate = new Promise<void>(resolve => { release = resolve; });
+    await previous;
+    try {
+      if (!isOk(this.logicalStatus)) return this.logicalStatus;
+      if (this.logicalEnded) return null;
+      if (this.logicalFrames === null) {
+        const raw = ChunkStoreReader.create(this.store, {
+          ...this.options, maxChunksToRead: null, stickyMimetype: false,
+        });
+        if (!isOk(raw)) return raw;
+        this.logicalFrames = [{store: this.store, reader: raw, resolver, remaining: null}];
+      }
+      if (this.options.maxChunksToRead === 0) { this.logicalEnded = true; return null; }
+      const deadline = timeoutMs === undefined ? null : performance.now() + timeoutMs;
+      let steps = 0;
+      while (this.logicalFrames.length) {
+        if (++steps % 128 === 0) await Promise.resolve();
+        const frame = this.logicalFrames.at(-1)!;
+        if (frame.remaining === 0) { frame.reader.cancel(); this.logicalFrames.pop(); continue; }
+        if (this.pendingReference?.frame === frame) {
+          const pending = this.pendingReference;
+          const target = await this.awaitReference(pending.target, deadline);
+          if (!isOk(target)) {
+            if (!isDeadlineExceededError(target)) this.logicalStatus = target;
+            return target;
+          }
+          if (this.logicalFrames === null) return abortedError('ChunkStoreReader was cancelled');
+          this.pendingReference = null;
+          if (this.logicalFrames.some(item => item.store === target.store)) {
+            this.logicalStatus = failedPreconditionError('Reference cycle detected.');
+            return this.logicalStatus;
+          }
+          const child = ChunkStoreReader.create(target.store, {
+            ...this.options, offset: pending.reference.offset, maxChunksToRead: null,
+            stickyMimetype: false,
+            numChunksToBuffer: 0,
+          });
+          if (!isOk(child)) { this.logicalStatus = child; return child; }
+          this.logicalFrames.push({
+            store: target.store, reader: child, resolver: target.resolver,
+            remaining: pending.reference.length,
+          });
+          continue;
+        }
+        const remainingMs = deadline === null ? undefined : Math.max(0, deadline - performance.now());
+        const fragment = await frame.reader.next(remainingMs);
+        if (!isOk(fragment)) {
+          if (!isDeadlineExceededError(fragment)) this.logicalStatus = fragment;
+          return fragment;
+        }
+        if (fragment === null) {
+          if (frame.remaining !== null) {
+            this.logicalStatus = dataLossError('Referenced node ended before its fragment window.');
+            return this.logicalStatus;
+          }
+          frame.reader.cancel(); this.logicalFrames.pop(); continue;
+        }
+        if (frame.remaining !== null) --frame.remaining;
+        if (this.logicalFrames.length === 1 && !fragment.continued) this.logicalRootFinal = true;
+        if (fragment.data instanceof NodeRef) {
+          if (!this.options.followNodeRefs) {
+            this.logicalStatus = unimplementedError('Reference following is disabled.');
+            return this.logicalStatus;
+          }
+          if (fragment.data.length === 0) continue;
+          if (this.logicalFrames.length > this.options.maxRefDepth) {
+            this.logicalStatus = resourceExhaustedError('Reference depth exceeded.');
+            return this.logicalStatus;
+          }
+          const reference = fragment.data;
+          this.pendingReference = {
+            frame,
+            reference,
+            target: Promise.resolve().then(() => frame.resolver(reference)).catch(
+              error => statusFromUnknown(error, 'Reference resolution failed.'),
+            ),
+          };
+          continue;
+        }
+        const chunk = fragment.data;
+        if (chunk.isNull) {
+          if (!fragment.continued && this.logicalFrames.length === 1) {
+            this.logicalEnded = true;
+            return null;
+          }
+          continue;
+        }
+        if (this.options.stickyMimetype) {
+          if (chunk.mimetype) this.logicalMimetype = chunk.mimetype;
+          else if (this.logicalMimetype) {
+            chunk.metadata ??= new ChunkMetadata({mimetype: this.logicalMimetype});
+            chunk.metadata.mimetype = this.logicalMimetype;
+          }
+        }
+        if (++this.logicalEmitted >= (this.options.maxChunksToRead ?? Infinity)) this.logicalEnded = true;
+        return fragment;
+      }
+      this.logicalEnded = true;
+      return null;
+    } finally { release(); }
+  }
 
   /** Await the next fragment; `null` is a clean logical end of the sequence. */
   next(timeoutMs?: number): Promise<StatusOr<NodeFragment | null>> {

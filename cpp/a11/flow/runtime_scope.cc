@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <absl/cleanup/cleanup.h>
+
 #include "a11/flow/internal/execution.h"
 
 namespace a11::flow::internal {
@@ -465,14 +467,12 @@ absl::StatusOr<NodePtr> Scope::ReadableNode(RefId ref) {
 }
 
 absl::Status Scope::ReadNode(const NodePtr& node, const Sink& sink) {
-  // Every value a flow reads enters here, so this is the one read worth
-  // batching: `NextFragments` hands back what the store already had and waits
-  // only when it had nothing, so a batch costs the same await as a value would.
+  // Batched logical reads follow references without waiting to fill a batch.
   std::vector<ItemPtr> items;
   items.reserve(kQueueDepth);
   while (true) {
     absl::StatusOr<std::vector<std::optional<data::NodeFragment>>> batch =
-        node->NextFragments(kQueueDepth).Await();
+        node->NextLogicalFragments(kQueueDepth).Await();
     if (!batch.ok()) {
       return batch.status();
     }
@@ -495,6 +495,49 @@ absl::Status Scope::ReadNode(const NodePtr& node, const Sink& sink) {
       }
       // Moved out of the fragment, which nothing else reads: a value's payload
       // is the value, and copying it here is a copy per stage.
+      items.push_back(Item::OfChunk(std::move(*chunk)));
+    }
+    ABSL_RETURN_IF_ERROR(sink.Many(items));
+    if (ended) {
+      return absl::OkStatus();
+    }
+  }
+}
+
+absl::Status Scope::ReadConfiguredNode(
+    const std::shared_ptr<stores::ChunkStoreReader>& reader, const Sink& sink,
+    bool fragments) {
+  absl::Cleanup cancel = [reader] {
+    reader->Cancel();
+  };
+  std::vector<ItemPtr> items;
+  items.reserve(kQueueDepth);
+  while (true) {
+    absl::StatusOr<std::vector<std::optional<data::NodeFragment>>> batch =
+        fragments ? reader->NextMany(kQueueDepth).Await()
+                  : reader->NextLogicalMany(kQueueDepth).Await();
+    if (!batch.ok()) {
+      return batch.status();
+    }
+    bool ended = false;
+    for (std::optional<data::NodeFragment>& fragment : *batch) {
+      if (!fragment.has_value()) {
+        ended = true;
+        break;
+      }
+      if (fragments) {
+        items.push_back(Item::Of(Value::Host(
+            std::make_shared<NodeFragmentObject>(std::move(*fragment)))));
+        continue;
+      }
+      ABSL_ASSIGN_OR_RETURN(data::Chunk * chunk, fragment->GetChunk());
+      if (chunk->IsNull()) {
+        if (!fragment->continued) {
+          ended = true;
+          break;
+        }
+        continue;
+      }
       items.push_back(Item::OfChunk(std::move(*chunk)));
     }
     ABSL_RETURN_IF_ERROR(sink.Many(items));

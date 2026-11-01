@@ -282,6 +282,37 @@ absl::StatusOr<Value> Scope::EvaluateWith(ExprId expr, const Value& it,
   context.has_it = true;
   context.bridge = &bridge();
   context.shapes = &shapes();
+  context.reference =
+      [&](const syntax::Builtin& builtin) -> absl::StatusOr<Value> {
+    const auto binding =
+        std::find_if(one.references.begin(), one.references.end(),
+                     [&](const graph::Expr::ReferenceBinding& candidate) {
+                       return candidate.node == &builtin;
+                     });
+    if (binding == one.references.end()) {
+      return absl::InvalidArgumentError("Unresolved 'ref' expression");
+    }
+    Value::Pairs fields;
+    if (builtin.args.size() == 2) {
+      const auto* options =
+          syntax::As<syntax::ObjectLiteral>(builtin.args[1].get());
+      if (options == nullptr) {
+        return absl::InvalidArgumentError("Invalid 'ref' options");
+      }
+      for (const auto& [key, node] : options->pairs) {
+        if (key == "for") {
+          continue;
+        }
+        ABSL_ASSIGN_OR_RETURN(Value value, flow::Evaluate(*node, context));
+        fields.emplace_back(key, std::move(value));
+      }
+    }
+    ABSL_ASSIGN_OR_RETURN(data::NodeRef reference,
+                          MakeReference(binding->source, binding->destination,
+                                        Value::Object(std::move(fields))));
+    return Value::Host(
+        std::make_shared<NodeReferenceObject>(std::move(reference)));
+  };
   auto value = flow::Evaluate(*one.node, context);
   for (const RefId ref : one.refs) {
     if (taken.find(ref) != taken.end() && expression_result_ != nullptr &&

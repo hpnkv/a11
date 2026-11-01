@@ -80,6 +80,46 @@ class HostObject {
   [[nodiscard]] virtual bool Equals(const HostObject& other) const = 0;
 };
 
+/// A typed reference carried through a fragment-view Flow pipeline.
+class NodeReferenceObject final : public HostObject {
+ public:
+  explicit NodeReferenceObject(data::NodeRef reference)
+      : reference_(std::move(reference)) {}
+
+  [[nodiscard]] const data::NodeRef& reference() const { return reference_; }
+
+  [[nodiscard]] std::string Tag() const override;
+  [[nodiscard]] std::string Text() const override;
+  [[nodiscard]] bool Truthy() const override;
+  [[nodiscard]] std::optional<size_t> Size() const override;
+  [[nodiscard]] Value Field(std::string_view name) const override;
+  [[nodiscard]] Value Element(const Value& key) const override;
+  [[nodiscard]] bool Equals(const HostObject& other) const override;
+
+ private:
+  data::NodeRef reference_;
+};
+
+/// A typed raw fragment carried through a fragment-view Flow pipeline.
+class NodeFragmentObject final : public HostObject {
+ public:
+  explicit NodeFragmentObject(data::NodeFragment fragment)
+      : fragment_(std::move(fragment)) {}
+
+  [[nodiscard]] const data::NodeFragment& fragment() const { return fragment_; }
+
+  [[nodiscard]] std::string Tag() const override;
+  [[nodiscard]] std::string Text() const override;
+  [[nodiscard]] bool Truthy() const override;
+  [[nodiscard]] std::optional<size_t> Size() const override;
+  [[nodiscard]] Value Field(std::string_view name) const override;
+  [[nodiscard]] Value Element(const Value& key) const override;
+  [[nodiscard]] bool Equals(const HostObject& other) const override;
+
+ private:
+  data::NodeFragment fragment_;
+};
+
 /// One Flow value.
 ///
 /// Immutable and cheap to copy: a container is held behind a `shared_ptr`, so
@@ -460,6 +500,7 @@ struct EvalContext {
   const PreparedExpressions* absl_nullable prepared = nullptr;
   std::function<absl::StatusOr<std::optional<Value>>(const syntax::Node&)>
       lookup;
+  std::function<absl::StatusOr<Value>(const syntax::Builtin&)> reference;
   const absl::flat_hash_map<const syntax::Node*, Value>* absl_nullable bound =
       nullptr;
   /// The value a `where`/`map`/`group` stage is looking at.

@@ -122,6 +122,7 @@ test('an unordered reader does not expand sticky mimetypes', async () => {
     ordered: false,
     maxChunksToRead: 2,
     stickyMimetype: true,
+    followNodeRefs: false,
   });
   assert.equal(isOk(reader), true);
   const read = [await reader.next(), await reader.next()];

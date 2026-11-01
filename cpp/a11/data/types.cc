@@ -468,6 +468,9 @@ absl::Status StorageService::Validate() const {
 
 absl::Status StorageIdentity::Validate() const {
   ABSL_RETURN_IF_ERROR(ValidateName(id));
+  if (credentials.has_value()) {
+    ABSL_RETURN_IF_ERROR(credentials->Validate());
+  }
   for (const auto& service : services) {
     ABSL_RETURN_IF_ERROR(service.Validate());
   }
@@ -476,6 +479,12 @@ absl::Status StorageIdentity::Validate() const {
 
 size_t StorageIdentity::ApproxBytes() const {
   size_t result = id.size();
+  if (credentials.has_value()) {
+    result += credentials->scheme.size();
+    for (const auto& [key, value] : credentials->fields) {
+      result += key.size() + value.size();
+    }
+  }
   for (const auto& service : services) {
     result += service.role.size() + service.endpoint.size();
     if (service.credentials.has_value()) {
@@ -485,6 +494,35 @@ size_t StorageIdentity::ApproxBytes() const {
       }
     }
   }
+  return result;
+}
+
+absl::StatusOr<NodeRef> NodeRef::WithCredentials(
+    StorageCredentials access, std::optional<std::string_view> role) const {
+  ABSL_RETURN_IF_ERROR(Validate());
+  ABSL_RETURN_IF_ERROR(access.Validate());
+  if (!storage.has_value()) {
+    return absl::FailedPreconditionError(
+        "Credentials require a storage-qualified reference");
+  }
+  NodeRef result = *this;
+  if (!role.has_value()) {
+    result.storage->credentials = std::move(access);
+  } else {
+    ABSL_RETURN_IF_ERROR(ValidateName(*role));
+    bool found = false;
+    for (auto& service : result.storage->services) {
+      if (service.role == *role) {
+        service.credentials = std::move(access);
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      return absl::InvalidArgumentError("Unknown storage service role");
+    }
+  }
+  ABSL_RETURN_IF_ERROR(result.Validate());
   return result;
 }
 

@@ -324,24 +324,29 @@ and streams retain the same execution model:
 
 ```a11flow
 planned = run plan-research(topic: topic)
-planned.briefs -> plan
+planned.briefs | ref -> plan
 
 nodes research {
   findings = node()
 
   for brief in planned.briefs parallel 3 {
     one = run investigate(topic: topic, brief: brief) timeout 2m
-    one.report -> findings
+    one.report | ref -> findings
   }
 
   written = run synthesise-findings(
     topic: topic, brief: planned.synthesis, findings: findings,
   )
-  written.report -> report
+  written.report | ref -> report
 }
 ```
 
 Flow also makes the orchestration policies part of the loaded composition:
+
+The synthesis flow reads `findings | read_with {max_ref_depth: 2,
+max_ref_breadth: 3, num_chunks_to_buffer: 8} | collect`. Each reference points
+to a retained investigation report, so the synthesis reader follows it in
+order without copying the report through the orchestration flow.
 
 - The runtime drains every declared action output that the flow does not read.
   The Python illustration can leave unused nested outputs to session cleanup;

@@ -23,6 +23,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <absl/base/no_destructor.h>
@@ -76,17 +77,17 @@ absl::Status ChunkStoreWriterOptions::Validate() const {
 struct ChunkStoreWriter::State
     : public std::enable_shared_from_this<ChunkStoreWriter::State> {
   struct Element {
-    data::Chunk chunk;
+    std::variant<data::Chunk, data::NodeRef> payload;
     std::optional<std::uint32_t> seq;
     bool continued;
     std::shared_ptr<a11::Promise<a11::Unit>> admission;
     a11::Promise<std::uint32_t> result;
 
-    Element(data::Chunk value, std::optional<std::uint32_t> sequence,
-            bool is_continued,
+    Element(std::variant<data::Chunk, data::NodeRef> value,
+            std::optional<std::uint32_t> sequence, bool is_continued,
             std::shared_ptr<a11::Promise<a11::Unit>> admission_promise,
             a11::Promise<std::uint32_t> promise)
-        : chunk(std::move(value)),
+        : payload(std::move(value)),
           seq(sequence),
           continued(is_continued),
           admission(std::move(admission_promise)),
@@ -98,10 +99,15 @@ struct ChunkStoreWriter::State
     Element& operator=(const Element&) = delete;
   };
 
+  struct Tee {
+    std::shared_ptr<net::WireStream> stream;
+    ReferenceRewriter rewrite;
+  };
+
   struct Batch {
     std::vector<Element> elements;
     std::string store_id;
-    std::vector<std::shared_ptr<net::WireStream>> streams;
+    std::vector<Tee> streams;
   };
 
   enum class Lifecycle { kNone, kClose, kAbort, kCancel };
@@ -285,7 +291,11 @@ struct ChunkStoreWriter::State
     // persists needs them, and a peer needs them, so either of those turns the.
     if (!batch.streams.empty() || !store->HoldsObjects()) {
       for (Element& element : batch.elements) {
-        if (const absl::Status materialised = element.chunk.Materialize();
+        auto* chunk = std::get_if<data::Chunk>(&element.payload);
+        if (chunk == nullptr) {
+          continue;
+        }
+        if (const absl::Status materialised = chunk->Materialize();
             !materialised.ok()) {
           // Reported the same way a store's own failure is, so a value that
           // cannot be encoded fails the write rather than being dropped.
@@ -298,11 +308,11 @@ struct ChunkStoreWriter::State
     }
     fragments.reserve(batch.elements.size());
     for (Element& element : batch.elements) {
-      data::Chunk chunk =
-          batch.streams.empty() ? std::move(element.chunk) : element.chunk;
+      auto payload =
+          batch.streams.empty() ? std::move(element.payload) : element.payload;
       fragments.push_back(data::NodeFragment{
           .id = batch.store_id,
-          .data = std::move(chunk),
+          .data = std::move(payload),
           .seq = element.seq,
           .continued = element.continued,
       });
@@ -367,14 +377,14 @@ struct ChunkStoreWriter::State
     // Assemble the message while this operation owns the batch. Stream handover
     // follows operation release because WireStream::Send may block.
     data::WireMessage message;
-    std::vector<std::shared_ptr<net::WireStream>> tee_streams;
+    std::vector<Tee> tee_streams;
     if (operation_status.ok() && !active_batch.streams.empty()) {
       tee_streams = active_batch.streams;
       message.node_fragments.reserve(active_batch.elements.size());
       for (size_t index = 0; index < active_batch.elements.size(); ++index) {
         message.node_fragments.push_back(data::NodeFragment{
             .id = active_batch.store_id,
-            .data = active_batch.elements[index].chunk,
+            .data = active_batch.elements[index].payload,
             .seq = (*result)[index],
             .continued = active_batch.elements[index].continued,
         });
@@ -464,8 +474,25 @@ struct ChunkStoreWriter::State
                             message = std::move(message),
                             streams = std::move(tee_streams)]() mutable {
         absl::Status tee_status;
-        for (const std::shared_ptr<net::WireStream>& stream : streams) {
-          tee_status = stream->Send(message);
+        for (const Tee& tee : streams) {
+          data::WireMessage outgoing = message;
+          if (tee.rewrite) {
+            for (auto& fragment : outgoing.node_fragments) {
+              if (auto* reference =
+                      std::get_if<data::NodeRef>(&fragment.data)) {
+                auto rewritten = tee.rewrite(*reference);
+                if (!rewritten.ok()) {
+                  tee_status = rewritten.status();
+                  break;
+                }
+                fragment.data = *std::move(rewritten);
+              }
+            }
+          }
+          if (!tee_status.ok()) {
+            break;
+          }
+          tee_status = tee.stream->Send(std::move(outgoing));
           if (!tee_status.ok()) {
             break;
           }
@@ -545,7 +572,7 @@ struct ChunkStoreWriter::State
   // a remote reader ends a node on a not-continued fragment, and closing
   // appends none.
   absl::Status TeeClose(const absl::Status& close_status) {
-    std::vector<std::shared_ptr<net::WireStream>> streams;
+    std::vector<Tee> streams;
     {
       thread::MutexLock lock(&mu);
       if (lifecycle != Lifecycle::kClose) {
@@ -574,9 +601,9 @@ struct ChunkStoreWriter::State
         .seq = 0,
         .continued = false,
     });
-    for (const std::shared_ptr<net::WireStream>& stream : streams) {
+    for (const Tee& tee : streams) {
       absl::Status sent;
-      sent = stream->Send(message);
+      sent = tee.stream->Send(message);
       if (!sent.ok()) {
         return sent;
       }
@@ -700,8 +727,7 @@ struct ChunkStoreWriter::State
   a11::Task lifecycle_future ABSL_GUARDED_BY(mu);
   std::vector<std::shared_ptr<a11::Promise<a11::Unit>>> drain_waiters
       ABSL_GUARDED_BY(mu);
-  std::vector<std::shared_ptr<net::WireStream>> attached_streams
-      ABSL_GUARDED_BY(mu);
+  std::vector<Tee> attached_streams ABSL_GUARDED_BY(mu);
   // Tees handed to a stream and not yet returned. Close waits for zero before
   // handing over its marker.
   size_t tees_in_flight ABSL_GUARDED_BY(mu) = 0;
@@ -759,6 +785,18 @@ ChunkStoreWrite ChunkStoreWriter::EnqueueChunk(data::Chunk chunk,
                                                std::optional<std::uint32_t> seq,
                                                bool final,
                                                bool ensure_started) {
+  return EnqueuePayload(std::move(chunk), seq, final, ensure_started);
+}
+
+ChunkStoreWrite ChunkStoreWriter::EnqueueReference(
+    data::NodeRef reference, std::optional<std::uint32_t> seq, bool final,
+    bool ensure_started) {
+  return EnqueuePayload(std::move(reference), seq, final, ensure_started);
+}
+
+ChunkStoreWrite ChunkStoreWriter::EnqueuePayload(
+    std::variant<data::Chunk, data::NodeRef> payload,
+    std::optional<std::uint32_t> seq, bool final, bool ensure_started) {
   const auto failed_write = [](const absl::Status& status) {
     return ChunkStoreWrite{
         .admitted = a11::FailedTask(status),
@@ -766,7 +804,9 @@ ChunkStoreWrite ChunkStoreWriter::EnqueueChunk(data::Chunk chunk,
     };
   };
 
-  if (const absl::Status validation = chunk.Validate(); !validation.ok()) {
+  const absl::Status validation =
+      std::visit([](const auto& value) { return value.Validate(); }, payload);
+  if (!validation.ok()) {
     return failed_write(validation);
   }
 
@@ -799,13 +839,15 @@ ChunkStoreWrite ChunkStoreWriter::EnqueueChunk(data::Chunk chunk,
       const bool explicit_sequence_gap =
           requested_seq.has_value() &&
           static_cast<std::uint64_t>(*requested_seq) != state_->next_sticky_seq;
-      state_->ApplyStickyMimetypeLocked(chunk, explicit_sequence_gap);
+      if (auto* chunk = std::get_if<data::Chunk>(&payload)) {
+        state_->ApplyStickyMimetypeLocked(*chunk, explicit_sequence_gap);
+      }
       state_->next_sticky_seq =
           requested_seq.has_value()
               ? static_cast<std::uint64_t>(*requested_seq) + 1
               : state_->next_sticky_seq + 1;
     }
-    State::Element element(std::move(chunk), seq, !final, admission,
+    State::Element element(std::move(payload), seq, !final, admission,
                            std::move(promise));
     if (!state_->options.num_chunks_to_buffer.has_value() ||
         state_->outstanding < *state_->options.num_chunks_to_buffer) {
@@ -833,6 +875,14 @@ a11::Future<std::uint32_t> ChunkStoreWriter::PutChunk(
   // Flushes inline rather than waking the scheduler, which is what FINDINGS.md
   // item 3 asked for and what the stack budget
   ChunkStoreWrite write = EnqueueChunk(std::move(chunk), seq, final, false);
+  Flush();
+  return std::move(write.confirmation);
+}
+
+a11::Future<std::uint32_t> ChunkStoreWriter::PutReference(
+    data::NodeRef reference, std::optional<std::uint32_t> seq, bool final) {
+  ChunkStoreWrite write =
+      EnqueueReference(std::move(reference), seq, final, false);
   Flush();
   return std::move(write.confirmation);
 }
@@ -980,17 +1030,23 @@ a11::Task ChunkStoreWriter::WaitForBufferToDrain() {
 
 absl::Status ChunkStoreWriter::AttachStream(
     std::shared_ptr<net::WireStream> stream) {
+  return AttachStream(std::move(stream), {});
+}
+
+absl::Status ChunkStoreWriter::AttachStream(
+    std::shared_ptr<net::WireStream> stream, ReferenceRewriter rewrite) {
   if (stream == nullptr) {
     return absl::InvalidArgumentError("stream must not be null");
   }
   (void)stream->GetId();
   thread::MutexLock lock(&state_->mu);
   for (const auto& attached : state_->attached_streams) {
-    if (attached == stream) {
+    if (attached.stream == stream) {
       return absl::OkStatus();
     }
   }
-  state_->attached_streams.push_back(std::move(stream));
+  state_->attached_streams.push_back(
+      State::Tee{std::move(stream), std::move(rewrite)});
   return absl::OkStatus();
 }
 
@@ -1000,7 +1056,9 @@ absl::Status ChunkStoreWriter::DetachStream(
     return absl::InvalidArgumentError("stream must not be null");
   }
   thread::MutexLock lock(&state_->mu);
-  std::erase(state_->attached_streams, stream);
+  std::erase_if(state_->attached_streams, [&](const State::Tee& attached) {
+    return attached.stream == stream;
+  });
   return absl::OkStatus();
 }
 

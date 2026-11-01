@@ -282,7 +282,7 @@ local function load_chunk(seq)
       fields['arrival'], ''
   end
   local storage = fields['storage']
-  if storage == 'inline' then
+  if storage == 'inline' or storage == 'node_ref' then
     if fields['payload'] == nil then
       return 'data_loss', 'Inline stream entry has no payload', stream_id,
         fields['arrival'], storage
@@ -412,7 +412,8 @@ if operation == 'put' then
       return failure('DATA_LOSS',
         'Arrival index ' .. arrival .. ' already exists')
     end
-    if storage ~= 'inline' and storage ~= 'redis' then
+    if storage ~= 'inline' and storage ~= 'redis' and
+        storage ~= 'node_ref' then
       return failure('INVALID_ARGUMENT', 'Invalid chunk storage kind')
     end
     if payload == nil then
@@ -487,7 +488,7 @@ if operation == 'put' then
     else
       stream_id = redis.call('XADD', stream_key, '*',
         'v', '1', 'kind', 'chunk', 'seq', seq_text, 'arrival', arrival,
-        'storage', 'inline', 'payload', payload, 'tombstone', tombstone)
+        'storage', storage, 'payload', payload, 'tombstone', tombstone)
     end
     redis.call('HSET', seq_key, seq_text, stream_id)
     redis.call('HSET', arrival_key, arrival, seq_text)
@@ -640,6 +641,9 @@ if operation == 'clear' then
   end
   if storage == 'tombstone' then
     return {'item', seq_text, 'tombstone', value_or_error, final_seq()}
+  end
+  if storage == 'node_ref' then
+    return failure('UNIMPLEMENTED', 'Cannot clear a node-reference fragment')
   end
   local entry = redis.call('XRANGE', stream_key, stream_id, stream_id,
     'COUNT', 1)

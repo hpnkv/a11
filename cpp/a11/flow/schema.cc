@@ -559,9 +559,9 @@ syntax::TypeExpression SchemaType(const nlohmann::json& schema,
   type.name = ScalarType(schema);
   if (const auto marked = schema.find(std::string(kFlowTypeKey));
       marked != schema.end() && marked->is_string()) {
-    const auto parsed = ParseTypeExpression(marked->get<std::string>());
+    auto parsed = ParseTypeExpression(marked->get<std::string>());
     if (parsed.ok()) {
-      return *parsed;
+      return std::move(*parsed);
     }
   }
   if (depth >= 128) {

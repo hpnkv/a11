@@ -13,13 +13,164 @@
 // limitations under the License.
 
 #include <cstddef>
+#include <cstdint>
+#include <limits>
 #include <optional>
 
 #include <absl/cleanup/cleanup.h>
+#include <absl/strings/str_cat.h>
 
 #include "a11/flow/internal/execution.h"
+#include "a11/nodes/node_map.h"
 
 namespace a11::flow::internal {
+
+namespace {
+
+struct ConfiguredRead {
+  stores::ChunkStoreReaderOptions options;
+  bool fragments = false;
+};
+
+struct ReferenceOptions {
+  std::uint32_t offset = 0;
+  std::optional<std::uint64_t> length;
+  std::optional<data::StorageCredentials> credentials;
+};
+
+absl::StatusOr<ReferenceOptions> ParseReferenceOptions(const Value& record) {
+  if (record.kind() == Value::Kind::kNull) {
+    return ReferenceOptions{};
+  }
+  if (record.kind() != Value::Kind::kObject) {
+    return absl::InvalidArgumentError("'ref' requires an option record");
+  }
+  ReferenceOptions result;
+  for (const auto& [key, value] : record.pairs()) {
+    if (key == "offset" || key == "length") {
+      if (value.kind() != Value::Kind::kInteger || value.integer() < 0) {
+        return absl::InvalidArgumentError(
+            absl::StrCat("Invalid 'ref' value for '", key, "'"));
+      }
+      const auto count = static_cast<std::uint64_t>(value.integer());
+      if (key == "offset") {
+        if (count > std::numeric_limits<std::uint32_t>::max()) {
+          return absl::InvalidArgumentError("Reference offset exceeds 2^32");
+        }
+        result.offset = static_cast<std::uint32_t>(count);
+      } else {
+        result.length = count;
+      }
+    } else if (key == "credentials") {
+      const Value* scheme = value.Get("scheme");
+      const Value* fields = value.Get("fields");
+      if (scheme == nullptr || scheme->kind() != Value::Kind::kString ||
+          fields == nullptr || fields->kind() != Value::Kind::kObject) {
+        return absl::InvalidArgumentError(
+            "Reference credentials require scheme and fields");
+      }
+      data::StorageCredentials credentials;
+      credentials.scheme = scheme->text();
+      for (const auto& [name, field] : fields->pairs()) {
+        if (field.kind() != Value::Kind::kString) {
+          return absl::InvalidArgumentError(
+              "Reference credential fields must be strings");
+        }
+        credentials.fields.emplace(name, field.text());
+      }
+      ABSL_RETURN_IF_ERROR(credentials.Validate());
+      result.credentials = std::move(credentials);
+    } else {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Unknown 'ref' option '", key, "'"));
+    }
+  }
+  data::NodeRef check{
+      .id = "reference", .offset = result.offset, .length = result.length};
+  ABSL_RETURN_IF_ERROR(check.Validate());
+  return result;
+}
+
+absl::StatusOr<ConfiguredRead> ParseReadOptions(const Value& record) {
+  if (record.kind() != Value::Kind::kObject) {
+    return absl::InvalidArgumentError("'read_with' requires an option record");
+  }
+  ConfiguredRead configured;
+  bool follow_given = false;
+  const auto number = [](const Value& value, std::string_view name,
+                         std::uint64_t limit) -> absl::StatusOr<std::uint64_t> {
+    if (value.kind() != Value::Kind::kInteger || value.integer() < 0 ||
+        static_cast<std::uint64_t>(value.integer()) > limit) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Invalid 'read_with' value for '", name, "'"));
+    }
+    return static_cast<std::uint64_t>(value.integer());
+  };
+  const auto boolean = [](const Value& value,
+                          std::string_view name) -> absl::StatusOr<bool> {
+    if (value.kind() != Value::Kind::kBool) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Invalid 'read_with' value for '", name, "'"));
+    }
+    return value.boolean();
+  };
+  constexpr std::uint64_t kUint32Range = std::uint64_t{1} << 32U;
+  for (const auto& [key, value] : record.pairs()) {
+    if (key == "view") {
+      if (value.kind() != Value::Kind::kString ||
+          (value.text() != "values" && value.text() != "fragments")) {
+        return absl::InvalidArgumentError("Invalid 'read_with' view");
+      }
+      configured.fragments = value.text() == "fragments";
+    } else if (key == "ordered") {
+      ABSL_ASSIGN_OR_RETURN(configured.options.ordered, boolean(value, key));
+    } else if (key == "pop_chunks") {
+      ABSL_ASSIGN_OR_RETURN(configured.options.pop_chunks, boolean(value, key));
+    } else if (key == "sticky_mimetype") {
+      ABSL_ASSIGN_OR_RETURN(configured.options.sticky_mimetype,
+                            boolean(value, key));
+    } else if (key == "follow_node_refs") {
+      follow_given = true;
+      ABSL_ASSIGN_OR_RETURN(configured.options.follow_node_refs,
+                            boolean(value, key));
+    } else if (key == "offset") {
+      ABSL_ASSIGN_OR_RETURN(
+          auto selected,
+          number(value, key, std::numeric_limits<std::uint32_t>::max()));
+      configured.options.offset = static_cast<std::uint32_t>(selected);
+    } else if (key == "num_chunks_to_buffer") {
+      ABSL_ASSIGN_OR_RETURN(auto selected, number(value, key, kUint32Range));
+      configured.options.num_chunks_to_buffer = selected;
+    } else if (key == "max_ref_depth") {
+      ABSL_ASSIGN_OR_RETURN(auto selected, number(value, key, 64));
+      configured.options.max_ref_depth = static_cast<std::uint32_t>(selected);
+    } else if (key == "max_ref_breadth") {
+      ABSL_ASSIGN_OR_RETURN(auto selected, number(value, key, 64));
+      configured.options.max_ref_breadth = static_cast<std::uint32_t>(selected);
+    } else if (key == "max_chunks_to_read") {
+      if (value.kind() == Value::Kind::kNull) {
+        configured.options.max_chunks_to_read.reset();
+      } else {
+        ABSL_ASSIGN_OR_RETURN(configured.options.max_chunks_to_read,
+                              number(value, key, kUint32Range));
+      }
+    } else {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Unknown 'read_with' option '", key, "'"));
+    }
+  }
+  if (configured.fragments) {
+    if (follow_given) {
+      return absl::InvalidArgumentError(
+          "Fragment view cannot set 'follow_node_refs'");
+    }
+    configured.options.follow_node_refs = false;
+  }
+  ABSL_RETURN_IF_ERROR(configured.options.Validate());
+  return configured;
+}
+
+}  // namespace
 
 absl::StatusOr<ItemPtr> Scope::BoundItem(RefId ref) {
   absl::Cleanup retire = [this, ref] {
@@ -257,6 +408,62 @@ absl::Status Scope::ProduceMerge(RefId ref, const Sink& sink) {
   return joined;
 }
 
+absl::StatusOr<data::NodeRef> Scope::MakeReference(RefId source_ref,
+                                                   RefId destination_ref,
+                                                   const Value& argument) {
+  ABSL_ASSIGN_OR_RETURN(const ReferenceOptions options,
+                        ParseReferenceOptions(argument));
+  ABSL_ASSIGN_OR_RETURN(const NodePtr source, ReadableNode(source_ref));
+  if (source == nullptr) {
+    return absl::InvalidArgumentError("'ref' requires a direct node source");
+  }
+  const auto source_map = source->Owner();
+  if (source_map == nullptr) {
+    return absl::FailedPreconditionError("Reference source needs a node map");
+  }
+  std::shared_ptr<nodes::NodeMap> destination_map;
+  if (destination_ref != kNone) {
+    ABSL_ASSIGN_OR_RETURN(const NodePtr destination,
+                          DestinationNode(destination_ref));
+    if (destination == nullptr) {
+      return absl::InvalidArgumentError(
+          "'ref' requires a direct node destination");
+    }
+    destination_map = destination->Owner();
+    if (destination_map == nullptr) {
+      return absl::FailedPreconditionError(
+          "Reference destination needs a node map");
+    }
+  }
+  const auto policy = options.credentials.has_value()
+                          ? nodes::ReferenceStoragePolicy::kInclude
+                          : nodes::ReferenceStoragePolicy::kAuto;
+  auto reference =
+      source->Ref(options.offset, options.length, destination_map, policy);
+  if (!reference.ok() && destination_map != nullptr &&
+      !options.credentials.has_value() &&
+      absl::IsFailedPrecondition(reference.status())) {
+    ABSL_ASSIGN_OR_RETURN(auto local, source->Ref());
+    ABSL_RETURN_IF_ERROR(
+        destination_map->ImportReference(local, source_map).status());
+    reference =
+        source->Ref(options.offset, options.length, destination_map, policy);
+  }
+  ABSL_RETURN_IF_ERROR(reference.status());
+  if (destination_map != nullptr) {
+    data::NodeRef whole = *reference;
+    whole.offset = 0;
+    whole.length.reset();
+    ABSL_RETURN_IF_ERROR(
+        destination_map->ImportReference(whole, source_map).status());
+  }
+  if (options.credentials.has_value()) {
+    ABSL_ASSIGN_OR_RETURN(reference,
+                          reference->WithCredentials(*options.credentials));
+  }
+  return reference;
+}
+
 /// Read a derived ref's source and reshape it with one stage.
 absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
   const graph::Ref& one = graph().refs[ref];
@@ -280,6 +487,57 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
     configured->count = count.integer();
   }
   const graph::Stage& stage = configured.has_value() ? *configured : one.stage;
+  if (stage.name == "ref") {
+    if (stage.destination == kNone) {
+      return absl::InvalidArgumentError("'ref' requires a destination");
+    }
+    Value argument = Value::Null();
+    if (stage.expr != kNone) {
+      ABSL_ASSIGN_OR_RETURN(argument, Evaluate(stage.expr));
+    }
+    ABSL_ASSIGN_OR_RETURN(
+        auto reference, MakeReference(one.source, stage.destination, argument));
+    ABSL_RETURN_IF_ERROR(sink.One(Item::OfReference(std::move(reference))));
+    const auto& origin = graph().refs[one.source];
+    return origin.kind == RefKind::kCallPort && origin.call != kNone
+               ? StepDone(origin.call)
+               : absl::OkStatus();
+  }
+  if (stage.name == "read_with") {
+    ABSL_ASSIGN_OR_RETURN(const Value argument, Evaluate(stage.expr));
+    ABSL_ASSIGN_OR_RETURN(const ConfiguredRead read,
+                          ParseReadOptions(argument));
+    ABSL_ASSIGN_OR_RETURN(const NodePtr node, ReadableNode(one.source));
+    if (node == nullptr) {
+      return absl::InvalidArgumentError(
+          "'read_with' requires a direct node or port source");
+    }
+    if (read.options.pop_chunks &&
+        graph().refs[one.source].kind != RefKind::kNode) {
+      return absl::FailedPreconditionError(
+          "Destructive 'read_with' requires a Flow-owned node");
+    }
+    if (read.options.pop_chunks) {
+      const auto ordinary = analysis_->readers.find(one.source);
+      if (ordinary != analysis_->readers.end() && ordinary->second > 0) {
+        return absl::FailedPreconditionError(
+            "Destructive 'read_with' requires an exclusive reader");
+      }
+      for (const RefId candidate : analysis_->refs) {
+        if (candidate == ref) {
+          continue;
+        }
+        const auto& other = graph().refs[candidate];
+        if (other.kind == RefKind::kDerived && other.source == one.source &&
+            (other.stage.name == "read_with" || other.stage.name == "ref")) {
+          return absl::FailedPreconditionError(
+              "Destructive 'read_with' requires an exclusive reader");
+        }
+      }
+    }
+    ABSL_ASSIGN_OR_RETURN(auto cursor, node->OpenReader(read.options));
+    return ReadConfiguredNode(cursor, sink, read.fragments);
+  }
   ABSL_ASSIGN_OR_RETURN(ReaderPtr source, Subscribe(one.source));
   HostBridge& host = bridge();
   const std::string& name = stage.name;

@@ -518,13 +518,8 @@ async def test_put_many_late_validation_failure_is_atomic(make_store):
 
 
 @pytest.mark.asyncio
-async def test_local_store_rejects_node_ref_payloads():
-    """NodeRef support is a backend property, not part of the contract.
-
-    The in-memory store has nowhere to resolve a reference, so it refuses one.
-    `SQLiteChunkStore` accepts them and stores the target as indexed columns;
-    see `test_sqlite_chunk_store.py`.
-    """
+async def test_local_store_preserves_node_ref_payloads():
+    """The local store retains references as typed fragments."""
     store = LocalChunkStore("test")
     unsupported = types.NodeFragment(
         seq=1,
@@ -534,11 +529,8 @@ async def test_local_store_rejects_node_ref_payloads():
         continued=True,
     )
 
-    with pytest.raises(StatusException) as raised:
-        await store.put_many([_fragment(0), unsupported])
-
-    assert raised.value.status.code == StatusCode.UNIMPLEMENTED
-    assert await store.size() == 0
+    assert await store.put_many([_fragment(0), unsupported]) == [0, 1]
+    assert (await store.get(1)).data == unsupported.data
 
 
 @pytest.mark.asyncio

@@ -119,8 +119,15 @@ class NodeMap : public std::enable_shared_from_this<NodeMap> {
   /// Storage identities directly accessible through this host's resolver.
   [[nodiscard]] std::vector<std::string> StorageIds() const;
 
+  /// Permit read resolution to open uncached nodes through this map's factory.
+  void SetAllowLazyReadResolution(bool allowed);
+  [[nodiscard]] bool AllowsLazyReadResolution() const;
+
   /// Resolve a whole-node reference; windows require a fragment-window reader.
   absl::StatusOr<std::shared_ptr<AsyncNode>> Resolve(
+      const data::NodeRef& reference);
+  /// Resolve an existing local target for a value read.
+  absl::StatusOr<std::shared_ptr<AsyncNode>> ResolveForRead(
       const data::NodeRef& reference);
 
   /// Share a referenced node from another scope, preserving its identity.
@@ -172,12 +179,15 @@ class NodeMap : public std::enable_shared_from_this<NodeMap> {
   mutable thread::Mutex mu_;
   StorageResolver storage_resolver_ ABSL_GUARDED_BY(mu_);
   std::vector<std::string> accessible_ids_ ABSL_GUARDED_BY(mu_);
+  bool allow_lazy_read_resolution_ ABSL_GUARDED_BY(mu_) = false;
   absl::flat_hash_map<std::string, std::shared_ptr<NodeMap>> storages_
       ABSL_GUARDED_BY(mu_);
   absl::flat_hash_map<
       std::string, absl::flat_hash_map<std::string, std::shared_ptr<AsyncNode>>>
       imported_ ABSL_GUARDED_BY(mu_);
   absl::flat_hash_map<std::string, std::shared_ptr<AsyncNode>> nodes_
+      ABSL_GUARDED_BY(mu_);
+  absl::flat_hash_map<std::string, std::shared_ptr<AsyncNode>> retained_refs_
       ABSL_GUARDED_BY(mu_);
 };
 

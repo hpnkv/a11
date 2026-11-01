@@ -48,6 +48,9 @@ install_native_options(
         "offset": (int, 0),
         "max_chunks_to_read": (int | None, None),
         "sticky_mimetype": (bool, False),
+        "follow_node_refs": (bool, True),
+        "max_ref_depth": (int, 8),
+        "max_ref_breadth": (int, 2),
     },
 )
 ChunkStoreReaderOptions.__module__ = __name__

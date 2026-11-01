@@ -3337,6 +3337,7 @@ class ParserImpl {
         builtin->name = word;
         Advance();
         const Bracketed brackets(this);
+        std::unique_ptr<syntax::ObjectLiteral> reference_options;
         SkipNewlines();
         while (!At(TokenKind::kRightParen)) {
           if (At(TokenKind::kEnd) || At(TokenKind::kRightBrace)) {
@@ -3346,7 +3347,23 @@ class ParserImpl {
             return builtin;
           }
           const size_t before = position_;
-          builtin->args.push_back(ParseExpression());
+          if (word == "ref" && !builtin->args.empty() && Current().IsWord() &&
+              Following().kind == TokenKind::kColon) {
+            if (reference_options == nullptr) {
+              reference_options = Make<syntax::ObjectLiteral>(Current());
+            }
+            std::string key = ExpectName("a reference option").text;
+            Expect(TokenKind::kColon);
+            reference_options->pairs.emplace_back(std::move(key),
+                                                  ParseExpression());
+          } else {
+            if (reference_options != nullptr) {
+              ReportHere(
+                  "flow.form.stage-argument",
+                  "Positional reference arguments precede named options.");
+            }
+            builtin->args.push_back(ParseExpression());
+          }
           SkipNewlines();
           if (!AcceptToken(TokenKind::kComma)) {
             if (position_ == before) {
@@ -3358,6 +3375,9 @@ class ParserImpl {
           if (position_ == before) {
             Advance();
           }
+        }
+        if (reference_options != nullptr) {
+          builtin->args.push_back(std::move(reference_options));
         }
         Expect(TokenKind::kRightParen);
         return builtin;

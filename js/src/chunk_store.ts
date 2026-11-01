@@ -170,7 +170,7 @@ interface ChangeWaiter {
  * without changing the node/reader/writer layers above it.
  */
 export class LocalChunkStore implements ChunkStore {
-  private readonly chunks = new Map<number, Chunk>();
+  private readonly chunks = new Map<number, Chunk | NodeRef>();
   private readonly seqToArrivalOrder = new Map<number, number>();
   private readonly arrivalOrderToSeq = new Map<number, number>();
   private readonly waiters = new Set<ChangeWaiter>();
@@ -200,7 +200,7 @@ export class LocalChunkStore implements ChunkStore {
     }
     return new NodeFragment({
       id: this.nodeId,
-      data: cloneChunk(chunk),
+      data: chunk instanceof Chunk ? cloneChunk(chunk) : new NodeRef({id: chunk.id, offset: chunk.offset, length: chunk.length, storage: chunk.storage}),
       seq,
       continued: this.finalSeq === null || seq < this.finalSeq,
     });
@@ -310,7 +310,7 @@ export class LocalChunkStore implements ChunkStore {
           ++this.totalChunksRead;
           result.push(new NodeFragment({
             id: this.nodeId,
-            data: cloneChunk(chunk),
+            data: chunk instanceof Chunk ? cloneChunk(chunk) : new NodeRef({id: chunk.id, offset: chunk.offset, length: chunk.length, storage: chunk.storage}),
             seq: expected,
             continued: this.finalSeq === null || expected < this.finalSeq,
           }));
@@ -356,7 +356,6 @@ export class LocalChunkStore implements ChunkStore {
           if (explicit.has(fragment.seq)) return invalidArgumentError(`Explicit seq ${fragment.seq} occurs more than once`);
           explicit.add(fragment.seq);
         }
-        if (!(fragment.data instanceof Chunk)) return unimplementedError('LocalChunkStore supports Chunk payloads, not NodeRef');
       }
       if (anyExplicit !== allExplicit) return invalidArgumentError('Sequence numbers must be set on every fragment or none');
       if (this.terminalStatus !== null) return failedPreconditionError(`Chunk store ${this.nodeId} is closed for writes`);
@@ -400,7 +399,8 @@ export class LocalChunkStore implements ChunkStore {
       for (let index = 0; index < fragments.length; ++index) {
         const seq = assigned[index]!;
         const arrival = this.totalChunksPut + index;
-        this.chunks.set(seq, cloneChunk(fragments[index]!.data as Chunk));
+        const payload = fragments[index]!.data;
+        this.chunks.set(seq, payload instanceof Chunk ? cloneChunk(payload) : new NodeRef({id: payload.id, offset: payload.offset, length: payload.length, storage: payload.storage}));
         this.arrivalOrderToSeq.set(arrival, seq);
         this.seqToArrivalOrder.set(seq, arrival);
       }
@@ -419,6 +419,7 @@ export class LocalChunkStore implements ChunkStore {
     try {
       const found = this.chunks.get(seq);
       if (found === undefined) return notFoundError(`No fragment with seq ${seq} exists`);
+      if (found instanceof NodeRef) return unimplementedError('Clearing a reference fragment is unsupported.');
       const original = cloneChunk(found);
       this.chunks.set(seq, new Chunk({ metadata: cloneMetadata(found.metadata), ref: '__tombstone__' }));
       return new NodeFragment({

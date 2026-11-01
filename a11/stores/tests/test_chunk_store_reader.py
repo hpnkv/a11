@@ -166,7 +166,10 @@ async def test_arrival_order_reader_does_not_stop_at_early_final_arrival():
     await store.put_many([_fragment(2, final=True), _fragment(0), _fragment(1)])
     await store.close_writes_with_status(Status.ok())
     reader = ChunkStoreReader(
-        store, ChunkStoreReaderOptions(ordered=False, num_chunks_to_buffer=4)
+        store,
+        ChunkStoreReaderOptions(
+            ordered=False, num_chunks_to_buffer=4, follow_node_refs=False
+        ),
     )
 
     await reader.wait()
@@ -311,7 +314,9 @@ async def test_zero_maximum_finishes_without_calling_store():
 async def test_pop_returns_original_chunk_and_leaves_tombstone():
     store = LocalChunkStore("pop")
     await store.put(_fragment(0, final=True))
-    reader = ChunkStoreReader(store, ChunkStoreReaderOptions(pop_chunks=True))
+    reader = ChunkStoreReader(
+        store, ChunkStoreReaderOptions(pop_chunks=True, follow_node_refs=False)
+    )
 
     fragment = await reader.next()
     stored = await store.get(0)
@@ -324,31 +329,33 @@ async def test_pop_returns_original_chunk_and_leaves_tombstone():
 @pytest.mark.asyncio
 async def test_sticky_mimetype_expands_ordered_chunk_metadata():
     store = LocalChunkStore("sticky-reader")
-    await store.put_many([
-        types.NodeFragment(
-            data=types.Chunk(
-                metadata=types.ChunkMetadata(mimetype="text/plain"),
-                data=b"anchor",
-            ),
-            seq=0,
-            continued=True,
-        ),
-        types.NodeFragment(
-            data=types.Chunk(
-                metadata=types.ChunkMetadata(
-                    mimetype="", attributes={"role": b"assistant"}
+    await store.put_many(
+        [
+            types.NodeFragment(
+                data=types.Chunk(
+                    metadata=types.ChunkMetadata(mimetype="text/plain"),
+                    data=b"anchor",
                 ),
-                data=b"attributes",
+                seq=0,
+                continued=True,
             ),
-            seq=1,
-            continued=True,
-        ),
-        types.NodeFragment(
-            data=types.Chunk(data=b"missing"),
-            seq=2,
-            continued=False,
-        ),
-    ])
+            types.NodeFragment(
+                data=types.Chunk(
+                    metadata=types.ChunkMetadata(
+                        mimetype="", attributes={"role": b"assistant"}
+                    ),
+                    data=b"attributes",
+                ),
+                seq=1,
+                continued=True,
+            ),
+            types.NodeFragment(
+                data=types.Chunk(data=b"missing"),
+                seq=2,
+                continued=False,
+            ),
+        ]
+    )
     reader = ChunkStoreReader(
         store, ChunkStoreReaderOptions(sticky_mimetype=True)
     )

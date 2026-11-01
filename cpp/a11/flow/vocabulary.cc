@@ -32,6 +32,7 @@ namespace {
 // Stages in the order a listing reads best: what shortens a stream, what
 // reshapes each value, what reduces it to one, what encodes it.
 constexpr std::array kStageOrder = {
+    std::string_view("read_with"),  std::string_view("ref"),
     std::string_view("take while"), std::string_view("take until"),
     std::string_view("first"),      std::string_view("last"),
     std::string_view("drop"),       std::string_view("truncate"),
@@ -56,6 +57,8 @@ constexpr std::array kStageOrder = {
 const absl::flat_hash_map<std::string_view, StageArgument>& StageTable() {
   static const auto* table =
       new absl::flat_hash_map<std::string_view, StageArgument>{
+          {"read_with", StageArgument::kExpression},
+          {"ref", StageArgument::kOptionalExpression},
           {"take while", StageArgument::kExpression},
           {"take until", StageArgument::kExpression},
           {"first", StageArgument::kNumber},
@@ -100,6 +103,17 @@ const absl::flat_hash_map<std::string_view, StageArgument>& StageTable() {
 // What each stage does, as reference.
 const absl::flat_hash_map<std::string_view, WordDoc>& StageDocs() {
   static const auto* table = new absl::flat_hash_map<std::string_view, WordDoc>{
+      {"read_with",
+       {"Read a node through an independent configured cursor.",
+        "a reader option record",
+        "The record overlays the reader defaults for this pipeline. Other "
+        "subscriptions keep their own cursor and options.",
+        "page.text | read_with {offset: 2} -> selected"}},
+      {"ref",
+       {"Write a reference to a direct source node.",
+        "optionally a fragment window record",
+        "The destination reads the source's retained fragments when needed.",
+        "page.text | ref -> archive"}},
       {"take while",
        {"Forwards the prefix for which the condition stays true.",
         "a condition with 'it' bound",
@@ -408,6 +422,12 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StageDocs() {
 // the same rule about accuracy: `Call` in `values.cc` is the implementation.
 const absl::flat_hash_map<std::string_view, WordDoc>& BuiltinDocs() {
   static const auto* table = new absl::flat_hash_map<std::string_view, WordDoc>{
+      {"ref",
+       {"Make a typed reference to a direct node or port.",
+        "a node source and optional destination, window, or credentials",
+        "The source stays unread; a later value read follows its retained "
+        "fragments.",
+        "ref(page.text, for: archive, offset: 2, length: 5)"}},
       {"integer",
        {"Convert a value to a checked whole number.", "one value",
         "Convert a value to a checked whole number.", "integer(\"12\")"}},

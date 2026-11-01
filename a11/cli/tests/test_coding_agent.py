@@ -556,10 +556,11 @@ async def test_user_input_request_can_be_answered_by_any_a11_client(tmp_path):
             },
         )
     )
-    for _ in range(20):
-        if agent.context.pending_user_inputs:
-            break
-        await asyncio.sleep(0)
+    async def wait_for_pending_input():
+        while not agent.context.pending_user_inputs:
+            await asyncio.sleep(0)
+
+    await asyncio.wait_for(wait_for_pending_input(), timeout=5)
     request_id = next(iter(agent.context.pending_user_inputs))
 
     pending = await _invoke(registry, "pending_user_inputs", {})

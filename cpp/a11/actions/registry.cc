@@ -83,12 +83,16 @@ absl::Status ActionRegistry::Unregister(std::string_view action_name) {
         "'", action_name, "' is a builtin action and cannot be unregistered"));
   }
   thread::MutexLock lock(&mu_);
-  if (schemas_.find(std::string(action_name)) == schemas_.end()) {
+  const auto schema = schemas_.find(action_name);
+  if (schema == schemas_.end()) {
     return absl::NotFoundError(
         absl::StrCat("Action '", action_name, "' is not registered"));
   }
-  schemas_.erase(std::string(action_name));
-  handlers_.erase(std::string(action_name));
+  schemas_.erase(schema);
+  if (const auto handler = handlers_.find(action_name);
+      handler != handlers_.end()) {
+    handlers_.erase(handler);
+  }
   return absl::OkStatus();
 }
 
@@ -100,7 +104,7 @@ bool ActionRegistry::IsRegistered(std::string_view action_name) const {
     return true;
   }
   thread::MutexLock lock(&mu_);
-  return schemas_.find(std::string(action_name)) != schemas_.end();
+  return schemas_.find(action_name) != schemas_.end();
 }
 
 absl::StatusOr<ActionSchema> ActionRegistry::GetSchema(

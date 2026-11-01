@@ -77,6 +77,28 @@ action result — use `consume()`:
 result = await node.consume()
 ```
 
+## Refer to another node
+
+A node can store a `NodeRef` instead of copying another node's chunks. Create
+both nodes in one `NodeMap` so the reader can resolve the target:
+
+```python
+nodes = a11.NodeMap()
+source = nodes.get("source")
+destination = nodes.get("destination")
+
+await source.finalize("answer")
+await destination.finalize(source.ref(for_node=destination))
+assert await destination.consume() == "answer"
+```
+
+`source.ref(offset=2, length=3)` selects three fragments starting at sequence
+two. Value and chunk reads follow references by default. Raw fragment reads
+return the `NodeRef` itself. The raw and value cursors are independent, so
+inspecting a stored reference does not consume expanded values. Set
+`ChunkStoreReaderOptions(follow_node_refs=False)` before reading to reject
+references on the value path while keeping raw inspection available.
+
 ## Valueless final markers
 
 A streaming producer usually does not know which token was the last one until it

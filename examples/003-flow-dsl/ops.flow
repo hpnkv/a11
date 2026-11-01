@@ -86,7 +86,10 @@ flow explain-a-command {
       ]
     },
     config: {}
-  ) with "x-a11-llm-api-key": api_key with "x-a11-llm-provider": provider
-      with "x-a11-llm-model": model with "x-a11-llm-base-url": base_url
+  )
+      with "x-a11-llm-api-key": api_key
+      with "x-a11-llm-provider": provider
+      with "x-a11-llm-model": model
+      with "x-a11-llm-base-url": base_url
   llm.text_output | join "" -> verdict
 }

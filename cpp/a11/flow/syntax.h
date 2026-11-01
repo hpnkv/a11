@@ -471,6 +471,8 @@ struct PipelineValue : NodeOf<NodeKind::kPipelineValue> {
 
 /// The `tee`/`via`/`timeout`/`after`/`with`/`id`/`forward` tail of a call.
 struct CallModifiers : NodeOf<NodeKind::kCallModifiers> {
+  /// Modifier keyword positions, in source order.
+  std::vector<Location> clause_locations;
   bool tee = false;
   Word node_map;
   std::optional<absl::Duration> timeout;

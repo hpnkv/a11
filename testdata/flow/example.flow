@@ -45,8 +45,10 @@ flow example {
   pages = node()
   nodes fetched {
     for hit in search.hits parallel 2 {
-      page = try call web-fetch(url: hit.url) timeout 20s with "accept":
-        "text/html" forward headers "authorization"
+      page = try call web-fetch(url: hit.url)
+          timeout 20s
+          with "accept": "text/html"
+          forward headers "authorization"
 
       # Reading a status waits for the call, so this is the pass's barrier too --
       # and a `try` whose status nothing reads is a failure nobody notices.

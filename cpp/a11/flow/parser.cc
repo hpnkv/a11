@@ -2345,6 +2345,7 @@ class ParserImpl {
       }
       const Token& word = Advance();
       const std::string modifier = vocabulary::Canonical(word.text);
+      modifiers->clause_locations.push_back(syntax::LocationOf(word));
       if (modifier == "tee") {
         modifiers->tee = true;
       } else if (modifier == "via") {

@@ -216,6 +216,16 @@ class Formatter {
           struct_braces_.insert(brace->start);
         }
       }
+      if (const auto* call = syntax::As<syntax::CallExpression>(&node);
+          call != nullptr && call->modifiers != nullptr &&
+          !call->modifiers->clause_locations.empty()) {
+        CallTail tail;
+        tail.end = call->extent.end;
+        for (const auto& clause : call->modifiers->clause_locations) {
+          tail.modifiers.push_back(clause.start);
+        }
+        call_tails_.emplace(tail.modifiers.front(), std::move(tail));
+      }
     };
     for (const auto& flow : parsed.flows) {
       syntax::VisitSubtree(*flow, visit);
@@ -267,6 +277,11 @@ class Formatter {
   }
 
  private:
+  struct CallTail {
+    size_t end = 0;
+    std::vector<size_t> modifiers;
+  };
+
   // Statement boundaries come from the AST. Comment attachment and string
   // fragments retain their source breaks.
   void NormalizeWhitespace() {
@@ -742,6 +757,34 @@ class Formatter {
 
   size_t Emit(size_t index) {
     const Token& token = code_[index];
+    const auto tail = call_tails_.find(token.start);
+    if (tail != call_tails_.end() && options_.line_width != 0) {
+      size_t width = line_.empty() || breaks_[index] > 0
+                         ? static_cast<size_t>(IndentOf(index))
+                         : static_cast<size_t>(indent_) + Columns(line_);
+      Token previous = line_.empty() || breaks_[index] > 0 ? Token{} : previous_;
+      for (size_t at = index;
+           at < code_.size() && code_[at].start < tail->second.end; ++at) {
+        if (previous.kind != TokenKind::kEnd &&
+            NeedsSpace(previous, code_[at])) {
+          ++width;
+        }
+        width += Columns(code_[at].text);
+        previous = code_[at];
+      }
+      if (width > options_.line_width) {
+        for (size_t start : tail->second.modifiers) {
+          const auto modifier = std::lower_bound(
+              code_.begin(), code_.end(), start,
+              [](const Token& candidate, size_t position) {
+                return candidate.start < position;
+              });
+          if (modifier != code_.end() && modifier->start == start) {
+            breaks_[static_cast<size_t>(modifier - code_.begin())] = 1;
+          }
+        }
+      }
+    }
     // A block brace ends its line whatever the author did one statement per
     // line is the language's own rule, and `{ a -> b }` is three of them.
     const bool joins_tail = after_block_close_ && JoinsBlockTail(index);
@@ -1381,6 +1424,7 @@ class Formatter {
   absl::flat_hash_set<size_t> module_braces_;
   absl::flat_hash_set<size_t> statement_starts_;
   absl::flat_hash_set<size_t> declaration_starts_;
+  absl::flat_hash_map<size_t, CallTail> call_tails_;
 
   std::vector<Token> code_;
   std::vector<int> breaks_;

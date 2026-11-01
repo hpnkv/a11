@@ -686,6 +686,32 @@ flow main {
   }
 }
 
+TEST(FlowFormat, PutsCallHeadersTimeoutAndViaOnSeparateLines) {
+  const std::string source = R"(flow ask {
+  out reply: string stream
+  said = call interact_with_llm(config: {think: true}) with "x-a11-llm-provider": "ollama" with "x-a11-llm-model": "glm-5.3-flash:cloud" timeout 4m via remote
+  said.text_output -> reply
+}
+)";
+  const std::string expected = R"(flow ask {
+  out reply: string stream
+
+  said = call interact_with_llm(config: {think: true})
+      with "x-a11-llm-provider": "ollama"
+      with "x-a11-llm-model": "glm-5.3-flash:cloud"
+      timeout 4m
+      via remote
+  said.text_output -> reply
+}
+)";
+  EXPECT_EQ(Formatted(source), expected);
+  EXPECT_EQ(Tree(source), Tree(expected));
+  EXPECT_FALSE(Format(expected).changed);
+  EXPECT_NE(Format(source, {.line_width = 0})
+                .formatted.find(") with \"x-a11-llm-provider\""),
+            std::string::npos);
+}
+
 TEST(FlowFormat, PrefersExpandedPipelineCalls) {
   const std::string source = R"(flow review {
   results = sources

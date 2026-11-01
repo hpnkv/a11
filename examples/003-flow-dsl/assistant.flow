@@ -65,8 +65,10 @@ flow ask-the-pages {
     content: [to_chunk({role: "user", content: [{type: "text", text: asked}]})]
   }
   llm = call interact_with_llm(interactions: request, config: {})
-      with "x-a11-llm-api-key": api_key with "x-a11-llm-provider": provider
-      with "x-a11-llm-model": model with "x-a11-llm-base-url": base_url
+      with "x-a11-llm-api-key": api_key
+      with "x-a11-llm-provider": provider
+      with "x-a11-llm-model": model
+      with "x-a11-llm-base-url": base_url
   llm.text_output | join "" -> answer
 }
 

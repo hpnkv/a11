@@ -617,7 +617,7 @@ function schemaMayBeUnavailable(code: StatusCode): boolean {
   );
 }
 
-const MODEL_ACTIONS = ["ask_model", "interact_with_llm"];
+const MODEL_ACTIONS = ["interact_with_llm", "ask_model"];
 const FLOW_TOOL_ACTIONS = new Set(["flow_actions", "flow_check", "flow_run"]);
 
 /** Studio's starter Flow, selected from the actions a peer advertises. */

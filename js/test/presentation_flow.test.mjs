@@ -21,10 +21,21 @@ import {
   FlowRunnerController,
   foldRun,
   filterFlowCompletions,
+  flowTemplate,
   hoverOf,
   insertIndentedFlowNewline,
 } from "../dist/presentation/index.js";
 import { isOk, StatusCode, okStatus, unavailableError } from "../dist/index.js";
+
+test("Flow starter uses the public model action when both are offered", () => {
+  const source = flowTemplate([
+    { name: "ask_model" },
+    { name: "interact_with_llm" },
+  ]);
+  assert.equal(isOk(source), true);
+  assert.match(source, /said = call interact_with_llm\(/);
+  assert.doesNotMatch(source, /said = call ask_model\(/);
+});
 
 test("Flow language replies retain the native versioned contract", () => {
   assert.deepEqual(

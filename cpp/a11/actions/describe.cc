@@ -220,8 +220,7 @@ bool MatchesAnyPattern(const std::vector<std::string>& patterns,
     if (!expression.ok()) {
       continue;
     }
-    if (RE2::FullMatch(absl::string_view(name.data(), name.size()),
-                       **expression)) {
+    if (expression->FullMatch(name)) {
       return true;
     }
   }

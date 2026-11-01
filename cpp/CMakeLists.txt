@@ -1138,6 +1138,21 @@ if (A11_WARNINGS_AS_ERRORS)
 endif ()
 
 
+add_library(a11_regex STATIC ${A11_REGEX_SOURCES})
+add_library(a11::regex ALIAS a11_regex)
+set_target_properties(a11_regex PROPERTIES EXPORT_NAME regex)
+target_include_directories(
+        a11_regex PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+target_link_libraries(
+        a11_regex
+        PUBLIC $<BUILD_INTERFACE:absl::statusor> $<INSTALL_INTERFACE:absl::statusor>
+        PRIVATE re2::re2
+        $<BUILD_INTERFACE:absl::status> $<INSTALL_INTERFACE:absl::status>
+        $<BUILD_INTERFACE:absl::strings> $<INSTALL_INTERFACE:absl::strings>
+        a11::warnings)
+
 add_library(a11_core STATIC ${A11_CORE_SOURCES})
 add_library(a11::core ALIAS a11_core)
 set_target_properties(a11_core PROPERTIES EXPORT_NAME core)
@@ -1407,7 +1422,7 @@ target_link_libraries(
         # nlohmann for a11/actions/describe.cc, which builds the a11.actions/v1
         # document. Private, and the public header includes only json_fwd.hpp,
         # so describing an action costs a consumer no nlohmann dependency.
-        PRIVATE re2::re2 a11::obs $<BUILD_INTERFACE:absl::random_random> $<INSTALL_INTERFACE:absl::random_random> $<BUILD_INTERFACE:absl::strings> $<INSTALL_INTERFACE:absl::strings> a11::warnings nlohmann_json::nlohmann_json)
+        PRIVATE a11::regex a11::obs $<BUILD_INTERFACE:absl::random_random> $<INSTALL_INTERFACE:absl::random_random> $<BUILD_INTERFACE:absl::strings> $<INSTALL_INTERFACE:absl::strings> a11::warnings nlohmann_json::nlohmann_json)
 
 add_library(a11_service STATIC ${A11_SERVICE_SOURCES})
 add_library(a11::service ALIAS a11_service)
@@ -1446,7 +1461,7 @@ target_link_libraries(
         nlohmann_json::nlohmann_json
         PRIVATE $<BUILD_INTERFACE:absl::strings> $<INSTALL_INTERFACE:absl::strings>
         $<BUILD_INTERFACE:absl::str_format> $<INSTALL_INTERFACE:absl::str_format>
-        re2::re2 a11::warnings)
+        a11::regex a11::warnings)
 
 if (A11_BUILD_AUDIO)
     # The Action-based audio interface: schemas, streaming handlers and the
@@ -1974,7 +1989,7 @@ endif ()
 # that can throw. Catching an exception that A11 itself would have to raise is not
 # a reason, because A11 does not raise any.
 a11_disallow_exceptions(
-        a11_llm_context a11_core a11_data a11_concurrency a11_obs a11_stores a11_net a11_nodes
+        a11_regex a11_llm_context a11_core a11_data a11_concurrency a11_obs a11_stores a11_net a11_nodes
         a11_actions a11_service a11_flow_lang a11_flow_runtime)
 if (A11_BUILD_REDIS)
     a11_disallow_exceptions(a11_redis)
@@ -2037,7 +2052,7 @@ if (A11_BUILD_FLOW_TOOL)
 endif ()
 
 set(A11_INSTALL_TARGETS
-        a11_warnings a11_core a11_data a11_concurrency a11_obs a11_flow_lang a11_stores
+        a11_warnings a11_regex a11_core a11_data a11_concurrency a11_obs a11_flow_lang a11_stores
         a11_net a11_nodes a11_actions a11_service Thread)
 if (A11_BUILD_REDIS)
     list(APPEND A11_INSTALL_TARGETS a11_redis)
@@ -2134,5 +2149,5 @@ add_library(a11_header_canary STATIC tests/header_canary.cc)
 target_link_libraries(
         a11_header_canary PRIVATE
         a11::actions a11::concurrency a11::core a11::data a11::net a11::nodes
-        a11::obs a11::service a11::stores re2::re2 a11::warnings)
+        a11::obs a11::service a11::stores a11::regex a11::warnings)
 a11_disallow_exceptions(a11_header_canary)

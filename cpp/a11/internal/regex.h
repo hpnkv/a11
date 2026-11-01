@@ -20,26 +20,35 @@
 #include <memory>
 #include <string_view>
 
-#include <absl/status/status.h>
 #include <absl/status/statusor.h>
-#include <absl/strings/str_cat.h>
-#include <re2/re2.h>
+
+namespace re2 {
+class RE2;
+}  // namespace re2
 
 namespace a11::internal {
 
+/// A compiled regular expression. Link a11::regex to use it.
+class Regex {
+ public:
+  Regex(Regex&&) noexcept;
+  Regex& operator=(Regex&&) noexcept;
+  ~Regex();
+
+  /// Whether the pattern matches the entire text.
+  [[nodiscard]] bool FullMatch(std::string_view text) const;
+  /// Whether the pattern matches anywhere in the text.
+  [[nodiscard]] bool PartialMatch(std::string_view text) const;
+
+ private:
+  friend absl::StatusOr<Regex> CompileRegex(std::string_view pattern);
+  explicit Regex(std::unique_ptr<re2::RE2> expression);
+
+  std::unique_ptr<re2::RE2> expression_;
+};
+
 /// Compiles an RE2 pattern, reporting invalid syntax without logging it.
-inline absl::StatusOr<std::unique_ptr<RE2>> CompileRegex(
-    std::string_view pattern) {
-  RE2::Options options;
-  options.set_log_errors(false);
-  auto expression = std::make_unique<RE2>(
-      absl::string_view(pattern.data(), pattern.size()), options);
-  if (!expression->ok()) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("Not a valid RE2 pattern: ", expression->error()));
-  }
-  return expression;
-}
+absl::StatusOr<Regex> CompileRegex(std::string_view pattern);
 
 }  // namespace a11::internal
 

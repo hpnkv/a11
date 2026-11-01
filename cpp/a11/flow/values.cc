@@ -1824,7 +1824,7 @@ absl::StatusOr<Value> CoerceField(const FieldPlan& field, const Value& given,
     if (!pattern.ok()) {
       return FieldError(path, pattern.status().message());
     }
-    if (!RE2::PartialMatch(held.text(), **pattern)) {
+    if (!pattern->PartialMatch(held.text())) {
       return FieldError(path,
                         absl::StrCat("'", held.text(), "' does not match '",
                                      field.pattern, "'."));

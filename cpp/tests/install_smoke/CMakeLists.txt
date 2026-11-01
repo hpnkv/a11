@@ -24,3 +24,11 @@ if(TARGET a11::audio)
   target_compile_definitions(a11_install_smoke PRIVATE A11_INSTALL_SMOKE_AUDIO=1)
 endif()
 target_compile_features(a11_install_smoke PRIVATE cxx_std_20)
+
+# The header owns a compiled pattern without including RE2. Only A11's target
+# supplies the matching implementation and its static link dependencies.
+add_executable(a11_regex_install_smoke regex_smoke.cc)
+target_link_libraries(a11_regex_install_smoke PRIVATE a11::regex)
+target_compile_features(a11_regex_install_smoke PRIVATE cxx_std_20)
+target_compile_options(a11_regex_install_smoke PRIVATE
+  $<$<CXX_COMPILER_ID:AppleClang,Clang,GNU>:-fno-exceptions>)

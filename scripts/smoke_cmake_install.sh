@@ -25,5 +25,8 @@ trap 'rm -rf "${work}"' EXIT
 cmake --install "${build_dir}" --prefix "${work}/prefix"
 cmake -S "${root}/cpp/tests/install_smoke" -B "${work}/build" -G Ninja \
   -DCMAKE_PREFIX_PATH="${work}/prefix"
+# Installed A11 headers compile without RE2's implementation headers.
+mv "${work}/prefix/include/re2" "${work}/re2-headers"
 cmake --build "${work}/build"
 "${work}/build/a11_install_smoke"
+"${work}/build/a11_regex_install_smoke"

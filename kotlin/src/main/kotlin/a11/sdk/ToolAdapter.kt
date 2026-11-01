@@ -54,6 +54,7 @@ class ToolAdapter(private val schema: ActionSchema) {
         val properties = LinkedHashMap<String, Any?>()
         val required = ArrayList<String>()
         for (port in schema.outputs.values) {
+            if (port.name == "usage_sources") continue
             if (port.required) required.add(port.name)
             properties[port.name] = wrapCollection(nodeSchema(port), port, true)
         }

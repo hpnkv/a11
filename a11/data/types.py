@@ -42,6 +42,7 @@ NameString = Annotated[
 
 from a11._native import ChunkMetadata
 from a11._native import Chunk
+from a11._native import StorageCredentials, StorageService, StorageIdentity
 from a11._native import NodeRef
 from a11._native import NodeFragment
 from a11._native import Port
@@ -51,6 +52,9 @@ from a11._native import WireMessage
 _NATIVE_TYPES = (
     ChunkMetadata,
     Chunk,
+    StorageCredentials,
+    StorageService,
+    StorageIdentity,
     NodeRef,
     NodeFragment,
     Port,
@@ -169,6 +173,43 @@ def _validate_chunk(value: Any, *, json_mode: bool = False) -> Chunk:
     )
 
 
+def _validate_storage_credentials(value, *, json_mode=False):
+    if isinstance(value, StorageCredentials):
+        return value
+    data = _mapping(value, "StorageCredentials")
+    return StorageCredentials(
+        scheme=data.get("scheme", ""), fields=data.get("fields", {})
+    )
+
+
+def _validate_storage_service(value, *, json_mode=False):
+    if isinstance(value, StorageService):
+        return value
+    data = _mapping(value, "StorageService")
+    credentials = data.get("credentials")
+    return StorageService(
+        role=data.get("role", ""),
+        endpoint=data.get("endpoint", ""),
+        credentials=(
+            _validate_storage_credentials(credentials)
+            if credentials is not None
+            else None
+        ),
+    )
+
+
+def _validate_storage_identity(value, *, json_mode=False):
+    if isinstance(value, StorageIdentity):
+        return value
+    data = _mapping(value, "StorageIdentity")
+    return StorageIdentity(
+        id=data["id"],
+        services=[
+            _validate_storage_service(item) for item in data.get("services", [])
+        ],
+    )
+
+
 def _validate_node_ref(value: Any, *, json_mode: bool = False) -> NodeRef:
     del json_mode
     if isinstance(value, NodeRef):
@@ -183,6 +224,11 @@ def _validate_node_ref(value: Any, *, json_mode: bool = False) -> NodeRef:
         id=data["id"],
         offset=data.get("offset", 0),
         length=data.get("length"),
+        storage=(
+            _validate_storage_identity(data["storage"])
+            if data.get("storage") is not None
+            else None
+        ),
     )
 
 
@@ -268,6 +314,9 @@ def _validate_wire(value: Any, *, json_mode: bool = False) -> WireMessage:
 
 
 _VALIDATORS = {
+    StorageCredentials: _validate_storage_credentials,
+    StorageService: _validate_storage_service,
+    StorageIdentity: _validate_storage_identity,
     ChunkMetadata: _validate_metadata,
     Chunk: _validate_chunk,
     NodeRef: _validate_node_ref,
@@ -308,12 +357,13 @@ def _dump_chunk(value: Chunk, mode: str) -> dict[str, Any]:
 
 
 def _dump_node_ref(value: NodeRef, mode: str) -> dict[str, Any]:
-    del mode
     result: dict[str, Any] = {"id": value.id}
     if value.offset:
         result["offset"] = value.offset
     if value.length is not None:
         result["length"] = value.length
+    if value.storage is not None:
+        result["storage"] = value.storage.model_dump(mode=mode)
     return result
 
 
@@ -375,6 +425,31 @@ def _dump_wire(value: WireMessage, mode: str) -> dict[str, Any]:
 
 
 _DUMPERS = {
+    StorageCredentials: lambda value, mode: {
+        "scheme": value.scheme,
+        "fields": dict(value.fields),
+    },
+    StorageService: lambda value, mode: {
+        "role": value.role,
+        "endpoint": value.endpoint,
+        **(
+            {"credentials": value.credentials.model_dump(mode=mode)}
+            if value.credentials is not None
+            else {}
+        ),
+    },
+    StorageIdentity: lambda value, mode: {
+        "id": value.id,
+        **(
+            {
+                "services": [
+                    item.model_dump(mode=mode) for item in value.services
+                ]
+            }
+            if value.services
+            else {}
+        ),
+    },
     ChunkMetadata: _dump_metadata,
     Chunk: _dump_chunk,
     NodeRef: _dump_node_ref,
@@ -443,6 +518,37 @@ def _model_copy(
 
 
 _SCHEMAS: dict[type, dict[str, Any]] = {
+    StorageCredentials: {
+        "type": "object",
+        "required": ["scheme"],
+        "properties": {
+            "scheme": {"type": "string"},
+            "fields": {
+                "type": "object",
+                "additionalProperties": {"type": "string"},
+            },
+        },
+    },
+    StorageService: {
+        "type": "object",
+        "required": ["role"],
+        "properties": {
+            "role": {"type": "string"},
+            "endpoint": {"type": "string"},
+            "credentials": {"$ref": "#/$defs/StorageCredentials"},
+        },
+    },
+    StorageIdentity: {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+            "id": {"type": "string"},
+            "services": {
+                "type": "array",
+                "items": {"$ref": "#/$defs/StorageService"},
+            },
+        },
+    },
     ChunkMetadata: {
         "type": "object",
         "required": ["mimetype"],
@@ -470,6 +576,9 @@ _SCHEMAS: dict[type, dict[str, Any]] = {
         "required": ["id"],
         "properties": {
             "id": {"type": "string", "pattern": _NAME_STRING_PATTERN},
+            "storage": {
+                "anyOf": [{"$ref": "#/$defs/StorageIdentity"}, {"type": "null"}]
+            },
             "offset": {"type": "integer", "minimum": 0, "maximum": 2**32 - 1},
             "length": {
                 "type": ["integer", "null"],
@@ -587,6 +696,13 @@ def _json_schema(cls, _schema, _handler):
 
 
 _ANNOTATIONS = {
+    StorageCredentials: {"scheme": str, "fields": dict[str, str]},
+    StorageService: {
+        "role": str,
+        "endpoint": str,
+        "credentials": StorageCredentials | None,
+    },
+    StorageIdentity: {"id": NameString, "services": list[StorageService]},
     ChunkMetadata: {
         "mimetype": str,
         "timestamp": datetime.datetime | None,
@@ -597,7 +713,12 @@ _ANNOTATIONS = {
         "ref": str,
         "data": bytes,
     },
-    NodeRef: {"id": NameString, "offset": int, "length": int | None},
+    NodeRef: {
+        "id": NameString,
+        "offset": int,
+        "length": int | None,
+        "storage": StorageIdentity | None,
+    },
     NodeFragment: {
         "id": str,
         "data": Chunk | NodeRef,
@@ -658,6 +779,9 @@ __all__ = [
     "NameString",
     "NodeFragment",
     "NodeRef",
+    "StorageCredentials",
+    "StorageService",
+    "StorageIdentity",
     "Port",
     "WireMessage",
     "is_half_close_message",

@@ -243,6 +243,11 @@ absl::StatusOr<data::NodeFragment> DecodeFragment(
   fragment.continued = !final_seq.has_value() || row.seq < *final_seq;
 
   if (row.storage == kStorageNodeRef) {
+    if (!row.data.empty()) {
+      ABSL_ASSIGN_OR_RETURN(fragment.data,
+                            data::NodeRef::FromMsgpack(row.data));
+      return fragment;
+    }
     if (!row.node_ref_id.has_value()) {
       return absl::DataLossError(absl::StrCat(
           "Fragment ", row.seq, " claims to be a node reference but has none"));
@@ -319,6 +324,8 @@ absl::StatusOr<EncodedFragment> EncodeFragment(
   encoded.timestamp_micros = absl::ToUnixMicros(now);
 
   if (const auto* node_ref = std::get_if<data::NodeRef>(&fragment.data)) {
+    // Keep the full reference in the payload; separate columns index referrers.
+    ABSL_ASSIGN_OR_RETURN(encoded.data, node_ref->ToMsgpack());
     encoded.storage = kStorageNodeRef;
     encoded.node_ref_id = node_ref->id;
     encoded.node_ref_offset = node_ref->offset;
@@ -381,7 +388,7 @@ absl::Status InsertFragment(SqliteConnection& connection,
   } else {
     sqlite3_bind_null(statement, 9);
   }
-  if (encoded.storage == kStorageInline) {
+  if (encoded.storage == kStorageInline || encoded.storage == kStorageNodeRef) {
     BindBlob(statement, 10, encoded.data);
   } else {
     sqlite3_bind_null(statement, 10);

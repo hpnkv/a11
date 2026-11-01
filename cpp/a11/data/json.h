@@ -39,6 +39,13 @@ absl::StatusOr<nlohmann::json> ChunkToJsonValue(const Chunk& value);
 /// Decode and validate a Chunk from native wire JSON.
 absl::StatusOr<Chunk> ChunkFromJsonValue(const nlohmann::json& value);
 
+/// Encode storage identity and optional access fields at the wire boundary.
+absl::StatusOr<nlohmann::json> StorageIdentityToJsonValue(
+    const StorageIdentity& value);
+/// Decode a typed storage identity without applying connection policy.
+absl::StatusOr<StorageIdentity> StorageIdentityFromJsonValue(
+    const nlohmann::json& value);
+
 /// Encode a NodeRef using the native wire JSON representation.
 absl::StatusOr<nlohmann::json> NodeRefToJsonValue(const NodeRef& value);
 /// Decode and validate a NodeRef from native wire JSON.

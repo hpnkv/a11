@@ -24,13 +24,14 @@ import {
   type ChunkStoreWriterOptions,
   type WritableWireStream,
 } from './chunk_store_writer.js';
-import { Chunk, NodeFragment, makeNullChunk, validateName } from './data.js';
+import { Chunk, NodeFragment, NodeRef, type StorageIdentity, makeNullChunk, validateName } from './data.js';
 import {
   SerializationRegistry,
   getGlobalSerializationRegistry,
 } from './serialization.js';
 import {
   failedPreconditionError,
+  notFoundError,
   internalError,
   invalidArgumentError,
   isOk,
@@ -557,7 +558,34 @@ export class AsyncNode {
 export class NodeMap {
   private readonly nodes = new Map<string, AsyncNode>();
 
-  constructor(private readonly factory: ChunkStoreFactory = (id) => LocalChunkStore.create(id)) {}
+  private readonly storages = new Map<string, NodeMap>();
+  private readonly imported = new Map<string, Map<string, AsyncNode>>();
+  private storageResolver: ((identity: StorageIdentity) => StatusOr<NodeMap> | Promise<StatusOr<NodeMap>>) | null = null;
+  private accessibleIds: string[] = [];
+  constructor(private readonly factory: ChunkStoreFactory = (id) => LocalChunkStore.create(id),
+              readonly storage: StorageIdentity | null = null) {}
+
+  registerStorage(id: string, storage: NodeMap): Status {
+    const valid = validateName(id);
+    if (!isOk(valid)) return valid;
+    if (storage === this) return invalidArgumentError('Storage namespace requires another node map.');
+    const previous = this.storages.get(id);
+    if (previous && previous !== storage) return failedPreconditionError('Storage identity is already configured.');
+    this.storages.set(id, storage);
+    return okStatus();
+  }
+
+  setStorageResolver(resolver: (identity: StorageIdentity) => StatusOr<NodeMap> | Promise<StatusOr<NodeMap>>,
+                     accessibleIds: string[] = []): Status {
+    if (typeof resolver !== 'function') return invalidArgumentError('Storage resolver must be callable.');
+    for (const id of accessibleIds) { const valid = validateName(id); if (!isOk(valid)) return valid; }
+    this.storageResolver = resolver;
+    this.accessibleIds = [...accessibleIds];
+    return okStatus();
+  }
+
+  storageIds(): string[] { return [...new Set([...this.storages.keys(), ...this.accessibleIds,
+    ...(this.storage ? [this.storage.id] : [])])].sort(); }
 
   /** Return the canonical node, creating its store on first access. */
   async get(nodeId: string): Promise<StatusOr<AsyncNode>> {
@@ -583,6 +611,61 @@ export class NodeMap {
   getIfExists(nodeId: string): StatusOr<AsyncNode | null> {
     const validation = validateName(nodeId);
     return isOk(validation) ? this.nodes.get(nodeId) ?? null : validation;
+  }
+
+  /** Resolve a whole-node reference; windows require a fragment-window reader. */
+  async resolve(reference: NodeRef): Promise<StatusOr<AsyncNode>> {
+    const valid = reference.validate();
+    if (!isOk(valid)) return valid;
+    if (reference.offset !== 0 || reference.length !== null) {
+      return unimplementedError('Resolving a NodeRef window requires a fragment-window reader.');
+    }
+    if (reference.storage === null || reference.storage.id === this.storage?.id) return this.get(reference.id);
+    const storage = this.storages.get(reference.storage.id);
+    if (storage) return storage.get(reference.id);
+    if (this.storageResolver) {
+      try {
+        const resolved = await this.storageResolver(reference.storage);
+        if (isOk(resolved)) return resolved.get(reference.id);
+        if (resolved.code !== 5) return resolved;
+      } catch (error) { return statusFromUnknown(error, 'Storage resolver raised an exception.'); }
+    }
+    return this.imported.get(reference.storage.id)?.get(reference.id) ??
+      notFoundError('Storage identity is not configured on this host.');
+  }
+
+  /** Share a referenced node from another scope, preserving its identity. */
+  async importReference(reference: NodeRef, source: NodeMap): Promise<StatusOr<AsyncNode>> {
+    if (reference.storage !== null) {
+      const direct = await this.resolve(reference);
+      if (isOk(direct)) return direct;
+      if (direct.code !== 5) return direct;
+      let original = await source.resolve(reference);
+      if (!isOk(original) && original.code === 5) original = await source.get(reference.id);
+      if (!isOk(original)) return original;
+      let group = this.imported.get(reference.storage.id);
+      if (!group) { group = new Map(); this.imported.set(reference.storage.id, group); }
+      const previous = group.get(reference.id);
+      if (previous && previous !== original) return failedPreconditionError('Conflicting storage-qualified node.');
+      group.set(reference.id, original);
+      return original;
+    }
+    const node = await source.resolve(reference);
+    if (!isOk(node)) return node;
+    const inserted = this.insert(node);
+    return isOk(inserted) ? node : inserted;
+  }
+
+  /** Share an existing node under its id; a different existing node is an error. */
+  private insert(node: AsyncNode): Status {
+    const id = node.getId();
+    if (!isOk(id)) return id;
+    const found = this.nodes.get(id);
+    if (found !== undefined && found !== node) {
+      return failedPreconditionError('A different node has this id.');
+    }
+    this.nodes.set(id, node);
+    return okStatus();
   }
 
   /** Remove a node, optionally only if it is the expected instance. */

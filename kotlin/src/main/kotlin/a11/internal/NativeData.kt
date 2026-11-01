@@ -97,6 +97,10 @@ internal object NativeData {
 
     external fun nodeRefIdSet(self: NodeRef, value: String): Unit
 
+    external fun nodeRefStorage(self: NodeRef): StatusOr<ByteArray?>
+
+    external fun nodeRefStorageSet(self: NodeRef, value: ByteArray?): Status
+
     external fun nodeRefOffset(self: NodeRef): Long
 
     external fun nodeRefOffsetSet(self: NodeRef, value: Long): Unit

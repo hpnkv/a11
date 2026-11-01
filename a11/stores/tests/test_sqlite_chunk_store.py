@@ -116,9 +116,24 @@ async def test_stores_node_references_and_traverses_them(tmp_path):
     referrer = factory.open("referrer")
 
     # Unlike the other backends, a NodeRef is a first-class payload here.
+    reference = types.NodeRef(
+        id="target",
+        offset=8,
+        length=64,
+        storage=types.StorageIdentity(
+            "external",
+            [
+                types.StorageService(
+                    "stream",
+                    "https://storage.example",
+                    types.StorageCredentials("bearer", {"token": "test-token"}),
+                )
+            ],
+        ),
+    )
     await referrer.put(
         types.NodeFragment(
-            data=types.NodeRef(id="target", offset=8, length=64),
+            data=reference,
             seq=0,
             continued=False,
         )
@@ -127,9 +142,11 @@ async def test_stores_node_references_and_traverses_them(tmp_path):
     stored = await referrer.get(0, deadline=_deadline())
     node_ref = stored.get_node_ref()
     assert (node_ref.id, node_ref.offset, node_ref.length) == ("target", 8, 64)
+    assert node_ref == reference
 
     referrers = await target.find_referrers()
     assert [fragment.id for fragment in referrers] == ["referrer"]
+    assert referrers[0].get_node_ref() == reference
 
     # A tombstone is chunk-shaped, so clearing a reference is refused rather
     # than quietly changing the payload's type.

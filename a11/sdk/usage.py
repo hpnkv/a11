@@ -12,11 +12,15 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 from pydantic_core import to_json
 
-from a11.sdk.llm import UsageMetadata
+import a11
+from a11.status import StatusException
+from a11.sdk.llm import LlmHeaders, UsageMetadata
 from a11.sdk.llm_context.config import config_for, services_for
 
 EVENT_TYPE = "a11.usage"
 METADATA_KEY = "a11.usage"
+USAGE_PURPOSE = "llm_usage"
+USAGE_PARENT_HEADER = "x-a11-usage-producer"
 usage_observer: ContextVar[Any] = ContextVar("a11_usage_observer", default=None)
 COUNTERS = (
     "input_tokens",
@@ -26,6 +30,35 @@ COUNTERS = (
     "reasoning_tokens",
     "total_tokens",
 )
+
+
+def usage_tracking_enabled(action: a11.Action) -> bool:
+    """Read the inherited opt-in for dedicated usage streams."""
+    value = action.get_header(LlmHeaders.USAGE_TRACKING, decode=True)
+    if value not in (None, "on", "off"):
+        raise a11.Status(
+            code=a11.StatusCode.INVALID_ARGUMENT,
+            message="x-a11-usage-tracking must be 'on' or 'off'.",
+        ).to_exception()
+    return value == "on"
+
+
+def enable_usage_tracking(
+    action: a11.Action, enabled: bool = True
+) -> a11.Action:
+    """Request usage sources for an action subtree, or suppress them with False.
+
+    Configure before running or calling the action. Absence defaults to off;
+    an explicit off overrides an inherited request for nested producers.
+    Existing interaction and provider-event usage remains available.
+    """
+    if action.has_been_run() or action.has_been_called():
+        raise a11.Status(
+            code=a11.StatusCode.FAILED_PRECONDITION,
+            message="Configure usage tracking before starting the action.",
+        ).to_exception()
+    action.set_header(LlmHeaders.USAGE_TRACKING, "on" if enabled else "off")
+    return action
 
 
 class UsageFigure(BaseModel):
@@ -72,6 +105,12 @@ class UsageUpdate(BaseModel):
     source_id: str | None = None
     operation: str = "generation"
     coverage: str = "reported"
+    producer_id: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    covers: list[str] = Field(
+        default_factory=list, exclude_if=lambda value: not value
+    )
     contribution: Literal["consumption", "reconciliation"] = "consumption"
     scope: UsageScope = Field(default_factory=UsageScope)
     figures: dict[str, UsageFigure] = Field(default_factory=dict)
@@ -155,7 +194,14 @@ def merge_updates(previous: Any, incoming: Any) -> Any:
 class UsageReporter:
     """Publish replacement usage snapshots on a provider's event stream."""
 
-    def __init__(self, action: Any, provider: str, model: str = "") -> None:
+    def __init__(
+        self,
+        action: Any,
+        provider: str,
+        model: str = "",
+        *,
+        usage_source: dict[str, Any] | None = None,
+    ) -> None:
         self.action = action
         self.provider = provider
         self.model = model
@@ -163,6 +209,9 @@ class UsageReporter:
         self.revision = 0
         self.usage: UsageMetadata | None = None
         self.scope = UsageScope()
+        self.usage_source = usage_source
+        self.stream_reference: dict[str, Any] | None = None
+        self._stream = None
         get_header = getattr(action, "get_header", None)
         self.operation = (
             get_header("x-a11-llm-context-operation", decode=True)
@@ -178,8 +227,10 @@ class UsageReporter:
         complete: bool = True,
         source_id: str | None = None,
         coverage: str = "reported",
+        covers: list[str] | None = None,
     ) -> UsageMetadata | None:
         """Publish counts supplied by the source, including partial reports."""
+        self._ensure_stream()
         if usage is None:
             return None
         self.revision += 1
@@ -201,6 +252,7 @@ class UsageReporter:
             source_usage=source,
             source_id=source_id,
             coverage=coverage,
+            covers=covers or [],
             operation=self.operation,
             scope=self.scope.model_copy(
                 update=(
@@ -224,7 +276,61 @@ class UsageReporter:
         await self._publish(update)
         return self.usage
 
+    def _ensure_stream(self) -> None:
+        if self.stream_reference is not None or not isinstance(
+            self.action, a11.Action
+        ):
+            return
+        if not usage_tracking_enabled(self.action):
+            return
+        parent = self.action.get_header(USAGE_PARENT_HEADER, decode=True) or ""
+        source = self.usage_source or {
+            "type": "a11_action",
+            "id": self.action.id,
+            "name": self.action.schema.name,
+        }
+        if self.scope.parent_agent_id is not None and self.usage_source is None:
+            source = {
+                "type": "provider_agent",
+                "provider": self.provider,
+                "id": self.scope.agent_id,
+                "action_id": self.action.id,
+            }
+        if self.scope.parent_agent_id is None:
+            owner_header = "x-a11-usage-producer-action"
+            parent_header = "x-a11-usage-parent-producer"
+            if (
+                self.action.get_header(owner_header, decode=True)
+                == self.action.id
+            ):
+                parent = (
+                    self.action.get_header(parent_header, decode=True) or ""
+                )
+            else:
+                self.action.set_header(owner_header, self.action.id)
+                self.action.set_header(parent_header, parent)
+        source = dict(source)
+        if self.action.trace_id:
+            source["trace_id"] = self.action.trace_id
+        if self.action.span_id:
+            source["span_id"] = self.action.span_id
+        self.stream_reference = self.action.register_stream(
+            USAGE_PURPOSE,
+            source,
+            producer_id=self.id,
+            parent_producer_id=parent,
+        )
+        self._stream = self.action.get_node_map().resolve(
+            a11.NodeRef.model_validate(self.stream_reference["node"])
+        )
+        if self.scope.parent_agent_id is None:
+            self.action.set_header(USAGE_PARENT_HEADER, self.id)
+
     async def _publish(self, update: UsageUpdate) -> None:
+        self._ensure_stream()
+        if self._stream is not None:
+            update = update.model_copy(update={"producer_id": self.id})
+            await self._stream.put(update.model_dump(mode="json"))
         event = update.model_dump(mode="json")
         services = services_for(self.action)
         if services.recorder is not None:
@@ -239,9 +345,13 @@ class UsageReporter:
             )
         if observer := usage_observer.get():
             await observer(event)
-        flushed = await self.action["event_stream"].put(event)
-        if inspect.isawaitable(flushed):
-            await flushed
+        if (
+            not isinstance(self.action, a11.Action)
+            or "event_stream" in self.action
+        ):
+            flushed = await self.action["event_stream"].put(event)
+            if inspect.isawaitable(flushed):
+                await flushed
 
     async def invalidate_context(
         self, source: Any, *, operation: str, context_tokens: int | None = None
@@ -288,23 +398,246 @@ class UsageLedger:
         return True
 
     def totals(self) -> UsageMetadata:
-        total = summarize_usage(
-            [
-                record.usage
-                for record in self.records.values()
-                if record.contribution == "consumption"
-            ]
-        )
+        records = self.contributions()
+        total = summarize_usage([record.usage for record in records])
         primary = [
             record.usage
-            for record in self.records.values()
-            if record.contribution == "consumption"
-            and record.scope.parent_agent_id is None
+            for record in records
+            if record.scope.parent_agent_id is None
         ]
         context = summarize_usage(primary)
         total.context_tokens = context.context_tokens
         total.context_source = context.context_source
+        if any(record.scope.reporting == "cumulative" for record in records):
+            for name in COUNTERS:
+                setattr(total, name, None)
+            total.complete = False
         return total
+
+    def contributions(self) -> list[UsageUpdate]:
+        """Select consumption once, retaining covered reports as evidence."""
+        records = {
+            key: record
+            for key, record in self.records.items()
+            if record.contribution == "consumption"
+            and not record.usage.context_only
+            and not record.usage.context_invalidated
+        }
+        covered: set[str] = set()
+        for key, record in records.items():
+            pending = list(record.covers)
+            visited: set[str] = set()
+            while pending:
+                target = pending.pop()
+                if target == key:
+                    raise ValueError("Usage coverage contains a cycle")
+                if target in visited:
+                    continue
+                visited.add(target)
+                covered.add(target)
+                if target in records:
+                    pending.extend(records[target].covers)
+        aggregates = {
+            (r.scope.agent_id, r.scope.turn_id)
+            for r in records.values()
+            if r.usage.usage_scope == "turn"
+            and r.scope.agent_id
+            and r.scope.turn_id
+        }
+        return [
+            r
+            for key, r in records.items()
+            if key not in covered
+            and (
+                r.usage.usage_scope == "turn"
+                or (r.scope.agent_id, r.scope.turn_id) not in aggregates
+            )
+        ]
+
+
+class UsageSourceReference(BaseModel):
+    """Locate one usage producer independently of its usage observations."""
+
+    model_config = ConfigDict(extra="ignore")
+    producer_id: str
+    parent_producer_id: str = ""
+    node: a11.NodeRef
+    purpose: Literal["llm_usage"] = USAGE_PURPOSE
+    source: dict[str, Any]
+
+    @property
+    def node_id(self) -> str:
+        """Return the id carried by the native node reference."""
+        return self.node.id
+
+    @property
+    def usage_source(self) -> dict[str, Any]:
+        """Describe the action, agent, or tool producing usage."""
+        return self.source
+
+
+class UsageAccounting:
+    """Collect direct and nested usage without consuming provider event streams.
+
+    Construct before starting the action to request tracking. Start ``collect``
+    alongside it, or read retained usage after an explicitly tracked action
+    finishes. Each collection opens independent read cursors. Totals cover
+    registered producers; tools without instrumentation remain unobserved.
+    """
+
+    def __init__(self, action: a11.Action) -> None:
+        self.action = action
+        self.sources: dict[str, UsageSourceReference] = {}
+        self.ledgers: dict[str, UsageLedger] = {}
+        self.errors: dict[str, a11.Status] = {}
+        self.finished = False
+        self._collecting = False
+        started = action.has_been_run() or action.has_been_called()
+        explicit_off = (
+            action.get_header(LlmHeaders.USAGE_TRACKING, decode=True) == "off"
+        )
+        if not started and not explicit_off:
+            enable_usage_tracking(action)
+        self.enabled = usage_tracking_enabled(action)
+        self._sources_node = (
+            action.get_stream_sources_node() if self.enabled else None
+        )
+
+    async def collect(self) -> UsageAccounting:
+        """Discover producers and drain their usage streams concurrently."""
+        if self._collecting or self.finished:
+            raise ValueError("A usage collection may run only once")
+        if not self.enabled:
+            self.finished = True
+            return self
+        self._collecting = True
+        tasks: list[asyncio.Task] = []
+        node = self._sources_node
+        try:
+            async for value in self._values(node):
+                if (
+                    not isinstance(value, dict)
+                    or value.get("purpose") != USAGE_PURPOSE
+                ):
+                    continue
+                reference = UsageSourceReference.model_validate(value)
+                previous = self.sources.get(reference.producer_id)
+                if previous is not None:
+                    if previous != reference:
+                        raise ValueError("Conflicting usage producer identity")
+                    continue
+                self.sources[reference.producer_id] = reference
+                self.ledgers[reference.producer_id] = UsageLedger()
+                tasks.append(
+                    asyncio.create_task(self._collect_source(reference))
+                )
+            await asyncio.gather(*tasks)
+        except StatusException as error:
+            self.errors["scope"] = error.status
+            await asyncio.gather(*tasks)
+        except asyncio.CancelledError:
+            self.errors["scope"] = a11.Status(
+                code=a11.StatusCode.CANCELLED,
+                message="Usage collection was cancelled.",
+            )
+            raise
+        except ValueError as error:
+            self.errors["scope"] = a11.Status(
+                code=a11.StatusCode.INVALID_ARGUMENT, message=str(error)
+            )
+            raise
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            self.finished = True
+            self._collecting = False
+        return self
+
+    @staticmethod
+    async def _values(node):
+        reader = a11.ChunkStoreReader(node.get_chunk_store())
+        try:
+            async for fragment in reader:
+                chunk = fragment.get_chunk()
+                if not chunk.is_null():
+                    yield a11.from_chunk(chunk)
+        finally:
+            reader.cancel()
+
+    async def _collect_source(self, reference: UsageSourceReference) -> None:
+        try:
+            node = self.action.get_node_map().resolve(reference.node)
+            async for value in self._values(node):
+                update = parse_update(value)
+                if update is None:
+                    raise ValueError(
+                        "A usage stream requires UsageUpdate values"
+                    )
+                if update.producer_id not in (None, reference.producer_id):
+                    raise ValueError(
+                        "Usage update belongs to a different producer"
+                    )
+                self.ledgers[reference.producer_id].observe(update)
+        except StatusException as error:
+            self.errors[reference.producer_id] = error.status
+
+    def _ledger(self, producers) -> UsageLedger:
+        ledger = UsageLedger()
+        for producer in producers:
+            for record in self.ledgers[producer].records.values():
+                ledger.observe(record)
+        return ledger
+
+    def for_source(self, producer_id: str) -> UsageMetadata:
+        """Return the latest available consumption for one producer."""
+        return self.ledgers[producer_id].totals()
+
+    @property
+    def direct_usage(self) -> UsageMetadata:
+        """Return consumption from producers rooted in this collection."""
+        return self._ledger(
+            key
+            for key, source in self.sources.items()
+            if source.parent_producer_id not in self.sources
+        ).totals()
+
+    @property
+    def descendant_usage(self) -> UsageMetadata:
+        """Return nested consumption with overlapping reports reconciled."""
+        return self._ledger(
+            key
+            for key, source in self.sources.items()
+            if source.parent_producer_id in self.sources
+        ).totals()
+
+    @property
+    def total_usage(self) -> UsageMetadata:
+        """Return consumption once across all discovered producers."""
+        total = self._ledger(self.sources).totals()
+        direct = self.direct_usage
+        total.context_tokens = direct.context_tokens
+        total.context_source = direct.context_source
+        if (
+            not self.enabled
+            or not self.finished
+            or self.errors
+            or any(not ledger.records for ledger in self.ledgers.values())
+        ):
+            total.complete = False
+        return total
+
+    @property
+    def coverage(
+        self,
+    ) -> Literal["disabled", "collecting", "incomplete", "reported_sources"]:
+        """Describe collection coverage for registered sources."""
+        if not self.enabled:
+            return "disabled"
+        if not self.finished:
+            return "collecting"
+        return "reported_sources" if self.total_usage.complete else "incomplete"
 
 
 def summarize_usage(values: list[UsageMetadata]) -> UsageMetadata:

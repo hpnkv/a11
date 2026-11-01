@@ -277,6 +277,42 @@ bool IsCloseStatusChunk(const Chunk& chunk);
 /** @brief Decodes a status previously encoded by MakeStatusChunk. */
 absl::StatusOr<absl::Status> StatusFromStatusChunk(const Chunk& chunk);
 
+/// Scheme-labelled credential fields supplied to a host storage resolver.
+struct StorageCredentials {
+  std::string scheme{};  ///< Authentication scheme interpreted by the host.
+  absl::flat_hash_map<std::string, std::string> fields{};  ///< Scheme fields.
+  /// Validate the scheme and field names.
+  absl::Status Validate() const;
+  friend bool operator==(const StorageCredentials&,
+                         const StorageCredentials&) = default;
+};
+
+/// One named service participating in a storage backend.
+struct StorageService {
+  std::string role{};      ///< Service role within the backend.
+  std::string endpoint{};  ///< Host-interpreted endpoint.
+  std::optional<StorageCredentials> credentials{};  ///< Optional access fields.
+  /// Validate service identity and authentication metadata.
+  absl::Status Validate() const;
+  friend bool operator==(const StorageService&,
+                         const StorageService&) = default;
+};
+
+/// Logical namespace with optional host-interpreted backend access information.
+struct StorageIdentity {
+  std::string id{};  ///< Logical namespace resolved by host configuration.
+  std::vector<StorageService>
+      services{};  ///< Optional backend access metadata.
+  /// Validate the namespace and its service metadata.
+  absl::Status Validate() const;
+  /// Estimate wire weight, including credential fields.
+  [[nodiscard]] size_t ApproxBytes() const;
+  /// Describe the namespace without printing credentials.
+  [[nodiscard]] std::string DebugString() const;
+  friend bool operator==(const StorageIdentity&,
+                         const StorageIdentity&) = default;
+};
+
 /**
  * @brief A reference to a (slice of a) logical node, in lieu of inline data.
  *
@@ -285,10 +321,12 @@ absl::StatusOr<absl::Status> StatusFromStatusChunk(const Chunk& chunk);
  */
 struct NodeRef {
   std::string id;            ///< Id of the referenced node.
-  std::uint32_t offset = 0;  ///< Byte offset into the referenced node.
+  std::uint32_t offset = 0;  ///< First referenced fragment sequence.
   // 2^32 is a valid length for a full logical node and therefore requires a
   // wider representation than offset and sequence numbers.
-  std::optional<std::uint64_t> length;  ///< Optional length of the window.
+  std::optional<std::uint64_t> length;  ///< Optional fragment count.
+  std::optional<StorageIdentity>
+      storage{};  ///< Host-resolved storage identity.
 
   /// Estimate memory/wire weight for bounded-buffer accounting.
   [[nodiscard]] size_t ApproxBytes() const;

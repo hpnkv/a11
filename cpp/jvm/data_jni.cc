@@ -14,6 +14,8 @@
 
 #include <absl/hash/hash.h>
 
+#include "a11/data/json.h"
+#include "a11/data/msgpack.h"
 #include "a11/data/types.h"
 #include "a11/service/session.h"
 #include "a11/stores/chunk_store.h"
@@ -55,6 +57,51 @@ Java_a11_internal_NativeData_chunkData(JNIEnv* env, jobject, jobject self) {
 extern "C" JNIEXPORT void JNICALL Java_a11_internal_NativeData_chunkDataSet(
     JNIEnv* env, jobject, jobject self, jbyteArray value) {
   Get<a11::data::Chunk>(env, self).data = Bytes(env, value);
+}
+
+extern "C" JNIEXPORT jobject JNICALL
+Java_a11_internal_NativeData_nodeRefStorage(JNIEnv* env, jobject,
+                                            jobject self) {
+  const auto& storage = Get<a11::data::NodeRef>(env, self).storage;
+  if (!storage.has_value()) {
+    return Ok(env, nullptr);
+  }
+  auto value = a11::data::StorageIdentityToJsonValue(*storage);
+  if (!value.ok()) {
+    return Status(env, value.status());
+  }
+  a11::data::MsgpackWriter writer;
+  auto encoded = writer.Pack(*value);
+  if (!encoded.ok()) {
+    return Status(env, encoded);
+  }
+  return Ok(env, Bytes(env, writer.bytes()));
+}
+
+extern "C" JNIEXPORT jobject JNICALL
+Java_a11_internal_NativeData_nodeRefStorageSet(JNIEnv* env, jobject,
+                                               jobject self, jbyteArray bytes) {
+  auto& storage = Get<a11::data::NodeRef>(env, self).storage;
+  if (bytes == nullptr) {
+    storage.reset();
+    return Status(env, absl::OkStatus());
+  }
+  const auto encoded = Bytes(env, bytes);
+  a11::data::MsgpackReader reader(encoded);
+  auto value = reader.Read();
+  if (!value.ok()) {
+    return Status(env, value.status());
+  }
+  auto consumed = reader.EnsureFullyConsumed();
+  if (!consumed.ok()) {
+    return Status(env, consumed);
+  }
+  auto decoded = a11::data::StorageIdentityFromJsonValue(*value);
+  if (!decoded.ok()) {
+    return Status(env, decoded.status());
+  }
+  storage = *std::move(decoded);
+  return Status(env, absl::OkStatus());
 }
 
 extern "C" JNIEXPORT jlong JNICALL
@@ -461,7 +508,9 @@ size_t Hash(const a11::data::Chunk& value) {
 }
 
 size_t Hash(const a11::data::NodeRef& value) {
-  return absl::HashOf(value.id, value.offset, value.length);
+  return absl::HashOf(
+      value.id, value.offset, value.length,
+      value.storage.has_value() ? value.storage->id : std::string{});
 }
 
 size_t Hash(const a11::data::NodeFragment& value) {

@@ -21,4 +21,6 @@ set(A11_ACTIONS_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/log.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/registry.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/schema.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/streams.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/stream_reference.cc
     PARENT_SCOPE)

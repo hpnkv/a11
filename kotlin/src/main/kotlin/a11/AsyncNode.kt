@@ -447,7 +447,42 @@ class AsyncNode private constructor(val id: String, private var registry: Serial
 }
 
 /** Registry of lazily created [AsyncNode]s keyed by stable node id. */
-class NodeMap {
+class NodeMap(val storage: StorageIdentity? = null) {
+    private val storages = java.util.concurrent.ConcurrentHashMap<String, NodeMap>()
+    private val imported =
+        java.util.concurrent.ConcurrentHashMap<
+            String,
+            java.util.concurrent.ConcurrentHashMap<String, AsyncNode>,
+        >()
+    private var storageResolver: ((StorageIdentity) -> StatusOr<NodeMap>)? = null
+    private var accessibleIds: List<String> = emptyList()
+
+    fun registerStorage(id: String, backend: NodeMap): Status {
+        validateName(id).orElse {
+            return it
+        }
+        if (backend === this) return invalidArgument("Storage namespace requires another node map.")
+        val previous = storages.putIfAbsent(id, backend)
+        return if (previous != null && previous !== backend)
+            alreadyExists("Storage identity is already configured.")
+        else Status.ok()
+    }
+
+    fun setStorageResolver(
+        resolver: (StorageIdentity) -> StatusOr<NodeMap>,
+        accessibleIds: List<String> = emptyList(),
+    ): Status {
+        for (id in accessibleIds) validateName(id).orElse {
+            return it
+        }
+        storageResolver = resolver
+        this.accessibleIds = accessibleIds.toList()
+        return Status.ok()
+    }
+
+    fun storageIds(): List<String> =
+        (storages.keys + accessibleIds + listOfNotNull(storage?.id)).distinct().sorted()
+
     private val nodes = HashMap<String, AsyncNode>()
     private val lock = Any()
 
@@ -475,6 +510,73 @@ class NodeMap {
         }
         return Ok(synchronized(lock) { nodes[nodeId] })
     }
+
+    /** Resolve a whole-node reference; windows require a fragment-window reader. */
+    fun resolve(reference: NodeRef): StatusOr<AsyncNode> {
+        reference.validate().orElse {
+            return it
+        }
+        if (reference.offset != 0u || reference.length != null)
+            return unimplemented("Resolving a NodeRef window requires a fragment-window reader.")
+        val identity = reference.storage
+        if (identity == null || identity.id == storage?.id) return get(reference.id)
+        storages[identity.id]?.let {
+            return it.get(reference.id)
+        }
+        storageResolver?.let { resolver ->
+            val resolved =
+                try {
+                    resolver(identity)
+                } catch (error: Exception) {
+                    Status.fromException(error)
+                }
+            if (resolved is Ok) return resolved.value.get(reference.id)
+            if (resolved.status.code != StatusCode.NOT_FOUND) return resolved as Err
+        }
+        return imported[identity.id]?.get(reference.id)?.let { Ok(it) }
+            ?: notFound("Storage identity is not configured on this host.")
+    }
+
+    /** Share a referenced node from another scope, preserving its identity. */
+    fun importReference(reference: NodeRef, source: NodeMap): StatusOr<AsyncNode> {
+        val identity = reference.storage
+        if (identity != null) {
+            val direct = resolve(reference)
+            if (direct is Ok) return direct
+            if (direct.status.code != StatusCode.NOT_FOUND) return direct
+            var original = source.resolve(reference)
+            if (original is Err && original.status.code == StatusCode.NOT_FOUND)
+                original = source.get(reference.id)
+            val node =
+                original.orElse {
+                    return it
+                }
+            val group =
+                imported.computeIfAbsent(identity.id) { java.util.concurrent.ConcurrentHashMap() }
+            val previous = group.putIfAbsent(reference.id, node)
+            if (previous != null && previous !== node)
+                return alreadyExists("Conflicting storage-qualified node.")
+            return Ok(node)
+        }
+        val node =
+            source.resolve(reference).orElse {
+                return it
+            }
+        insert(node).orElse {
+            return it
+        }
+        return Ok(node)
+    }
+
+    /** Share an existing node under its id; a different existing node is an error. */
+    private fun insert(node: AsyncNode): Status =
+        synchronized(lock) {
+            val found = nodes[node.id]
+            if (found != null && found !== node)
+                return alreadyExists("A different node has this id.")
+            nodes[node.id] = node
+            Status.ok()
+        }
 
     fun discard(nodeId: String, expected: AsyncNode? = null): StatusOr<AsyncNode?> {
         validateName(nodeId).orElse { status ->

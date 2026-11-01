@@ -17,6 +17,8 @@
 package a11
 
 import a11.net.WireStream
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
@@ -92,6 +94,12 @@ class Action private constructor(schema: ActionSchema, options: ActionCreateOpti
     // Set once a consumer has taken the log port through getLogNode(). It then
     // owns presentation, so log() stops reporting to the process sink.
     private var logClaimed = false
+    @Volatile private var streamsEnabled = false
+    private val directStreamIds = ConcurrentHashMap.newKeySet<String>()
+    private val streamSourcePorts = ConcurrentHashMap<String, String>()
+    private val streamReferences = ConcurrentHashMap<String, StreamReference>()
+    private val ownedStreamIds = ConcurrentHashMap.newKeySet<String>()
+    private val streamChildren = ConcurrentHashMap.newKeySet<Action>()
     private val done = Deferred<Status>()
     private val dispatched = Deferred<Status>()
     private val cancelCallbacks = mutableListOf<OnActionCancelled>()
@@ -170,6 +178,134 @@ class Action private constructor(schema: ActionSchema, options: ActionCreateOpti
     }
 
     // --- port access ---------------------------------------------------------
+
+    /** Discover auxiliary streams produced within this action subtree. */
+    suspend fun getStreamSourcesNode(requestPayload: Boolean = true): StatusOr<AsyncNode> {
+        streamsEnabled = true
+        if (requestPayload) {
+            val inherited =
+                headers[STREAM_STORAGE_HEADER]?.let {
+                    utf8Decode(it).orElse {
+                        return it
+                    }
+                }
+            val supported =
+                nodeMap.storageIds().filter { inherited == null || it in inherited.split(',') }
+            setHeader(STREAM_STORAGE_HEADER, supported.joinToString(","))
+        }
+        setHeader(STREAM_SCOPE_HEADER, outputIds.getValue(ACTION_STREAMS_OUTPUT))
+        return getOutput(ACTION_STREAMS_OUTPUT, false)
+    }
+
+    /** Publish references for a purpose on a declared output port. */
+    suspend fun exposeStreamSources(port: String, purpose: String): Status {
+        if (finishing.get() || streamReferences.isNotEmpty())
+            return failedPrecondition("Expose stream sources before registering producers.")
+        if (!schema.outputs.containsKey(port) || purpose.isEmpty())
+            return invalidArgument("A declared output and purpose are required.")
+        streamSourcePorts[port] = purpose
+        return getStreamSourcesNode(false).status
+    }
+
+    /** Create an owned auxiliary stream and publish its source reference. */
+    suspend fun registerStream(
+        purpose: String,
+        source: Map<String, Any?>,
+        producerId: String = UUID.randomUUID().toString(),
+        parentProducerId: String = "",
+    ): StatusOr<StreamReference> {
+        if (mode != ActionMode.RUN || finishing.get())
+            return failedPrecondition("Only a running action may register streams.")
+        val nodeId =
+            makeNodeId(id, "stream_" + UUID.randomUUID()).orElse {
+                return it
+            }
+        val reference =
+            StreamReference(
+                producerId,
+                parentProducerId,
+                NodeRef(nodeId, storage = nodeMap.storage),
+                purpose,
+                source,
+            )
+        ownedStreamIds.add(nodeId)
+        publishStreamReference(reference).orElse {
+            return it
+        }
+        return Ok(reference)
+    }
+
+    /** Adopt a peer's reference and forward it into enclosing local scopes. */
+    internal suspend fun receiveStreamReference(value: Any?): Status {
+        if (mode != ActionMode.CALL || completionStatus != null)
+            return failedPrecondition("Stream reference requires an active call.")
+        val reference =
+            StreamReference.fromValue(value).orElse {
+                return it
+            }
+        return publishStreamReference(reference)
+    }
+
+    private suspend fun publishStreamReference(reference: StreamReference): Status {
+        val chunk =
+            reference.toChunk().orElse {
+                return it
+            }
+        val producer = reference.producerId
+        val purpose = reference.purpose
+        val sourceMap = nodeMap
+        var current: Action? = this
+        while (current != null) {
+            val action = current
+            val previous = action.streamReferences.putIfAbsent(producer, reference)
+            if (previous != null) {
+                if (previous != reference)
+                    return alreadyExists("Conflicting stream producer identity.")
+            } else {
+                if (action.completionStatus != null)
+                    return failedPrecondition("The stream scope has finished.")
+                if (action.streamReferences.size > 4096)
+                    return resourceExhausted("Stream scope exceeds 4096 producers.")
+                action.streamsEnabled = true
+                val node =
+                    action.nodeMap.importReference(reference.node, sourceMap).orElse {
+                        return it
+                    }
+                val remote =
+                    action.mode == ActionMode.RUN && action.stream != null && action.parent == null
+                val capabilities =
+                    action.headers[STREAM_STORAGE_HEADER]?.let {
+                        utf8Decode(it).orElse {
+                            return it
+                        }
+                    } ?: ""
+                val direct =
+                    reference.node.storage?.id?.let { it in capabilities.split(',') } ?: false
+                if (remote && direct) action.directStreamIds.add(reference.node.id)
+                if (remote && !direct) {
+                    val transport =
+                        sourceMap.get(reference.node.id).orElse {
+                            return it
+                        }
+                    action.attachStreamIfRequested(transport, true)
+                }
+                val ports =
+                    listOf(ACTION_STREAMS_OUTPUT) +
+                        action.streamSourcePorts.filterValues { it == purpose }.keys
+                for (port in ports) {
+                    val output =
+                        action.getOutput(port, remote).orElse {
+                            return it
+                        }
+                    output.putChunk(chunk).orElse {
+                        return it
+                    }
+                }
+            }
+            current = action.parent
+        }
+        return Status.ok()
+    }
 
     suspend fun getInput(name: String, bindStream: Boolean? = null): StatusOr<AsyncNode> {
         val id = inputIds[name] ?: return notFound("Action input '$name' is not mapped.")
@@ -454,6 +590,7 @@ class Action private constructor(schema: ActionSchema, options: ActionCreateOpti
                     return status
                 }
         child.parent = this
+        streamChildren.add(child)
         if (forwardHeaders)
             forwardHeadersWithPrefix(child).orElse { status ->
                 return status
@@ -549,6 +686,7 @@ class Action private constructor(schema: ActionSchema, options: ActionCreateOpti
                 }
             first = first.updated(status)
         }
+        for (child in streamChildren.toList()) child.cancel()
         val cancelledStatus = cancelled("Action was cancelled.")
         when (mode) {
             ActionMode.CALL -> {
@@ -639,6 +777,22 @@ class Action private constructor(schema: ActionSchema, options: ActionCreateOpti
     private fun begin(mode: ActionMode): Status {
         if (cancelRequested) return cancelled("Action was cancelled.")
         if (this.mode != ActionMode.NONE) return failedPrecondition("Action has already started.")
+        headers[STREAM_SCOPE_HEADER]?.let { scope ->
+            streamsEnabled = true
+            val scopeId =
+                utf8Decode(scope).orElse {
+                    return it
+                }
+            validateName(scopeId).orElse {
+                return it
+            }
+            if (mode == ActionMode.RUN && parent == null) outputIds[ACTION_STREAMS_OUTPUT] = scopeId
+        }
+        if (mode == ActionMode.CALL && streamsEnabled) {
+            if (!headers.containsKey(STREAM_STORAGE_HEADER))
+                setHeader(STREAM_STORAGE_HEADER, nodeMap.storageIds().joinToString(","))
+            setHeader(STREAM_SCOPE_HEADER, outputIds.getValue(ACTION_STREAMS_OUTPUT))
+        }
         this.mode = mode
         return Status.ok()
     }
@@ -655,7 +809,12 @@ class Action private constructor(schema: ActionSchema, options: ActionCreateOpti
                 return status
             }
         for (name in
-            listOf(ACTION_STATUS_OUTPUT, ACTION_DISPATCH_STATUS_OUTPUT, ACTION_LOG_OUTPUT)) {
+            listOf(
+                ACTION_STATUS_OUTPUT,
+                ACTION_DISPATCH_STATUS_OUTPUT,
+                ACTION_LOG_OUTPUT,
+                ACTION_STREAMS_OUTPUT,
+            )) {
             outputIds[name] =
                 makeNodeId(id, name).orElse { status ->
                     return status
@@ -728,6 +887,12 @@ class Action private constructor(schema: ActionSchema, options: ActionCreateOpti
     private suspend fun finishRun(initialStatus: Status) {
         if (completionStatus != null || !finishing.compareAndSet(false, true)) return
         var finalStatus = initialStatus
+        if (streamsEnabled || headers.containsKey(STREAM_SCOPE_HEADER)) {
+            for (child in streamChildren.toList()) {
+                if (!initialStatus.ok()) child.cancel()
+                if (child.mode == ActionMode.RUN || child.mode == ActionMode.CALL) child.wait()
+            }
+        }
         val outputStatus = finishOutputNodes(finalStatus)
         finalStatus = finalStatus.updated(outputStatus)
         val communicated = communicateStatus(finalStatus)
@@ -735,13 +900,18 @@ class Action private constructor(schema: ActionSchema, options: ActionCreateOpti
         releaseNodesAfterRun()
         completionStatus = finalStatus
         done.resolve(finalStatus)
+        parent?.streamChildren?.remove(this)
         untrackFromSession()
     }
 
     private suspend fun finishOutputNodes(status: Status): Status {
         // Close the log port with ordinary outputs. Handlers do not close this
         // reserved port themselves.
-        val ids = (schema.outputs.keys + ACTION_LOG_OUTPUT).mapNotNull { item -> outputIds[item] }
+        val names =
+            schema.outputs.keys +
+                ACTION_LOG_OUTPUT +
+                if (streamsEnabled) listOf(ACTION_STREAMS_OUTPUT) else emptyList()
+        val ids = names.mapNotNull { outputIds[it] } + ownedStreamIds
         var first: Status = Status.ok()
         val s = stream
         if (!status.ok() && s != null && ids.isNotEmpty()) {
@@ -759,6 +929,8 @@ class Action private constructor(schema: ActionSchema, options: ActionCreateOpti
                     first = first.updated(status)
                     continue
                 }
+            if (mode == ActionMode.RUN && parent == null && id !in directStreamIds)
+                attachStreamIfRequested(node, true)
             val writable =
                 node.isWritable().orElse { status ->
                     first = first.updated(status)
@@ -846,6 +1018,7 @@ class Action private constructor(schema: ActionSchema, options: ActionCreateOpti
             completionStatus = status
             detachBoundNodes()
             done.resolve(status)
+            parent?.streamChildren?.remove(this)
         }
         if (removeFromSession) untrackFromSession()
     }

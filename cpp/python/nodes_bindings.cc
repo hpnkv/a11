@@ -89,6 +89,36 @@ class PythonFactory {
   std::vector<PyObject*> values_;
 };
 
+class PythonStorageResolver {
+ public:
+  explicit PythonStorageResolver(const py::object& function)
+      : function_(function.inc_ref().ptr()) {}
+
+  ~PythonStorageResolver() {
+    DeferredPythonRefs::Retire(std::exchange(function_, nullptr));
+  }
+
+  absl::StatusOr<std::shared_ptr<nodes::NodeMap>> Call(
+      data::StorageIdentity identity) {
+    py::gil_scoped_acquire acquire;
+    try {
+      auto value =
+          py::reinterpret_borrow<py::function>(function_)(std::move(identity));
+      if (value.is_none()) {
+        return absl::NotFoundError("Storage is unavailable on this host");
+      }
+      return value.cast<std::shared_ptr<nodes::NodeMap>>();
+    } catch (py::error_already_set& error) {
+      return StatusFromPythonException(error);
+    } catch (const std::exception& error) {
+      return absl::InvalidArgumentError(error.what());
+    }
+  }
+
+ private:
+  PyObject* function_;
+};
+
 NativeStatus StatusObject(const absl::Status& status) {
   return NativeStatus(status);
 }
@@ -135,23 +165,27 @@ void BindNodes(py::module_& module) {
                              "Number of registered deserializers.");
 
   py::classh<nodes::NodeMap>(module, "NodeMap", py::dynamic_attr())
-      .def(py::init([](const py::object& factory) {
+      .def(py::init([](const py::object& factory,
+                       std::optional<data::StorageIdentity> storage_identity) {
              if (factory.is_none()) {
-               return ValueOrThrow(nodes::NodeMap::Create());
+               return ValueOrThrow(
+                   nodes::NodeMap::Create({}, std::move(storage_identity)));
              }
              if (PyCallable_Check(factory.ptr()) == 0) {
                ThrowStatus(
                    absl::InvalidArgumentError("factory must be callable"));
              }
              auto owner = std::make_shared<PythonFactory>(factory);
-             return ValueOrThrow(
-                 nodes::NodeMap::Create([owner](const std::string& node_id) {
+             return ValueOrThrow(nodes::NodeMap::Create(
+                 [owner](const std::string& node_id) {
                    return owner->Call(node_id);
-                 }));
+                 },
+                 std::move(storage_identity)));
            }),
            "Creates a node map, optionally backed by a chunk-store factory "
            "callable invoked to construct the backing store for each new node.",
-           py::arg("chunk_store_factory") = py::none())
+           py::arg("chunk_store_factory") = py::none(),
+           py::arg("storage") = std::nullopt)
       .def(
           "get",
           [](nodes::NodeMap& self, std::string node_id) {
@@ -161,6 +195,60 @@ void BindNodes(py::module_& module) {
           "Returns the node for the given id, creating it if it does not "
           "already exist.",
           py::arg("node_id"))
+      .def(
+          "set_storage_resolver",
+          [](nodes::NodeMap& self, py::object resolver,
+             std::vector<std::string> accessible_ids) {
+            if (!PyCallable_Check(resolver.ptr())) {
+              ThrowStatus(absl::InvalidArgumentError(
+                  "Storage resolver must be callable"));
+            }
+            auto owner = std::make_shared<PythonStorageResolver>(resolver);
+            ThrowIfNotOk(WithoutGil([&] {
+              return self.SetStorageResolver(
+                  [owner](data::StorageIdentity identity) {
+                    return owner->Call(std::move(identity));
+                  },
+                  std::move(accessible_ids));
+            }));
+          },
+          "Configure host connection policy and directly accessible storage "
+          "identities.",
+          py::arg("resolver"),
+          py::arg("accessible_ids") = std::vector<std::string>{})
+      .def_property_readonly(
+          "storage", &nodes::NodeMap::Storage,
+          "Identity of this map's backend, or None for local storage.")
+      .def("storage_ids", &nodes::NodeMap::StorageIds,
+           "Return the host's directly accessible storage identities.")
+      .def(
+          "register_storage",
+          [](nodes::NodeMap& self, std::string identity,
+             std::shared_ptr<nodes::NodeMap> storage) {
+            ThrowIfNotOk(WithoutGil([&] {
+              return self.RegisterStorage(std::move(identity),
+                                          std::move(storage));
+            }));
+          },
+          "Configure a host-accessible storage namespace and its backend.",
+          py::arg("storage_id"), py::arg("storage"))
+      .def(
+          "resolve",
+          [](nodes::NodeMap& self, const data::NodeRef& reference) {
+            return ValueOrThrow(
+                WithoutGil([&] { return self.Resolve(reference); }));
+          },
+          "Resolve a whole-node reference in this scope.", py::arg("reference"))
+      .def(
+          "import_reference",
+          [](nodes::NodeMap& self, const data::NodeRef& reference,
+             const std::shared_ptr<nodes::NodeMap>& source) {
+            return ValueOrThrow(WithoutGil(
+                [&] { return self.ImportReference(reference, source); }));
+          },
+          "Share a referenced node from another scope, preserving its "
+          "identity.",
+          py::arg("reference"), py::arg("source"))
       .def(
           "get_if_exists",
           [](const nodes::NodeMap& self, const std::string& node_id) {

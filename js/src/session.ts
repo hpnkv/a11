@@ -15,10 +15,12 @@
  */
 
 import { Action } from './action.js';
+import { fromChunk } from './serialization.js';
 import { ActionRegistry } from './action_registry.js';
 import {
   ACTION_DISPATCH_STATUS_OUTPUT,
   ACTION_STATUS_OUTPUT,
+  ACTION_STREAMS_OUTPUT,
   CANCEL_ACTION_HEADER,
   CANCEL_ACTION_NAME,
   decodeStatusChunk,
@@ -42,6 +44,7 @@ import {
 } from './data.js';
 import {
   abortedError,
+  resourceExhaustedError,
   alreadyExistsError,
   cancelledError,
   deadlineExceededError,
@@ -825,6 +828,18 @@ export class Session {
       const chunk = fragment.getChunk();
       let protocolStatus: Status | null = null;
       let action: Action | null = null;
+
+      const referenceSuffix = `#${ACTION_STREAMS_OUTPUT}`;
+      if (fragment.id.endsWith(referenceSuffix) && isOk(chunk) &&
+          chunk.metadata?.attributes.has('a11-stream-reference')) {
+        const action = this.getAction(fragment.id.slice(0, -referenceSuffix.length));
+        if (!isOk(action)) return action;
+        if (chunk.data.byteLength > 16384) return resourceExhaustedError('Stream reference exceeds 16384 bytes.');
+        const reference = await fromChunk(chunk);
+        if (!isOk(reference)) return reference;
+        const status = await action.receiveStreamReference(reference);
+        return isOk(status) ? fragment.seq ?? 0 : status;
+      }
 
       // A closure marker reports that the peer drained the node and closed its
       // write half; it carries no value, so it is applied to the local mirror

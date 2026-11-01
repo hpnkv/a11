@@ -32,6 +32,7 @@
 import { z } from 'zod';
 
 import type { Action } from '../../action.js';
+import {usageTrackingEnabled} from '../usage.js';
 import {
   ActionHeaderSchema,
   ActionPortSchema,
@@ -377,6 +378,10 @@ export const INTERACT_WITH_GEMMA_SCHEMA = new ActionSchema({
     }),
   },
   outputs: {
+    usage_sources: new ActionPortSchema({
+      name: 'usage_sources', type: 'application/json', required: false,
+      description: 'References to direct and nested usage producers.',
+    }),
     event_stream: new ActionPortSchema({
       name: 'event_stream',
       type: 'application/json',
@@ -395,6 +400,10 @@ export const INTERACT_WITH_GEMMA_SCHEMA = new ActionSchema({
     }),
   },
   headers: {
+    [LlmHeaders.USAGE_TRACKING]: new ActionHeaderSchema({
+      name: LlmHeaders.USAGE_TRACKING,
+      description: "Request dedicated usage streams with 'on'; inherited 'off' suppresses them.",
+    }),
     [LlmHeaders.MODEL]: new ActionHeaderSchema({
       name: LlmHeaders.MODEL,
       description: 'Label recorded for the local model.',
@@ -564,6 +573,16 @@ registerInteractionNormalizer(Backend.GEMMA, gemmaToNormalized);
 
 /** Run a browser Gemma interaction, streaming its reply. Never throws. */
 export async function interactWithGemma(action: Action): Promise<Status> {
+  const tracking = usageTrackingEnabled(action);
+  if (!isOk(tracking)) return tracking;
+  if (tracking) {
+    const exposed = await action.exposeStreamSources('usage_sources', 'llm_usage');
+    if (!isOk(exposed)) return exposed;
+  }
+  const parentHeader = action.getHeader('x-a11-usage-producer');
+  if (!isOk(parentHeader)) return parentHeader;
+  const parentProducer = parentHeader === null ? '' : utf8Decode(parentHeader);
+  if (!isOk(parentProducer)) return parentProducer;
   const eventNodeResult = await action.getOutput('event_stream', false);
   const thoughtsNodeResult = await action.getOutput('thoughts', false);
   const textNodeResult = await action.getOutput('text_output', false);
@@ -657,10 +676,30 @@ export async function interactWithGemma(action: Action): Promise<Status> {
     const emit = (delta: string): void => show(stopFilter.push(delta));
 
     const usageId = globalThis.crypto.randomUUID();
-    const publishUsage = (usage: UsageMetadata, coverage: string) => eventNode.put({
-      type: 'a11.usage', version: 1, id: usageId,
-      revision: usage.usage_revision, provider: 'gemma', model, usage, coverage,
-    });
+    let usageNode: AsyncNode | null = null;
+    if (tracking) {
+      const reference = await action.registerStream('llm_usage', {
+        type: 'a11_action', id: action.getId(), name: action.getSchema().name,
+      }, usageId, parentProducer);
+      if (!isOk(reference)) return reference;
+      const opened = await action.getNodeMap().resolve(reference.node);
+      if (!isOk(opened)) return opened;
+      usageNode = opened;
+      const attributed = action.setHeader('x-a11-usage-producer', usageId);
+      if (!isOk(attributed)) return attributed;
+    }
+    const publishUsage = async (usage: UsageMetadata, coverage: string) => {
+      const update = {
+        type: 'a11.usage', version: 1, id: usageId,
+        ...(tracking ? {producer_id: usageId} : {}),
+        revision: usage.usage_revision, provider: 'gemma', model, usage, coverage,
+      };
+      if (usageNode !== null) {
+        const written = await usageNode.put(update);
+        if (!isOk(written)) return written;
+      }
+      return eventNode.put(update);
+    };
     const initialUsage = await publishUsage({
       usage_id: usageId, usage_revision: 1, complete: false,
     }, 'awaiting_engine_result');

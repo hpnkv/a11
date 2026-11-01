@@ -246,6 +246,7 @@ def test_action_and_adapter_surface_is_shared(case: ProviderCase):
         "thoughts",
         "text_output",
         "new_interactions",
+        "usage_sources",
     }
     interaction = case.adapter.make_text_message_interaction(
         "hello", "Be concise.", llm.Role.USER

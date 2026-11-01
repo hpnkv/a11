@@ -149,24 +149,23 @@ def summarize_run(records: list[dict]) -> dict:
             "usage": delta.model_dump(),
             "scope": {**scope, "reporting": "delta"},
         }
-    # A turn aggregate covers requests from the same agent and turn.
-    aggregates = {
-        (r.get("scope", {}).get("agent_id"), r.get("scope", {}).get("turn_id"))
-        for r in contributions
-        if r.get("usage", {}).get("usage_scope") == "turn"
-        and r.get("scope", {}).get("agent_id")
-        and r.get("scope", {}).get("turn_id")
-    }
-    contributions = [
-        r
-        for r in contributions
-        if r.get("usage", {}).get("usage_scope") == "turn"
-        or (
-            r.get("scope", {}).get("agent_id"),
-            r.get("scope", {}).get("turn_id"),
+    ledger = usage_api.UsageLedger()
+    for row in contributions:
+        revision = max(1, row.get("revision", 1))
+        usage = UsageMetadata.model_validate(row["usage"]).model_copy(
+            update={"usage_id": row["id"], "usage_revision": revision}
         )
-        not in aggregates
-    ]
+        ledger.observe(
+            usage_api.UsageUpdate(
+                id=row["id"],
+                revision=revision,
+                provider=row.get("provider", ""),
+                usage=usage,
+                scope=row.get("scope", {}),
+                covers=row.get("covers", []),
+            )
+        )
+    contributions = [record.model_dump() for record in ledger.contributions()]
     ambiguous_cumulative = any(
         r.get("scope", {}).get("reporting") == "cumulative"
         for r in contributions
@@ -174,21 +173,16 @@ def summarize_run(records: list[dict]) -> dict:
     partial = any(
         r.get("usage", {}).get("complete") is False for r in contributions
     )
-    usage = {}
-    for name in (
-        "input_tokens",
-        "output_tokens",
-        "cached_input_tokens",
-        "cache_write_tokens",
-    ):
-        values = [row.get("usage", {}).get(name) for row in contributions]
-        usage[name] = (
-            sum(values)
-            if not ambiguous_cumulative
-            and values
-            and all(v is not None for v in values)
-            else None
+    total_usage = ledger.totals()
+    usage = {
+        name: getattr(total_usage, name)
+        for name in (
+            "input_tokens",
+            "output_tokens",
+            "cached_input_tokens",
+            "cache_write_tokens",
         )
+    }
     return {
         "operations": (
             len(seen) + sum(not r.get("operation_id") for r in operations)

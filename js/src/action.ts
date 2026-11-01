@@ -18,11 +18,14 @@ import {
   copyByteMap,
   normalizeByteMap,
   randomId,
+  utf8Decode,
   type ByteMap,
   type ByteMapInput,
   type ByteSource,
 } from './bytes.js';
 import { Deferred } from './concurrency.js';
+import {wireValueCodecByTag} from './wire_values.js';
+import {NODE_REF_TAG} from './serial_tags.js';
 
 /// One encoder for the log attributes, which are written on every log line.
 const encoder = new TextEncoder();
@@ -46,6 +49,7 @@ import {
   Chunk,
   ChunkMetadata,
   NodeFragment,
+  NodeRef,
   Port,
   WireMessage,
   makeNullChunk,
@@ -55,6 +59,9 @@ import { OCTET_STREAM_MIMETYPE, toChunk } from './serialization.js';
 import {
   ACTION_DISPATCH_STATUS_OUTPUT,
   ACTION_LOG_OUTPUT,
+  ACTION_STREAMS_OUTPUT,
+  STREAM_SCOPE_HEADER,
+  STREAM_STORAGE_HEADER,
   ACTION_HEADER_PREFIX,
   AUTHORIZATION_REFERENCE_HEADER,
   ACTION_STATUS_OUTPUT,
@@ -67,6 +74,7 @@ import {
 } from './action_schema.js';
 import {
   cancelledError,
+  resourceExhaustedError,
   deadlineExceededError,
   failedPreconditionError,
   internalError,
@@ -144,6 +152,38 @@ export interface ActionCreateOptions {
   registry?: ActionRegistryLike | null;
   /** Port binding and post-run retention policy. */
   settings?: ActionSettings;
+}
+
+/** Locate an auxiliary producer independently of its stream payload. */
+export interface StreamReference {
+  producer_id: string;
+  parent_producer_id: string;
+  node: NodeRef;
+  purpose: string;
+  source: Record<string, unknown>;
+}
+
+/** Decode a stream descriptor through the existing NodeRef wire codec. */
+export function parseStreamReference(value: unknown): StatusOr<StreamReference> {
+  if (!value || typeof value !== 'object') return invalidArgumentError('Invalid stream reference.');
+  const fields = value as Record<string, unknown>;
+  if (typeof fields.producer_id !== 'string' || !fields.producer_id ||
+      typeof fields.purpose !== 'string' || !fields.purpose ||
+      (fields.parent_producer_id !== undefined && typeof fields.parent_producer_id !== 'string') ||
+      !fields.source || typeof fields.source !== 'object' || Array.isArray(fields.source) ||
+      !fields.node || typeof fields.node !== 'object' || Array.isArray(fields.node)) {
+    return invalidArgumentError('Invalid stream reference fields.');
+  }
+  const node = fields.node instanceof NodeRef ? fields.node
+    : wireValueCodecByTag(NODE_REF_TAG)!.load(fields.node as Record<string, unknown>);
+  if (!isOk(node)) return node;
+  if (!(node instanceof NodeRef)) return invalidArgumentError('Invalid node reference.');
+  const valid = node.validate();
+  if (!isOk(valid)) return valid;
+  return {
+    producer_id: fields.producer_id, parent_producer_id: fields.parent_producer_id as string ?? '',
+    node, purpose: fields.purpose, source: fields.source as Record<string, unknown>,
+  };
 }
 
 type ActionMode = 'none' | 'run' | 'call' | 'cancelled';
@@ -258,6 +298,11 @@ export class Action {
   // Set once a consumer has taken the log port through getLogNode(). It then
   // owns presentation, so log() stops reporting to the process sink.
   private logClaimed = false;
+  private streamsEnabled = false;
+  private readonly directStreamIds = new Set<string>();
+  private readonly streamSourcePorts = new Map<string, string>();
+  private readonly streamReferences = new Map<string, StreamReference>();
+  private readonly ownedStreamIds = new Set<string>();
   private readonly done = new Deferred<Status>();
   private readonly dispatched = new Deferred<Status>();
   private readonly cancelController = new AbortController();
@@ -518,6 +563,118 @@ export class Action {
   /** Open any node by its concrete id. */
   async getNode(nodeId: string): Promise<StatusOr<AsyncNode>> {
     return this.nodeMap.get(nodeId);
+  }
+
+  /** Discover auxiliary streams produced within this action subtree. */
+  async getStreamSourcesNode(requestPayload = true): Promise<StatusOr<AsyncNode>> {
+    this.streamsEnabled = true;
+    if (requestPayload) {
+      const inherited = this.headers.get(STREAM_STORAGE_HEADER);
+      const names = inherited ? utf8Decode(inherited) : null;
+      if (names !== null && !isOk(names)) return names;
+      const supported = this.nodeMap.storageIds().filter(id => names === null || names.split(',').includes(id));
+      this.setHeader(STREAM_STORAGE_HEADER, supported.join(','));
+    }
+    const id = this.outputIds.get(ACTION_STREAMS_OUTPUT)!;
+    const status = this.setHeader(STREAM_SCOPE_HEADER, id);
+    if (!isOk(status)) return status;
+    return this.getOutput(ACTION_STREAMS_OUTPUT, false);
+  }
+
+  /** Publish references for a purpose on a declared output port. */
+  async exposeStreamSources(port: string, purpose: string): Promise<Status> {
+    if (this.finishing || this.streamReferences.size > 0) {
+      return failedPreconditionError('Expose stream sources before registering producers.');
+    }
+    if (!this.schema.outputs.has(port) || !purpose) {
+      return invalidArgumentError('A declared output and purpose are required.');
+    }
+    this.streamSourcePorts.set(port, purpose);
+    const node = await this.getStreamSourcesNode(false);
+    return isOk(node) ? okStatus() : node;
+  }
+
+  /** Create an owned auxiliary stream and publish its source reference. */
+  async registerStream(
+    purpose: string, source: Record<string, unknown>,
+    producerId = randomId('producer-'), parentProducerId = '',
+  ): Promise<StatusOr<StreamReference>> {
+    if (this.mode !== 'run' || this.finishing) {
+      return failedPreconditionError('Only a running action may register streams.');
+    }
+    const nodeId = Action.makeNodeId(this.id, randomId('stream_'));
+    if (!isOk(nodeId)) return nodeId;
+    const reference: StreamReference = {
+      producer_id: producerId, parent_producer_id: parentProducerId,
+      node: new NodeRef({id: nodeId, storage: this.nodeMap.storage}), purpose, source,
+    };
+    this.ownedStreamIds.add(nodeId);
+    const status = await this.publishStreamReference(reference);
+    return isOk(status) ? reference : status;
+  }
+
+  /** Adopt a peer's reference and forward it into enclosing local scopes. */
+  async receiveStreamReference(value: unknown): Promise<Status> {
+    if (this.mode !== 'call' || this.completionStatus !== null) {
+      return failedPreconditionError('Stream reference requires an active call.');
+    }
+    const reference = parseStreamReference(value);
+    return isOk(reference) ? this.publishStreamReference(reference) : reference;
+  }
+
+  private async publishStreamReference(reference: StreamReference): Promise<Status> {
+    if (!reference.producer_id || !reference.purpose ||
+        typeof reference.producer_id !== 'string' || typeof reference.purpose !== 'string' ||
+        !reference.source || typeof reference.source !== 'object' || Array.isArray(reference.source)) {
+      return invalidArgumentError('Invalid stream reference.');
+    }
+    const chunk = await toChunk(reference, 'application/json');
+    if (!isOk(chunk)) return chunk;
+    if (chunk.data.byteLength > 16384) return resourceExhaustedError('Stream reference exceeds 16384 bytes.');
+    chunk.metadata!.attributes.set('a11-stream-reference', encoder.encode('1'));
+    const sourceMap = this.nodeMap;
+    let current: Action | null = this;
+    while (current !== null) {
+      const previous = current.streamReferences.get(reference.producer_id);
+      if (previous !== undefined) {
+        if (JSON.stringify(previous) !== JSON.stringify(reference)) {
+          return failedPreconditionError('Conflicting stream producer identity.');
+        }
+      } else {
+        if (current.completionStatus !== null) return failedPreconditionError('The stream scope has finished.');
+        if (current.streamReferences.size >= 4096) return resourceExhaustedError('Stream scope exceeds 4096 producers.');
+        current.streamsEnabled = true;
+        current.streamReferences.set(reference.producer_id, reference);
+        const node = await current.nodeMap.importReference(reference.node, sourceMap);
+        if (!isOk(node)) return node;
+        const remote = current.mode === 'run' && current.stream !== null && current.parent === null;
+        const advertised = current.headers.get(STREAM_STORAGE_HEADER);
+        const capabilities = advertised ? utf8Decode(advertised) : '';
+        if (!isOk(capabilities)) return capabilities;
+        const direct = reference.node.storage !== null && capabilities.split(',').includes(reference.node.storage.id);
+        if (remote && direct) current.directStreamIds.add(reference.node.id);
+        if (remote && !direct) {
+          const transport = await sourceMap.get(reference.node.id);
+          if (!isOk(transport)) return transport;
+          const attached = current.attachStreamIfRequested(transport, true);
+          if (!isOk(attached)) return attached;
+        }
+        const ports = [ACTION_STREAMS_OUTPUT, ...[...current.streamSourcePorts]
+          .filter(([, purpose]) => purpose === reference.purpose).map(([port]) => port)];
+        for (const port of ports) {
+          const output = await current.getOutput(port, remote);
+          if (!isOk(output)) return output;
+          const written = await output.putChunk(chunk);
+          if (!isOk(written)) return written;
+          if (remote && port === ACTION_STREAMS_OUTPUT) {
+            const drained = await output.waitForBufferToDrain();
+            if (!isOk(drained)) return drained;
+          }
+        }
+      }
+      current = current.parent;
+    }
+    return okStatus();
   }
 
   /** Open a named input node and optionally mirror local writes to the peer. */
@@ -940,6 +1097,21 @@ export class Action {
   private begin(mode: 'run' | 'call'): Status {
     if (this.cancelRequested) return cancelledError('Action was cancelled.');
     if (this.mode !== 'none') return failedPreconditionError('Action has already started.');
+    const scope = this.headers.get(STREAM_SCOPE_HEADER);
+    if (scope !== undefined) {
+      this.streamsEnabled = true;
+      if (mode === 'run' && this.parent === null) {
+        const id = utf8Decode(scope);
+        if (!isOk(id)) return id;
+        const valid = validateName(id);
+        if (!isOk(valid)) return valid;
+        this.outputIds.set(ACTION_STREAMS_OUTPUT, id);
+      }
+    }
+    if (mode === 'call' && this.streamsEnabled) {
+      if (!this.headers.has(STREAM_STORAGE_HEADER)) this.setHeader(STREAM_STORAGE_HEADER, this.nodeMap.storageIds().join(','));
+      this.setHeader(STREAM_SCOPE_HEADER, this.outputIds.get(ACTION_STREAMS_OUTPUT)!);
+    }
     this.mode = mode;
     return okStatus();
   }
@@ -1114,6 +1286,7 @@ export class Action {
       ACTION_STATUS_OUTPUT,
       ACTION_DISPATCH_STATUS_OUTPUT,
       ACTION_LOG_OUTPUT,
+      ACTION_STREAMS_OUTPUT,
     ]) {
       const id = Action.makeNodeId(this.id, name);
       if (!isOk(id)) return id;
@@ -1239,8 +1412,19 @@ export class Action {
         }));
         if (cancelled) await this.abortInputs(finalStatus as NonOkStatus);
       }
+      if (this.streamsEnabled || this.headers.has(STREAM_SCOPE_HEADER)) {
+        await Promise.all([...this.children]
+          .filter(child => child.hasBeenRun() || child.hasBeenCalled())
+          .map(child => child.wait()));
+      }
       const outputStatus = await this.finishOutputNodes(finalStatus);
       if (isOk(finalStatus) && !isOk(outputStatus)) finalStatus = outputStatus;
+      if (this.streamsEnabled) {
+        for (const node of this.boundNodes) {
+          const drained = await node.waitForBufferToDrain();
+          if (isOk(finalStatus) && !isOk(drained)) finalStatus = drained;
+        }
+      }
       let communicated = await this.communicateStatus(finalStatus);
       if (isOk(finalStatus) && !isOk(communicated)) {
         finalStatus = communicated;
@@ -1269,9 +1453,11 @@ export class Action {
   private async finishOutputNodes(status: Status): Promise<Status> {
     // Close the reserved log port with ordinary outputs. Handlers do not close
     // it themselves.
-    const ids = [...this.schema.outputs.keys(), ACTION_LOG_OUTPUT]
+    const ids = [...this.schema.outputs.keys(), ACTION_LOG_OUTPUT,
+      ...(this.streamsEnabled ? [ACTION_STREAMS_OUTPUT] : [])]
       .map((name) => this.outputIds.get(name))
       .filter((id): id is string => id !== undefined);
+    ids.push(...this.ownedStreamIds);
     let first: Status = okStatus();
     if (!isOk(status) && this.stream !== null && ids.length > 0) {
       const chunk = statusToChunk(status);
@@ -1303,6 +1489,10 @@ export class Action {
       const node = await this.nodeMap.get(id);
       if (!isOk(node)) { first = firstError(first, node); continue; }
       this.outputNodes.add(node);
+      if (!this.directStreamIds.has(id)) {
+        const attached = this.attachStreamIfRequested(node, this.mode === 'run' && this.parent === null);
+        if (!isOk(attached)) { first = firstError(first, attached); continue; }
+      }
       const writable = await node.isWritable();
       if (!isOk(writable)) { first = firstError(first, writable); continue; }
       if (!writable) continue;

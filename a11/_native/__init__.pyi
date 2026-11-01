@@ -180,6 +180,9 @@ __all__: list[str] = [
     "SpeechRecognizerOptions",
     "SseOutboundDelivery",
     "Status",
+    "StorageCredentials",
+    "StorageIdentity",
+    "StorageService",
     "StreamMode",
     "TCP",
     "TEXT_MIMETYPE",
@@ -448,6 +451,11 @@ class Action:
         Return True when the action has a port with the given name.
         """
 
+    def expose_stream_sources(self, port: str, purpose: str) -> None:
+        """
+        Publish references for a purpose on a declared output port.
+        """
+
     def forward_header(self, target: Action, name: str) -> None:
         """
         Copy a single header from this action to a target action.
@@ -554,6 +562,11 @@ class Action:
     def get_stream(self) -> WireStream:
         """
         Return the action's bound wire stream.
+        """
+
+    def get_stream_sources_node(self) -> AsyncNode:
+        """
+        Discover auxiliary streams produced within this action subtree.
         """
 
     def get_verified_authorization(self) -> VerifiedAuthorization:
@@ -695,6 +708,17 @@ class Action:
     def map_ports_from_message(self, message: ActionMessage) -> Action:
         """
         Map the action's ports from a wire message and return the action.
+        """
+
+    def register_stream(
+        self,
+        purpose: str,
+        source: typing.Any,
+        producer_id: str = "",
+        parent_producer_id: str = "",
+    ) -> dict:
+        """
+        Create an owned auxiliary stream and publish its source reference.
         """
 
     def remove_header(self, name: str) -> None:
@@ -4751,7 +4775,11 @@ class NodeMap:
         Returns whether a node with the given id exists.
         """
 
-    def __init__(self, chunk_store_factory: typing.Any | None = None) -> None:
+    def __init__(
+        self,
+        chunk_store_factory: typing.Any | None = None,
+        storage: StorageIdentity | None = None,
+    ) -> None:
         """
         Creates a node map, optionally backed by a chunk-store factory callable invoked to construct the backing store for each new node.
         """
@@ -4790,14 +4818,51 @@ class NodeMap:
         A snapshot: nodes are created on demand, so this is what was there when it was asked for.
         """
 
+    def import_reference(
+        self, reference: NodeRef, source: NodeMap
+    ) -> AsyncNode:
+        """
+        Share a referenced node from another scope, preserving its identity.
+        """
+
+    def register_storage(self, storage_id: str, storage: NodeMap) -> None:
+        """
+        Configure a host-accessible storage namespace and its backend.
+        """
+
+    def resolve(self, reference: NodeRef) -> AsyncNode:
+        """
+        Resolve a whole-node reference in this scope.
+        """
+
+    def set_storage_resolver(
+        self,
+        resolver: typing.Any,
+        accessible_ids: collections.abc.Sequence[str] = [],
+    ) -> None:
+        """
+        Configure host connection policy and directly accessible storage identities.
+        """
+
     def size(self) -> int:
         """
         Number of nodes in the map.
         """
 
+    def storage_ids(self) -> list[str]:
+        """
+        Return the host's directly accessible storage identities.
+        """
+
+    @property
+    def storage(self) -> StorageIdentity | None:
+        """
+        Identity of this map's backend, or None for local storage.
+        """
+
 class NodeRef:
     """
-    Reference to a byte range of another logical node.
+    Reference to a fragment range of another logical node.
     """
 
     __hash__: None = None  # pyright: ignore[reportIncompatibleMethodOverride]
@@ -4848,9 +4913,10 @@ class NodeRef:
         id: str,
         offset: typing.SupportsInt | None = 0,
         length: typing.Any | None = None,
+        storage: StorageIdentity | None = None,
     ) -> None:
         """
-        Create a node reference from an id, byte offset, and length.
+        Create a storage-qualified reference to a fragment range.
         """
 
     def __repr__(self) -> str:
@@ -4897,7 +4963,7 @@ class NodeRef:
     @property
     def length(self) -> int | None:
         """
-        Optional byte length of the referenced range.
+        Optional number of referenced fragments.
         """
     @length.setter
     def length(self, arg0: typing.SupportsInt | None) -> None: ...
@@ -4905,10 +4971,18 @@ class NodeRef:
     @property
     def offset(self) -> int:
         """
-        Byte offset into the referenced node.
+        First referenced fragment sequence.
         """
     @offset.setter
     def offset(self, arg0: typing.SupportsInt) -> None: ...
+
+    @property
+    def storage(self) -> StorageIdentity | None:
+        """
+        Optional host-resolved storage namespace.
+        """
+    @storage.setter
+    def storage(self, arg0: StorageIdentity | None) -> None: ...
 
 class ParsedUrl:
     def __init__(self) -> None:
@@ -7517,6 +7591,246 @@ class Status:
         """
     @message.setter
     def message(self, arg1: str) -> None: ...
+
+class StorageCredentials:
+    """
+    Scheme-labelled credential fields for a host storage resolver.
+    """
+
+    __hash__: None = None  # pyright: ignore[reportIncompatibleMethodOverride]
+    @classmethod
+    def __get_pydantic_core_schema__(cls, _source_type, _handler): ...
+    @classmethod
+    def __get_pydantic_json_schema__(cls, _schema, _handler): ...
+    @classmethod
+    def model_construct(cls, **values: typing.Any):
+        """
+        Construct a native value from trusted field values.
+
+        Native records retain C++ invariants. This validates input rather than
+        creating an invalid object.
+        """
+
+    @classmethod
+    def model_json_schema(cls, **_: typing.Any) -> dict[str, typing.Any]: ...
+    @classmethod
+    def model_validate(cls, value: typing.Any, **_: typing.Any): ...
+    @classmethod
+    def model_validate_json(
+        cls, value: str | bytes | bytearray, **_: typing.Any
+    ): ...
+    def __copy__(self) -> StorageCredentials:
+        """
+        Copy this native value.
+        """
+
+    def __deepcopy__(self, memo: dict) -> StorageCredentials:
+        """
+        Copy this native value and its owned fields.
+        """
+
+    def __eq__(self, other: object) -> bool:
+        """
+        Compare credential values.
+        """
+
+    def __init__(self, scheme: str, fields: dict = {}) -> None:
+        """
+        Create scheme-labelled credentials.
+        """
+
+    def __repr__(self) -> str:
+        """
+        Describe credentials without exposing their fields.
+        """
+
+    def model_copy(
+        self, *, update: dict[str, typing.Any] | None = None, deep: bool = False
+    ): ...
+    def model_dump(
+        self, *, mode: str = "python", **_: typing.Any
+    ) -> dict[str, typing.Any]: ...
+    def model_dump_json(self, **kwargs: typing.Any) -> str: ...
+
+    @property
+    def fields(self) -> dict:
+        """
+        Scheme-specific string fields.
+        """
+    @fields.setter
+    def fields(self, arg1: dict) -> None: ...
+
+    @property
+    def scheme(self) -> str:
+        """
+        Authentication scheme interpreted by the host.
+        """
+    @scheme.setter
+    def scheme(self, arg0: str) -> None: ...
+
+class StorageIdentity:
+    """
+    Logical storage namespace with optional service access information.
+    """
+
+    __hash__: None = None  # pyright: ignore[reportIncompatibleMethodOverride]
+    @classmethod
+    def __get_pydantic_core_schema__(cls, _source_type, _handler): ...
+    @classmethod
+    def __get_pydantic_json_schema__(cls, _schema, _handler): ...
+    @classmethod
+    def model_construct(cls, **values: typing.Any):
+        """
+        Construct a native value from trusted field values.
+
+        Native records retain C++ invariants. This validates input rather than
+        creating an invalid object.
+        """
+
+    @classmethod
+    def model_json_schema(cls, **_: typing.Any) -> dict[str, typing.Any]: ...
+    @classmethod
+    def model_validate(cls, value: typing.Any, **_: typing.Any): ...
+    @classmethod
+    def model_validate_json(
+        cls, value: str | bytes | bytearray, **_: typing.Any
+    ): ...
+    def __copy__(self) -> StorageIdentity:
+        """
+        Copy this native value.
+        """
+
+    def __deepcopy__(self, memo: dict) -> StorageIdentity:
+        """
+        Copy this native value and its owned fields.
+        """
+
+    def __eq__(self, other: object) -> bool:
+        """
+        Compare storage access information.
+        """
+
+    def __init__(
+        self, id: str, services: collections.abc.Sequence[StorageService] = []
+    ) -> None:
+        """
+        Create a storage identity.
+        """
+
+    def __repr__(self) -> str:
+        """
+        Describe the namespace without credential values.
+        """
+
+    def model_copy(
+        self, *, update: dict[str, typing.Any] | None = None, deep: bool = False
+    ): ...
+    def model_dump(
+        self, *, mode: str = "python", **_: typing.Any
+    ) -> dict[str, typing.Any]: ...
+    def model_dump_json(self, **kwargs: typing.Any) -> str: ...
+
+    @property
+    def id(self) -> str:
+        """
+        Logical namespace interpreted by the host resolver.
+        """
+    @id.setter
+    def id(self, arg0: str) -> None: ...
+
+    @property
+    def services(self) -> list[StorageService]:
+        """
+        Optional service access information.
+        """
+    @services.setter
+    def services(
+        self, arg0: collections.abc.Sequence[StorageService]
+    ) -> None: ...
+
+class StorageService:
+    """
+    One named service participating in a storage backend.
+    """
+
+    __hash__: None = None  # pyright: ignore[reportIncompatibleMethodOverride]
+    @classmethod
+    def __get_pydantic_core_schema__(cls, _source_type, _handler): ...
+    @classmethod
+    def __get_pydantic_json_schema__(cls, _schema, _handler): ...
+    @classmethod
+    def model_construct(cls, **values: typing.Any):
+        """
+        Construct a native value from trusted field values.
+
+        Native records retain C++ invariants. This validates input rather than
+        creating an invalid object.
+        """
+
+    @classmethod
+    def model_json_schema(cls, **_: typing.Any) -> dict[str, typing.Any]: ...
+    @classmethod
+    def model_validate(cls, value: typing.Any, **_: typing.Any): ...
+    @classmethod
+    def model_validate_json(
+        cls, value: str | bytes | bytearray, **_: typing.Any
+    ): ...
+    def __copy__(self) -> StorageService:
+        """
+        Copy this native value.
+        """
+
+    def __deepcopy__(self, memo: dict) -> StorageService:
+        """
+        Copy this native value and its owned fields.
+        """
+
+    def __eq__(self, other: object) -> bool:
+        """
+        Compare service access information.
+        """
+
+    def __init__(
+        self,
+        role: str,
+        endpoint: str = "",
+        credentials: StorageCredentials | None = None,
+    ) -> None:
+        """
+        Create service access information.
+        """
+
+    def model_copy(
+        self, *, update: dict[str, typing.Any] | None = None, deep: bool = False
+    ): ...
+    def model_dump(
+        self, *, mode: str = "python", **_: typing.Any
+    ) -> dict[str, typing.Any]: ...
+    def model_dump_json(self, **kwargs: typing.Any) -> str: ...
+
+    @property
+    def credentials(self) -> StorageCredentials | None:
+        """
+        Optional authentication fields.
+        """
+    @credentials.setter
+    def credentials(self, arg0: StorageCredentials | None) -> None: ...
+
+    @property
+    def endpoint(self) -> str:
+        """
+        Host-interpreted service endpoint.
+        """
+    @endpoint.setter
+    def endpoint(self, arg0: str) -> None: ...
+
+    @property
+    def role(self) -> str:
+        """
+        Service role within the backend.
+        """
+    @role.setter
+    def role(self, arg0: str) -> None: ...
 
 class StreamMode:
     """

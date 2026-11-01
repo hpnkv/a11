@@ -81,6 +81,9 @@ from .authorization import (
     verify_action_authorization,
 )
 from .data.types import (
+    StorageCredentials,
+    StorageService,
+    StorageIdentity,
     ChunkMetadata,
     Chunk,
     NodeRef,

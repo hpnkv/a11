@@ -188,6 +188,7 @@ private fun dumpNodeRef(value: NodeRef): Fields {
     fields["id"] = value.id
     if (value.offset != 0u) fields["offset"] = value.offset.toLong()
     value.length?.let { value -> fields["length"] = value.toLong() }
+    value.storage?.let { fields["storage"] = it.toFields() }
     return fields
 }
 

@@ -47,6 +47,7 @@ import {
   ChunkMetadata,
   NodeFragment,
   NodeRef,
+  storageIdentityFromValue,
   Port,
   WireMessage,
 } from './data.js';
@@ -279,16 +280,20 @@ function dumpNodeRef(value: NodeRef): StatusOr<Fields> {
   const fields: Fields = { id: value.id };
   put(fields, 'offset', value.offset, value.offset === 0);
   put(fields, 'length', value.length, value.length === null);
+  put(fields, 'storage', value.storage, value.storage === null);
   return fields;
 }
 
 function loadNodeRef(fields: Fields): StatusOr<NodeRef> {
   const length = fields['length'];
   const offset = fields['offset'];
+  const storage = fields.storage == null ? null : storageIdentityFromValue(fields.storage);
+  if (storage !== null && !isOk(storage)) return storage;
   return new NodeRef({
     id: readString(fields, 'id'),
     offset: typeof offset === 'number' ? offset : Number(offset ?? 0),
     length: length === null || length === undefined ? null : Number(length),
+    storage,
   });
 }
 

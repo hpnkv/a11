@@ -36,6 +36,7 @@
 #include "a11/actions/log.h"
 #include "a11/actions/registry.h"
 #include "a11/actions/schema.h"
+#include "a11/actions/stream_reference.h"
 #include "a11/concurrency/callback_scheduler.h"
 #include "a11/concurrency/executor.h"
 #include "a11/concurrency/future.h"

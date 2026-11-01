@@ -34,6 +34,7 @@
 #include "a11/data/types.h"
 #include "a11/net/in_process_wire_stream.h"
 #include "a11/nodes/async_node.h"
+#include "a11/nodes/node_map.h"
 #include "a11/service/session.h"
 #include "thread/fiber.h"
 
@@ -423,5 +424,241 @@ TEST(Action, CancellingAnUnstartedChildReleasesItsParentRegistration) {
   }
   EXPECT_TRUE(weak.expired());
 }
+
+TEST(ActionStreamsTest, ReferencesCrossUnawareActionsAndPrivateNodeMaps) {
+  auto parent = *Action::Create(EmptySchema("parent"));
+  auto references = *parent->GetStreamSourcesNode();
+  ASSERT_TRUE(
+      parent
+          ->BindHandler([](std::shared_ptr<Action> action) {
+            return a11::SubmitTask([action]() -> absl::Status {
+              ABSL_ASSIGN_OR_RETURN(
+                  auto middle,
+                  action->MakeNested(EmptySchema("middle"), false));
+              ABSL_RETURN_IF_ERROR(
+                  middle->BindHandler([](std::shared_ptr<Action> middle) {
+                    return a11::SubmitTask([middle]() -> absl::Status {
+                      ABSL_ASSIGN_OR_RETURN(
+                          auto child, middle->MakeNested(EmptySchema("child")));
+                      ABSL_RETURN_IF_ERROR(
+                          child->BindHandler([](std::shared_ptr<Action> child) {
+                            return a11::SubmitTask([child]() -> absl::Status {
+                              ABSL_ASSIGN_OR_RETURN(
+                                  auto reference,
+                                  child->RegisterStream(
+                                      "progress",
+                                      data::Chunk{
+                                          .metadata =
+                                              data::ChunkMetadata{
+                                                  .mimetype =
+                                                      "application/json"},
+                                          .data = R"({"type":"test"})"},
+                                      "producer"));
+                              ABSL_ASSIGN_OR_RETURN(
+                                  auto node, child->GetNode(reference.node.id));
+                              return node
+                                  ->PutChunk(data::Chunk{.data = "progress"})
+                                  .Await()
+                                  .status();
+                            });
+                          }));
+                      return child->Run().status();
+                    });
+                  }));
+              return middle->Run().status();
+            });
+          })
+          .ok());
+  ASSERT_TRUE(parent->Run().ok());
+  ASSERT_TRUE(parent->Wait(absl::Seconds(5)).Await().ok());
+  auto encoded = references->NextChunk().Await();
+  ASSERT_TRUE(encoded.ok()) << encoded.status();
+  ASSERT_TRUE(encoded->has_value());
+  auto reference = StreamReferenceFromChunk(**encoded);
+  ASSERT_TRUE(reference.ok()) << reference.status();
+  EXPECT_EQ(reference->producer_id, "producer");
+  auto node = *parent->GetNode(reference->node.id);
+  auto value = node->NextChunk().Await();
+  ASSERT_TRUE(value.ok()) << value.status();
+  ASSERT_TRUE(value->has_value());
+  EXPECT_EQ((**value).data, "progress");
+  EXPECT_FALSE(node->NextChunk().Await()->has_value());
+  EXPECT_FALSE(references->NextChunk().Await()->has_value());
+}
+
+TEST(ActionStreamsTest, RemoteReferencesExposeReadableProducerNodes) {
+  auto registry = std::make_shared<ActionRegistry>();
+  ASSERT_TRUE(
+      registry
+          ->Register(
+              "producer", EmptySchema("producer"),
+              [](std::shared_ptr<Action> action) {
+                return a11::SubmitTask([action]() -> absl::Status {
+                  ABSL_ASSIGN_OR_RETURN(
+                      auto reference,
+                      action->RegisterStream(
+                          "usage",
+                          data::Chunk{.metadata =
+                                          data::ChunkMetadata{
+                                              .mimetype = "application/json"},
+                                      .data = R"({"type":"external_tool"})"},
+                          "remote-producer"));
+                  ABSL_ASSIGN_OR_RETURN(auto node,
+                                        action->GetNode(reference.node.id));
+                  return node->PutChunk(data::Chunk{.data = "usage"})
+                      .Await()
+                      .status();
+                });
+              })
+          .ok());
+  service::SessionOptions options;
+  options.no_stream_timeout = absl::InfiniteDuration();
+  auto client = *service::Session::Create("client", {}, {}, {}, options);
+  auto server = *service::Session::Create("server", {}, {}, {}, options,
+                                          nullptr, registry);
+  auto pair = *net::InProcessWireStream::CreatePair();
+  ASSERT_TRUE(
+      client->AddStream(pair.first, service::StreamMode::kStart)->Await().ok());
+  ASSERT_TRUE(server->AddStream(pair.second, service::StreamMode::kAccept)
+                  ->Await()
+                  .ok());
+  auto call = *Action::Create(EmptySchema("producer"), "remote", {}, nullptr,
+                              pair.first, client);
+  auto references = *call->GetStreamSourcesNode();
+  ASSERT_TRUE(call->Call().Await().ok());
+  auto finished = call->Wait(absl::Seconds(5)).Await();
+  ASSERT_TRUE(finished.ok()) << finished.status();
+  auto encoded = references->NextChunk().Await(absl::Now() + absl::Seconds(5));
+  ASSERT_TRUE(encoded.ok()) << encoded.status();
+  ASSERT_TRUE(encoded->has_value());
+  auto reference = StreamReferenceFromChunk(**encoded);
+  ASSERT_TRUE(reference.ok()) << reference.status();
+  auto node = *call->GetNode(reference->node.id);
+  auto value = node->NextChunk().Await(absl::Now() + absl::Seconds(5));
+  ASSERT_TRUE(value.ok()) << value.status();
+  ASSERT_TRUE(value->has_value());
+  EXPECT_EQ((**value).data, "usage");
+  EXPECT_FALSE(node->NextChunk().Await()->has_value());
+  EXPECT_FALSE(references->NextChunk().Await()->has_value());
+}
+
+TEST(ActionStreamsTest, ReferencesAndPayloadCrossTwoSessionHops) {
+  for (const bool direct : {false, true}) {
+    auto storage = *nodes::NodeMap::Create(
+        {}, data::StorageIdentity{.id = "shared", .services = {}});
+    auto client_nodes = *nodes::NodeMap::Create();
+    if (direct) {
+      ASSERT_TRUE(client_nodes->RegisterStorage("shared", storage).ok());
+    }
+    auto leaf_registry = std::make_shared<ActionRegistry>();
+    const auto leaf_schema = EmptySchema("producer");
+    ASSERT_TRUE(
+        leaf_registry
+            ->Register("producer", leaf_schema,
+                       [](std::shared_ptr<Action> action) {
+                         return a11::SubmitTask([action]() -> absl::Status {
+                           for (int index = 0; index < 16; ++index) {
+                             data::Chunk source{
+                                 .metadata =
+                                     data::ChunkMetadata{
+                                         .mimetype = "application/json"},
+                                 .data = R"({"type":"test"})"};
+                             ABSL_ASSIGN_OR_RETURN(
+                                 auto reference,
+                                 action->RegisterStream("progress",
+                                                        std::move(source)));
+                             ABSL_ASSIGN_OR_RETURN(
+                                 auto node, action->GetNode(reference.node.id));
+                             ABSL_RETURN_IF_ERROR(
+                                 node->PutChunk(data::Chunk{.data = "progress"})
+                                     .Await()
+                                     .status());
+                           }
+                           return absl::OkStatus();
+                         });
+                       })
+            .ok());
+    auto downstream = *net::InProcessWireStream::CreatePair();
+    auto middle_registry = std::make_shared<ActionRegistry>();
+    ASSERT_TRUE(
+        middle_registry
+            ->Register("bridge", EmptySchema("bridge"),
+                       [leaf_schema, endpoint = downstream.first](
+                           std::shared_ptr<Action> action) {
+                         return a11::SubmitTask([action, leaf_schema,
+                                                 endpoint]() -> absl::Status {
+                           ABSL_ASSIGN_OR_RETURN(
+                               auto child, action->MakeNested(leaf_schema));
+                           ABSL_RETURN_IF_ERROR(child->BindStream(endpoint));
+                           return child->Call().Await().status();
+                         });
+                       })
+            .ok());
+    service::SessionOptions options;
+    options.no_stream_timeout = absl::InfiniteDuration();
+    auto client =
+        *service::Session::Create("client", {}, {}, {}, options, client_nodes);
+    auto middle = *service::Session::Create("middle", {}, {}, {}, options,
+                                            nullptr, middle_registry);
+    auto leaf = *service::Session::Create("leaf", {}, {}, {}, options, storage,
+                                          leaf_registry);
+    auto upstream = *net::InProcessWireStream::CreatePair();
+    ASSERT_TRUE(client->AddStream(upstream.first, service::StreamMode::kStart)
+                    ->Await()
+                    .ok());
+    ASSERT_TRUE(middle->AddStream(upstream.second, service::StreamMode::kAccept)
+                    ->Await()
+                    .ok());
+    ASSERT_TRUE(middle->AddStream(downstream.first, service::StreamMode::kStart)
+                    ->Await()
+                    .ok());
+    ASSERT_TRUE(leaf->AddStream(downstream.second, service::StreamMode::kAccept)
+                    ->Await()
+                    .ok());
+    auto call = *Action::Create(EmptySchema("bridge"), "bridge-call", {},
+                                nullptr, upstream.first, client);
+    auto references = *call->GetStreamSourcesNode();
+    ASSERT_TRUE(call->Call().Await().ok());
+    auto finished = call->Wait(absl::Seconds(5)).Await();
+    ASSERT_TRUE(finished.ok()) << finished.status();
+    int count = 0;
+    while (true) {
+      auto encoded =
+          references->NextChunk().Await(absl::Now() + absl::Seconds(5));
+      ASSERT_TRUE(encoded.ok()) << encoded.status();
+      if (!encoded->has_value()) {
+        break;
+      }
+      auto reference = StreamReferenceFromChunk(**encoded);
+      ASSERT_TRUE(reference.ok()) << reference.status();
+      auto node = *call->GetNodeMap()->Resolve(reference->node);
+      auto value = node->NextChunk().Await(absl::Now() + absl::Seconds(5));
+      ASSERT_TRUE(value.ok()) << value.status();
+      ASSERT_TRUE(value->has_value());
+      EXPECT_EQ((**value).data, "progress");
+      EXPECT_FALSE(node->NextChunk().Await()->has_value());
+      EXPECT_TRUE(reference->node.storage.has_value());
+      auto mirror = *middle->GetNodeMap()->Get(reference->node.id);
+      auto mirrored_fragments = mirror->GetChunkStore()->Size().Await();
+      ASSERT_TRUE(mirrored_fragments.ok()) << mirrored_fragments.status();
+      EXPECT_EQ(*mirrored_fragments, direct ? 0 : 1);
+      ++count;
+    }
+    EXPECT_EQ(count, 16);
+  }
+}
+
+TEST(ActionStreamsTest, ReferenceCodecValidatesUntrustedFields) {
+  data::Chunk chunk{
+      .metadata = data::ChunkMetadata{.mimetype = "application/json"},
+      .data =
+          R"({"producer_id":7,"node_id":"node","purpose":"usage","source":{}})"};
+  EXPECT_EQ(StreamReferenceFromChunk(chunk).status().code(),
+            absl::StatusCode::kInvalidArgument);
+  chunk.data.assign(16385, 'x');
+  EXPECT_EQ(StreamReferenceFromChunk(chunk).status().code(),
+            absl::StatusCode::kResourceExhausted);
+}
+
 }  // namespace
 }  // namespace a11::actions

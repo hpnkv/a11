@@ -64,6 +64,14 @@ def llm_context_handler(handler):
 
     @functools.wraps(handler)
     async def wrapped(action, *args, **kwargs):
+        if (
+            hasattr(action, "expose_stream_sources")
+            and "usage_sources" in action
+        ):
+            from a11.sdk.usage import usage_tracking_enabled
+
+            if usage_tracking_enabled(action):
+                action.expose_stream_sources("usage_sources", "llm_usage")
         raw = action.get_header(LlmContextHeaders.CONFIG)
         if raw is None:
             return await handler(action, *args, **kwargs)

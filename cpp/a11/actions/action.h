@@ -52,6 +52,7 @@
 
 #include "a11/actions/log.h"
 #include "a11/actions/schema.h"
+#include "a11/actions/stream_reference.h"
 #include "a11/concurrency/future.h"
 #include "a11/data/serialization.h"
 #include "a11/data/types.h"
@@ -319,6 +320,20 @@ class Action : public std::enable_shared_from_this<Action> {
    */
   absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> GetLogNode();
 
+  /// Return references to auxiliary streams produced by this action subtree.
+  absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> GetStreamSourcesNode(
+      bool request_payload = true);
+
+  /// Publish references of @p purpose on a declared output @p port.
+  absl::Status ExposeStreamSources(std::string port, std::string purpose);
+
+  /// Create an owned auxiliary stream and publish its JSON reference.
+  /// References contain producer_id, parent_producer_id, node, purpose,
+  /// and source. Each producer id is unique within an accounting scope.
+  absl::StatusOr<StreamReference> RegisterStream(
+      std::string purpose, data::Chunk source, std::string producer_id = {},
+      std::string parent_producer_id = {});
+
   /**
    * @brief Returns the wire ::a11::data::ActionMessage describing this action.
    */
@@ -465,6 +480,10 @@ class Action : public std::enable_shared_from_this<Action> {
  private:
   enum class Mode { kNone, kRun, kCall, kCancelled };
 
+  absl::Status ReceiveStreamReference(const StreamReference& reference);
+  absl::Status PublishStreamReference(const StreamReference& reference);
+  absl::Status WaitForStreamChildren();
+
   Action(ActionSchema schema, std::string id, ActionHandler handler,
          std::shared_ptr<nodes::NodeMap> node_map,
          std::shared_ptr<net::WireStream> stream,
@@ -566,6 +585,14 @@ class Action : public std::enable_shared_from_this<Action> {
   // Set once a consumer has taken the log port through GetLogNode(). It then
   // owns presentation, so WriteLog stops reporting to the process sink.
   bool log_claimed_ ABSL_GUARDED_BY(mu_) = false;
+  bool streams_enabled_ ABSL_GUARDED_BY(mu_) = false;
+  bool stream_reader_requested_ ABSL_GUARDED_BY(mu_) = false;
+  absl::flat_hash_set<std::string> direct_stream_ids_ ABSL_GUARDED_BY(mu_);
+  absl::flat_hash_map<std::string, std::string> stream_source_ports_
+      ABSL_GUARDED_BY(mu_);
+  absl::flat_hash_map<std::string, StreamReference> stream_references_
+      ABSL_GUARDED_BY(mu_);
+  absl::flat_hash_set<std::string> owned_stream_ids_ ABSL_GUARDED_BY(mu_);
   std::optional<absl::Status> dispatch_status_ ABSL_GUARDED_BY(mu_);
   std::shared_ptr<a11::Promise<a11::Unit>> done_promise_ ABSL_GUARDED_BY(mu_);
   a11::Task done_future_ ABSL_GUARDED_BY(mu_);

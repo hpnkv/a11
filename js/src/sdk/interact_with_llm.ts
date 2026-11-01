@@ -104,6 +104,10 @@ export const INTERACT_WITH_LLM_SCHEMA = new ActionSchema({
     }),
   },
   outputs: {
+    usage_sources: new ActionPortSchema({
+      name: 'usage_sources', type: 'application/json', required: false,
+      description: 'References to direct and nested usage producers.',
+    }),
     event_stream: new ActionPortSchema({
       name: 'event_stream',
       type: 'application/json',
@@ -122,6 +126,10 @@ export const INTERACT_WITH_LLM_SCHEMA = new ActionSchema({
     }),
   },
   headers: {
+    [LlmHeaders.USAGE_TRACKING]: new ActionHeaderSchema({
+      name: LlmHeaders.USAGE_TRACKING,
+      description: "Request dedicated usage streams with 'on'; inherited 'off' suppresses them.",
+    }),
     [LlmHeaders.API_KEY]: new ActionHeaderSchema({
       name: LlmHeaders.API_KEY,
       description: 'The backend API key.',

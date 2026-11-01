@@ -128,6 +128,13 @@ INTERACT_WITH_CODEX_SCHEMA = a11.ActionSchema(
         ),
     },
     outputs={
+        "usage_sources": a11.ActionPortSchema(
+            "usage_sources",
+            "application/json",
+            typeinfo=dict,
+            description="References to direct and nested usage producers.",
+            required=False,
+        ),
         "event_stream": a11.ActionPortSchema(
             "event_stream", "application/json", typeinfo=dict, required=False
         ),
@@ -147,6 +154,11 @@ INTERACT_WITH_CODEX_SCHEMA = a11.ActionSchema(
     headers=a11.DEFAULT_ACTION_HEADERS
     | LLM_CONTEXT_HEADERS
     | {
+        LlmHeaders.USAGE_TRACKING: a11.ActionHeaderSchema(
+            LlmHeaders.USAGE_TRACKING,
+            "Request dedicated usage streams with 'on'; inherited 'off'"
+            " suppresses them.",
+        ),
         LlmHeaders.API_KEY: a11.ActionHeaderSchema(
             LlmHeaders.API_KEY,
             "Codex API key override, kept in app-server memory; otherwise"

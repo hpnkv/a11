@@ -34,6 +34,7 @@
 #include <absl/strings/ascii.h>
 #include <absl/strings/str_cat.h>
 #include <absl/strings/str_format.h>
+#include <absl/strings/str_join.h>
 #include <absl/time/clock.h>
 #include <absl/time/time.h>
 
@@ -1257,7 +1258,24 @@ absl::Status Action::Begin(Mode mode) {
   if (mode_ != Mode::kNone) {
     return absl::FailedPreconditionError("Action has already started");
   }
+  const auto stream_scope = headers_.find(std::string(kStreamScopeHeader));
+  if (stream_scope != headers_.end()) {
+    ABSL_RETURN_IF_ERROR(data::ValidateName(stream_scope->second));
+    streams_enabled_ = true;
+    if (mode == Mode::kRun && parent_.expired()) {
+      output_ids_.insert_or_assign(std::string(kActionStreamsOutput),
+                                   stream_scope->second);
+    }
+  }
   mode_ = mode;
+  if (mode == Mode::kCall &&
+      (streams_enabled_ ||
+       headers_.find(std::string(kStreamScopeHeader)) != headers_.end())) {
+    streams_enabled_ = true;
+    headers_.insert_or_assign(
+        std::string(kStreamScopeHeader),
+        output_ids_.at(std::string(kActionStreamsOutput)));
+  }
   return absl::OkStatus();
 }
 
@@ -1394,7 +1412,8 @@ absl::Status Action::RemapDefaultPorts() {
     output_ids_.emplace(name, std::move(id));
   }
   for (const std::string_view name :
-       {kActionStatusOutput, kActionDispatchStatusOutput, kActionLogOutput}) {
+       {kActionStatusOutput, kActionDispatchStatusOutput, kActionLogOutput,
+        kActionStreamsOutput}) {
     ABSL_ASSIGN_OR_RETURN(std::string id, MakeNodeId(id_, name));
     output_ids_.emplace(std::string(name), std::move(id));
   }
@@ -1654,10 +1673,26 @@ absl::Status Action::FinishRun(absl::Status status) {
     }
   }
 
+  WaitForStreamChildren().IgnoreError();
   if (const absl::Status output_error = FinishOutputNodes(final_status);
       final_status.ok() && !output_error.ok()) {
     final_status = output_error;
     FinishOutputNodes(final_status).IgnoreError();
+  }
+  {
+    std::vector<std::shared_ptr<nodes::AsyncNode>> streams;
+    {
+      thread::MutexLock lock(&mu_);
+      if (streams_enabled_) {
+        streams.assign(stream_bound_nodes_.begin(), stream_bound_nodes_.end());
+      }
+    }
+    for (const auto& node : streams) {
+      const auto drained = node->WaitForBufferToDrain().Await();
+      if (final_status.ok() && !drained.ok()) {
+        final_status = drained.status();
+      }
+    }
   }
   if (const absl::Status communicate_error = CommunicateStatus(final_status);
       final_status.ok() && !communicate_error.ok()) {
@@ -1700,15 +1735,23 @@ absl::Status Action::FinishOutputNodes(const absl::Status& status) {
   std::shared_ptr<nodes::NodeMap> node_map;
   std::string log_id;
   bool remote = false;
+  bool remote_stream_scope = false;
+  absl::flat_hash_set<std::string> direct_stream_ids;
   {
     thread::MutexLock lock(&mu_);
     node_map = node_map_;
     remote = stream_ != nullptr || !session_.expired();
+    remote_stream_scope = mode_ == Mode::kRun && parent_.expired();
+    direct_stream_ids = direct_stream_ids_;
     // Publishing the terminal state and snapshotting the nodes to close under
     // one hold of mu_ is what makes the lazy path safe.
     outputs_finished_ = true;
     outputs_final_status_ = status;
+    ids.insert(owned_stream_ids_.begin(), owned_stream_ids_.end());
     for (const auto& [name, id] : output_ids_) {
+      if (name == kActionStreamsOutput && !streams_enabled_) {
+        continue;
+      }
       if (name != kActionStatusOutput && name != kActionDispatchStatusOutput) {
         ids.insert(id);
       }
@@ -1742,6 +1785,13 @@ absl::Status Action::FinishOutputNodes(const absl::Status& status) {
     if (found != nodes.end()) {
       KeepFirstError(AttachStreamIfRequested(found->second, /*bind=*/true),
                      &first);
+    }
+  }
+  if (remote && remote_stream_scope) {
+    for (const auto& [id, node] : nodes) {
+      if (direct_stream_ids.find(id) == direct_stream_ids.end()) {
+        KeepFirstError(AttachStreamIfRequested(node, true), &first);
+      }
     }
   }
   if (!status.ok()) {
@@ -2039,6 +2089,9 @@ void Action::AbortLocalCallOutputs(const absl::Status& status) {
     if (!outputs_finished_) {
       outputs_finished_ = true;
       outputs_final_status_ = status;
+    }
+    for (const auto& reference : stream_references_ | std::views::values) {
+      ids.insert(reference.node.id);
     }
     for (const auto& [name, id] : output_ids_) {
       if (name != kActionStatusOutput && name != kActionDispatchStatusOutput) {

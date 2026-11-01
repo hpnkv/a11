@@ -194,6 +194,7 @@ async function gatherActionOutputs(nested: Action): Promise<StatusOr<NodeFragmen
       const fragment = await node.nextFragment();
       if (!isOk(fragment)) return fragment;
       if (fragment === null) break;
+      if (outputName === 'usage_sources') continue;
       fragment.id = outputName;
       fragment.continued = true;
       fragments.push(fragment);

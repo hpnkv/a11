@@ -46,8 +46,8 @@ from absl import logging
 
 import a11
 from a11 import _native
-from a11.sdk.llm import Interaction, LlmHeaders
-from a11.sdk.llm_context.config import LLM_CONTEXT_HEADERS
+from a11.sdk.interact_with_llm_schema import INTERACT_WITH_LLM_SCHEMA
+from a11.sdk.llm import LlmHeaders
 from a11.sdk.llm_context.runtime import llm_context_handler
 from a11.sdk.usage import usage_observer
 from a11.status import Status, StatusCode
@@ -123,78 +123,6 @@ _MODEL_PREFIXES: tuple[tuple[str, str], ...] = (
     ("gemma", "ollama"),
     ("phi", "ollama"),
     ("deepseek", "ollama"),
-)
-
-
-INTERACT_WITH_LLM_SCHEMA = a11.ActionSchema(
-    name="interact_with_llm",
-    description=(
-        "Route an LLM interaction to a concrete backend chosen by the"
-        f" {LlmHeaders.PROVIDER.value} header."
-    ),
-    inputs={
-        "interactions": a11.ActionPortSchema(
-            "interactions",
-            "application/json",
-            typeinfo=Interaction,
-            required=True,
-        ),
-        "tools": a11.ActionPortSchema(
-            "tools",
-            "application/json",
-            typeinfo=dict,
-            required=False,
-        ),
-        "config": a11.ActionPortSchema(
-            "config",
-            "application/json",
-            typeinfo=dict,
-            unary=True,
-            required=False,
-        ),
-    },
-    outputs={
-        "event_stream": a11.ActionPortSchema(
-            "event_stream",
-            "application/json",
-            typeinfo=dict,
-            required=False,
-        ),
-        "thoughts": a11.ActionPortSchema(
-            "thoughts",
-            "text/plain",
-            required=False,
-        ),
-        "text_output": a11.ActionPortSchema(
-            "text_output",
-            "text/plain",
-            required=False,
-        ),
-        "new_interactions": a11.ActionPortSchema(
-            "new_interactions",
-            "application/json",
-            typeinfo=Interaction,
-            required=True,
-        ),
-    },
-    headers=a11.DEFAULT_ACTION_HEADERS
-    | LLM_CONTEXT_HEADERS
-    | {
-        LlmHeaders.API_KEY: a11.ActionHeaderSchema(
-            LlmHeaders.API_KEY, "The backend API key."
-        ),
-        LlmHeaders.MODEL: a11.ActionHeaderSchema(
-            LlmHeaders.MODEL, "The backend model."
-        ),
-        LlmHeaders.PROVIDER: a11.ActionHeaderSchema(
-            LlmHeaders.PROVIDER,
-            f"Which backend to route to, one of: {', '.join(_PROVIDERS)}.",
-        ),
-        LlmHeaders.ALLOWED_LLM_ACTIONS: a11.ActionHeaderSchema(
-            LlmHeaders.ALLOWED_LLM_ACTIONS,
-            "The allowed action (tool) name patterns, comma-separated.",
-        ),
-    },
 )
 
 
@@ -337,6 +265,7 @@ async def _run_backend(
     pumps.extend(
         asyncio.create_task(_pump_fragments(backend[name], action[name]))
         for name in INTERACT_WITH_LLM_SCHEMA.outputs
+        if name != "usage_sources"
     )
     pumps.append(asyncio.create_task(_forward_logs(logs, action, backend)))
 

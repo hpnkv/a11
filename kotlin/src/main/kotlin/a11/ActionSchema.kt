@@ -36,6 +36,12 @@ const val ACTION_DISPATCH_STATUS_OUTPUT = "__dispatch_status__"
  * other outputs. See `ActionLog.kt`.
  */
 const val ACTION_LOG_OUTPUT = "__log__"
+/** Reserved output discovering auxiliary streams in an action subtree. */
+const val ACTION_STREAMS_OUTPUT = "__streams__"
+/** Header enabling auxiliary stream propagation across action calls. */
+const val STREAM_SCOPE_HEADER = "x-a11-stream-scope"
+/** Collector namespaces that require no payload mirroring. */
+const val STREAM_STORAGE_HEADER = "x-a11-stream-storage"
 /** Reserved wire action name used to request remote cancellation. */
 const val CANCEL_ACTION_NAME = "__cancel__"
 /** Header naming the action id targeted by a cancellation message. */
@@ -105,7 +111,13 @@ class ActionSchema(
         validateName(name).orElse { status ->
             return status
         }
-        val reserved = setOf(ACTION_STATUS_OUTPUT, ACTION_DISPATCH_STATUS_OUTPUT, ACTION_LOG_OUTPUT)
+        val reserved =
+            setOf(
+                ACTION_STATUS_OUTPUT,
+                ACTION_DISPATCH_STATUS_OUTPUT,
+                ACTION_LOG_OUTPUT,
+                ACTION_STREAMS_OUTPUT,
+            )
         for (ports in listOf(inputs, outputs)) {
             for ((key, port) in ports) {
                 validateName(key).orElse { status ->

@@ -419,6 +419,13 @@ def _normalise_annotations(stub: str, submodule: str | None = None) -> str:
         "get(self, node_id: str) -> ...": (
             "get(self, node_id: str) -> AsyncNode"
         ),
+        "resolve(self, reference: NodeRef) -> ...": (
+            "resolve(self, reference: NodeRef) -> AsyncNode"
+        ),
+        "import_reference(self, reference: NodeRef, source: NodeMap) -> ...": (
+            "import_reference(self, reference: NodeRef, source: NodeMap) ->"
+            " AsyncNode"
+        ),
         "get_if_exists(self, node_id: str) -> ...": (
             "get_if_exists(self, node_id: str) -> AsyncNode | None"
         ),

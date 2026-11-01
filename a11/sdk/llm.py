@@ -44,6 +44,7 @@ class LlmHeaders(enum.StrEnum):
     PROVIDER = "x-a11-llm-provider"
     BASE_URL = "x-a11-llm-base-url"
     ALLOWED_LLM_ACTIONS = "x-a11-allowed-llm-actions"
+    USAGE_TRACKING = "x-a11-usage-tracking"
 
 
 class OrderedOutputStreams:

@@ -35,6 +35,7 @@
 #include <absl/time/time.h>
 #include <nlohmann/json.hpp>
 
+#include "a11/data/json.h"
 #include "a11/data/msgpack.h"
 
 namespace a11::data {
@@ -449,19 +450,71 @@ absl::StatusOr<absl::Status> StatusFromStatusChunk(const Chunk& chunk) {
   return UnpackStatus(chunk.data);
 }
 
+absl::Status StorageCredentials::Validate() const {
+  ABSL_RETURN_IF_ERROR(ValidateName(scheme));
+  for (const auto& [name, unused] : fields) {
+    ABSL_RETURN_IF_ERROR(ValidateName(name));
+  }
+  return absl::OkStatus();
+}
+
+absl::Status StorageService::Validate() const {
+  ABSL_RETURN_IF_ERROR(ValidateName(role));
+  if (credentials.has_value()) {
+    ABSL_RETURN_IF_ERROR(credentials->Validate());
+  }
+  return absl::OkStatus();
+}
+
+absl::Status StorageIdentity::Validate() const {
+  ABSL_RETURN_IF_ERROR(ValidateName(id));
+  for (const auto& service : services) {
+    ABSL_RETURN_IF_ERROR(service.Validate());
+  }
+  return absl::OkStatus();
+}
+
+size_t StorageIdentity::ApproxBytes() const {
+  size_t result = id.size();
+  for (const auto& service : services) {
+    result += service.role.size() + service.endpoint.size();
+    if (service.credentials.has_value()) {
+      result += service.credentials->scheme.size();
+      for (const auto& [key, value] : service.credentials->fields) {
+        result += key.size() + value.size();
+      }
+    }
+  }
+  return result;
+}
+
+std::string StorageIdentity::DebugString() const {
+  return absl::StrCat("StorageIdentity(id='",
+                      BoundedText(id, kDebugPreviewMaxNameChars),
+                      "', services=", services.size(), ")");
+}
+
 size_t NodeRef::ApproxBytes() const {
-  return id.size() + 4 + (length.has_value() ? 4 : 0) + 1;
+  return id.size() + 4 + (length.has_value() ? 4 : 0) + 1 +
+         (storage.has_value() ? storage->ApproxBytes() : 0);
 }
 
 std::string NodeRef::DebugString() const {
   return absl::StrCat(
       "NodeRef(id='", BoundedText(id, kDebugPreviewMaxNameChars),
       "', offset=", offset,
-      ", length=", length.has_value() ? absl::StrCat(*length) : "end", ")");
+      ", length=", length.has_value() ? absl::StrCat(*length) : "end",
+      ", storage=",
+      storage.has_value() ? BoundedText(storage->id, kDebugPreviewMaxNameChars)
+                          : "local",
+      ")");
 }
 
 absl::Status NodeRef::Validate() const {
   ABSL_RETURN_IF_ERROR(ValidateName(id));
+  if (storage.has_value()) {
+    ABSL_RETURN_IF_ERROR(storage->Validate());
+  }
   if (length.has_value() &&
       (*length > kUint32Range || *length + offset > kUint32Range)) {
     return absl::InvalidArgumentError("Offset + length must not exceed 2^32");
@@ -484,6 +537,12 @@ absl::Status NodeRef::ToMsgpackInto(MsgpackWriter* absl_nonnull writer) const {
   writer->PackUint(offset);
   if (length.has_value()) {
     writer->PackUint(*length);
+  } else {
+    writer->PackNil();
+  }
+  if (storage.has_value()) {
+    ABSL_ASSIGN_OR_RETURN(auto value, StorageIdentityToJsonValue(*storage));
+    ABSL_RETURN_IF_ERROR(writer->Pack(value));
   } else {
     writer->PackNil();
   }
@@ -510,10 +569,17 @@ absl::StatusOr<NodeRef> NodeRef::FromMsgpack(std::string_view bytes) {
                           JsonUnsigned(length_value, "NodeRef.length"));
     length = parsed;
   }
+  ABSL_ASSIGN_OR_RETURN(auto storage_value,
+                        ReadField(&reader, "NodeRef.storage"));
+  std::optional<StorageIdentity> storage;
+  if (!storage_value.is_null()) {
+    ABSL_ASSIGN_OR_RETURN(storage, StorageIdentityFromJsonValue(storage_value));
+  }
   ABSL_RETURN_IF_ERROR(reader.EnsureFullyConsumed());
   NodeRef result{.id = std::move(id),
                  .offset = static_cast<std::uint32_t>(offset),
-                 .length = length};
+                 .length = length,
+                 .storage = std::move(storage)};
   ABSL_RETURN_IF_ERROR(result.Validate());
   return result;
 }

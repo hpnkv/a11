@@ -23,6 +23,7 @@ import a11.ChunkMetadata
 import a11.NodeFragment
 import a11.NodeRef
 import a11.Port
+import a11.StorageIdentity
 import a11.WireMessage
 import a11.base64Decode
 import a11.base64Encode
@@ -111,6 +112,7 @@ internal fun decodeNodeRef(fields: Map<String, Any?>): NodeRef =
         fieldText(fields, "id"),
         fields["offset"]?.let { value -> NativeBridge.number(value).toUInt() } ?: 0u,
         fields["length"]?.let { value -> NativeBridge.number(value).toULong() },
+        fields["storage"]?.let { value -> StorageIdentity.fromValue(value).value() },
     )
 
 internal fun decodeNodeFragment(fields: Map<String, Any?>): NodeFragment {

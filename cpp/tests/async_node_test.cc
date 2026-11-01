@@ -293,5 +293,22 @@ TEST(AsyncNodeTest, NodeMapCachesAndDiscardsIdentity) {
   EXPECT_EQ(map->Size(), 0);
 }
 
+TEST(NodeMap, ImportsWholeNodeReferencesWithoutCopyingTheirStreams) {
+  auto source = *NodeMap::Create();
+  auto target = *NodeMap::Create();
+  data::NodeRef reference{.id = "shared", .offset = 0, .length = std::nullopt};
+  auto original = *source->Resolve(reference);
+  auto imported = target->ImportReference(reference, source);
+  ASSERT_TRUE(imported.ok()) << imported.status();
+  EXPECT_EQ(*imported, original);
+  EXPECT_EQ(*target->Resolve(reference), original);
+  auto other = *NodeMap::Create();
+  EXPECT_EQ(target->ImportReference(reference, other).status().code(),
+            absl::StatusCode::kAlreadyExists);
+  reference.offset = 1;
+  EXPECT_EQ(target->Resolve(reference).status().code(),
+            absl::StatusCode::kUnimplemented);
+}
+
 }  // namespace
 }  // namespace a11::nodes

@@ -64,12 +64,19 @@ INTERACT_WITH_LLM_SCHEMA = a11.ActionSchema(
                 " Choose that provider's object schema."
             ),
             unary=True,
-            required=True,
+            required=False,
             typeinfo=dict,
             json_schema=json.dumps(PROVIDER_CONFIG_SCHEMA),
         ),
     },
     outputs={
+        "usage_sources": a11.ActionPortSchema(
+            "usage_sources",
+            "application/json",
+            typeinfo=dict,
+            description="References to direct and nested usage producers.",
+            required=False,
+        ),
         "event_stream": a11.ActionPortSchema(
             "event_stream",
             "application/json",
@@ -96,6 +103,11 @@ INTERACT_WITH_LLM_SCHEMA = a11.ActionSchema(
     headers=a11.DEFAULT_ACTION_HEADERS
     | LLM_CONTEXT_HEADERS
     | {
+        LlmHeaders.USAGE_TRACKING: a11.ActionHeaderSchema(
+            LlmHeaders.USAGE_TRACKING,
+            "Request dedicated usage streams with 'on'; inherited 'off'"
+            " suppresses them.",
+        ),
         LlmHeaders.API_KEY: a11.ActionHeaderSchema(
             LlmHeaders.API_KEY, "API key for the downstream provider."
         ),

@@ -59,6 +59,8 @@ import {
 
 /** Framework headers that select and configure an LLM backend. */
 export enum LlmHeaders {
+  /** Request dedicated usage streams with on; inherited off suppresses them. */
+  USAGE_TRACKING = 'x-a11-usage-tracking',
   /** Provider credential forwarded to the backend. */
   API_KEY = 'x-a11-llm-api-key',
   /** Provider model id. */

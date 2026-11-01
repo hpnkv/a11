@@ -42,6 +42,7 @@ enum class LlmHeaders(val header: String) {
     PROVIDER("x-a11-llm-provider"),
     BASE_URL("x-a11-llm-base-url"),
     ALLOWED_LLM_ACTIONS("x-a11-allowed-llm-actions"),
+    USAGE_TRACKING("x-a11-usage-tracking"),
 }
 
 /** Conversation roles. `model` is the assistant role, matching the Python SDK. */

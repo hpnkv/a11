@@ -42,6 +42,8 @@ val INTERACT_WITH_LLM_SCHEMA: ActionSchema =
             ),
         outputs =
             linkedMapOf(
+                "usage_sources" to
+                    ActionPortSchema("usage_sources", "application/json", required = false),
                 "event_stream" to
                     ActionPortSchema("event_stream", "application/json", required = false),
                 "thoughts" to ActionPortSchema("thoughts", "text/plain", required = false),
@@ -51,6 +53,11 @@ val INTERACT_WITH_LLM_SCHEMA: ActionSchema =
             ),
         headers =
             linkedMapOf(
+                LlmHeaders.USAGE_TRACKING.header to
+                    ActionHeaderSchema(
+                        LlmHeaders.USAGE_TRACKING.header,
+                        "Request dedicated usage streams with 'on'; inherited 'off' suppresses them.",
+                    ),
                 LlmHeaders.API_KEY.header to
                     ActionHeaderSchema(LlmHeaders.API_KEY.header, "The backend API key."),
                 LlmHeaders.PROVIDER.header to

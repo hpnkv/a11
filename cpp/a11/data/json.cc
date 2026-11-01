@@ -236,6 +236,9 @@ Json EncodeNodeRef(const NodeRef& node_ref) {
   if (node_ref.length.has_value()) {
     value["length"] = *node_ref.length;
   }
+  if (node_ref.storage.has_value()) {
+    value["storage"] = *StorageIdentityToJsonValue(*node_ref.storage);
+  }
   return value;
 }
 
@@ -257,9 +260,16 @@ absl::StatusOr<NodeRef> DecodeNodeRef(const Json& value) {
                     "NodeRef"));
     length = decoded;
   }
+  std::optional<StorageIdentity> storage;
+  const auto encoded_storage = value.find("storage");
+  if (encoded_storage != value.end() && !encoded_storage->is_null()) {
+    ABSL_ASSIGN_OR_RETURN(storage,
+                          StorageIdentityFromJsonValue(*encoded_storage));
+  }
   NodeRef result{.id = std::move(id),
                  .offset = static_cast<std::uint32_t>(offset),
-                 .length = length};
+                 .length = length,
+                 .storage = std::move(storage)};
   ABSL_RETURN_IF_ERROR(result.Validate());
   return result;
 }
@@ -427,6 +437,84 @@ absl::StatusOr<Json> ChunkToJsonValue(const Chunk& value) {
 
 absl::StatusOr<Chunk> ChunkFromJsonValue(const Json& value) {
   return DecodeChunk(value);
+}
+
+absl::StatusOr<Json> StorageIdentityToJsonValue(const StorageIdentity& value) {
+  ABSL_RETURN_IF_ERROR(value.Validate());
+  Json result = {{"id", value.id}};
+  if (!value.services.empty()) {
+    auto services = Json::array();
+    for (const auto& service : value.services) {
+      Json entry = {{"role", service.role}, {"endpoint", service.endpoint}};
+      if (service.credentials.has_value()) {
+        Json fields = Json::object();
+        for (const auto& [name, field] : service.credentials->fields) {
+          fields[name] = field;
+        }
+        entry["credentials"] = {{"scheme", service.credentials->scheme},
+                                {"fields", std::move(fields)}};
+      }
+      services.push_back(std::move(entry));
+    }
+    result["services"] = std::move(services);
+  }
+  return result;
+}
+
+absl::StatusOr<StorageIdentity> StorageIdentityFromJsonValue(
+    const Json& value) {
+  if (!value.is_object()) {
+    return absl::InvalidArgumentError("Storage identity must be an object");
+  }
+  ABSL_ASSIGN_OR_RETURN(auto id, GetString(value, "id", "", "StorageIdentity"));
+  StorageIdentity result{.id = std::move(id), .services = {}};
+  const auto services = value.find("services");
+  if (services != value.end()) {
+    if (!services->is_array()) {
+      return absl::InvalidArgumentError("Storage services must be an array");
+    }
+    for (const auto& entry : *services) {
+      if (!entry.is_object()) {
+        return absl::InvalidArgumentError("Storage service must be an object");
+      }
+      ABSL_ASSIGN_OR_RETURN(auto role,
+                            GetString(entry, "role", "", "StorageService"));
+      ABSL_ASSIGN_OR_RETURN(auto endpoint,
+                            GetString(entry, "endpoint", "", "StorageService"));
+      StorageService service{.role = std::move(role),
+                             .endpoint = std::move(endpoint),
+                             .credentials = {}};
+      const auto credential = entry.find("credentials");
+      if (credential != entry.end() && !credential->is_null()) {
+        if (!credential->is_object()) {
+          return absl::InvalidArgumentError(
+              "Storage credentials must be an object");
+        }
+        ABSL_ASSIGN_OR_RETURN(auto scheme, GetString(*credential, "scheme", "",
+                                                     "StorageCredentials"));
+        StorageCredentials credentials{.scheme = std::move(scheme),
+                                       .fields = {}};
+        const auto fields = credential->find("fields");
+        if (fields != credential->end()) {
+          if (!fields->is_object()) {
+            return absl::InvalidArgumentError(
+                "Credential fields must be an object");
+          }
+          for (auto field = fields->begin(); field != fields->end(); ++field) {
+            if (!field->is_string()) {
+              return absl::InvalidArgumentError(
+                  "Credential fields must be strings");
+            }
+            credentials.fields.emplace(field.key(), field->get<std::string>());
+          }
+        }
+        service.credentials = std::move(credentials);
+      }
+      result.services.push_back(std::move(service));
+    }
+  }
+  ABSL_RETURN_IF_ERROR(result.Validate());
+  return result;
 }
 
 absl::StatusOr<Json> NodeRefToJsonValue(const NodeRef& value) {

@@ -603,6 +603,30 @@ a11::Future<std::uint32_t> Session::DispatchNodeFragment(
     return a11::FailedFuture<std::uint32_t>(validation);
   }
 
+  const std::string references_suffix =
+      absl::StrCat("#", actions::kActionStreamsOutput);
+  const data::Chunk* reference_chunk = std::get_if<data::Chunk>(&fragment.data);
+  if (fragment.id.ends_with(references_suffix) && reference_chunk != nullptr &&
+      reference_chunk->metadata.has_value() &&
+      reference_chunk->metadata->attributes.find(
+          actions::kStreamReferenceAttribute) !=
+          reference_chunk->metadata->attributes.end()) {
+    auto self = shared_from_this();
+    return a11::Submit<std::uint32_t>(
+        [self, fragment = std::move(fragment),
+         references_suffix]() mutable -> absl::StatusOr<std::uint32_t> {
+          ABSL_ASSIGN_OR_RETURN(
+              auto action,
+              self->GetAction(fragment.id.substr(
+                  0, fragment.id.size() - references_suffix.size())));
+          ABSL_ASSIGN_OR_RETURN(auto reference,
+                                actions::StreamReferenceFromChunk(std::move(
+                                    std::get<data::Chunk>(fragment.data))));
+          ABSL_RETURN_IF_ERROR(action->ReceiveStreamReference(reference));
+          return fragment.seq.value_or(0);
+        });
+  }
+
   // An ordinary data fragment for an ordinary node -- the overwhelming majority
   // of what a busy session dispatches -- is handled here without a fiber. So
   // the fiber this

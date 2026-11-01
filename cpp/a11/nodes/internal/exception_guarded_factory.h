@@ -32,6 +32,7 @@ namespace a11::nodes::internal {
 // / Wraps a factory so a raised exception becomes the error status NodeMap
 // reads.
 [[nodiscard]] ChunkStoreFactory GuardFactory(ChunkStoreFactory factory);
+[[nodiscard]] StorageResolver GuardStorageResolver(StorageResolver resolver);
 
 }  // namespace a11::nodes::internal
 

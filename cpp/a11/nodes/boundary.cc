@@ -40,4 +40,10 @@ ChunkStoreFactory GuardFactory(ChunkStoreFactory factory) {
       std::move(factory), "chunk-store factory");
 }
 
+StorageResolver GuardStorageResolver(StorageResolver resolver) {
+  return exception_guard::Wrap<absl::StatusOr<std::shared_ptr<NodeMap>>,
+                               data::StorageIdentity>(std::move(resolver),
+                                                      "storage resolver");
+}
+
 }  // namespace a11::nodes::internal

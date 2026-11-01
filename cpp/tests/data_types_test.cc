@@ -59,5 +59,29 @@ TEST(DataTypesTest, NodeReferenceChecksBounds) {
             absl::StatusCode::kInvalidArgument);
 }
 
+TEST(DataTypesTest, StorageQualifiedNodeReferencesRoundTrip) {
+  StorageIdentity identity{
+      .id = "shared",
+      .services = {StorageService{
+          .role = "stream",
+          .endpoint = "https://storage.example",
+          .credentials = StorageCredentials{
+              .scheme = "bearer", .fields = {{"token", "test-token"}}}}}};
+  NodeRef original{
+      .id = "node", .offset = 17, .length = 3, .storage = identity};
+  auto encoded = original.ToMsgpack();
+  ASSERT_TRUE(encoded.ok()) << encoded.status();
+  auto decoded = NodeRef::FromMsgpack(*encoded);
+  ASSERT_TRUE(decoded.ok()) << decoded.status();
+  EXPECT_EQ(*decoded, original);
+  EXPECT_EQ(decoded->offset, 17);
+  EXPECT_EQ(decoded->length, 3);
+  EXPECT_EQ(original.DebugString().find("test-token"), std::string::npos);
+  original.storage.reset();
+  auto local_bytes = original.ToMsgpack();
+  ASSERT_TRUE(local_bytes.ok());
+  EXPECT_EQ(*NodeRef::FromMsgpack(*local_bytes), original);
+}
+
 }  // namespace
 }  // namespace a11::data

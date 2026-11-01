@@ -195,15 +195,30 @@ class NodeRef internal constructor(handle: Long) : NativeObject(handle), NodePay
         id: String,
         offset: UInt = 0u,
         length: ULong? = null,
+        storage: StorageIdentity? = null,
     ) : this(NativeData.nodeRefNew()) {
         this.id = id
         this.offset = offset
         this.length = length
+        this.storage = storage
     }
 
     var id: String
         get() = NativeData.nodeRefId(this)
         set(value) = NativeData.nodeRefIdSet(this, value)
+
+    /** Optional host-resolved namespace and backend access information. */
+    var storage: StorageIdentity?
+        get() =
+            NativeData.nodeRefStorage(this).value()?.let {
+                StorageIdentity.fromValue(MsgpackCodec.decodeOne(it).value()).value()
+            }
+        set(value) {
+            val encoded = value?.let { MsgpackCodec.encodeOne(it.toFields()).value() }
+            NativeData.nodeRefStorageSet(this, encoded).orElse {
+                fatal("Invalid storage access information")
+            }
+        }
 
     var offset: UInt
         get() = NativeData.nodeRefOffset(this).toUInt()
@@ -222,7 +237,8 @@ class NodeRef internal constructor(handle: Long) : NativeObject(handle), NodePay
         id: String = this.id,
         offset: UInt = this.offset,
         length: ULong? = this.length,
-    ): NodeRef = NodeRef(id, offset, length)
+        storage: StorageIdentity? = this.storage,
+    ): NodeRef = NodeRef(id, offset, length, storage)
 
     override fun validate(): Status = NativeData.nodeRefValidate(this)
 

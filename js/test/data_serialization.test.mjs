@@ -38,7 +38,7 @@ test('A11 values use concatenated MessagePack fields', () => {
   const values = [
     [new ChunkMetadata(), 'a0c080', ChunkMetadata],
     [new Chunk(), 'c0a0c400', Chunk],
-    [new NodeRef({ id: 'x' }), 'a17800c0', NodeRef],
+    [new NodeRef({ id: 'x' }), 'a17800c0c0', NodeRef],
     [new Port('x', 'y'), 'a178a179', Port],
     [new WireMessage(), '01909080', WireMessage],
   ];

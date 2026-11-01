@@ -447,6 +447,58 @@ export class Chunk {
   }
 }
 
+/** Scheme-labelled string fields interpreted by a host storage resolver. */
+export interface StorageCredentials { scheme: string; fields?: Record<string, string>; }
+/** One named service participating in a storage backend. */
+export interface StorageService { role: string; endpoint?: string; credentials?: StorageCredentials | null; }
+/** Logical namespace with optional backend access information. */
+export interface StorageIdentity { id: string; services?: StorageService[]; }
+
+/** Decode the structured access fields at the serialization boundary. */
+export function storageIdentityFromValue(value: unknown): StatusOr<StorageIdentity> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return invalidArgumentError('Invalid storage identity.');
+  const source = value as Record<string, unknown>;
+  const id = asString(source.id, 'StorageIdentity.id');
+  if (!isOk(id)) return id;
+  const valid = validateName(id);
+  if (!isOk(valid)) return valid;
+  const result: StorageIdentity = {id};
+  if (source.services !== undefined) {
+    if (!Array.isArray(source.services)) return invalidArgumentError('Storage services must be an array.');
+    const services: StorageService[] = [];
+    for (const item of source.services) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return invalidArgumentError('Invalid storage service.');
+      const role = asString(item.role, 'StorageService.role');
+      if (!isOk(role)) return role;
+      const roleStatus = validateName(role);
+      if (!isOk(roleStatus)) return roleStatus;
+      const endpoint = asString(item.endpoint ?? '', 'StorageService.endpoint');
+      if (!isOk(endpoint)) return endpoint;
+      const service: StorageService = {role, endpoint};
+      if (item.credentials != null) {
+        const raw = item.credentials;
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return invalidArgumentError('Invalid storage credentials.');
+        const scheme = asString(raw.scheme, 'StorageCredentials.scheme');
+        if (!isOk(scheme)) return scheme;
+        const schemeStatus = validateName(scheme);
+        if (!isOk(schemeStatus)) return schemeStatus;
+        if (raw.fields != null && (typeof raw.fields !== 'object' || Array.isArray(raw.fields))) return invalidArgumentError('Invalid credential fields.');
+        const fields: Record<string, string> = {};
+        for (const [key, value] of Object.entries(raw.fields ?? {}).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) {
+          const keyStatus = validateName(key);
+          if (!isOk(keyStatus)) return keyStatus;
+          if (typeof value !== 'string') return invalidArgumentError('Credential fields must be strings.');
+          fields[key] = value;
+        }
+        service.credentials = {fields, scheme};
+      }
+      services.push(service.credentials ? {credentials: service.credentials, endpoint, role} : {endpoint, role});
+    }
+    if (services.length) result.services = services;
+  }
+  return result;
+}
+
 /** Node id and optional window accepted by {@link NodeRef}. */
 export interface NodeRefOptions {
   /** Referenced node id. */
@@ -455,6 +507,8 @@ export interface NodeRefOptions {
   offset?: number;
   /** Number of fragments, or `null` for the remaining node. */
   length?: number | null;
+  /** Optional host-resolved storage namespace. */
+  storage?: StorageIdentity | null;
 }
 
 /** Reference to all or part of another logical node instead of inline bytes. */
@@ -465,11 +519,14 @@ export class NodeRef {
   offset: number;
   /** Number of fragments, or `null` for the remaining node. */
   length: number | null;
+  /** Optional host-resolved storage namespace. */
+  storage: StorageIdentity | null;
 
   constructor(options: NodeRefOptions) {
     this.id = options.id;
     this.offset = options.offset ?? 0;
     this.length = options.length ?? null;
+    this.storage = options.storage ?? null;
   }
 
   /** Construct and validate a node reference. */
@@ -488,12 +545,17 @@ export class NodeRef {
 
   /** Approximate encoded field size. */
   get approxBytes(): number {
-    return this.id.length + 5 + (this.length === null ? 0 : 8);
+    return this.id.length + 5 + (this.length === null ? 0 : 8) +
+      (this.storage ? new TextEncoder().encode(JSON.stringify(this.storage)).byteLength : 0);
   }
 
   /** Validate the id and uint32 window. */
   validate(): Status {
     try {
+      if (this.storage !== null) {
+        const storage = storageIdentityFromValue(this.storage);
+        if (!isOk(storage)) return storage;
+      }
       const nameStatus = validateName(this.id);
       if (!isOk(nameStatus)) return nameStatus;
       if (!Number.isInteger(this.offset) || this.offset < 0 || this.offset > UINT32_MAX) {
@@ -517,14 +579,15 @@ export class NodeRef {
   /** Encode the concatenated MessagePack node-reference record. */
   toMsgpack(): StatusOr<Uint8Array> {
     const status = this.validate();
-    return isOk(status)
-      ? encodeMsgpackFields([this.id, this.offset, this.length])
-      : status;
+    if (!isOk(status)) return status;
+    const storage = this.storage === null ? null : storageIdentityFromValue(this.storage);
+    return storage !== null && !isOk(storage) ? storage
+      : encodeMsgpackFields([this.id, this.offset, this.length, storage]);
   }
 
   /** Decode a concatenated MessagePack node-reference record. */
   static fromMsgpack(bytes: Uint8Array): StatusOr<NodeRef> {
-    const fields = decodeMsgpackFields(bytes, 3, 'NodeRef');
+    const fields = decodeMsgpackFields(bytes, 4, 'NodeRef');
     if (!isOk(fields)) return fields;
     const id = asString(fields[0], 'NodeRef.id');
     if (!isOk(id)) return id;
@@ -536,7 +599,9 @@ export class NodeRef {
       if (!isOk(decoded)) return decoded;
       length = decoded;
     }
-    return NodeRef.create({ id, offset, length });
+    const storage = fields[3] === null ? null : storageIdentityFromValue(fields[3]);
+    if (storage !== null && !isOk(storage)) return storage;
+    return NodeRef.create({ id, offset, length, storage });
   }
 }
 

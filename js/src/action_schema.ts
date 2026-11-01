@@ -47,6 +47,12 @@ export const ACTION_DISPATCH_STATUS_OUTPUT = '__dispatch_status__';
  * `Action.log`, closed with the action's other outputs. See `./action_log.js`.
  */
 export const ACTION_LOG_OUTPUT = '__log__';
+/** Reserved output discovering auxiliary streams in an action subtree. */
+export const ACTION_STREAMS_OUTPUT = '__streams__';
+/** Header enabling auxiliary stream propagation across action calls. */
+export const STREAM_SCOPE_HEADER = 'x-a11-stream-scope';
+/** Collector storage namespaces that require no payload mirroring. */
+export const STREAM_STORAGE_HEADER = 'x-a11-stream-storage';
 /** Reserved wire action name used to request remote cancellation. */
 export const CANCEL_ACTION_NAME = '__cancel__';
 /** Header naming the action id targeted by a cancellation message. */
@@ -329,6 +335,7 @@ export class ActionSchema {
       ACTION_STATUS_OUTPUT,
       ACTION_DISPATCH_STATUS_OUTPUT,
       ACTION_LOG_OUTPUT,
+      ACTION_STREAMS_OUTPUT,
     ]);
     for (const ports of [this.inputs, this.outputs]) {
       if (!(ports instanceof Map)) return invalidArgumentError('Action ports must be a Map.');

@@ -184,6 +184,117 @@ and provider continuation IDs. It is completed conversation state, not a live
 stream or an agent checkpoint. Store it as ordinary application data; use the
 output streams for content that must be rendered or processed incrementally.
 
+## Collect nested usage
+
+Construct `UsageAccounting` before starting an action to request dedicated
+usage streams for its subtree. Continue draining the action's ordinary outputs:
+
+```python
+from a11.sdk.usage import UsageAccounting
+
+accounting = UsageAccounting(action)
+collection = asyncio.create_task(accounting.collect())
+action.run()
+await action.wait()
+await collection
+print(accounting.total_usage)
+```
+
+Every `interact_with_*` action and `interact_with_llm` exposes `usage_sources`.
+Each entry identifies a producer, its enclosing producer, a native `NodeRef`,
+and source metadata. The referenced node carries normalized `UsageUpdate`
+values. The router forwards producer identities unchanged. An intermediate
+A11 handler needs no usage-specific code when it creates nested actions through
+A11's APIs.
+
+`accounting.sources` retains attribution, `for_source(id)` reads one producer's
+consumption, and `direct_usage` and `descendant_usage` select the corresponding
+parts of the subtree. Revisions replace earlier reports of the same usage ID.
+An aggregate can name covered usage IDs in `UsageUpdate.covers`; covered reports
+remain available as evidence and contribute once to the total. Context counts
+remain associated with direct model requests.
+
+`coverage == "reported_sources"` describes registered producers. Tools without
+instrumentation and subtrees that disable tracking remain unobserved. Missing
+reports, interrupted streams, and unverified cumulative counts produce
+incomplete accounting. Independent read cursors support multiple consumers and
+replay of retained usage.
+
+### Disable usage tracking
+
+Dedicated tracking defaults to off. `UsageAccounting` requests it through the
+inherited `x-a11-usage-tracking: on` header. An explicit off suppresses that
+request for an action subtree:
+
+```python
+from a11.sdk.usage import enable_usage_tracking
+
+enable_usage_tracking(action, False)
+```
+
+Configure the policy before `run()` or `call()`. Disabled tracking creates no
+producer nodes or source registrations. Existing provider-event and interaction
+usage remains available. `enable_usage_tracking(action)` also enables tracking
+without constructing a collector; a collector can read that retained usage
+later.
+
+### Connect another usage producer
+
+An action wrapping an external tool can publish normalized usage with its own
+source metadata, including when it has no `event_stream` output:
+
+```python
+from a11.sdk.llm import UsageMetadata
+from a11.sdk.usage import UsageReporter
+
+reporter = UsageReporter(
+    action,
+    "external-provider",
+    usage_source={"type": "external_tool", "id": tool_call_id},
+)
+await reporter.report(UsageMetadata(input_tokens=20, output_tokens=7, total_tokens=27))
+```
+
+The adapter owns provider-specific extraction and normalization. A11 preserves
+source identity, revisions, and stream lifetime through nested and remote
+calls.
+
+### Resolve usage from shared storage
+
+`NodeRef.storage` is optional. Its absence resolves the node in the current
+node map. A `StorageIdentity` names a namespace; a host registers its backend
+or supplies a resolver that returns the appropriate `NodeMap`:
+
+```python
+identity = a11.StorageIdentity("usage-store")
+backend = a11.NodeMap(chunk_store_factory=store_factory, storage=identity)
+host_nodes.register_storage(identity.id, backend)
+```
+
+Producer nodes inherit their node map's storage identity. A collector advertises
+its directly accessible namespaces. References cross intermediate actions,
+while usage payloads remain in shared storage when the collector has direct
+access. Otherwise the runtime mirrors payloads over the action transports.
+
+`host_nodes.set_storage_resolver(resolve, accessible_ids=["usage-store"])`
+installs host connection policy. The synchronous callback receives a typed
+`StorageIdentity` and returns a backend node map, or `None` when unavailable.
+Advertised identities are namespaces the host can access directly for the run.
+
+A storage identity can also carry optional `StorageService` values. Each names
+a service role and endpoint, with optional `StorageCredentials` containing a
+scheme and flat string fields. For Redis plus S3, services can describe the
+index and payload endpoints separately; an S2 backend can describe its stream
+endpoint and bearer credential. The host resolver decides which supplied access
+fields it accepts. A bare identity uses host configuration. Native diagnostic
+representations omit credential values.
+
+`NodeRef.offset` identifies the first fragment sequence and `length` counts
+fragments. Storage qualification preserves those units. Usage producers expose
+whole-node references. Referenced producer nodes remain addressable after action
+completion; their node map or backend controls retention independently of normal
+output-port cleanup.
+
 ## Run the complete model call
 
 ```python

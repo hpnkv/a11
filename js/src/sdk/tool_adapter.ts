@@ -82,6 +82,7 @@ export class ToolAdapter {
     const properties: Record<string, unknown> = {};
     const requiredNodes: string[] = [];
     for (const port of this.schema.outputs.values()) {
+      if (port.name === 'usage_sources') continue;
       const nodeSchema = this.nodeSchema(port);
       if (!isOk(nodeSchema)) return nodeSchema;
       if (port.required) requiredNodes.push(port.name);

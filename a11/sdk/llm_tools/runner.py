@@ -119,7 +119,7 @@ def output_definition_from_schema(
     properties: dict[str, Any] = {}
     for port in entry.get("outputs", ()):
         name = port.get("name")
-        if not name:
+        if not name or name == "usage_sources":
             continue
         schema = deepcopy(port.get("json_schema", {}))
         if not port.get("unary", False):
@@ -491,7 +491,11 @@ async def collect_action_outputs(
     mapping = dict(action.get_schema().output_to_json_field)
     for output_name in action.get_schema().outputs.keys():
         per_port[output_name] = []
-        map_to = mapping.get(output_name) if mapping else output_name
+        map_to = (
+            None
+            if output_name == "usage_sources"
+            else mapping.get(output_name) if mapping else output_name
+        )
         try:
             node = action[output_name]
             async for fragment in node.iter_fragments(

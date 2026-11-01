@@ -62,6 +62,12 @@ inline constexpr std::string_view kActionDispatchStatusOutput =
  * @c a11/actions/log.h.
  */
 inline constexpr std::string_view kActionLogOutput = "__log__";
+/** @brief Reserved output discovering auxiliary streams in an action subtree. */
+inline constexpr std::string_view kActionStreamsOutput = "__streams__";
+/** @brief Header enabling auxiliary stream propagation across action calls. */
+inline constexpr std::string_view kStreamScopeHeader = "x-a11-stream-scope";
+/** @brief Collector storage namespaces that require no payload mirroring. */
+inline constexpr std::string_view kStreamStorageHeader = "x-a11-stream-storage";
 /** @brief Reserved action name used to signal cancellation to a peer. */
 inline constexpr std::string_view kCancelActionName = "__cancel__";
 /** @brief Header naming the action targeted by a cancel request. */

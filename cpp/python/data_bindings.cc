@@ -858,30 +858,155 @@ void BindData(py::module_& module) {
            "Return a human-readable debug string.");
   BindValueProtocol(chunk);
 
+  py::class_<data::StorageCredentials>(
+      module, "StorageCredentials",
+      "Scheme-labelled credential fields for a host storage resolver.")
+      .def(py::init([](std::string scheme, py::dict fields) {
+             data::StorageCredentials value{.scheme = std::move(scheme),
+                                            .fields = {}};
+             for (const auto item : fields) {
+               value.fields.emplace(py::cast<std::string>(item.first),
+                                    py::cast<std::string>(item.second));
+             }
+             ValidateOrThrow(value);
+             return value;
+           }),
+           "Create scheme-labelled credentials.", py::arg("scheme"),
+           py::arg("fields") = py::dict())
+      .def(
+          "__copy__", [](const data::StorageCredentials& self) { return self; },
+          "Copy this native value.")
+      .def(
+          "__deepcopy__",
+          [](const data::StorageCredentials& self, py::dict) { return self; },
+          "Copy this native value and its owned fields.", py::arg("memo"))
+      .def(
+          "__eq__",
+          [](const data::StorageCredentials& a,
+             const data::StorageCredentials& b) { return a == b; },
+          "Compare credential values.", py::arg("other"))
+      .def_readwrite("scheme", &data::StorageCredentials::scheme,
+                     "Authentication scheme interpreted by the host.")
+      .def_property(
+          "fields",
+          [](const data::StorageCredentials& self) {
+            py::dict result;
+            for (const auto& [key, value] : self.fields) {
+              result[py::str(key)] = py::str(value);
+            }
+            return result;
+          },
+          [](data::StorageCredentials& self, py::dict fields) {
+            data::StorageCredentials updated{.scheme = self.scheme,
+                                             .fields = {}};
+            for (const auto item : fields) {
+              updated.fields.emplace(py::cast<std::string>(item.first),
+                                     py::cast<std::string>(item.second));
+            }
+            ValidateOrThrow(updated);
+            self = std::move(updated);
+          },
+          "Scheme-specific string fields.")
+      .def(
+          "__repr__",
+          [](const data::StorageCredentials&) {
+            return "StorageCredentials(<redacted>)";
+          },
+          "Describe credentials without exposing their fields.");
+  py::class_<data::StorageService>(
+      module, "StorageService",
+      "One named service participating in a storage backend.")
+      .def(py::init([](std::string role, std::string endpoint,
+                       std::optional<data::StorageCredentials> credentials) {
+             data::StorageService value{.role = std::move(role),
+                                        .endpoint = std::move(endpoint),
+                                        .credentials = std::move(credentials)};
+             ValidateOrThrow(value);
+             return value;
+           }),
+           "Create service access information.", py::arg("role"),
+           py::arg("endpoint") = "", py::arg("credentials") = std::nullopt)
+      .def(
+          "__copy__", [](const data::StorageService& self) { return self; },
+          "Copy this native value.")
+      .def(
+          "__deepcopy__",
+          [](const data::StorageService& self, py::dict) { return self; },
+          "Copy this native value and its owned fields.", py::arg("memo"))
+      .def(
+          "__eq__",
+          [](const data::StorageService& a, const data::StorageService& b) {
+            return a == b;
+          },
+          "Compare service access information.", py::arg("other"))
+      .def_readwrite("role", &data::StorageService::role,
+                     "Service role within the backend.")
+      .def_readwrite("endpoint", &data::StorageService::endpoint,
+                     "Host-interpreted service endpoint.")
+      .def_readwrite("credentials", &data::StorageService::credentials,
+                     "Optional authentication fields.");
+  py::class_<data::StorageIdentity>(
+      module, "StorageIdentity",
+      "Logical storage namespace with optional service access information.")
+      .def(py::init(
+               [](std::string id, std::vector<data::StorageService> services) {
+                 data::StorageIdentity value{.id = std::move(id),
+                                             .services = std::move(services)};
+                 ValidateOrThrow(value);
+                 return value;
+               }),
+           "Create a storage identity.", py::arg("id"),
+           py::arg("services") = std::vector<data::StorageService>{})
+      .def(
+          "__copy__", [](const data::StorageIdentity& self) { return self; },
+          "Copy this native value.")
+      .def(
+          "__deepcopy__",
+          [](const data::StorageIdentity& self, py::dict) { return self; },
+          "Copy this native value and its owned fields.", py::arg("memo"))
+      .def(
+          "__eq__",
+          [](const data::StorageIdentity& a, const data::StorageIdentity& b) {
+            return a == b;
+          },
+          "Compare storage access information.", py::arg("other"))
+      .def_readwrite("id", &data::StorageIdentity::id,
+                     "Logical namespace interpreted by the host resolver.")
+      .def_readwrite("services", &data::StorageIdentity::services,
+                     "Optional service access information.")
+      .def("__repr__", &data::StorageIdentity::DebugString,
+           "Describe the namespace without credential values.");
+
   py::class_<data::NodeRef> node_ref(
-      module, "NodeRef", "Reference to a byte range of another logical node.",
+      module, "NodeRef",
+      "Reference to a fragment range of another logical node.",
       py::dynamic_attr());
   node_ref
       .def(py::init([](std::string id,
                        const py::typing::Optional<py::int_>& offset,
-                       const py::handle& length) {
+                       const py::handle& length,
+                       std::optional<data::StorageIdentity> storage) {
              data::NodeRef result{
                  .id = std::move(id),
                  .offset = static_cast<std::uint32_t>(UnsignedValue(
                      offset, std::numeric_limits<std::uint32_t>::max(),
                      "offset")),
-                 .length = OptionalLength(length)};
+                 .length = OptionalLength(length),
+                 .storage = std::move(storage)};
              ValidateOrThrow(result);
              return result;
            }),
-           "Create a node reference from an id, byte offset, and length.",
-           py::arg("id"), py::arg("offset") = 0, py::arg("length") = py::none())
+           "Create a storage-qualified reference to a fragment range.",
+           py::arg("id"), py::arg("offset") = 0, py::arg("length") = py::none(),
+           py::arg("storage") = std::nullopt)
       .def_readwrite("id", &data::NodeRef::id,
                      "Identifier of the referenced node.")
       .def_readwrite("offset", &data::NodeRef::offset,
-                     "Byte offset into the referenced node.")
+                     "First referenced fragment sequence.")
       .def_readwrite("length", &data::NodeRef::length,
-                     "Optional byte length of the referenced range.")
+                     "Optional number of referenced fragments.")
+      .def_readwrite("storage", &data::NodeRef::storage,
+                     "Optional host-resolved storage namespace.")
       .def_property_readonly("approx_bytes", &data::NodeRef::ApproxBytes,
                              "Approximate in-memory size of the ref in bytes.")
       .def("debug_string", &data::NodeRef::DebugString,

@@ -111,3 +111,31 @@ The complete buildable `split-words` variant is in the repository
 [README](https://github.com/hpnkv/a11#building-the-c-runtime). Continue with
 [streaming nodes](@ref cpp_streaming), or move the same schema and handler to a
 [remote session](@ref cpp_remote_actions).
+
+## Publish auxiliary stream references
+
+`Action::RegisterStream` creates an owned stream and returns a typed
+`StreamReference`. The descriptor contains producer identity, parentage, a
+`data::NodeRef`, a purpose, and opaque source metadata. `GetStreamSourcesNode`
+discovers references produced within an action subtree. `ExposeStreamSources`
+can also publish references of one purpose on a declared output port.
+
+The runtime closes producer streams with their owning actions and waits for
+active descendants before ending a requested scope. Session adapters forward
+references and mirror payloads when the collector lacks direct storage access.
+JSON conversion occurs through `StreamReferenceToChunk` and
+`StreamReferenceFromChunk`; registration and forwarding use the native struct.
+
+`NodeMap::Resolve` resolves a `NodeRef`. `ImportReference` shares its backing
+node across local scopes. A qualified reference contains `StorageIdentity`;
+`RegisterStorage` binds its logical id to a host-accessible backend and
+`SetStorageResolver` installs host connection policy. Optional service access
+information contains roles, endpoints, and scheme-labelled credential fields.
+The host decides how to interpret those fields. Namespace resolution remains
+independent of the usage payload protocol.
+
+A collector advertises directly accessible namespace ids through framework
+headers. Intermediate actions forward qualified references without relaying
+usage payloads for those namespaces. Unqualified references retain session-local
+resolution and transport mirroring. Reference windows use fragment sequences
+and counts.

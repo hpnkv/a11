@@ -36,7 +36,7 @@ class ValidationTest {
         )
         assertEquals(
             StatusCode.INVALID_ARGUMENT,
-            NodeRef.fromMsgpack(fields("node", 0xffff_ffffL, 2)).status.code,
+            NodeRef.fromMsgpack(fields("node", 0xffff_ffffL, 2, null)).status.code,
         )
         assertEquals(
             StatusCode.INVALID_ARGUMENT,

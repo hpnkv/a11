@@ -217,7 +217,14 @@
       ]
     },
     {
-      "description": "List the actions a flow may call, with the name, arity and description of every input and output port each one has. Call this before writing a flow: piping one action into another needs the names of the ports on both sides, and an action's output ports are not part of the tool definition you were given. The list is the actions you are allowed to call, minus the flow tools themselves.",
+      "description": "Optionally discover missing contracts for actions a flow may call. Pass names to request only the actions needed for the next step; omit names to list all permitted composable actions. Returns input and output ports plus runnable flags. Reuse known contracts in flow_run without this lookup.",
+      "inputs": [
+        {
+          "description": "Optional list of up to 12 unique action names.",
+          "name": "names",
+          "type": "application/json"
+        }
+      ],
       "name": "flow_actions",
       "outputs": [
         {
@@ -229,7 +236,7 @@
       ]
     },
     {
-      "description": "Compile a flow without running it, and return the composition it resolves to: its ports, and every step in the order they are written. Nothing is dispatched and no action is called, so this is the safe way to find out whether a flow says what you meant before its calls have real effects. A flow that will not compile comes back as an error naming the line and column of the problem.",
+      "description": "Optionally compile a Flow without dispatching actions. Returns the composition or a diagnostic with its location. Use this when compiler feedback would help; flow_run also compiles before running.",
       "inputs": [
         {
           "description": "The text of one or more flow declarations.",
@@ -249,7 +256,7 @@
       ]
     },
     {
-      "description": "Run a flow: a composition of the actions you may call, written in the A11 Flow language, dispatched here as one step. The actions it names really run, and their intermediate values move between them without passing through you -- which is the point, and the reason to reach for a flow when the data between two tools is large or when the same shape of work repeats. What comes back is the flow's declared outputs, one object keyed by port name, so declare outputs that are small enough to read. A flow may only call actions you are allowed to call; one that names another is refused before anything runs.",
+      "description": "Default execution tool for almost every tool operation, including a single read, search, edit, command, or request. Invoke underlying tools inside the Flow. Prefer composing specialized non-shell tools and Flow stages whenever they can solve the task. Combine independent work and known chains; use another Flow after a new decision. Compiles, checks permissions, and executes permitted actions. Proactively limit sources, filter and project results, and combine item caps with text truncation on returned evidence. Keep full intermediates needed by downstream actions inside the Flow. Returns declared outputs as an object keyed by port name. Discovery and a separate flow_check call are optional.",
       "inputs": [
         {
           "description": "Which flow in the source to run. Defaults to the first one declared, which is the one a file is usually about.",
@@ -262,12 +269,12 @@
           "type": "application/json"
         },
         {
-          "description": "Values for the flow's input ports, keyed by port name: the list of values to write to that port, or a bare value as shorthand for a list of one. How many a port takes is the flow's business, not this port's -- a port declared `stream` reads every value, an ordinary one reads the first, and a port left out here carries none.",
+          "description": "Object keyed by input port name. Supply one value for a unary port and a list of items for a stream port. Omitted ports are closed without values.",
           "name": "inputs",
           "type": "application/json"
         },
         {
-          "description": "The text of one or more flow declarations.",
+          "description": "Raw, unfenced Flow source. A one-action Flow is enough; use exact action and port names from known contracts and return only bounded evidence needed for the next decision.",
           "name": "source",
           "required": true,
           "type": "text/plain"
@@ -284,10 +291,9 @@
       ]
     },
     {
-      "description": "Route an LLM interaction to a concrete backend chosen by the x-a11-llm-provider header.",
       "headers": [
         {
-          "description": "The allowed action (tool) name patterns, comma-separated.",
+          "description": "The allowed downstream LLM action (tool) name patterns, comma-separated.",
           "name": "x-a11-allowed-llm-actions",
           "type": "string"
         },
@@ -302,7 +308,7 @@
           "type": "string"
         },
         {
-          "description": "The backend API key.",
+          "description": "API key for the downstream provider.",
           "name": "x-a11-llm-api-key",
           "type": "string"
         },
@@ -327,13 +333,18 @@
           "type": "string"
         },
         {
-          "description": "The backend model.",
+          "description": "The downstream model.",
           "name": "x-a11-llm-model",
           "type": "string"
         },
         {
-          "description": "Which backend to route to, one of: claude, claude_code, gemini, gpt, openai, codex, ollama, vllm.",
+          "description": "The downstream provider.",
           "name": "x-a11-llm-provider",
+          "type": "string"
+        },
+        {
+          "description": "Request dedicated usage streams with 'on'; inherited 'off' suppresses them.",
+          "name": "x-a11-usage-tracking",
           "type": "string"
         },
         {
@@ -354,6 +365,7 @@
       ],
       "inputs": [
         {
+          "description": "Options for the provider selected by x-a11-llm-provider. Choose that provider's object schema.",
           "name": "config",
           "type": "application/json"
         },
@@ -390,6 +402,12 @@
         {
           "name": "thoughts",
           "type": "text/plain",
+          "unary": false
+        },
+        {
+          "description": "References to direct and nested usage producers.",
+          "name": "usage_sources",
+          "type": "application/json",
           "unary": false
         }
       ]
@@ -692,7 +710,7 @@
       ]
     },
     {
-      "description": "Read a file, with each way of wanting it on a port of its own: the bytes as they arrive, the whole thing as text, one value per line, and the metadata -- which is written before any content, so a composition can act on the size while the reading is still going on. Reading streams, so a file larger than memory costs a chunk at a time. In Flow, pipe `bytes` straight into a streaming consumer, or filter and bound `lines` before routing only the useful selection to a flow output.",
+      "description": "Read a file, with each way of wanting it on a port of its own: the bytes as they arrive, the whole thing as std::text, one value per line, and the metadata -- which is written before any content, so a composition can act on the size while the reading is still going on. Reading streams, so a file larger than memory costs a chunk at a time. In Flow, pipe `bytes` straight into a streaming consumer, or filter and bound `lines` before routing only the useful selection to a flow output.",
       "headers": [
         {
           "description": "Absolute execution deadline: a base-10 count of milliseconds since the Unix epoch, or nanoseconds with an 'ns' suffix. The read fails with deadline_exceeded once it is reached, because a partial file is not a shorter file.",
@@ -1522,7 +1540,7 @@
       "tag": "a11.NodeFragment"
     },
     {
-      "description": "Reference to a byte range of another logical node.",
+      "description": "Reference to a fragment range of another logical node.",
       "fields": [
         {
           "description": "Approximate in-memory size of the ref in bytes.",
@@ -1535,13 +1553,18 @@
           "type": "json"
         },
         {
-          "description": "Optional byte length of the referenced range.",
+          "description": "Optional number of referenced fragments.",
           "name": "length",
           "type": "json"
         },
         {
-          "description": "Byte offset into the referenced node.",
+          "description": "First referenced fragment sequence.",
           "name": "offset",
+          "type": "json"
+        },
+        {
+          "description": "Optional host-resolved storage namespace.",
+          "name": "storage",
           "type": "json"
         }
       ],

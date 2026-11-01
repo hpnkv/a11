@@ -694,7 +694,7 @@ def _described_tool(
     fields = tuple(
         (mapping.get(name, name), name)
         for name in schema.outputs
-        if not mapping or name in mapping
+        if name != "usage_sources" and (not mapping or name in mapping)
     )
 
     return McpTool(

@@ -326,6 +326,32 @@ class Session(
         var protocolStatus: Status? = null
         var action: Action? = null
 
+        val referenceSuffix = "#" + ACTION_STREAMS_OUTPUT
+        if (
+            fragment.id.endsWith(referenceSuffix) &&
+                chunk is Ok &&
+                chunk.value.metadata?.attributes?.containsKey("a11-stream-reference") == true
+        ) {
+            val owner =
+                getAction(fragment.id.removeSuffix(referenceSuffix)).orElse {
+                    return it
+                }
+            if (chunk.value.data.size > 16384)
+                return resourceExhausted("Stream reference exceeds 16384 bytes.")
+            val text =
+                utf8Decode(chunk.value.data).orElse {
+                    return it
+                }
+            val reference =
+                A11Json.parse(text).orElse {
+                    return it
+                }
+            owner.receiveStreamReference(reference).orElse {
+                return it
+            }
+            return Ok(fragment.seq?.toLong() ?: 0L)
+        }
+
         // A closure marker reports that the peer drained the node and closed
         // its
         // write half; it carries no value, so it is applied to the local mirror

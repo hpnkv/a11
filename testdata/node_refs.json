@@ -1,0 +1,65 @@
+[
+  {
+    "name": "local",
+    "json": {
+      "id": "node"
+    },
+    "msgpack_hex": "a46e6f646500c0c0"
+  },
+  {
+    "name": "qualified",
+    "json": {
+      "id": "node",
+      "storage": {
+        "id": "shared"
+      }
+    },
+    "msgpack_hex": "a46e6f646500c081a26964a6736861726564"
+  },
+  {
+    "name": "window",
+    "json": {
+      "id": "node",
+      "offset": 17,
+      "length": 3,
+      "storage": {
+        "id": "shared"
+      }
+    },
+    "msgpack_hex": "a46e6f6465110381a26964a6736861726564"
+  },
+  {
+    "name": "services",
+    "json": {
+      "id": "node",
+      "storage": {
+        "id": "shared",
+        "services": [
+          {
+            "role": "index",
+            "endpoint": "redis://cache",
+            "credentials": {
+              "scheme": "redis",
+              "fields": {
+                "password": "test-password",
+                "username": "test"
+              }
+            }
+          },
+          {
+            "role": "payload",
+            "endpoint": "s3://bucket",
+            "credentials": {
+              "scheme": "aws",
+              "fields": {
+                "secret_access_key": "test-key",
+                "access_key_id": "test-id"
+              }
+            }
+          }
+        ]
+      }
+    },
+    "msgpack_hex": "a46e6f646500c082a26964a6736861726564a873657276696365739283ab63726564656e7469616c7382a66669656c647382a870617373776f7264ad746573742d70617373776f7264a8757365726e616d65a474657374a6736368656d65a57265646973a8656e64706f696e74ad72656469733a2f2f6361636865a4726f6c65a5696e64657883ab63726564656e7469616c7382a66669656c647382ad6163636573735f6b65795f6964a7746573742d6964b17365637265745f6163636573735f6b6579a8746573742d6b6579a6736368656d65a3617773a8656e64706f696e74ab73333a2f2f6275636b6574a4726f6c65a77061796c6f6164"
+  }
+]

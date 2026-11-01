@@ -1310,6 +1310,46 @@ void BindActions(py::module_& module) {
           "Return the action's log port node, claiming it for this consumer so "
           "the process log sink is not also told.")
       .def(
+          "get_stream_sources_node",
+          [](actions::Action& self) {
+            return ValueOrThrow(
+                WithoutGil([&] { return self.GetStreamSourcesNode(); }));
+          },
+          "Discover auxiliary streams produced within this action subtree.")
+      .def(
+          "expose_stream_sources",
+          [](actions::Action& self, std::string port, std::string purpose) {
+            ThrowIfNotOk(WithoutGil([&] {
+              return self.ExposeStreamSources(std::move(port),
+                                              std::move(purpose));
+            }));
+          },
+          "Publish references for a purpose on a declared output port.",
+          py::arg("port"), py::arg("purpose"))
+      .def(
+          "register_stream",
+          [](actions::Action& self, std::string purpose, py::object source,
+             std::string producer_id,
+             std::string parent_producer_id) -> py::dict {
+            auto metadata = AuthorizationJsonFromPython(source);
+            data::Chunk source_chunk{
+                .metadata = data::ChunkMetadata{.mimetype = "application/json"},
+                .data = metadata.dump()};
+            auto reference = ValueOrThrow(WithoutGil([&] {
+              return self.RegisterStream(
+                  std::move(purpose), std::move(source_chunk),
+                  std::move(producer_id), std::move(parent_producer_id));
+            }));
+            auto encoded =
+                ValueOrThrow(actions::StreamReferenceToChunk(reference));
+            return py::module_::import("json")
+                .attr("loads")(encoded.data)
+                .cast<py::dict>();
+          },
+          "Create an owned auxiliary stream and publish its source reference.",
+          py::arg("purpose"), py::arg("source"), py::arg("producer_id") = "",
+          py::arg("parent_producer_id") = "")
+      .def(
           "__getitem__",
           [](actions::Action& self, std::string name) {
             return ValueOrThrow(WithoutGil([&] { return self.GetPort(name); }));

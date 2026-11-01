@@ -123,6 +123,9 @@ The build uses `cmake-build-debug`, `cmake-build-release`, `build/debug`, or
 `build/release`, selecting the first configured directory. Set
 `-PflowToolBuildDir=/path/to/build` to select another CMake tree, or
 `-PflowToolBinary=/path/to/a11-flow` to package an explicitly supplied binary.
+The bundled Kotlin JNI library uses an optimized, stripped build; its original
+library remains in the CMake build directory for debugging. See the
+[Kotlin build options](../kotlin/README.md) for native build and stripping controls.
 Release builds can supply additional platforms under `bin/<os>-<arch>/`; an old
 host binary there cannot override the refreshed copy. Tests exercise the
 packaged service and verify its digest against the selected native binary.

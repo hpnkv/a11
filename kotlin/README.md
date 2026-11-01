@@ -143,10 +143,18 @@ four-space indentation, 100 columns, and explicit imports. The root
 `.editorconfig` supplies IDEA's settings; Gradle's `kotlinFormat` and
 `kotlinFormatCheck` tasks cover the library and example 010.
 
-The Gradle build configures CMake's debug preset with `A11_BUILD_JVM=ON` and
-packages the platform library in the jar. Set `A11_DEPS_PREFIX` as described in
-[BUILDING.md](../BUILDING.md). `-Da11.native.library=/absolute/path/to/library`
-selects an existing native build.
+The Gradle build uses CMake's optimized `release` preset with
+`A11_BUILD_JVM=ON`. The build stages a stripped copy under
+`build/native/<os>-<arch>/` and packages it in the JAR. The original library and
+debugging information stay in `cmake-build-release`. Only JNI entry points are
+exported from the module.
+Set `A11_DEPS_PREFIX` as described in [BUILDING.md](../BUILDING.md).
+
+Use `-Pa11.nativePreset=debug` for a Debug build, or
+`-Pa11.nativeStrip=false` to package the unstripped library. Set
+`-Pa11.strip=/path/to/strip` to select a stripping tool.
+`-Da11.native.library=/absolute/path/to/library` selects an existing native
+library at runtime, including the unstripped build output for debugging.
 
 Application examples:
 [009 C++ echo](../examples/009-websocket-echo-cc) and

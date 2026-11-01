@@ -61,7 +61,13 @@ val nativeArch =
         else -> "x86_64"
     }
 val nativeLibraryName = System.mapLibraryName("a11_jvm")
-val nativeLibrary = rootDir.resolve("../cmake-build-debug/cpp/$nativeLibraryName")
+val nativePreset = providers.gradleProperty("a11.nativePreset").orElse("release")
+val nativeBuildDirectory = rootDir.resolve("../cmake-build-${nativePreset.get()}")
+val nativeLibrary = nativeBuildDirectory.resolve("cpp/$nativeLibraryName")
+val packagedNativeLibrary =
+    layout.buildDirectory.file("native/$nativeOs-$nativeArch/$nativeLibraryName")
+val nativeStrip =
+    providers.gradleProperty("a11.nativeStrip").map { it.toBooleanStrict() }.orElse(true)
 val nativePrefix =
     System.getenv("A11_DEPS_PREFIX")
         ?: System.getProperty("user.home") +
@@ -94,29 +100,58 @@ val configureNativeJvm =
         workingDir(rootDir.resolve(".."))
         environment("A11_DEPS_PREFIX", nativePrefix)
         environment("JAVA_HOME", System.getProperty("java.home"))
-        commandLine("cmake", "--preset", "debug", "-DA11_BUILD_JVM=ON")
+        commandLine("cmake", "--preset", nativePreset.get(), "-DA11_BUILD_JVM=ON")
         environment("PATH", nativeToolPath.get())
         inputs.property("nativePrefix", nativePrefix)
+        inputs.property("nativePreset", nativePreset)
         doFirst { executable = cmakeExecutable.get() }
         inputs.files(
             rootDir.resolve("../CMakePresets.json"),
             rootDir.resolve("../cpp/CMakeLists.txt"),
             rootDir.resolve("../cpp/jvm/CMakeLists.txt"),
         )
-        outputs.file(rootDir.resolve("../cmake-build-debug/CMakeCache.txt"))
+        outputs.file(nativeBuildDirectory.resolve("CMakeCache.txt"))
     }
 val buildNativeJvm =
     tasks.register<Exec>("buildNativeJvm") {
         dependsOn(configureNativeJvm)
         workingDir(rootDir.resolve(".."))
-        commandLine("cmake", "--build", "--preset", "debug", "--target", "a11_jvm", "-j", "8")
+        commandLine("cmake", "--build", nativeBuildDirectory, "--target", "a11_jvm", "-j", "8")
         environment("PATH", nativeToolPath.get())
         doFirst { executable = cmakeExecutable.get() }
     }
 
+val prepareNativeJvm =
+    tasks.register("prepareNativeJvm") {
+        dependsOn(buildNativeJvm)
+        inputs.file(nativeLibrary)
+        inputs.property("strip", nativeStrip)
+        outputs.file(packagedNativeLibrary)
+        doLast {
+            val output = packagedNativeLibrary.get().asFile
+            output.parentFile.mkdirs()
+            nativeLibrary.copyTo(output, overwrite = true)
+            if (nativeStrip.get()) {
+                providers
+                    .exec {
+                        executable = providers.gradleProperty("a11.strip").orElse("strip").get()
+                        environment("PATH", nativeToolPath.get())
+                        args(
+                            if (nativeOs == "macos") listOf("-S", "-x")
+                            else listOf("--strip-unneeded")
+                        )
+                        args(output.absolutePath)
+                    }
+                    .result
+                    .get()
+                    .assertNormalExitValue()
+            }
+        }
+    }
+
 tasks.processResources {
-    dependsOn(buildNativeJvm)
-    from(nativeLibrary) { into("a11/native/$nativeOs-$nativeArch") }
+    dependsOn(prepareNativeJvm)
+    from(packagedNativeLibrary) { into("a11/native/$nativeOs-$nativeArch") }
 }
 
 // Match the published Google Kotlin guide (four spaces and 100 columns).

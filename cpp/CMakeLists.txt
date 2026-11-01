@@ -1716,6 +1716,21 @@ if (A11_BUILD_JVM)
     target_link_libraries(a11_jvm PRIVATE a11_jvm_runtime)
     target_compile_options(a11_jvm PRIVATE
             $<$<CXX_COMPILER_ID:AppleClang,Clang,GNU>:-fno-exceptions>)
+    # JNI entry points form this module's ABI; dependency symbols stay private.
+    if (APPLE)
+        target_link_options(a11_jvm PRIVATE
+                "LINKER:-exported_symbol,_Java_a11_*" "LINKER:-dead_strip")
+    elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        set(A11_JVM_EXPORTS "${CMAKE_CURRENT_SOURCE_DIR}/jvm/exports.map")
+        target_link_options(a11_jvm PRIVATE
+                "LINKER:--version-script,${A11_JVM_EXPORTS}"
+                "LINKER:--gc-sections")
+        set_property(TARGET a11_jvm APPEND PROPERTY LINK_DEPENDS
+                "${A11_JVM_EXPORTS}")
+        target_compile_options(a11_jvm PRIVATE -ffunction-sections -fdata-sections)
+        target_compile_options(a11_jvm_runtime PRIVATE
+                -ffunction-sections -fdata-sections)
+    endif ()
     install(TARGETS a11_jvm LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
 endif ()
 

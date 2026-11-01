@@ -1,0 +1,4 @@
+{
+    global: Java_a11_*;
+    local: *;
+};

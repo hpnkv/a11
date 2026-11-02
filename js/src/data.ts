@@ -22,11 +22,8 @@ import {
   type ByteMap,
   type ByteMapInput,
 } from './bytes.js';
-import {
-  decodeMsgpackFields,
-  encodeMsgpackFields,
-  msgpackByteMap,
-} from './msgpack_codec.js';
+import {dataCodecBridge} from './internal/wasm/native_data_codec.js';
+import {statusFromBridgeFailure} from './internal/wasm/status_bridge.js';
 import {
   failedPreconditionError,
   invalidArgumentError,
@@ -41,27 +38,34 @@ import {
 
 const UINT32_MAX = 0xffff_ffff;
 const UINT32_RANGE = 0x1_0000_0000;
-const INT64_MIN = -(1n << 63n);
-const INT64_MAX = (1n << 63n) - 1n;
-const NAME_PATTERN = /^[A-Za-z0-9_](?:[A-Za-z0-9_#-]{0,253}[A-Za-z0-9_])?$/;
+
+function encodeNativeData(kind: string, value: Record<string, unknown>):
+    StatusOr<Uint8Array> {
+  const bridge = dataCodecBridge();
+  if (bridge === null) return failedPreconditionError(
+    'Initialize A11 WASM before encoding A11 values.');
+  try { return bridge.encode(kind, value); }
+  catch (error) { return statusFromBridgeFailure(error, `${kind} encode failed.`); }
+}
+
+function decodeNativeData(kind: string, bytes: Uint8Array):
+    StatusOr<Record<string, unknown>> {
+  const bridge = dataCodecBridge();
+  if (bridge === null) return failedPreconditionError(
+    'Initialize A11 WASM before decoding A11 values.');
+  try { return bridge.decode(kind, bytes); }
+  catch (error) { return statusFromBridgeFailure(error, `${kind} decode failed.`); }
+}
 
 /** Validate an action, port, node, session, stream, or metadata identifier. */
 export function validateName(name: string): Status {
-  if (typeof name !== 'string' || name.length < 1 || name.length > 255) {
-    return invalidArgumentError(
-      'name must contain between 1 and 255 characters',
-    );
-  }
-  if (!NAME_PATTERN.test(name)) {
-    return invalidArgumentError(
-      'name must start and end with an ASCII letter, digit, or underscore and contain only [a-zA-Z0-9-_#]',
-    );
-  }
-  return okStatus();
-}
-
-function validateOptionalName(value: string): Status {
-  return value === '' ? okStatus() : validateName(value);
+  if (typeof name !== 'string') return invalidArgumentError(
+    'name must be a string.');
+  const native = dataCodecBridge();
+  if (native === null) return failedPreconditionError(
+    'Initialize A11 WASM before validating A11 names.');
+  try { native.validateName(name); return okStatus(); }
+  catch (error) { return statusFromBridgeFailure(error, 'Invalid A11 name.'); }
 }
 
 function asRecord(value: unknown, context: string): StatusOr<Record<string, unknown>> {
@@ -75,12 +79,6 @@ function asString(value: unknown, field: string): StatusOr<string> {
   return typeof value === 'string'
     ? value
     : invalidArgumentError(`${field} must be a string.`);
-}
-
-function asBinary(value: unknown, field: string): StatusOr<Uint8Array> {
-  return value instanceof Uint8Array
-    ? new Uint8Array(value)
-    : invalidArgumentError(`${field} must be MessagePack binary data.`);
 }
 
 function asUnsigned(
@@ -103,37 +101,6 @@ function asUnsigned(
     return outOfRangeError(`${field} exceeds its supported range.`);
   }
   return numberValue;
-}
-
-function asSignedInt64(
-  value: unknown,
-  field: string,
-): StatusOr<number | bigint> {
-  if (typeof value === 'bigint') {
-    return value >= INT64_MIN && value <= INT64_MAX
-      ? value
-      : outOfRangeError(`${field} exceeds int64.`);
-  }
-  if (typeof value !== 'number' || !Number.isSafeInteger(value)) {
-    return invalidArgumentError(`${field} must be integer microseconds.`);
-  }
-  return value;
-}
-
-function decodeByteMap(value: unknown, field: string): StatusOr<ByteMap> {
-  const object = asRecord(value, field);
-  if (!isOk(object)) return object;
-  const result: ByteMap = new Map();
-  for (const [key, raw] of Object.entries(object)) {
-    const valid = validateName(key);
-    if (!isOk(valid)) {
-      return invalidArgumentError(`Invalid key in ${field}: ${valid.message}`);
-    }
-    const bytes = asBinary(raw, `${field}.${key}`);
-    if (!isOk(bytes)) return bytes;
-    result.set(key, bytes);
-  }
-  return result;
 }
 
 function byteMapFromJson(value: unknown, field: string): StatusOr<ByteMap> {
@@ -236,26 +203,9 @@ export class ChunkMetadata {
   /** Validate MIME, timestamp, and attribute fields. */
   validate(): Status {
     try {
-      if (typeof this.mimetype !== 'string') {
-        return invalidArgumentError('ChunkMetadata.mimetype must be a string.');
-      }
-      if (this.timestamp !== null && !isValidDate(this.timestamp)) {
-        return invalidArgumentError('ChunkMetadata.timestamp must be a valid Date or null.');
-      }
-      if (!(this.attributes instanceof Map)) {
-        return invalidArgumentError('ChunkMetadata.attributes must be a Map.');
-      }
-      for (const [key, value] of this.attributes) {
-        const status = validateName(key);
-        if (!isOk(status)) return status;
-        if (!(value instanceof Uint8Array)) {
-          return invalidArgumentError(
-            'ChunkMetadata attribute values must be Uint8Array values.',
-          );
-        }
-      }
-      return okStatus();
-    } catch (error) {
+      const native = encodeNativeData('chunk_metadata', metadataToJson(this));
+      return isOk(native) ? okStatus() : native;
+} catch (error) {
       return invalidArgumentError('Invalid ChunkMetadata value.', [], error);
     }
   }
@@ -288,45 +238,15 @@ export class ChunkMetadata {
 
   /** Encode the concatenated MessagePack metadata record. */
   toMsgpack(): StatusOr<Uint8Array> {
-    const status = this.validate();
-    if (!isOk(status)) return status;
-    let timestamp: number | bigint | null = null;
-    if (this.timestamp !== null) {
-      const micros = BigInt(Math.trunc(this.timestamp.getTime())) * 1000n;
-      timestamp = micros >= BigInt(Number.MIN_SAFE_INTEGER) &&
-          micros <= BigInt(Number.MAX_SAFE_INTEGER)
-        ? Number(micros)
-        : micros;
-    }
-    return encodeMsgpackFields([
-      this.mimetype,
-      timestamp,
-      msgpackByteMap(this.attributes),
-    ]);
-  }
+    const native = encodeNativeData('chunk_metadata', metadataToJson(this));
+    return native;
+}
 
   /** Decode a concatenated MessagePack metadata record. */
   static fromMsgpack(bytes: Uint8Array): StatusOr<ChunkMetadata> {
-    const fields = decodeMsgpackFields(bytes, 3, 'ChunkMetadata');
-    if (!isOk(fields)) return fields;
-    const mimetype = asString(fields[0], 'ChunkMetadata.mimetype');
-    if (!isOk(mimetype)) return mimetype;
-    let timestamp: Date | null = null;
-    if (fields[1] !== null) {
-      const micros = asSignedInt64(fields[1], 'ChunkMetadata.timestamp');
-      if (!isOk(micros)) return micros;
-      const milliseconds = typeof micros === 'bigint'
-        ? Number(micros / 1000n)
-        : micros / 1000;
-      timestamp = new Date(milliseconds);
-      if (!isValidDate(timestamp)) {
-        return outOfRangeError('ChunkMetadata.timestamp is outside the Date range.');
-      }
-    }
-    const attributes = decodeByteMap(fields[2], 'ChunkMetadata.attributes');
-    if (!isOk(attributes)) return attributes;
-    return ChunkMetadata.create({ mimetype, timestamp, attributes });
-  }
+    const native = decodeNativeData('chunk_metadata', bytes);
+    return isOk(native) ? metadataFromJson(native) : native;
+}
 }
 
 /** Inline payload, reference, and metadata accepted by {@link Chunk}. */
@@ -404,47 +324,24 @@ export class Chunk {
   /** Validate payload ownership and metadata. */
   validate(): Status {
     try {
-      if (typeof this.ref !== 'string') return invalidArgumentError('Chunk.ref must be a string.');
-      if (!(this.data instanceof Uint8Array)) return invalidArgumentError('Chunk.data must be Uint8Array.');
-      if (this.ref !== '' && this.data.byteLength !== 0) {
-        return invalidArgumentError('Only one of ref or data may be set');
-      }
-      if (this.metadata !== null && !(this.metadata instanceof ChunkMetadata)) {
-        return invalidArgumentError('Chunk.metadata must be ChunkMetadata or null.');
-      }
-      return this.metadata === null ? okStatus() : this.metadata.validate();
-    } catch (error) {
+      const native = encodeNativeData('chunk', chunkToJson(this));
+      return isOk(native) ? okStatus() : native;
+} catch (error) {
       return invalidArgumentError('Invalid Chunk value.', [], error);
     }
   }
 
   /** Encode the concatenated MessagePack chunk record. */
   toMsgpack(): StatusOr<Uint8Array> {
-    const status = this.validate();
-    if (!isOk(status)) return status;
-    const metadata = this.metadata?.toMsgpack() ?? null;
-    if (metadata !== null && !isOk(metadata)) return metadata;
-    return encodeMsgpackFields([metadata, this.ref, this.data]);
-  }
+    const native = encodeNativeData('chunk', chunkToJson(this));
+    return native;
+}
 
   /** Decode a concatenated MessagePack chunk record. */
   static fromMsgpack(bytes: Uint8Array): StatusOr<Chunk> {
-    const fields = decodeMsgpackFields(bytes, 3, 'Chunk');
-    if (!isOk(fields)) return fields;
-    let metadata: ChunkMetadata | null = null;
-    if (fields[0] !== null) {
-      const encoded = asBinary(fields[0], 'Chunk.metadata');
-      if (!isOk(encoded)) return encoded;
-      const decoded = ChunkMetadata.fromMsgpack(encoded);
-      if (!isOk(decoded)) return decoded;
-      metadata = decoded;
-    }
-    const ref = asString(fields[1], 'Chunk.ref');
-    if (!isOk(ref)) return ref;
-    const data = asBinary(fields[2], 'Chunk.data');
-    if (!isOk(data)) return data;
-    return Chunk.create({ metadata, ref, data });
-  }
+    const native = decodeNativeData('chunk', bytes);
+    return isOk(native) ? chunkFromJson(native) : native;
+}
 }
 
 /** Scheme-labelled string fields interpreted by a host storage resolver. */
@@ -563,26 +460,9 @@ export class NodeRef {
   /** Validate the id and uint32 window. */
   validate(): Status {
     try {
-      if (this.storage !== null) {
-        const storage = storageIdentityFromValue(this.storage);
-        if (!isOk(storage)) return storage;
-      }
-      const nameStatus = validateName(this.id);
-      if (!isOk(nameStatus)) return nameStatus;
-      if (!Number.isInteger(this.offset) || this.offset < 0 || this.offset > UINT32_MAX) {
-        return invalidArgumentError('NodeRef.offset must be a uint32 integer.');
-      }
-      if (
-        this.length !== null &&
-        (!Number.isInteger(this.length) ||
-          this.length < 0 ||
-          this.length > UINT32_RANGE ||
-          this.length + this.offset > UINT32_RANGE)
-      ) {
-        return invalidArgumentError('Offset + length must not exceed 2^32');
-      }
-      return okStatus();
-    } catch (error) {
+      const native = encodeNativeData('node_ref', nodeRefToJson(this));
+      return isOk(native) ? okStatus() : native;
+} catch (error) {
       return invalidArgumentError('Invalid NodeRef value.', [], error);
     }
   }
@@ -608,31 +488,15 @@ export class NodeRef {
 
   /** Encode the concatenated MessagePack node-reference record. */
   toMsgpack(): StatusOr<Uint8Array> {
-    const status = this.validate();
-    if (!isOk(status)) return status;
-    const storage = this.storage === null ? null : storageIdentityFromValue(this.storage);
-    return storage !== null && !isOk(storage) ? storage
-      : encodeMsgpackFields([this.id, this.offset, this.length, storage]);
-  }
+    const native = encodeNativeData('node_ref', nodeRefToJson(this));
+    return native;
+}
 
   /** Decode a concatenated MessagePack node-reference record. */
   static fromMsgpack(bytes: Uint8Array): StatusOr<NodeRef> {
-    const fields = decodeMsgpackFields(bytes, 4, 'NodeRef');
-    if (!isOk(fields)) return fields;
-    const id = asString(fields[0], 'NodeRef.id');
-    if (!isOk(id)) return id;
-    const offset = asUnsigned(fields[1], 'NodeRef.offset', UINT32_MAX);
-    if (!isOk(offset)) return offset;
-    let length: number | null = null;
-    if (fields[2] !== null) {
-      const decoded = asUnsigned(fields[2], 'NodeRef.length', UINT32_RANGE);
-      if (!isOk(decoded)) return decoded;
-      length = decoded;
-    }
-    const storage = fields[3] === null ? null : storageIdentityFromValue(fields[3]);
-    if (storage !== null && !isOk(storage)) return storage;
-    return NodeRef.create({ id, offset, length, storage });
-  }
+    const native = decodeNativeData('node_ref', bytes);
+    return isOk(native) ? nodeRefFromJson(native) : native;
+}
 }
 
 /** Stream identity, payload, sequence, and continuation fields. */
@@ -690,19 +554,9 @@ export class NodeFragment {
   /** Validate identity, sequence, continuation, and payload. */
   validate(): Status {
     try {
-      const idStatus = validateOptionalName(this.id);
-      if (!isOk(idStatus)) return idStatus;
-      if (!(this.data instanceof Chunk) && !(this.data instanceof NodeRef)) {
-        return invalidArgumentError('NodeFragment.data must be a Chunk or NodeRef.');
-      }
-      if (this.seq !== null && (!Number.isInteger(this.seq) || this.seq < 0 || this.seq > UINT32_MAX)) {
-        return invalidArgumentError('NodeFragment.seq must be a uint32 integer or null.');
-      }
-      if (typeof this.continued !== 'boolean') {
-        return invalidArgumentError('NodeFragment.continued must be boolean.');
-      }
-      return this.data.validate();
-    } catch (error) {
+      const native = encodeNativeData('node_fragment', fragmentToJson(this));
+      return isOk(native) ? okStatus() : native;
+} catch (error) {
       return invalidArgumentError('Invalid NodeFragment value.', [], error);
     }
   }
@@ -723,42 +577,15 @@ export class NodeFragment {
 
   /** Encode the concatenated MessagePack fragment record. */
   toMsgpack(): StatusOr<Uint8Array> {
-    const status = this.validate();
-    if (!isOk(status)) return status;
-    const encoded = this.data.toMsgpack();
-    if (!isOk(encoded)) return encoded;
-    return encodeMsgpackFields([
-      this.id,
-      this.data instanceof Chunk ? 0 : 1,
-      encoded,
-      this.seq,
-      this.continued,
-    ]);
-  }
+    const native = encodeNativeData('node_fragment', fragmentToJson(this));
+    return native;
+}
 
   /** Decode a concatenated MessagePack fragment record. */
   static fromMsgpack(bytes: Uint8Array): StatusOr<NodeFragment> {
-    const fields = decodeMsgpackFields(bytes, 5, 'NodeFragment');
-    if (!isOk(fields)) return fields;
-    const id = asString(fields[0], 'NodeFragment.id');
-    if (!isOk(id)) return id;
-    const variant = asUnsigned(fields[1], 'NodeFragment.data index', 1);
-    if (!isOk(variant)) return variant;
-    const encoded = asBinary(fields[2], 'NodeFragment.data');
-    if (!isOk(encoded)) return encoded;
-    const data = variant === 0 ? Chunk.fromMsgpack(encoded) : NodeRef.fromMsgpack(encoded);
-    if (!isOk(data)) return data;
-    let seq: number | null = null;
-    if (fields[3] !== null) {
-      const parsed = asUnsigned(fields[3], 'NodeFragment.seq', UINT32_MAX);
-      if (!isOk(parsed)) return parsed;
-      seq = parsed;
-    }
-    if (typeof fields[4] !== 'boolean') {
-      return invalidArgumentError('NodeFragment.continued must be bool.');
-    }
-    return NodeFragment.create({ id, data, seq, continued: fields[4] });
-  }
+    const native = decodeNativeData('node_fragment', bytes);
+    return isOk(native) ? fragmentFromJson(native) : native;
+}
 }
 
 /** Maps one schema port name onto the concrete node id for an action instance. */
@@ -787,28 +614,24 @@ export class Port {
   /** Validate the optional port and node names. */
   validate(): Status {
     try {
-      const nameStatus = validateOptionalName(this.name);
-      return isOk(nameStatus) ? validateOptionalName(this.id) : nameStatus;
-    } catch (error) {
+      const native = encodeNativeData('port', portToJson(this));
+      return isOk(native) ? okStatus() : native;
+} catch (error) {
       return invalidArgumentError('Invalid Port value.', [], error);
     }
   }
 
   /** Encode the concatenated MessagePack port record. */
   toMsgpack(): StatusOr<Uint8Array> {
-    const status = this.validate();
-    return isOk(status) ? encodeMsgpackFields([this.name, this.id]) : status;
-  }
+    const native = encodeNativeData('port', portToJson(this));
+    return native;
+}
 
   /** Decode a concatenated MessagePack port record. */
   static fromMsgpack(bytes: Uint8Array): StatusOr<Port> {
-    const fields = decodeMsgpackFields(bytes, 2, 'Port');
-    if (!isOk(fields)) return fields;
-    const name = asString(fields[0], 'Port.name');
-    if (!isOk(name)) return name;
-    const id = asString(fields[1], 'Port.id');
-    return isOk(id) ? Port.create(name, id) : id;
-  }
+    const native = decodeNativeData('port', bytes);
+    return isOk(native) ? portFromJson(native) : native;
+}
 }
 
 /** Action call identity, port mappings, and headers accepted on the wire. */
@@ -874,78 +697,24 @@ export class ActionMessage {
   /** Validate identity, port mappings, and headers. */
   validate(): Status {
     try {
-      for (const name of [this.id, this.name]) {
-        const status = validateOptionalName(name);
-        if (!isOk(status)) return status;
-      }
-      if (!Array.isArray(this.inputs) || !Array.isArray(this.outputs)) {
-        return invalidArgumentError('Action ports must be arrays.');
-      }
-      for (const port of [...this.inputs, ...this.outputs]) {
-        if (!(port instanceof Port)) return invalidArgumentError('Action ports must be Port values.');
-        const status = port.validate();
-        if (!isOk(status)) return status;
-      }
-      if (!(this.headers instanceof Map)) {
-        return invalidArgumentError('ActionMessage.headers must be a Map.');
-      }
-      for (const [key, value] of this.headers) {
-        const status = validateName(key);
-        if (!isOk(status)) return status;
-        if (!(value instanceof Uint8Array)) {
-          return invalidArgumentError(
-            'ActionMessage header values must be Uint8Array values.',
-          );
-        }
-      }
-      return okStatus();
-    } catch (error) {
+      const native = encodeNativeData('action_message', actionToJson(this));
+      return isOk(native) ? okStatus() : native;
+} catch (error) {
       return invalidArgumentError('Invalid ActionMessage value.', [], error);
     }
   }
 
   /** Encode the concatenated MessagePack action record. */
   toMsgpack(): StatusOr<Uint8Array> {
-    const status = this.validate();
-    if (!isOk(status)) return status;
-    const inputs: Uint8Array[] = [];
-    const outputs: Uint8Array[] = [];
-    for (const [ports, encoded] of [[this.inputs, inputs], [this.outputs, outputs]] as const) {
-      for (const port of ports) {
-        const bytes = port.toMsgpack();
-        if (!isOk(bytes)) return bytes;
-        encoded.push(bytes);
-      }
-    }
-    return encodeMsgpackFields([this.id, this.name, inputs, outputs, msgpackByteMap(this.headers)]);
-  }
+    const native = encodeNativeData('action_message', actionToJson(this));
+    return native;
+}
 
   /** Decode a concatenated MessagePack action record. */
   static fromMsgpack(bytes: Uint8Array): StatusOr<ActionMessage> {
-    const fields = decodeMsgpackFields(bytes, 5, 'ActionMessage');
-    if (!isOk(fields)) return fields;
-    const id = asString(fields[0], 'ActionMessage.id');
-    if (!isOk(id)) return id;
-    const name = asString(fields[1], 'ActionMessage.name');
-    if (!isOk(name)) return name;
-    const decodedPorts: Port[][] = [];
-    for (const [index, field] of [[2, 'inputs'], [3, 'outputs']] as const) {
-      const raw = fields[index];
-      if (!Array.isArray(raw)) return invalidArgumentError(`ActionMessage.${field} must be a list.`);
-      const ports: Port[] = [];
-      for (const item of raw) {
-        const encoded = asBinary(item, `ActionMessage.${field}`);
-        if (!isOk(encoded)) return encoded;
-        const port = Port.fromMsgpack(encoded);
-        if (!isOk(port)) return port;
-        ports.push(port);
-      }
-      decodedPorts.push(ports);
-    }
-    const headers = decodeByteMap(fields[4], 'ActionMessage.headers');
-    if (!isOk(headers)) return headers;
-    return ActionMessage.create({ id, name, inputs: decodedPorts[0], outputs: decodedPorts[1], headers });
-  }
+    const native = decodeNativeData('action_message', bytes);
+    return isOk(native) ? actionFromJson(native) : native;
+}
 }
 
 /** Fragments, calls, and connection metadata batched into a WireMessage. */
@@ -1005,36 +774,9 @@ export class WireMessage {
   /** Validate all fragments, calls, and headers. */
   validate(): Status {
     try {
-      if (!Array.isArray(this.nodeFragments)) {
-        return invalidArgumentError('WireMessage.nodeFragments must be an array.');
-      }
-      if (!Array.isArray(this.actions)) {
-        return invalidArgumentError('WireMessage.actions must be an array.');
-      }
-      for (const fragment of this.nodeFragments) {
-        if (!(fragment instanceof NodeFragment)) return invalidArgumentError('WireMessage.nodeFragments must contain NodeFragment values.');
-        const status = fragment.validate();
-        if (!isOk(status)) return status;
-      }
-      for (const action of this.actions) {
-        if (!(action instanceof ActionMessage)) return invalidArgumentError('WireMessage.actions must contain ActionMessage values.');
-        const status = action.validate();
-        if (!isOk(status)) return status;
-      }
-      if (!(this.headers instanceof Map)) {
-        return invalidArgumentError('WireMessage.headers must be a Map.');
-      }
-      for (const [key, value] of this.headers) {
-        const status = validateName(key);
-        if (!isOk(status)) return status;
-        if (!(value instanceof Uint8Array)) {
-          return invalidArgumentError(
-            'WireMessage header values must be Uint8Array values.',
-          );
-        }
-      }
-      return okStatus();
-    } catch (error) {
+      const native = encodeNativeData('wire_message', wireMessageJsonUnchecked(this));
+      return isOk(native) ? okStatus() : native;
+} catch (error) {
       return invalidArgumentError('Invalid WireMessage value.', [], error);
     }
   }
@@ -1046,52 +788,16 @@ export class WireMessage {
 
   /** Encode the current concatenated MessagePack wire record. */
   toMsgpack(): StatusOr<Uint8Array> {
-    const status = this.validate();
-    if (!isOk(status)) return status;
-    const fragments: Uint8Array[] = [];
-    const actions: Uint8Array[] = [];
-    for (const fragment of this.nodeFragments) {
-      const bytes = fragment.toMsgpack();
-      if (!isOk(bytes)) return bytes;
-      fragments.push(bytes);
-    }
-    for (const action of this.actions) {
-      const bytes = action.toMsgpack();
-      if (!isOk(bytes)) return bytes;
-      actions.push(bytes);
-    }
-    return encodeMsgpackFields([WireMessage.VERSION, fragments, actions, msgpackByteMap(this.headers)]);
-  }
+    const native = encodeNativeData('wire_message', wireMessageJsonUnchecked(this));
+    return native;
+}
 
   /** Decode a concatenated MessagePack wire record. */
   static fromMsgpack(bytes: Uint8Array): StatusOr<WireMessage> {
-    const fields = decodeMsgpackFields(bytes, 4, 'WireMessage');
-    if (!isOk(fields)) return fields;
-    const version = asUnsigned(fields[0], 'WireMessage.version', UINT32_MAX);
-    if (!isOk(version)) return version;
-    if (version !== WireMessage.VERSION) {
-      return invalidArgumentError(`Invalid serialized WireMessage version: ${version}`);
-    }
-    const fragments: NodeFragment[] = [];
-    const actions: ActionMessage[] = [];
-    for (const [index, target, decode, field] of [
-      [1, fragments, NodeFragment.fromMsgpack, 'node_fragments'],
-      [2, actions, ActionMessage.fromMsgpack, 'actions'],
-    ] as const) {
-      const raw = fields[index];
-      if (!Array.isArray(raw)) return invalidArgumentError(`WireMessage.${field} must be a list.`);
-      for (const item of raw) {
-        const encoded = asBinary(item, `WireMessage.${field}`);
-        if (!isOk(encoded)) return encoded;
-        const value = decode(encoded);
-        if (!isOk(value)) return value;
-        (target as Array<NodeFragment | ActionMessage>).push(value);
-      }
-    }
-    const headers = decodeByteMap(fields[3], 'WireMessage.headers');
-    if (!isOk(headers)) return headers;
-    return WireMessage.create({ nodeFragments: fragments, actions, headers });
-  }
+    const native = decodeNativeData('wire_message', bytes);
+    return isOk(native) ?
+      wireMessageFromJsonValueUnchecked(native) : native;
+}
 
   /** Convert the message to its language-neutral JSON field map. */
   toJsonValue(): StatusOr<Record<string, unknown>> {
@@ -1149,17 +855,18 @@ function chunkToJson(chunk: Chunk): Record<string, unknown> {
   return result;
 }
 
+function nodeRefToJson(ref: NodeRef): Record<string, unknown> {
+  return {id: ref.id, ...(ref.offset === 0 ? {} : {offset: ref.offset}),
+    ...(ref.length === null ? {} : {length: ref.length}),
+    ...(ref.storage === null ? {} : {storage: ref.storage})};
+}
+
 function fragmentToJson(fragment: NodeFragment): Record<string, unknown> {
   const result: Record<string, unknown> = {};
   if (fragment.id !== '') result.id = fragment.id;
   result.data = fragment.data instanceof Chunk
     ? chunkToJson(fragment.data)
-    : {
-        id: fragment.data.id,
-        ...(fragment.data.offset === 0 ? {} : { offset: fragment.data.offset }),
-        ...(fragment.data.length === null ? {} : { length: fragment.data.length }),
-        ...(fragment.data.storage === null ? {} : { storage: fragment.data.storage }),
-      };
+    : nodeRefToJson(fragment.data);
   if (fragment.seq !== null) result.seq = fragment.seq;
   if (fragment.continued) result.continued = true;
   return result;
@@ -1192,14 +899,18 @@ export function wireMessageToJsonValue(
     }
     const validation = message.validate();
     if (!isOk(validation)) return validation;
-    return {
-      ...(message.nodeFragments.length === 0 ? {} : { node_fragments: message.nodeFragments.map(fragmentToJson) }),
-      ...(message.actions.length === 0 ? {} : { actions: message.actions.map(actionToJson) }),
-      ...(message.headers.size === 0 ? {} : { headers: byteMapToJson(message.headers) }),
-    };
+    return wireMessageJsonUnchecked(message);
   } catch (error) {
     return statusFromUnknown(error, 'Serializing WireMessage JSON value raised.');
   }
+}
+
+function wireMessageJsonUnchecked(message: WireMessage): Record<string, unknown> {
+  return {
+    ...(message.nodeFragments.length === 0 ? {} : { node_fragments: message.nodeFragments.map(fragmentToJson) }),
+    ...(message.actions.length === 0 ? {} : { actions: message.actions.map(actionToJson) }),
+    ...(message.headers.size === 0 ? {} : { headers: byteMapToJson(message.headers) }),
+  };
 }
 
 function metadataFromJson(value: unknown): StatusOr<ChunkMetadata> {

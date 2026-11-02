@@ -72,6 +72,9 @@ export async function createA11WasmRuntime(options = {}) {
   const registryGenerations = new Map();
   const activeCallbacks = new Map();
   const hostStreams = new Map();
+  const hostChannels = new Map();
+  const channelCallbacks = new Map();
+  const attachedChannelStreams = new Map();
   const releasingHostStreams = new Map();
   let saveQueue = Promise.resolve();
   let workerTermination = Promise.resolve();
@@ -107,6 +110,12 @@ export async function createA11WasmRuntime(options = {}) {
       void Promise.resolve().then(() => stream.abort(terminal)).catch(() => {});
     }
     hostStreams.clear();
+    for (const channel of hostChannels.values()) {
+      try { channel.close(); } catch {}
+    }
+    hostChannels.clear();
+    channelCallbacks.clear();
+    attachedChannelStreams.clear();
     releasingHostStreams.clear();
     for (const [id, item] of pending) {
       pending.delete(id);
@@ -122,9 +131,66 @@ export async function createA11WasmRuntime(options = {}) {
       worker = current;
       function message(value) {
         const data = value?.data ?? value;
+        if (data.binaryEvent) {
+          const event = data.binaryEvent;
+          Promise.resolve().then(async () => {
+            const channel = hostChannels.get(event.streamId);
+            if (!channel) return {status: {code: StatusCode.NOT_FOUND,
+              message: 'Host binary channel is unknown', details: []}};
+            let value;
+            let status;
+            if (event.kind === 'open') status = await channel.open();
+            else if (event.kind === 'send') {
+              status = channel.send(decodeSnapshot(event.payload));
+            } else if (event.kind === 'is_open') {
+              value = channel.isOpen();
+            } else if (event.kind === 'buffered_amount') {
+              value = channel.bufferedAmount();
+              if (value && typeof value === 'object' &&
+                  typeof value.code === 'number') {
+                status = value;
+                value = undefined;
+              }
+            } else if (event.kind === 'close') status = channel.close();
+            else if (event.kind === 'abort') status = channel.abort
+              ? channel.abort(event.payload) : channel.close();
+            else if (event.kind === 'reset') status = channel.resetCallbacks();
+            else return {status: {code: StatusCode.UNIMPLEMENTED,
+              message: `Unknown binary event ${event.kind}`, details: []}};
+            if (event.kind === 'is_open' && typeof value !== 'boolean') {
+              throw new TypeError('BinaryChannel.isOpen() must return boolean');
+            }
+            if (event.kind === 'buffered_amount' &&
+                (!Number.isSafeInteger(value) || value < 0)) {
+              throw new TypeError('BinaryChannel.bufferedAmount() must be nonnegative');
+            }
+            return {status: normalizeStatus(status ?? {code: StatusCode.OK,
+              message: '', details: []}, 'Invalid BinaryChannel status'), value};
+          }).catch(error => ({status: statusFromThrown(error,
+            'Host binary channel operation failed')})).then(answer => {
+            current.postMessage({binaryResult: {id: event.id, answer}});
+          });
+          return;
+        }
         if (data.wireEvent) {
           const event = data.wireEvent;
           Promise.resolve().then(async () => {
+            const callbacks = channelCallbacks.get(event.streamId);
+            if (callbacks) {
+              if (event.kind === 'message') {
+                return normalizeStatus(await callbacks.onMessage(event.payload),
+                  'Invalid channel message callback status');
+              }
+              if (event.kind === 'half_close') {
+                return normalizeStatus(await callbacks.onMessage(null,
+                  event.payload),
+                  'Invalid channel half-close callback status');
+              }
+              if (event.kind === 'done') {
+                return normalizeStatus(await callbacks.onDone(event.payload),
+                  'Invalid channel done callback status');
+              }
+            }
             const stream = hostStreams.get(event.streamId);
             if (!stream) return {code: StatusCode.NOT_FOUND,
               message: 'Host wire stream is not attached', details: []};
@@ -222,7 +288,8 @@ export async function createA11WasmRuntime(options = {}) {
           const invocation = data.invokeSession;
           const callbacks = sessionCallbacks.get(invocation.sessionId);
           const event = invocation.event;
-          const stream = hostStreams.get(event?.streamId);
+          const stream = hostStreams.get(event?.streamId) ??
+            attachedChannelStreams.get(`${invocation.sessionId}\0${event?.streamId}`);
           const invoked = Promise.resolve().then(async () => {
             if (!callbacks || !stream) return {code: StatusCode.NOT_FOUND,
               message: 'Session callback or stream is unavailable',
@@ -382,7 +449,103 @@ export async function createA11WasmRuntime(options = {}) {
       registryGenerations.delete(name);
       hostActions.delete(name);
     },
+    async createChannelStream(channel, id, role = 'either',
+                              streamOptions = {}, framing = {}) {
+      if (!channel || typeof channel.setCallbacks !== 'function' ||
+          typeof id !== 'string' || !id) {
+        throw new TypeError('A stream id and BinaryChannel are required');
+      }
+      const wireId = id;
+      id = `channel-${++serial}-${wireId}`;
+      hostChannels.set(id, channel);
+      let prepared = false;
+      try {
+        await command({operation: 'channel_prepare', id, wireId, role,
+          options: streamOptions, framing});
+        prepared = true;
+        const emit = (kind, payload = null) => {
+          void command({operation: 'channel_event', id, kind, payload})
+            .catch(() => {});
+        };
+        const status = normalizeStatus(channel.setCallbacks({
+          onOpen: () => emit('open'),
+          onMessage: packet => emit('message', encodeSnapshot(packet)),
+          onError: error => emit('error', error),
+          onClosed: () => emit('closed'),
+          onBufferedAmountLow: () => emit('buffered_amount_low'),
+        }), 'Invalid BinaryChannel callback status');
+        if (status.code !== StatusCode.OK) throw new A11WasmError(status);
+        return {
+          __a11NativeChannelStream: true,
+          ownerRuntime: api,
+          id,
+          wireId,
+          send: message => command({operation: 'channel_send', id, message}),
+          halfClose: message => command({operation: 'channel_half_close',
+            id, message}),
+          abort: status => command({operation: 'channel_abort', id, status}),
+          drain: () => command({operation: 'channel_drain', id}),
+          setDeadline: deadlineMs => command({operation: 'channel_deadline',
+            id, deadlineMs}),
+          status: () => command({operation: 'channel_status', id}),
+          receiveStart(mode, onMessage, onDone) {
+            channelCallbacks.set(id, {onMessage, onDone});
+            return command({operation: mode === 'accept'
+              ? 'channel_recv_accept' : 'channel_recv_start', id})
+              .catch(error => { channelCallbacks.delete(id); throw error; });
+          },
+          receive: timeoutMs => command({operation: 'channel_recv_receive', id,
+            ...(timeoutMs === undefined ? {} : {timeoutMs})}),
+          start(onMessage, onDone, mode = 'start') {
+            channelCallbacks.set(id, {onMessage, onDone});
+            return command({operation: mode === 'accept'
+              ? 'channel_accept' : 'channel_start', id});
+          },
+          async release() {
+            channelCallbacks.delete(id);
+            await command({operation: 'channel_release', id});
+            hostChannels.delete(id);
+          },
+        };
+      } catch (error) {
+        hostChannels.delete(id);
+        if (prepared) {
+          void command({operation: 'channel_release', id}).catch(() => {});
+        }
+        throw error;
+      }
+    },
     async attachWireStream(sessionId, stream, mode = 'start') {
+      if (stream?.__a11NativeChannelStream === true &&
+          stream.ownerRuntime === api) {
+        attachedChannelStreams.set(`${sessionId}\0${stream.wireId}`,
+          stream.host ?? stream);
+        try {
+          await command({operation: 'session_add_channel_stream',
+            id: stream.id, sessionId, mode});
+        } catch (error) {
+          attachedChannelStreams.delete(`${sessionId}\0${stream.wireId}`);
+          throw error;
+        }
+        return stream.wireId;
+      }
+      if (stream?.__a11NativeChannelStream === true) {
+        const remote = stream;
+        const status = pending => Promise.resolve(pending).then(() => ({
+          code: StatusCode.OK, message: '', details: [],
+        }));
+        stream = {
+          id: remote.id,
+          start: (onMessage, onDone) => status(remote.start(onMessage,
+            async () => onDone(), 'start')),
+          accept: (onMessage, onDone) => status(remote.start(onMessage,
+            async () => onDone(), 'accept')),
+          send: message => status(remote.send(message)),
+          halfClose: message => status(remote.halfClose(message)),
+          abort: cause => status(remote.abort(cause)),
+          getStatus: async () => (await remote.status()).status,
+        };
+      }
       if (!stream || typeof stream !== 'object') {
         throw new TypeError('Wire stream is required');
       }
@@ -409,7 +572,7 @@ export async function createA11WasmRuntime(options = {}) {
           }
         };
         const done = async () => {
-          const status = stream.getStatus?.();
+          const status = await stream.getStatus?.();
           try {
             await command({operation: status?.code !== undefined &&
               status.code !== StatusCode.OK ? 'host_stream_abort'

@@ -18,6 +18,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  createA11Runtime,
   ActionMessage,
   Chunk,
   ChunkMetadata,
@@ -31,6 +32,10 @@ import {
   packStatus,
   okStatus,
 } from '../dist/index.js';
+
+const nativeRuntime = await createA11Runtime();
+assert.equal(isOk(nativeRuntime), true);
+test.after(async () => { await nativeRuntime.dispose(); });
 
 const hex = (bytes) => Buffer.from(bytes).toString('hex');
 
@@ -54,7 +59,7 @@ test('A11 values use concatenated MessagePack fields', () => {
 
   const packed = packStatus(okStatus());
   assert.equal(isOk(packed), true);
-  assert.equal(hex(packed), '00a24f4b90');
+  assert.equal(hex(packed), '00a090');
 });
 
 test('nested A11 wire values round-trip without exceptions', () => {

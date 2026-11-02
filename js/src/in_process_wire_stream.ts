@@ -24,6 +24,7 @@ import {
   okStatus,
   statusFromUnknown,
   type Status,
+  type NonOkStatus,
   type StatusOr,
 } from './status.js';
 import {
@@ -120,11 +121,15 @@ class MemoryBinaryChannel implements BinaryChannel {
   close(): Status {
     if (this.closed) return okStatus();
     this.closeOne();
+    return okStatus();
+  }
+
+  abort(status: NonOkStatus): Status {
+    if (this.closed) return okStatus();
     const peer = this.peer;
-    if (peer !== null) {
-      // Model a transport close notification: packets admitted before close
-      // are observable first, just as WebSocket/DataChannel message events are.
-      setTimeout(() => peer.closeOne(), 0);
+    this.closeOne();
+    if (peer !== null && !peer.closed) {
+      queueMicrotask(() => peer.callbacks?.onError(status));
     }
     return okStatus();
   }
@@ -256,21 +261,22 @@ export class InProcessWireStream implements WireStream {
     return [new InProcessWireStream(first), new InProcessWireStream(second)];
   }
 
-  send(message: WireMessage): Status { return this.stream.send(message); }
+  send(message: WireMessage): Promise<Status> { return this.stream.send(message); }
   start(onMessage?: OnWireMessage, onDone?: OnWireDone): Promise<Status> {
     return this.stream.start(onMessage, onDone);
   }
   accept(onMessage?: OnWireMessage, onDone?: OnWireDone): Promise<Status> {
     return this.stream.accept(onMessage, onDone);
   }
-  halfClose(trailers?: ByteMapInput): Status { return this.stream.halfClose(trailers); }
+  halfClose(trailers?: ByteMapInput): Promise<Status> { return this.stream.halfClose(trailers); }
   drainOutgoingMessages(): Promise<Status> { return this.stream.drainOutgoingMessages(); }
-  abort(status: Status): Status { return this.stream.abort(status); }
-  setDeadline(deadline?: WireDeadline): Status { return this.stream.setDeadline(deadline); }
-  getDeadline(): number | null { return this.stream.getDeadline(); }
-  getStatus(): Status { return this.stream.getStatus(); }
-  getTrailers(): ByteMap | null { return this.stream.getTrailers(); }
+  abort(status: Status): Promise<Status> { return this.stream.abort(status); }
+  setDeadline(deadline?: WireDeadline): Promise<Status> { return this.stream.setDeadline(deadline); }
+  getDeadline(): Promise<number | null> { return this.stream.getDeadline(); }
+  getStatus(): Promise<Status> { return this.stream.getStatus(); }
+  getTrailers(): Promise<ByteMap | null> { return this.stream.getTrailers(); }
   getId(): string { return this.stream.getId(); }
   getImpl(): unknown | null { return this.stream.getImpl(); }
+  nativeHandle() { return this.stream.nativeHandle(); }
   wait(): Promise<Status> { return this.stream.wait(); }
 }

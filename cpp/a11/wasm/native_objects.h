@@ -27,9 +27,11 @@
 #include "a11/actions/registry.h"
 #include "a11/nodes/node_map.h"
 #include "a11/service/session.h"
+#include "a11/net/wire_stream_with_recv.h"
 #include "graph_snapshot.h"
 #include "host_settings.h"
 #include "host_stream.h"
+#include "host_binary_channel.h"
 #include "thread/boost_primitives.h"
 
 namespace a11::wasm {
@@ -54,6 +56,13 @@ struct NativeGraph {
   absl::flat_hash_map<std::string, std::shared_ptr<HostStreamPair>>
       host_streams ABSL_GUARDED_BY(mu);
   absl::flat_hash_set<std::string> pending_host_streams ABSL_GUARDED_BY(mu);
+  absl::flat_hash_map<std::string, std::shared_ptr<HostBinaryChannel>>
+      binary_channels ABSL_GUARDED_BY(mu);
+  absl::flat_hash_map<std::string, std::shared_ptr<HostChannelWireStream>>
+      channel_streams ABSL_GUARDED_BY(mu);
+  absl::flat_hash_map<std::string,
+                      std::shared_ptr<net::WireStreamWithRecv>>
+      channel_receivers ABSL_GUARDED_BY(mu);
 };
 
 struct NativeObjects {

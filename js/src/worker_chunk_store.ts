@@ -19,8 +19,8 @@ import {type A11Runtime} from './runtime_backend.js';
 import {NodeFragment, validateName} from './data.js';
 import {invalidArgumentError, isOk, isStatus, statusFromUnknown,
   type Status, type StatusOr} from './status.js';
-import {checkedDeadline, failure, fromRaw, toRaw} from './fragment_bridge.js';
-import {statusFromBridgeValue} from './status_bridge.js';
+import {checkedDeadline, failure, fromRaw, toRaw} from './internal/wasm/fragment_bridge.js';
+import {statusFromBridgeValue} from './internal/wasm/status_bridge.js';
 
 export interface WorkerStoreHandle {
   get(sequence: number, options?: {deadlineMs?: number}):

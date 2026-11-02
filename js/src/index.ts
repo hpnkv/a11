@@ -24,15 +24,12 @@ export * from './runtime.js';
 export * from './runtime_llm.js';
 export * from './status_codec.js';
 export * from './byte_chunking.js';
-export * from './sticky_metadata.js';
-export * from './wire_stream_bridge.js';
 export * from './flow_highlight.js';
 export {GraphNode, GraphAction, GraphSession, GraphSessionWithRecv,
   RuntimeGraph} from './runtime_graph.js';
 export type {GraphBinding, NodeBinding, ActionBinding, SessionBinding}
   from './runtime_graph.js';
 export type {WorkerStoreHandle} from './worker_chunk_store.js';
-export type {WireCodecBridge} from './wire_bridge.js';
 export type {ChunkStore, Deadline, ChunkStoreReaderOptions,
   ChunkStoreWriterOptions, SessionOptions} from './runtime_options.js';
 export * from './stream_reference.js';

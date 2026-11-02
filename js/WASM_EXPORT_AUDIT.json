@@ -1,0 +1,6342 @@
+{
+  "format": "a11.wasm-export-audit/v1",
+  "exportedSymbols": 1056,
+  "exports": [
+    {
+      "entry": ".",
+      "name": "A11_SERIAL_TAG",
+      "source": "src/wire_values.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "A11ActionConfig",
+      "source": "src/sdk/llm.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "a11ActionConfigSchema",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "A11Backend",
+      "source": "src/runtime_backend.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "A11Feature",
+      "source": "src/runtime_backend.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "A11FlowRunnerBridge",
+      "source": "src/runtime_backend.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "A11Peer",
+      "source": "src/sdk/llm.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "a11PeerFromString",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "a11PeerSchema",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "a11PeerToString",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "A11Runtime",
+      "source": "src/runtime_backend.ts",
+      "route": "native-worker"
+    },
+    {
+      "entry": ".",
+      "name": "A11RuntimeOptions",
+      "source": "src/runtime_backend.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "A11SnapshotStore",
+      "source": "src/runtime_backend.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "A11WasmModule",
+      "source": "src/runtime_backend.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "A11WasmWorkerOptions",
+      "source": "src/runtime_backend.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "ABORT_STATUS_HEADER",
+      "source": "src/wire_stream.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "abortedError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "AbortedError",
+      "source": "src/status.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "AbortedException",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "Action",
+      "source": "src/runtime_graph.ts",
+      "route": "native-worker"
+    },
+    {
+      "entry": ".",
+      "name": "ACTION_CONFIG_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": ".",
+      "name": "ACTION_DISPATCH_STATUS_OUTPUT",
+      "source": "src/action_schema.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "ACTION_HEADER_PREFIX",
+      "source": "src/action_schema.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "ACTION_LOG_OUTPUT",
+      "source": "src/action_schema.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "ACTION_MESSAGE_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": ".",
+      "name": "ACTION_STATUS_MIMETYPE",
+      "source": "src/action_schema.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "ACTION_STATUS_OUTPUT",
+      "source": "src/action_schema.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "ACTION_STREAMS_OUTPUT",
+      "source": "src/action_schema.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "ActionBinding",
+      "source": "src/runtime_graph.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "ActionCall",
+      "source": "src/sdk/tool_runner.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "ActionCreateOptions",
+      "source": "src/runtime_graph.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "ActionHandler",
+      "source": "src/runtime_registry.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "ActionHeaderSchema",
+      "source": "src/action_schema.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "ActionHeaderSchemaOptions",
+      "source": "src/action_schema.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "ActionLogSink",
+      "source": "src/action_log.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "ActionMessage",
+      "source": "src/data.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "ActionMessageOptions",
+      "source": "src/data.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "actionNameMatchesAllowed",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "ActionPortSchema",
+      "source": "src/action_schema.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "ActionPortSchemaOptions",
+      "source": "src/action_schema.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "ActionRegistry",
+      "source": "src/runtime_registry.ts",
+      "route": "native-worker"
+    },
+    {
+      "entry": ".",
+      "name": "ActionSchema",
+      "source": "src/action_schema.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "ActionSchemaOptions",
+      "source": "src/action_schema.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "ActionSettings",
+      "source": "src/action_schema.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "alreadyExistsError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "AlreadyExistsError",
+      "source": "src/status.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "AlreadyExistsException",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "asActionConfigValue",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "asPeerValue",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "asStatusValue",
+      "source": "src/wire_values.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "asUsageMetadataValue",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "AsyncByteSource",
+      "source": "src/bytes.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "AsyncNode",
+      "source": "src/runtime_graph.ts",
+      "route": "native-worker"
+    },
+    {
+      "entry": ".",
+      "name": "AsyncNodeOptions",
+      "source": "src/runtime_graph.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "AUDIO_BUFFER_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": ".",
+      "name": "AUDIO_CAPTURE_EVENT_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": ".",
+      "name": "AUDIO_CONTROL_EVENT_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": ".",
+      "name": "AUDIO_DEVICE_INFO_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": ".",
+      "name": "AUDIO_INPUT_OPTIONS_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": ".",
+      "name": "AUTHORIZATION_HEADER",
+      "source": "src/authorization.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "AUTHORIZATION_REFERENCE_HEADER",
+      "source": "src/action_schema.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "AUTHORIZATION_VERSION",
+      "source": "src/authorization.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "AuthorizationEnvelope",
+      "source": "src/authorization.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "authorizationFromText",
+      "source": "src/authorization.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "authorizationToText",
+      "source": "src/authorization.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "AUTHORIZE_ACTION",
+      "source": "src/authorization.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "Backend",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "BACKEND_METADATA_KEY",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "base64Decode",
+      "source": "src/bytes.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "base64Encode",
+      "source": "src/bytes.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "BinaryChannel",
+      "source": "src/channel_wire_stream.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "BinaryChannelCallbacks",
+      "source": "src/channel_wire_stream.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "BlockKind",
+      "source": "src/sdk/presentation.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "ByteChunkingOptions",
+      "source": "src/byte_chunking.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "ByteMap",
+      "source": "src/bytes.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "ByteMapInput",
+      "source": "src/bytes.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "byteMapsEqual",
+      "source": "src/bytes.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "BytePacket",
+      "source": "src/byte_chunking.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "BytePacketType",
+      "source": "src/byte_chunking.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "ByteReassembler",
+      "source": "src/byte_chunking.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "ByteSource",
+      "source": "src/bytes.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "CANCEL_ACTION_HEADER",
+      "source": "src/action_schema.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "CANCEL_ACTION_NAME",
+      "source": "src/action_schema.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "cancelledError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "CancelledError",
+      "source": "src/status.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "CancelledException",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "ChannelEndpointRole",
+      "source": "src/channel_wire_stream.ts",
+      "route": "native-worker"
+    },
+    {
+      "entry": ".",
+      "name": "ChannelFramingOptions",
+      "source": "src/channel_wire_stream.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "ChannelWireStream",
+      "source": "src/channel_wire_stream.ts",
+      "route": "native-worker"
+    },
+    {
+      "entry": ".",
+      "name": "Chunk",
+      "source": "src/data.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "CHUNK_METADATA_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": ".",
+      "name": "CHUNK_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": ".",
+      "name": "ChunkMetadata",
+      "source": "src/data.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "ChunkMetadataOptions",
+      "source": "src/data.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "ChunkOptions",
+      "source": "src/data.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "ChunkStore",
+      "source": "src/runtime_options.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "ChunkStoreReaderOptions",
+      "source": "src/runtime_options.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "ChunkStoreWriterOptions",
+      "source": "src/runtime_options.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "CLAUDE_DEFAULT_MODEL",
+      "source": "src/sdk/config_schemas.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "ClaudeCodeBuiltinTool",
+      "source": "src/sdk/config_schemas.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "claudeCodeBuiltinToolSchema",
+      "source": "src/sdk/config_schemas.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "ClaudeCodeCreateSessionConfig",
+      "source": "src/sdk/config_schemas.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "claudeCodeCreateSessionConfigSchema",
+      "source": "src/sdk/config_schemas.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "ClaudeCreateMessageConfig",
+      "source": "src/sdk/config_schemas.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "claudeCreateMessageConfigSchema",
+      "source": "src/sdk/config_schemas.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "CLOSE_STATUS_ATTRIBUTE",
+      "source": "src/action_schema.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "completeToolInputIds",
+      "source": "src/sdk/presentation.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "concatBytes",
+      "source": "src/bytes.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "copyByteMap",
+      "source": "src/bytes.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "createA11Runtime",
+      "source": "src/runtime_backend.ts",
+      "route": "native-worker"
+    },
+    {
+      "entry": ".",
+      "name": "dataLossError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "DataLossError",
+      "source": "src/status.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "DataLossException",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "Deadline",
+      "source": "src/runtime_options.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "deadlineExceededError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "DeadlineExceededError",
+      "source": "src/status.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "DeadlineExceededException",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "decodeAuthorization",
+      "source": "src/authorization.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "DecodedStatus",
+      "source": "src/status_codec.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "decodeStatus",
+      "source": "src/status_codec.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "decodeStatusChunk",
+      "source": "src/action_schema.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "DEFAULT_LOG_LEVEL",
+      "source": "src/action_log.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "DEFAULT_MODEL",
+      "source": "src/sdk/gemma/interact_with_gemma.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "DEFAULT_MODEL_ASSET_PATH",
+      "source": "src/sdk/gemma/interact_with_gemma.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "DEFAULT_ROLE",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "DEFAULT_SSE_CONNECT_ENDPOINT",
+      "source": "src/http_sse_wire_stream.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "DEFAULT_SSE_MESSAGE_ENDPOINT",
+      "source": "src/http_sse_wire_stream.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "DEFAULT_STOP_SEQUENCES",
+      "source": "src/sdk/gemma/interact_with_gemma.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "DURATION_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": ".",
+      "name": "enableUsageTracking",
+      "source": "src/runtime_usage.ts",
+      "route": "native-worker-facade"
+    },
+    {
+      "entry": ".",
+      "name": "encodeAuthorization",
+      "source": "src/authorization.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "executeActionsFromInteraction",
+      "source": "src/runtime_tool_runner.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "failedPreconditionError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "FailedPreconditionError",
+      "source": "src/status.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "FailedPreconditionException",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "FetchFunction",
+      "source": "src/http_sse_wire_stream.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "fetchModelAssetBuffer",
+      "source": "src/sdk/gemma/interact_with_gemma.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "Fields",
+      "source": "src/wire_values.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "FLOW_BUILTINS",
+      "source": "src/flow_vocabulary.ts",
+      "route": "generated-native-data"
+    },
+    {
+      "entry": ".",
+      "name": "FLOW_CONSTANTS",
+      "source": "src/flow_vocabulary.ts",
+      "route": "generated-native-data"
+    },
+    {
+      "entry": ".",
+      "name": "FLOW_KEYWORDS",
+      "source": "src/flow_vocabulary.ts",
+      "route": "generated-native-data"
+    },
+    {
+      "entry": ".",
+      "name": "FLOW_LOG_LEVELS",
+      "source": "src/flow_vocabulary.ts",
+      "route": "generated-native-data"
+    },
+    {
+      "entry": ".",
+      "name": "FLOW_OPERATOR_WORDS",
+      "source": "src/flow_vocabulary.ts",
+      "route": "generated-native-data"
+    },
+    {
+      "entry": ".",
+      "name": "FLOW_STAGES",
+      "source": "src/flow_vocabulary.ts",
+      "route": "generated-native-data"
+    },
+    {
+      "entry": ".",
+      "name": "FLOW_TYPES",
+      "source": "src/flow_vocabulary.ts",
+      "route": "generated-native-data"
+    },
+    {
+      "entry": ".",
+      "name": "FlowProgram",
+      "source": "src/runtime_flow.ts",
+      "route": "native-worker"
+    },
+    {
+      "entry": ".",
+      "name": "FlowRunOptions",
+      "source": "src/runtime_flow.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "FlowToken",
+      "source": "src/flow_highlight.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "FlowTokenKind",
+      "source": "src/flow_highlight.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "FlowTooling",
+      "source": "src/runtime_flow.ts",
+      "route": "native-worker"
+    },
+    {
+      "entry": ".",
+      "name": "formatUsage",
+      "source": "src/sdk/usage.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "fromChunk",
+      "source": "src/serialization.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "GEMINI_DEFAULT_MODEL",
+      "source": "src/sdk/config_schemas.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "GeminiCreateInteractionConfig",
+      "source": "src/sdk/config_schemas.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "geminiCreateInteractionConfigSchema",
+      "source": "src/sdk/config_schemas.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "GeminiStateMode",
+      "source": "src/sdk/config_schemas.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "geminiStateModeSchema",
+      "source": "src/sdk/config_schemas.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "GemmaConfig",
+      "source": "src/sdk/gemma/interact_with_gemma.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "gemmaConfigSchema",
+      "source": "src/sdk/gemma/interact_with_gemma.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "GemmaEngine",
+      "source": "src/sdk/gemma/interact_with_gemma.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "GemmaEngineFactory",
+      "source": "src/sdk/gemma/interact_with_gemma.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "GemmaPromptPart",
+      "source": "src/sdk/gemma/interact_with_gemma.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "GET_SCHEMA_NAME",
+      "source": "src/action_names.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "getActionLogSink",
+      "source": "src/action_log.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "getAllowedLlmActionPatterns",
+      "source": "src/runtime_llm_policy.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "getAuthorization",
+      "source": "src/runtime_authorization.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "getError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "getGlobalSerializationRegistry",
+      "source": "src/serialization.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "getStatusAndValue",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "getToolDefinitions",
+      "source": "src/runtime_tool_runner.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "getValue",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "GLOBAL_WEBRTC_SIGNALLING_ENDPOINT",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "GraphAction",
+      "source": "src/runtime_graph.ts",
+      "route": "native-worker"
+    },
+    {
+      "entry": ".",
+      "name": "GraphBinding",
+      "source": "src/runtime_graph.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "GraphNode",
+      "source": "src/runtime_graph.ts",
+      "route": "native-worker"
+    },
+    {
+      "entry": ".",
+      "name": "GraphSession",
+      "source": "src/runtime_graph.ts",
+      "route": "native-worker"
+    },
+    {
+      "entry": ".",
+      "name": "GraphSessionWithRecv",
+      "source": "src/runtime_graph.ts",
+      "route": "native-worker"
+    },
+    {
+      "entry": ".",
+      "name": "HeaderEntry",
+      "source": "src/schema_json.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "HttpHeaders",
+      "source": "src/http_sse_wire_stream.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "HttpSseClientWireStream",
+      "source": "src/http_sse_wire_stream.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "HttpSseOptions",
+      "source": "src/http_sse_wire_stream.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "InProcessWireStream",
+      "source": "src/in_process_wire_stream.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "INTERACT_WITH_CLAUDE_CODE_CONFIG_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": ".",
+      "name": "INTERACT_WITH_CLAUDE_CONFIG_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": ".",
+      "name": "INTERACT_WITH_CODEX_CONFIG_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": ".",
+      "name": "INTERACT_WITH_GEMINI_CONFIG_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": ".",
+      "name": "INTERACT_WITH_GEMMA_CONFIG_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": ".",
+      "name": "INTERACT_WITH_GEMMA_SCHEMA",
+      "source": "src/sdk/gemma/interact_with_gemma.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "INTERACT_WITH_GPT_CONFIG_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": ".",
+      "name": "INTERACT_WITH_LLM_SCHEMA",
+      "source": "src/sdk/interact_with_llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "INTERACT_WITH_OLLAMA_CONFIG_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": ".",
+      "name": "INTERACT_WITH_VLLM_CONFIG_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": ".",
+      "name": "Interaction",
+      "source": "src/sdk/llm.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "INTERACTION_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": ".",
+      "name": "interactionBackend",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "InteractionInput",
+      "source": "src/sdk/llm.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "InteractionNormalizer",
+      "source": "src/sdk/llm.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "interactionUsageUpdates",
+      "source": "src/sdk/usage.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "interactWithGemma",
+      "source": "src/runtime_llm.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": ".",
+      "name": "interactWithLlm",
+      "source": "src/runtime_llm.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": ".",
+      "name": "internalError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "InternalError",
+      "source": "src/status.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "InternalException",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "invalidArgumentError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "InvalidArgumentError",
+      "source": "src/status.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "InvalidArgumentException",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "InvalidStatusAccessBehaviour",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "invokeWireCallback",
+      "source": "src/wire_stream.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "isAbortedError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "isAlreadyExistsError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "isCancelledError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "isCloseStatusChunk",
+      "source": "src/action_schema.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "isDataLossError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "isDeadlineExceededError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "isFailedPreconditionError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "isInternalError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "isInvalidArgumentError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "isLogLevel",
+      "source": "src/action_log.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "isNotFoundError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "isOk",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "isOutOfRangeError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "isPermissionDeniedError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "isResourceExhaustedError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "isStatus",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "isStatusChunk",
+      "source": "src/action_schema.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "isTextualLogMimetype",
+      "source": "src/action_log.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "isToolResultCarrier",
+      "source": "src/sdk/presentation.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "isUnauthenticatedError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "isUnavailableError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "isUnimplementedError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "isUnknownError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "JSON_MIMETYPE",
+      "source": "src/serialization.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "LIST_ACTIONS_NAME",
+      "source": "src/action_names.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "LlmHeaders",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "LocalChunkStore",
+      "source": "src/worker_chunk_store.ts",
+      "route": "native-worker"
+    },
+    {
+      "entry": ".",
+      "name": "LOG_CHANNEL_ATTRIBUTE",
+      "source": "src/action_log.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "LOG_FILE_ATTRIBUTE",
+      "source": "src/action_log.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "LOG_INTERNAL_ATTRIBUTE",
+      "source": "src/action_log.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "LOG_INTERNAL_FALSE",
+      "source": "src/action_log.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "LOG_INTERNAL_TRUE",
+      "source": "src/action_log.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "LOG_LEVEL_ATTRIBUTE",
+      "source": "src/action_log.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "LOG_LEVELS",
+      "source": "src/action_log.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "LOG_LINENO_ATTRIBUTE",
+      "source": "src/action_log.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "LogLevel",
+      "source": "src/action_log.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "LogOptions",
+      "source": "src/action_log.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "LogRecord",
+      "source": "src/action_log.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "logRecordFromChunk",
+      "source": "src/action_log.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "logText",
+      "source": "src/action_log.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "MakeActionOptions",
+      "source": "src/runtime_registry.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "makeClaudeCodeCreateSessionConfig",
+      "source": "src/sdk/config_schemas.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "makeClaudeCreateMessageConfig",
+      "source": "src/sdk/config_schemas.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "makeGeminiCreateInteractionConfig",
+      "source": "src/sdk/config_schemas.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "makeHalfCloseMessage",
+      "source": "src/data.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "makeInteraction",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "makeNullChunk",
+      "source": "src/data.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "makeOllamaCreateChatConfig",
+      "source": "src/sdk/config_schemas.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "makeTextMessageInteraction",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "makeVllmCreateChatCompletionConfig",
+      "source": "src/sdk/config_schemas.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "MAX_AUTHORIZATION_BYTES",
+      "source": "src/authorization.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "MAX_AUTHORIZATION_HOPS",
+      "source": "src/authorization.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "MAX_SINGLE_WIRE_MESSAGE_SIZE",
+      "source": "src/wire_stream.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "MINIMUM_BYTE_PACKET_SIZE",
+      "source": "src/byte_chunking.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "MODEL_CACHE_NAME",
+      "source": "src/sdk/gemma/interact_with_gemma.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "MSGPACK_MIMETYPE",
+      "source": "src/serialization.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "NODE_FRAGMENT_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": ".",
+      "name": "NODE_REF_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": ".",
+      "name": "NodeBinding",
+      "source": "src/runtime_graph.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "NodeFragment",
+      "source": "src/data.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "NodeFragmentOptions",
+      "source": "src/data.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "NodeMap",
+      "source": "src/runtime_graph.ts",
+      "route": "native-worker"
+    },
+    {
+      "entry": ".",
+      "name": "NodeRef",
+      "source": "src/data.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "NodeRefOptions",
+      "source": "src/data.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "noexcept",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "noexceptFetch",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "NonOkStatus",
+      "source": "src/status.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "normalizeByShape",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "normalizeByteChunkingOptions",
+      "source": "src/byte_chunking.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "normalizeByteMap",
+      "source": "src/bytes.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "normalizeChannelFramingOptions",
+      "source": "src/channel_wire_stream.ts",
+      "route": "native-worker"
+    },
+    {
+      "entry": ".",
+      "name": "NormalizedByteChunkingOptions",
+      "source": "src/byte_chunking.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "NormalizedChannelFramingOptions",
+      "source": "src/channel_wire_stream.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "NormalizedContentType",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "NormalizedMessage",
+      "source": "src/sdk/llm.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "NormalizedPart",
+      "source": "src/sdk/llm.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "NormalizedWireStreamOptions",
+      "source": "src/wire_stream.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "normalizeInteraction",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "normalizeWireHeaders",
+      "source": "src/wire_stream.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "normalizeWireStreamOptions",
+      "source": "src/wire_stream.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "notFoundError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "NotFoundError",
+      "source": "src/status.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "NotFoundException",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "OCTET_STREAM_MIMETYPE",
+      "source": "src/serialization.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "okStatus",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "OkStatus",
+      "source": "src/status.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "OLLAMA_DEFAULT_MODEL",
+      "source": "src/sdk/config_schemas.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "OllamaCreateChatConfig",
+      "source": "src/sdk/config_schemas.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "ollamaCreateChatConfigSchema",
+      "source": "src/sdk/config_schemas.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "OnSignallingMessage",
+      "source": "src/signalling.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "OnWireDone",
+      "source": "src/wire_stream.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "OnWireMessage",
+      "source": "src/wire_stream.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "organiseAndDeduplicateJsonschema",
+      "source": "src/sdk/jsonschema.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "outOfRangeError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "OutOfRangeError",
+      "source": "src/status.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "OutOfRangeException",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "packStatus",
+      "source": "src/status_codec.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "parseBytePacket",
+      "source": "src/byte_chunking.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "parseInteraction",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "parseLogLevel",
+      "source": "src/action_log.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "parseStreamReference",
+      "source": "src/stream_reference.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "PEER_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": ".",
+      "name": "PeerConnectionFactory",
+      "source": "src/webrtc_wire_stream.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "permissionDeniedError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "PermissionDeniedError",
+      "source": "src/status.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "PermissionDeniedException",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "PING_NAME",
+      "source": "src/action_names.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "plainText",
+      "source": "src/sdk/presentation.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "Port",
+      "source": "src/data.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "PORT_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": ".",
+      "name": "PortEntry",
+      "source": "src/schema_json.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "PortValueSchemas",
+      "source": "src/sdk/tool_adapter.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "PortView",
+      "source": "src/schema_json.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "PresentationBlock",
+      "source": "src/sdk/presentation.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "PresentationReducer",
+      "source": "src/sdk/presentation.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "PresentationSink",
+      "source": "src/sdk/presentation.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "PresentationTurn",
+      "source": "src/sdk/presentation.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "presentConversation",
+      "source": "src/sdk/presentation.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "presentInteraction",
+      "source": "src/sdk/presentation.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "randomId",
+      "source": "src/bytes.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "registerInteractionNormalizer",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "registerWireValueCodec",
+      "source": "src/wire_values.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "rememberUsage",
+      "source": "src/sdk/usage.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "reportLog",
+      "source": "src/action_log.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "resetGemmaEngineFactory",
+      "source": "src/sdk/gemma/interact_with_gemma.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "resourceExhaustedError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "ResourceExhaustedError",
+      "source": "src/status.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "ResourceExhaustedException",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "Role",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "RuntimeActionOptions",
+      "source": "src/runtime_backend.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "RuntimeGraph",
+      "source": "src/runtime_graph.ts",
+      "route": "native-worker"
+    },
+    {
+      "entry": ".",
+      "name": "SCHEMA_DOCUMENT_FORMAT",
+      "source": "src/schema_json.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "schemaDocument",
+      "source": "src/schema_json.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "SchemaDocument",
+      "source": "src/schema_json.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "SchemaEntry",
+      "source": "src/schema_json.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "schemaFromJson",
+      "source": "src/schema_json.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "schemasInDocument",
+      "source": "src/schema_json.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "schemaToJson",
+      "source": "src/schema_json.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "SerializationCodec",
+      "source": "src/serialization.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "SerializationRegistry",
+      "source": "src/serialization.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "SerializedData",
+      "source": "src/serialization.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "Session",
+      "source": "src/runtime_graph.ts",
+      "route": "native-worker"
+    },
+    {
+      "entry": ".",
+      "name": "SessionBinding",
+      "source": "src/runtime_graph.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "SessionCreateOptions",
+      "source": "src/runtime_graph.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "SessionOptions",
+      "source": "src/runtime_options.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "SessionWithRecv",
+      "source": "src/runtime_graph.ts",
+      "route": "native-worker"
+    },
+    {
+      "entry": ".",
+      "name": "setActionLogSink",
+      "source": "src/action_log.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "setAuthorizationHeader",
+      "source": "src/runtime_authorization.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "setAuthorizationReference",
+      "source": "src/runtime_authorization.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "setGemmaEngineFactory",
+      "source": "src/sdk/gemma/interact_with_gemma.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "setGlobalSerializationRegistry",
+      "source": "src/serialization.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "SignallingMessage",
+      "source": "src/signalling.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "SignallingMessageOptions",
+      "source": "src/signalling.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "SignallingMessageType",
+      "source": "src/signalling.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "SignallingTransport",
+      "source": "src/signalling.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "SPEECH_RECOGNIZER_OPTIONS_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": ".",
+      "name": "splitBytesIntoPackets",
+      "source": "src/byte_chunking.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "SSE_HTTP_HEADER_PREFIX",
+      "source": "src/http_sse_wire_stream.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "SSE_STREAM_ID_HEADER",
+      "source": "src/http_sse_wire_stream.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "Status",
+      "source": "src/status.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "STATUS_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": ".",
+      "name": "StatusCode",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "statusCodeFromHttp",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "statusCodeFromWebSocket",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "statusCodeToWebSocket",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "StatusException",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "statusFromChunk",
+      "source": "src/action_schema.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "statusFromJson",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "statusFromResponse",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "statusFromUnknown",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "StatusJson",
+      "source": "src/status.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "StatusOr",
+      "source": "src/status.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "statusToChunk",
+      "source": "src/action_schema.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "statusToJson",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "StorageCredentials",
+      "source": "src/data.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "StorageIdentity",
+      "source": "src/data.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "storageIdentityFromValue",
+      "source": "src/data.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "StorageService",
+      "source": "src/data.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "STREAM_SCOPE_HEADER",
+      "source": "src/action_schema.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "STREAM_STORAGE_HEADER",
+      "source": "src/action_schema.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "StreamMode",
+      "source": "src/stream_mode.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "StreamReference",
+      "source": "src/stream_reference.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "streamReferenceFromChunk",
+      "source": "src/stream_reference.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "streamReferenceToChunk",
+      "source": "src/stream_reference.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "summarizeUsage",
+      "source": "src/sdk/usage.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "tagValue",
+      "source": "src/wire_values.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "terminate",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "testTagged",
+      "source": "src/wire_values.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "TEXT_MIMETYPE",
+      "source": "src/serialization.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "throwForError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "TIME_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": ".",
+      "name": "toBytes",
+      "source": "src/bytes.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "toBytesAsync",
+      "source": "src/bytes.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "toChunk",
+      "source": "src/serialization.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "tokenizeFlow",
+      "source": "src/flow_highlight.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "TOOL_LOGS_METADATA_KEY",
+      "source": "src/sdk/presentation.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "TOOL_STATUSES_METADATA_KEY",
+      "source": "src/sdk/presentation.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "ToolAdapter",
+      "source": "src/sdk/tool_adapter.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "ToolDefinition",
+      "source": "src/sdk/tool_runner.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "toolInputs",
+      "source": "src/sdk/presentation.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "toolLogs",
+      "source": "src/sdk/presentation.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "toolOutputs",
+      "source": "src/sdk/presentation.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "toolStatuses",
+      "source": "src/sdk/presentation.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "TRANSCRIPTION_EVENT_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": ".",
+      "name": "TurnRelayType",
+      "source": "src/webrtc_wire_stream.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "TurnServer",
+      "source": "src/webrtc_wire_stream.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "TurnServerOptions",
+      "source": "src/webrtc_wire_stream.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "unauthenticatedError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "UnauthenticatedError",
+      "source": "src/status.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "UnauthenticatedException",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "unavailableError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "UnavailableError",
+      "source": "src/status.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "UnavailableException",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "unimplementedError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "UnimplementedError",
+      "source": "src/status.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "UnimplementedException",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "unknownError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "UnknownError",
+      "source": "src/status.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "UnknownException",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "unpackStatus",
+      "source": "src/status_codec.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "USAGE_METADATA_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": ".",
+      "name": "UsageAccounting",
+      "source": "src/runtime_usage.ts",
+      "route": "native-worker-facade"
+    },
+    {
+      "entry": ".",
+      "name": "UsageFigure",
+      "source": "src/sdk/usage.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "UsageLedger",
+      "source": "src/sdk/usage.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "UsageMetadata",
+      "source": "src/sdk/llm.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "usageMetadataSchema",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "UsageScope",
+      "source": "src/sdk/usage.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "usageTrackingEnabled",
+      "source": "src/runtime_usage.ts",
+      "route": "native-worker-facade"
+    },
+    {
+      "entry": ".",
+      "name": "usageUpdate",
+      "source": "src/sdk/usage.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "UsageUpdate",
+      "source": "src/sdk/usage.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "utf8Decode",
+      "source": "src/bytes.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "utf8Encode",
+      "source": "src/bytes.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "validateA11Peer",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "validateName",
+      "source": "src/data.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "valueOrTerminate",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "valueOrThrow",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "valueTag",
+      "source": "src/wire_values.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "VLLM_DEFAULT_MODEL",
+      "source": "src/sdk/config_schemas.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "VllmCreateChatCompletionConfig",
+      "source": "src/sdk/config_schemas.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "vllmCreateChatCompletionConfigSchema",
+      "source": "src/sdk/config_schemas.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "WebRtcConfiguration",
+      "source": "src/webrtc_wire_stream.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "WebRtcWireStream",
+      "source": "src/webrtc_wire_stream.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "WebSocketClientOptions",
+      "source": "src/websocket_wire_stream.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "WebSocketFactory",
+      "source": "src/websocket_wire_stream.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "WebSocketLike",
+      "source": "src/websocket_wire_stream.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "WebSocketSignallingClient",
+      "source": "src/signalling.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "WebSocketSignallingClientOptions",
+      "source": "src/signalling.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "WebSocketWireStream",
+      "source": "src/websocket_wire_stream.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "WHOLE_JSON_OUTPUT",
+      "source": "src/action_schema.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "WIRE_MESSAGE_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": ".",
+      "name": "WireDeadline",
+      "source": "src/wire_stream.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "wireDeadlineMillis",
+      "source": "src/wire_stream.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "WireMessage",
+      "source": "src/data.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "wireMessageFromJsonValue",
+      "source": "src/data.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "WireMessageOptions",
+      "source": "src/data.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "wireMessageToJsonValue",
+      "source": "src/data.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": ".",
+      "name": "WireStream",
+      "source": "src/wire_stream.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "WireStreamOptions",
+      "source": "src/wire_stream.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "WireStreamWithRecv",
+      "source": "src/wire_stream.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "WireValueCodec",
+      "source": "src/wire_values.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "wireValueCodecByTag",
+      "source": "src/wire_values.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "wireValueCodecCount",
+      "source": "src/wire_values.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "wireValueCodecFor",
+      "source": "src/wire_values.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "wireValueCodecs",
+      "source": "src/wire_values.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": ".",
+      "name": "WorkerStoreHandle",
+      "source": "src/worker_chunk_store.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": ".",
+      "name": "zodParse",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": ".",
+      "name": "zodToJsonSchema",
+      "source": "src/sdk/jsonschema.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "ActionCatalogueController",
+      "source": "src/presentation/action.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "ActionCatalogueSnapshot",
+      "source": "src/presentation/action.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "appendOutput",
+      "source": "src/presentation/output.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "applyFlowEdits",
+      "source": "src/presentation/flow/language.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "asSchema",
+      "source": "src/presentation/schema.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "blankFor",
+      "source": "src/presentation/schema.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "bytesToHex",
+      "source": "src/presentation/value.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "ChatToolKind",
+      "source": "src/presentation/chat.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "ChatToolPresentation",
+      "source": "src/presentation/chat.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "compactJsonPreview",
+      "source": "src/presentation/value.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "COMPLETE_FLOW_PREVIEW_LINES",
+      "source": "src/presentation/chat.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "completionsOf",
+      "source": "src/presentation/flow/language.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "concentricRadii",
+      "source": "src/presentation/geometry.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "concentricRadiusExpression",
+      "source": "src/presentation/geometry.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "consumeStatusIterator",
+      "source": "src/presentation/iterator.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "CornerRadii",
+      "source": "src/presentation/geometry.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "CornerRadius",
+      "source": "src/presentation/geometry.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "countFlowDiagnostics",
+      "source": "src/presentation/flow/editor.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "decodeStoredValue",
+      "source": "src/presentation/storage.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "decodeTrafficUtf8",
+      "source": "src/presentation/traffic.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "DecoratedFlowToken",
+      "source": "src/presentation/flow/editor.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "decorateFlowTokens",
+      "source": "src/presentation/flow/editor.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "DEFAULT_OUTPUT_VIEW",
+      "source": "src/presentation/output.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "defaultHeaderValue",
+      "source": "src/presentation/action.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "deriveTrafficSnapshot",
+      "source": "src/presentation/traffic.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "describeChatTool",
+      "source": "src/presentation/chat.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "describePortInput",
+      "source": "src/presentation/input.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "diagnosticsOf",
+      "source": "src/presentation/flow/language.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "EMPTY_RUN",
+      "source": "src/presentation/flow/stream.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "encodeStoredValue",
+      "source": "src/presentation/storage.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "filterActions",
+      "source": "src/presentation/action.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "filterFlowCompletions",
+      "source": "src/presentation/flow/editor.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "FLOW_COMPLETION_DEBOUNCE_MS",
+      "source": "src/presentation/flow/editor.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "FLOW_DIAGNOSTIC_DEBOUNCE_MS",
+      "source": "src/presentation/flow/editor.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "FLOW_HOVER_CACHE_LIMIT",
+      "source": "src/presentation/flow/editor.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "FLOW_HOVER_DEBOUNCE_MS",
+      "source": "src/presentation/flow/editor.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "FLOW_HOVER_HANDOFF_MS",
+      "source": "src/presentation/flow/editor.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "FLOW_HOVER_PROGRESS_MS",
+      "source": "src/presentation/flow/editor.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "FLOW_SCHEMA_DEBOUNCE_MS",
+      "source": "src/presentation/flow/runner.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "flowCheckSchemaProblem",
+      "source": "src/presentation/action.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "FlowCompileService",
+      "source": "src/presentation/flow/runner.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "FlowCompletion",
+      "source": "src/presentation/flow/language.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "FlowCompletions",
+      "source": "src/presentation/flow/language.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "FlowDiagnostic",
+      "source": "src/presentation/flow/language.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "FlowDiagnosticCounts",
+      "source": "src/presentation/flow/editor.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "FlowDiagnostics",
+      "source": "src/presentation/flow/language.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "FlowDiagnosticSeverity",
+      "source": "src/presentation/flow/language.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "FlowEdit",
+      "source": "src/presentation/flow/language.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "FlowEditorController",
+      "source": "src/presentation/flow/editor.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "FlowEditorSnapshot",
+      "source": "src/presentation/flow/editor.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "FlowEntry",
+      "source": "src/presentation/flow/stream.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "FlowFix",
+      "source": "src/presentation/flow/language.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "FlowFormat",
+      "source": "src/presentation/flow/language.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "FlowHover",
+      "source": "src/presentation/flow/language.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "FlowLanguageRequest",
+      "source": "src/presentation/flow/language.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "FlowLanguageTransport",
+      "source": "src/presentation/flow/language.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "FlowReader",
+      "source": "src/presentation/flow/stream.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "FlowRunnerController",
+      "source": "src/presentation/flow/runner.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "FlowRunnerOptions",
+      "source": "src/presentation/flow/runner.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "FlowRunnerSnapshot",
+      "source": "src/presentation/flow/runner.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "FlowRunRequest",
+      "source": "src/presentation/flow/runner.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "flowRunSchemaProblem",
+      "source": "src/presentation/action.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "FlowRunService",
+      "source": "src/presentation/flow/runner.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "FlowSelection",
+      "source": "src/presentation/flow/editor.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "FlowServiceReply",
+      "source": "src/presentation/flow/language.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "flowTemplate",
+      "source": "src/presentation/flow/runner.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "foldRun",
+      "source": "src/presentation/flow/stream.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "FollowTailController",
+      "source": "src/presentation/interaction.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "formatOf",
+      "source": "src/presentation/flow/language.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "GroupableLog",
+      "source": "src/presentation/log.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "groupLogs",
+      "source": "src/presentation/log.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "HeaderField",
+      "source": "src/presentation/action.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "headerFieldsFor",
+      "source": "src/presentation/action.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "hexEscaped",
+      "source": "src/presentation/value.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "HoverIntentController",
+      "source": "src/presentation/interaction.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "hoverOf",
+      "source": "src/presentation/flow/language.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "HoverPolicy",
+      "source": "src/presentation/interaction.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "HoverSnapshot",
+      "source": "src/presentation/interaction.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "indentJson",
+      "source": "src/presentation/json.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "InputChoice",
+      "source": "src/presentation/input.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "InputWidget",
+      "source": "src/presentation/input.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "InputWidgetKind",
+      "source": "src/presentation/input.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "insertIndentedFlowNewline",
+      "source": "src/presentation/flow/editor.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "Insets",
+      "source": "src/presentation/geometry.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "isEmpty",
+      "source": "src/presentation/schema.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "isFormable",
+      "source": "src/presentation/schema.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "isLeaf",
+      "source": "src/presentation/schema.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "isMessagePack",
+      "source": "src/presentation/value.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "isProse",
+      "source": "src/presentation/schema.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "isSecretHeader",
+      "source": "src/presentation/action.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "isTextualPort",
+      "source": "src/presentation/output.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "JsonDocument",
+      "source": "src/presentation/json.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "JsonSchema",
+      "source": "src/presentation/schema.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "JsonToken",
+      "source": "src/presentation/json.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "JsonTokenKind",
+      "source": "src/presentation/json.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "jsonTokens",
+      "source": "src/presentation/json.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "lineBeforeFlowCaret",
+      "source": "src/presentation/flow/editor.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "listEdge",
+      "source": "src/presentation/geometry.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "ListEdge",
+      "source": "src/presentation/geometry.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "listEdgeRadii",
+      "source": "src/presentation/geometry.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "LogGroup",
+      "source": "src/presentation/log.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "looksLikeMarkdown",
+      "source": "src/presentation/value.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "MAX_BINARY_PREVIEW_BYTES",
+      "source": "src/presentation/value.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "MAX_INLINE_JSON_CHARS",
+      "source": "src/presentation/value.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "MAX_MSGPACK_PREVIEW_BYTES",
+      "source": "src/presentation/value.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "MAX_NESTED_BYTE_PREVIEW_BYTES",
+      "source": "src/presentation/value.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "MAX_OUTPUT_VALUES",
+      "source": "src/presentation/output.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "MAX_RUN_LOGS",
+      "source": "src/presentation/run.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "MAX_RUNS",
+      "source": "src/presentation/run.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "MAX_TEXT_CHARS",
+      "source": "src/presentation/output.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "MAX_TEXT_PARTS",
+      "source": "src/presentation/output.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "MAX_TRAFFIC_ENTRIES",
+      "source": "src/presentation/traffic.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "MAX_TRAFFIC_IMAGE_PREVIEW_BYTES",
+      "source": "src/presentation/traffic.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "missing",
+      "source": "src/presentation/schema.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "Note",
+      "source": "src/presentation/flow/stream.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "OutputBlock",
+      "source": "src/presentation/output.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "outputCopyText",
+      "source": "src/presentation/output.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "OutputViewState",
+      "source": "src/presentation/output.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "OverlayPlacement",
+      "source": "src/presentation/geometry.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "OverlayPlacementOptions",
+      "source": "src/presentation/geometry.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "OverlaySide",
+      "source": "src/presentation/geometry.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "parseFlowDuration",
+      "source": "src/presentation/input.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "parseUnifiedPatch",
+      "source": "src/presentation/chat.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "PatchFile",
+      "source": "src/presentation/chat.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "PatchHunk",
+      "source": "src/presentation/chat.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "PatchLine",
+      "source": "src/presentation/chat.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "PatchLineKind",
+      "source": "src/presentation/chat.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "PatchPresentation",
+      "source": "src/presentation/chat.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "pendingUserInput",
+      "source": "src/presentation/chat.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "PendingUserInput",
+      "source": "src/presentation/chat.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "placeOverlay",
+      "source": "src/presentation/geometry.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "PresentationStorage",
+      "source": "src/presentation/storage.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "presentValue",
+      "source": "src/presentation/value.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "previewValue",
+      "source": "src/presentation/value.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "readJson",
+      "source": "src/presentation/json.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "Rect",
+      "source": "src/presentation/geometry.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "redactHeaders",
+      "source": "src/presentation/action.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "redactTraffic",
+      "source": "src/presentation/traffic.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "RelativeScheduleOptions",
+      "source": "src/presentation/input.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "renderValue",
+      "source": "src/presentation/output.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "requiredNames",
+      "source": "src/presentation/schema.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "resolveCallHeaders",
+      "source": "src/presentation/action.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "retainRuns",
+      "source": "src/presentation/run.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "RunAccumulator",
+      "source": "src/presentation/run.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "RunEvent",
+      "source": "src/presentation/run.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "RunLog",
+      "source": "src/presentation/run.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "RunSnapshot",
+      "source": "src/presentation/run.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "RunState",
+      "source": "src/presentation/run.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "RunView",
+      "source": "src/presentation/flow/stream.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "safeJson",
+      "source": "src/presentation/value.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "schemaEntryFromFlowPlan",
+      "source": "src/presentation/flow/runner.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "schemaShape",
+      "source": "src/presentation/schema.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "SchemaShape",
+      "source": "src/presentation/schema.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "schemaText",
+      "source": "src/presentation/schema.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "ScrollMetrics",
+      "source": "src/presentation/interaction.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "seedHeaderValues",
+      "source": "src/presentation/action.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "sendWithRelativeDelays",
+      "source": "src/presentation/input.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "showCompleteFlowPreview",
+      "source": "src/presentation/chat.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "splitRun",
+      "source": "src/presentation/flow/stream.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "StringStorage",
+      "source": "src/presentation/storage.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "STUDIO_CHAT_BOTTOM_PX",
+      "source": "src/presentation/interaction.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "STUDIO_FLOW_HOVER",
+      "source": "src/presentation/interaction.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "STUDIO_WIRE_BOTTOM_PX",
+      "source": "src/presentation/interaction.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "STUDIO_WIRE_HOVER",
+      "source": "src/presentation/interaction.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "SUGGESTED_HEADERS",
+      "source": "src/presentation/action.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "summariseTraffic",
+      "source": "src/presentation/traffic.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "Timer",
+      "source": "src/presentation/interaction.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "toolInputPreview",
+      "source": "src/presentation/chat.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "TRAFFIC_GLANCE_CHARS",
+      "source": "src/presentation/traffic.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "TRAFFIC_PREVIEW_BYTES",
+      "source": "src/presentation/traffic.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "TrafficAction",
+      "source": "src/presentation/traffic.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "TrafficController",
+      "source": "src/presentation/traffic.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "TrafficDecoded",
+      "source": "src/presentation/traffic.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "TrafficDirection",
+      "source": "src/presentation/traffic.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "TrafficEntry",
+      "source": "src/presentation/traffic.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "TrafficField",
+      "source": "src/presentation/traffic.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "TrafficFilters",
+      "source": "src/presentation/traffic.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "TrafficFragment",
+      "source": "src/presentation/traffic.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "TrafficOrigin",
+      "source": "src/presentation/traffic.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "TrafficSnapshot",
+      "source": "src/presentation/traffic.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "typeLabel",
+      "source": "src/presentation/schema.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "uniformInsets",
+      "source": "src/presentation/geometry.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "uniformRadii",
+      "source": "src/presentation/geometry.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "ValuePresentation",
+      "source": "src/presentation/value.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "ValuePresenter",
+      "source": "src/presentation/value.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation",
+      "name": "ValuePresenterRegistry",
+      "source": "src/presentation/value.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "valueTypeLabel",
+      "source": "src/presentation/value.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation",
+      "name": "withContextualHoverDescription",
+      "source": "src/presentation/flow/language.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation/browser",
+      "name": "ObservedOverlay",
+      "source": "src/presentation/browser/overlay.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./presentation/browser",
+      "name": "observeOverlay",
+      "source": "src/presentation/browser/overlay.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./presentation/browser",
+      "name": "ObserveOverlayOptions",
+      "source": "src/presentation/browser/overlay.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "A11_SERIAL_TAG",
+      "source": "src/wire_values.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "A11ActionConfig",
+      "source": "src/sdk/llm.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "a11ActionConfigSchema",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "A11Backend",
+      "source": "src/runtime_backend.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "A11Feature",
+      "source": "src/runtime_backend.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "A11FlowRunnerBridge",
+      "source": "src/runtime_backend.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "A11Peer",
+      "source": "src/sdk/llm.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "a11PeerFromString",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "a11PeerSchema",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "a11PeerToString",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "A11Runtime",
+      "source": "src/runtime_backend.ts",
+      "route": "native-worker"
+    },
+    {
+      "entry": "./runtime",
+      "name": "A11RuntimeOptions",
+      "source": "src/runtime_backend.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "A11SnapshotStore",
+      "source": "src/runtime_backend.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "A11WasmModule",
+      "source": "src/runtime_backend.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "A11WasmWorkerOptions",
+      "source": "src/runtime_backend.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "ABORT_STATUS_HEADER",
+      "source": "src/wire_stream.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "abortedError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "AbortedError",
+      "source": "src/status.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "AbortedException",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "Action",
+      "source": "src/runtime_graph.ts",
+      "route": "native-worker"
+    },
+    {
+      "entry": "./runtime",
+      "name": "ACTION_CONFIG_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": "./runtime",
+      "name": "ACTION_DISPATCH_STATUS_OUTPUT",
+      "source": "src/action_schema.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "ACTION_HEADER_PREFIX",
+      "source": "src/action_schema.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "ACTION_LOG_OUTPUT",
+      "source": "src/action_schema.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "ACTION_MESSAGE_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": "./runtime",
+      "name": "ACTION_STATUS_MIMETYPE",
+      "source": "src/action_schema.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "ACTION_STATUS_OUTPUT",
+      "source": "src/action_schema.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "ACTION_STREAMS_OUTPUT",
+      "source": "src/action_schema.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "ActionCall",
+      "source": "src/sdk/tool_runner.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "ActionCreateOptions",
+      "source": "src/runtime_graph.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "ActionHandler",
+      "source": "src/runtime_registry.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "ActionHeaderSchema",
+      "source": "src/action_schema.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "ActionHeaderSchemaOptions",
+      "source": "src/action_schema.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "ActionLogSink",
+      "source": "src/action_log.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "ActionMessage",
+      "source": "src/data.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "ActionMessageOptions",
+      "source": "src/data.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "actionNameMatchesAllowed",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "ActionPortSchema",
+      "source": "src/action_schema.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "ActionPortSchemaOptions",
+      "source": "src/action_schema.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "ActionRegistry",
+      "source": "src/runtime_registry.ts",
+      "route": "native-worker"
+    },
+    {
+      "entry": "./runtime",
+      "name": "ActionSchema",
+      "source": "src/action_schema.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "ActionSchemaOptions",
+      "source": "src/action_schema.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "ActionSettings",
+      "source": "src/action_schema.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "alreadyExistsError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "AlreadyExistsError",
+      "source": "src/status.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "AlreadyExistsException",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "asActionConfigValue",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "asPeerValue",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "asStatusValue",
+      "source": "src/wire_values.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "asUsageMetadataValue",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "AsyncByteSource",
+      "source": "src/bytes.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "AsyncNode",
+      "source": "src/runtime_graph.ts",
+      "route": "native-worker"
+    },
+    {
+      "entry": "./runtime",
+      "name": "AsyncNodeOptions",
+      "source": "src/runtime_graph.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "AUDIO_BUFFER_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": "./runtime",
+      "name": "AUDIO_CAPTURE_EVENT_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": "./runtime",
+      "name": "AUDIO_CONTROL_EVENT_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": "./runtime",
+      "name": "AUDIO_DEVICE_INFO_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": "./runtime",
+      "name": "AUDIO_INPUT_OPTIONS_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": "./runtime",
+      "name": "AUTHORIZATION_HEADER",
+      "source": "src/authorization.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "AUTHORIZATION_REFERENCE_HEADER",
+      "source": "src/action_schema.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "AUTHORIZATION_VERSION",
+      "source": "src/authorization.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "AuthorizationEnvelope",
+      "source": "src/authorization.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "authorizationFromText",
+      "source": "src/authorization.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "authorizationToText",
+      "source": "src/authorization.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "AUTHORIZE_ACTION",
+      "source": "src/authorization.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "Backend",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "BACKEND_METADATA_KEY",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "base64Decode",
+      "source": "src/bytes.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "base64Encode",
+      "source": "src/bytes.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "BinaryChannel",
+      "source": "src/channel_wire_stream.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "BinaryChannelCallbacks",
+      "source": "src/channel_wire_stream.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "ByteMap",
+      "source": "src/bytes.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "ByteMapInput",
+      "source": "src/bytes.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "byteMapsEqual",
+      "source": "src/bytes.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "ByteSource",
+      "source": "src/bytes.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "CANCEL_ACTION_HEADER",
+      "source": "src/action_schema.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "CANCEL_ACTION_NAME",
+      "source": "src/action_schema.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "cancelledError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "CancelledError",
+      "source": "src/status.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "CancelledException",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "ChannelEndpointRole",
+      "source": "src/channel_wire_stream.ts",
+      "route": "native-worker"
+    },
+    {
+      "entry": "./runtime",
+      "name": "ChannelFramingOptions",
+      "source": "src/channel_wire_stream.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "ChannelWireStream",
+      "source": "src/channel_wire_stream.ts",
+      "route": "native-worker"
+    },
+    {
+      "entry": "./runtime",
+      "name": "Chunk",
+      "source": "src/data.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "CHUNK_METADATA_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": "./runtime",
+      "name": "CHUNK_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": "./runtime",
+      "name": "ChunkMetadata",
+      "source": "src/data.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "ChunkMetadataOptions",
+      "source": "src/data.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "ChunkOptions",
+      "source": "src/data.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "CLOSE_STATUS_ATTRIBUTE",
+      "source": "src/action_schema.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "concatBytes",
+      "source": "src/bytes.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "copyByteMap",
+      "source": "src/bytes.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "createA11Runtime",
+      "source": "src/runtime_backend.ts",
+      "route": "native-worker"
+    },
+    {
+      "entry": "./runtime",
+      "name": "dataLossError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "DataLossError",
+      "source": "src/status.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "DataLossException",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "deadlineExceededError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "DeadlineExceededError",
+      "source": "src/status.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "DeadlineExceededException",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "decodeAuthorization",
+      "source": "src/authorization.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "decodeStatusChunk",
+      "source": "src/action_schema.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "DEFAULT_LOG_LEVEL",
+      "source": "src/action_log.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "DEFAULT_ROLE",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "DEFAULT_SSE_CONNECT_ENDPOINT",
+      "source": "src/http_sse_wire_stream.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "DEFAULT_SSE_MESSAGE_ENDPOINT",
+      "source": "src/http_sse_wire_stream.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "DURATION_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": "./runtime",
+      "name": "enableUsageTracking",
+      "source": "src/runtime_usage.ts",
+      "route": "native-worker-facade"
+    },
+    {
+      "entry": "./runtime",
+      "name": "encodeAuthorization",
+      "source": "src/authorization.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "executeActionsFromInteraction",
+      "source": "src/runtime_tool_runner.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "failedPreconditionError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "FailedPreconditionError",
+      "source": "src/status.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "FailedPreconditionException",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "FetchFunction",
+      "source": "src/http_sse_wire_stream.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "Fields",
+      "source": "src/wire_values.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "FlowProgram",
+      "source": "src/runtime_flow.ts",
+      "route": "native-worker"
+    },
+    {
+      "entry": "./runtime",
+      "name": "FlowRunOptions",
+      "source": "src/runtime_flow.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "FlowTooling",
+      "source": "src/runtime_flow.ts",
+      "route": "native-worker"
+    },
+    {
+      "entry": "./runtime",
+      "name": "formatUsage",
+      "source": "src/sdk/usage.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "fromChunk",
+      "source": "src/serialization.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "GET_SCHEMA_NAME",
+      "source": "src/action_names.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "getActionLogSink",
+      "source": "src/action_log.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "getAllowedLlmActionPatterns",
+      "source": "src/runtime_llm_policy.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "getAuthorization",
+      "source": "src/runtime_authorization.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "getError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "getGlobalSerializationRegistry",
+      "source": "src/serialization.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "getStatusAndValue",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "getToolDefinitions",
+      "source": "src/runtime_tool_runner.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "getValue",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "GLOBAL_WEBRTC_SIGNALLING_ENDPOINT",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "HeaderEntry",
+      "source": "src/schema_json.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "HttpHeaders",
+      "source": "src/http_sse_wire_stream.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "HttpSseClientWireStream",
+      "source": "src/http_sse_wire_stream.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "HttpSseOptions",
+      "source": "src/http_sse_wire_stream.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "InProcessWireStream",
+      "source": "src/in_process_wire_stream.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "INTERACT_WITH_CLAUDE_CODE_CONFIG_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": "./runtime",
+      "name": "INTERACT_WITH_CLAUDE_CONFIG_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": "./runtime",
+      "name": "INTERACT_WITH_CODEX_CONFIG_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": "./runtime",
+      "name": "INTERACT_WITH_GEMINI_CONFIG_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": "./runtime",
+      "name": "INTERACT_WITH_GEMMA_CONFIG_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": "./runtime",
+      "name": "INTERACT_WITH_GPT_CONFIG_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": "./runtime",
+      "name": "INTERACT_WITH_OLLAMA_CONFIG_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": "./runtime",
+      "name": "INTERACT_WITH_VLLM_CONFIG_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": "./runtime",
+      "name": "Interaction",
+      "source": "src/sdk/llm.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "INTERACTION_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": "./runtime",
+      "name": "interactionBackend",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "InteractionInput",
+      "source": "src/sdk/llm.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "InteractionNormalizer",
+      "source": "src/sdk/llm.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "interactionUsageUpdates",
+      "source": "src/sdk/usage.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "internalError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "InternalError",
+      "source": "src/status.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "InternalException",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "invalidArgumentError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "InvalidArgumentError",
+      "source": "src/status.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "InvalidArgumentException",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "InvalidStatusAccessBehaviour",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "invokeWireCallback",
+      "source": "src/wire_stream.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "isAbortedError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "isAlreadyExistsError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "isCancelledError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "isCloseStatusChunk",
+      "source": "src/action_schema.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "isDataLossError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "isDeadlineExceededError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "isFailedPreconditionError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "isInternalError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "isInvalidArgumentError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "isLogLevel",
+      "source": "src/action_log.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "isNotFoundError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "isOk",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "isOutOfRangeError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "isPermissionDeniedError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "isResourceExhaustedError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "isStatus",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "isStatusChunk",
+      "source": "src/action_schema.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "isTextualLogMimetype",
+      "source": "src/action_log.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "isUnauthenticatedError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "isUnavailableError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "isUnimplementedError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "isUnknownError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "JSON_MIMETYPE",
+      "source": "src/serialization.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "LIST_ACTIONS_NAME",
+      "source": "src/action_names.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "LlmHeaders",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "LocalChunkStore",
+      "source": "src/worker_chunk_store.ts",
+      "route": "native-worker"
+    },
+    {
+      "entry": "./runtime",
+      "name": "LOG_CHANNEL_ATTRIBUTE",
+      "source": "src/action_log.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "LOG_FILE_ATTRIBUTE",
+      "source": "src/action_log.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "LOG_INTERNAL_ATTRIBUTE",
+      "source": "src/action_log.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "LOG_INTERNAL_FALSE",
+      "source": "src/action_log.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "LOG_INTERNAL_TRUE",
+      "source": "src/action_log.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "LOG_LEVEL_ATTRIBUTE",
+      "source": "src/action_log.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "LOG_LEVELS",
+      "source": "src/action_log.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "LOG_LINENO_ATTRIBUTE",
+      "source": "src/action_log.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "LogLevel",
+      "source": "src/action_log.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "LogOptions",
+      "source": "src/action_log.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "LogRecord",
+      "source": "src/action_log.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "logRecordFromChunk",
+      "source": "src/action_log.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "logText",
+      "source": "src/action_log.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "MakeActionOptions",
+      "source": "src/runtime_registry.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "makeHalfCloseMessage",
+      "source": "src/data.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "makeInteraction",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "makeNullChunk",
+      "source": "src/data.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "makeTextMessageInteraction",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "MAX_AUTHORIZATION_BYTES",
+      "source": "src/authorization.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "MAX_AUTHORIZATION_HOPS",
+      "source": "src/authorization.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "MAX_SINGLE_WIRE_MESSAGE_SIZE",
+      "source": "src/wire_stream.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "MSGPACK_MIMETYPE",
+      "source": "src/serialization.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "NODE_FRAGMENT_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": "./runtime",
+      "name": "NODE_REF_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": "./runtime",
+      "name": "NodeFragment",
+      "source": "src/data.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "NodeFragmentOptions",
+      "source": "src/data.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "NodeMap",
+      "source": "src/runtime_graph.ts",
+      "route": "native-worker"
+    },
+    {
+      "entry": "./runtime",
+      "name": "NodeRef",
+      "source": "src/data.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "NodeRefOptions",
+      "source": "src/data.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "noexcept",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "noexceptFetch",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "NonOkStatus",
+      "source": "src/status.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "normalizeByShape",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "normalizeByteMap",
+      "source": "src/bytes.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "normalizeChannelFramingOptions",
+      "source": "src/channel_wire_stream.ts",
+      "route": "native-worker"
+    },
+    {
+      "entry": "./runtime",
+      "name": "NormalizedChannelFramingOptions",
+      "source": "src/channel_wire_stream.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "NormalizedContentType",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "NormalizedMessage",
+      "source": "src/sdk/llm.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "NormalizedPart",
+      "source": "src/sdk/llm.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "NormalizedWireStreamOptions",
+      "source": "src/wire_stream.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "normalizeInteraction",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "normalizeWireHeaders",
+      "source": "src/wire_stream.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "normalizeWireStreamOptions",
+      "source": "src/wire_stream.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "notFoundError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "NotFoundError",
+      "source": "src/status.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "NotFoundException",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "OCTET_STREAM_MIMETYPE",
+      "source": "src/serialization.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "okStatus",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "OkStatus",
+      "source": "src/status.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "OnSignallingMessage",
+      "source": "src/signalling.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "OnWireDone",
+      "source": "src/wire_stream.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "OnWireMessage",
+      "source": "src/wire_stream.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "outOfRangeError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "OutOfRangeError",
+      "source": "src/status.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "OutOfRangeException",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "parseInteraction",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "parseLogLevel",
+      "source": "src/action_log.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "PEER_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": "./runtime",
+      "name": "PeerConnectionFactory",
+      "source": "src/webrtc_wire_stream.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "permissionDeniedError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "PermissionDeniedError",
+      "source": "src/status.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "PermissionDeniedException",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "PING_NAME",
+      "source": "src/action_names.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "Port",
+      "source": "src/data.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "PORT_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": "./runtime",
+      "name": "PortEntry",
+      "source": "src/schema_json.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "PortView",
+      "source": "src/schema_json.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "randomId",
+      "source": "src/bytes.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "registerInteractionNormalizer",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "registerWireValueCodec",
+      "source": "src/wire_values.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "rememberUsage",
+      "source": "src/sdk/usage.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "reportLog",
+      "source": "src/action_log.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "resourceExhaustedError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "ResourceExhaustedError",
+      "source": "src/status.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "ResourceExhaustedException",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "Role",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "RuntimeActionOptions",
+      "source": "src/runtime_backend.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "SCHEMA_DOCUMENT_FORMAT",
+      "source": "src/schema_json.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "schemaDocument",
+      "source": "src/schema_json.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "SchemaDocument",
+      "source": "src/schema_json.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "SchemaEntry",
+      "source": "src/schema_json.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "schemaFromJson",
+      "source": "src/schema_json.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "schemasInDocument",
+      "source": "src/schema_json.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "schemaToJson",
+      "source": "src/schema_json.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "SerializationCodec",
+      "source": "src/serialization.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "SerializationRegistry",
+      "source": "src/serialization.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "SerializedData",
+      "source": "src/serialization.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "Session",
+      "source": "src/runtime_graph.ts",
+      "route": "native-worker"
+    },
+    {
+      "entry": "./runtime",
+      "name": "SessionCreateOptions",
+      "source": "src/runtime_graph.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "SessionWithRecv",
+      "source": "src/runtime_graph.ts",
+      "route": "native-worker"
+    },
+    {
+      "entry": "./runtime",
+      "name": "setActionLogSink",
+      "source": "src/action_log.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "setAuthorizationHeader",
+      "source": "src/runtime_authorization.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "setAuthorizationReference",
+      "source": "src/runtime_authorization.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "setGlobalSerializationRegistry",
+      "source": "src/serialization.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "SignallingMessage",
+      "source": "src/signalling.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "SignallingMessageOptions",
+      "source": "src/signalling.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "SignallingMessageType",
+      "source": "src/signalling.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "SignallingTransport",
+      "source": "src/signalling.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "SPEECH_RECOGNIZER_OPTIONS_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": "./runtime",
+      "name": "SSE_HTTP_HEADER_PREFIX",
+      "source": "src/http_sse_wire_stream.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "SSE_STREAM_ID_HEADER",
+      "source": "src/http_sse_wire_stream.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "Status",
+      "source": "src/status.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "STATUS_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": "./runtime",
+      "name": "StatusCode",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "statusCodeFromHttp",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "statusCodeFromWebSocket",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "statusCodeToWebSocket",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "StatusException",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "statusFromChunk",
+      "source": "src/action_schema.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "statusFromJson",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "statusFromResponse",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "statusFromUnknown",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "StatusJson",
+      "source": "src/status.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "StatusOr",
+      "source": "src/status.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "statusToChunk",
+      "source": "src/action_schema.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "statusToJson",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "StorageCredentials",
+      "source": "src/data.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "StorageIdentity",
+      "source": "src/data.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "storageIdentityFromValue",
+      "source": "src/data.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "StorageService",
+      "source": "src/data.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "STREAM_SCOPE_HEADER",
+      "source": "src/action_schema.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "STREAM_STORAGE_HEADER",
+      "source": "src/action_schema.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "StreamMode",
+      "source": "src/stream_mode.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "summarizeUsage",
+      "source": "src/sdk/usage.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "tagValue",
+      "source": "src/wire_values.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "terminate",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "testTagged",
+      "source": "src/wire_values.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "TEXT_MIMETYPE",
+      "source": "src/serialization.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "throwForError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "TIME_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": "./runtime",
+      "name": "toBytes",
+      "source": "src/bytes.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "toBytesAsync",
+      "source": "src/bytes.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "toChunk",
+      "source": "src/serialization.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "ToolDefinition",
+      "source": "src/sdk/tool_runner.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "TRANSCRIPTION_EVENT_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": "./runtime",
+      "name": "TurnRelayType",
+      "source": "src/webrtc_wire_stream.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "TurnServer",
+      "source": "src/webrtc_wire_stream.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "TurnServerOptions",
+      "source": "src/webrtc_wire_stream.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "unauthenticatedError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "UnauthenticatedError",
+      "source": "src/status.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "UnauthenticatedException",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "unavailableError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "UnavailableError",
+      "source": "src/status.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "UnavailableException",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "unimplementedError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "UnimplementedError",
+      "source": "src/status.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "UnimplementedException",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "unknownError",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "UnknownError",
+      "source": "src/status.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "UnknownException",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "USAGE_METADATA_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": "./runtime",
+      "name": "UsageAccounting",
+      "source": "src/runtime_usage.ts",
+      "route": "native-worker-facade"
+    },
+    {
+      "entry": "./runtime",
+      "name": "UsageFigure",
+      "source": "src/sdk/usage.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "UsageLedger",
+      "source": "src/sdk/usage.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "UsageMetadata",
+      "source": "src/sdk/llm.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "usageMetadataSchema",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "UsageScope",
+      "source": "src/sdk/usage.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "usageTrackingEnabled",
+      "source": "src/runtime_usage.ts",
+      "route": "native-worker-facade"
+    },
+    {
+      "entry": "./runtime",
+      "name": "usageUpdate",
+      "source": "src/sdk/usage.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "UsageUpdate",
+      "source": "src/sdk/usage.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "utf8Decode",
+      "source": "src/bytes.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "utf8Encode",
+      "source": "src/bytes.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "validateA11Peer",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "validateName",
+      "source": "src/data.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "valueOrTerminate",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "valueOrThrow",
+      "source": "src/status.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "valueTag",
+      "source": "src/wire_values.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "WebRtcConfiguration",
+      "source": "src/webrtc_wire_stream.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "WebRtcWireStream",
+      "source": "src/webrtc_wire_stream.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "WebSocketClientOptions",
+      "source": "src/websocket_wire_stream.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "WebSocketFactory",
+      "source": "src/websocket_wire_stream.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "WebSocketLike",
+      "source": "src/websocket_wire_stream.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "WebSocketSignallingClient",
+      "source": "src/signalling.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "WebSocketSignallingClientOptions",
+      "source": "src/signalling.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "WebSocketWireStream",
+      "source": "src/websocket_wire_stream.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime",
+      "name": "WHOLE_JSON_OUTPUT",
+      "source": "src/action_schema.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "WIRE_MESSAGE_TAG",
+      "source": "src/serial_tags.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": "./runtime",
+      "name": "WireDeadline",
+      "source": "src/wire_stream.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "wireDeadlineMillis",
+      "source": "src/wire_stream.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "WireMessage",
+      "source": "src/data.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "wireMessageFromJsonValue",
+      "source": "src/data.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "WireMessageOptions",
+      "source": "src/data.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "wireMessageToJsonValue",
+      "source": "src/data.ts",
+      "route": "native-after-init"
+    },
+    {
+      "entry": "./runtime",
+      "name": "WireStream",
+      "source": "src/wire_stream.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "WireStreamOptions",
+      "source": "src/wire_stream.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "WireStreamWithRecv",
+      "source": "src/wire_stream.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "WireValueCodec",
+      "source": "src/wire_values.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime",
+      "name": "wireValueCodecByTag",
+      "source": "src/wire_values.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "wireValueCodecCount",
+      "source": "src/wire_values.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "wireValueCodecFor",
+      "source": "src/wire_values.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "wireValueCodecs",
+      "source": "src/wire_values.ts",
+      "route": "typescript-protocol"
+    },
+    {
+      "entry": "./runtime",
+      "name": "zodParse",
+      "source": "src/sdk/llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime/llm",
+      "name": "DEFAULT_MODEL",
+      "source": "src/sdk/gemma/interact_with_gemma.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime/llm",
+      "name": "DEFAULT_MODEL_ASSET_PATH",
+      "source": "src/sdk/gemma/interact_with_gemma.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime/llm",
+      "name": "DEFAULT_STOP_SEQUENCES",
+      "source": "src/sdk/gemma/interact_with_gemma.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime/llm",
+      "name": "fetchModelAssetBuffer",
+      "source": "src/sdk/gemma/interact_with_gemma.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime/llm",
+      "name": "GemmaConfig",
+      "source": "src/sdk/gemma/interact_with_gemma.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime/llm",
+      "name": "gemmaConfigSchema",
+      "source": "src/sdk/gemma/interact_with_gemma.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime/llm",
+      "name": "GemmaEngine",
+      "source": "src/sdk/gemma/interact_with_gemma.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime/llm",
+      "name": "GemmaEngineFactory",
+      "source": "src/sdk/gemma/interact_with_gemma.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime/llm",
+      "name": "GemmaPromptPart",
+      "source": "src/sdk/gemma/interact_with_gemma.ts",
+      "route": "type-only"
+    },
+    {
+      "entry": "./runtime/llm",
+      "name": "INTERACT_WITH_GEMMA_SCHEMA",
+      "source": "src/sdk/gemma/interact_with_gemma.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime/llm",
+      "name": "INTERACT_WITH_LLM_SCHEMA",
+      "source": "src/sdk/interact_with_llm.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime/llm",
+      "name": "interactWithGemma",
+      "source": "src/runtime_llm.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": "./runtime/llm",
+      "name": "interactWithLlm",
+      "source": "src/runtime_llm.ts",
+      "route": "value-conversion"
+    },
+    {
+      "entry": "./runtime/llm",
+      "name": "MODEL_CACHE_NAME",
+      "source": "src/sdk/gemma/interact_with_gemma.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime/llm",
+      "name": "resetGemmaEngineFactory",
+      "source": "src/sdk/gemma/interact_with_gemma.ts",
+      "route": "host"
+    },
+    {
+      "entry": "./runtime/llm",
+      "name": "setGemmaEngineFactory",
+      "source": "src/sdk/gemma/interact_with_gemma.ts",
+      "route": "host"
+    }
+  ]
+}

@@ -21,12 +21,18 @@ import { fileURLToPath } from 'node:url';
 
 import {
   A11Runtime, ActionHeaderSchema, ActionPortSchema, ActionRegistry,
-  ActionSchema, Chunk, ChunkMetadata, InProcessWireStream,
+  ActionSchema, ByteReassembler, Chunk, ChunkMetadata, InProcessWireStream,
   GraphAction, GraphNode, GraphSession, GraphSessionWithRecv,
   RuntimeGraph,
-  NodeFragment, NodeRef,
+  NodeFragment, NodeRef, Port, ActionMessage,
   Session, StatusCode, StreamMode, WireMessage,
-  createA11Runtime, isOk, okStatus, wireMessageFromJsonValue,
+  createA11Runtime, isOk, okStatus, parseBytePacket,
+  packStatus, decodeStatus, statusToChunk, decodeStatusChunk,
+  encodeAuthorization, decodeAuthorization, authorizationToText,
+  authorizationFromText, parseStreamReference, streamReferenceToChunk,
+  streamReferenceFromChunk, splitBytesIntoPackets, wireMessageFromJsonValue,
+  toChunk, fromChunk,
+  schemaToJson, schemaFromJson, schemasInDocument,
   wireMessageToJsonValue,
   LocalChunkStore as NativeLocalChunkStore,
 } from '../dist/index.js';
@@ -69,6 +75,9 @@ test('runtime rejects the retired TypeScript backend', async () => {
     StatusCode.UNIMPLEMENTED);
   assert.equal((await createA11Runtime({features: {
     nodes: 'typescript'}})).code, StatusCode.UNIMPLEMENTED);
+  const active = await createA11Runtime(options());
+  assert.equal(isOk(active), true);
+  try {
   const qualified = new WireMessage({nodeFragments: [new NodeFragment({
     id: 'alias', data: new NodeRef({id: 'source', storage: {id: 'archive'}}),
   })]});
@@ -77,6 +86,7 @@ test('runtime rejects the retired TypeScript backend', async () => {
   const roundtrip = wireMessageFromJsonValue(json);
   assert.equal(isOk(roundtrip), true);
   assert.equal(roundtrip.nodeFragments[0].data.storage.id, 'archive');
+  } finally { await active.dispose(); }
 });
 
 test('WASM codecs, Flow tooling, fragment log, and Flow execution run natively',
@@ -86,6 +96,115 @@ test('WASM codecs, Flow tooling, fragment log, and Flow execution run natively',
   assert.ok(runtime instanceof A11Runtime);
   assert.equal(runtime.backendFor('chunkStore'), 'wasm');
   assert.equal(runtime.backendFor('actions'), 'wasm');
+  const packedStatus = packStatus({code: StatusCode.PERMISSION_DENIED,
+    message: 'denied', details: [{reason: 'test'}]});
+  assert.equal(isOk(packedStatus), true);
+  assert.deepEqual(decodeStatus(packedStatus), {status: {
+    code: StatusCode.PERMISSION_DENIED, message: 'denied',
+    details: [{reason: 'test'}],
+  }});
+  const closing = statusToChunk({code: StatusCode.PERMISSION_DENIED,
+    message: 'denied'}, true);
+  assert.equal(isOk(closing), true);
+  assert.equal(decodeStatusChunk(closing).status.code,
+    StatusCode.PERMISSION_DENIED);
+  assert.equal(closing.metadata.attributes.has('a11-close'), true);
+  for (const value of [new ChunkMetadata({mimetype: 'text/plain'}),
+    new Chunk({data: encoded.encode('data')}),
+    new NodeRef({id: 'source', storage: {id: 'archive'}}),
+    new NodeFragment({id: 'source', data: new Chunk({data: encoded.encode('x')})}),
+    new Port('input', 'source'),
+    new ActionMessage({id: 'call', name: 'query'})]) {
+    const bytes = value.toMsgpack();
+    assert.equal(isOk(bytes), true, value.constructor.name);
+    const decoded = value.constructor.fromMsgpack(bytes);
+    assert.equal(isOk(decoded), true, value.constructor.name);
+    assert.ok(decoded instanceof value.constructor);
+  }
+  const invalidSchema = new ActionSchema({name: 'conflict',
+    inputs: {same: new ActionPortSchema({name: 'same', type: 'string'})},
+    outputs: {same: new ActionPortSchema({name: 'same', type: 'string'})}});
+  assert.equal(invalidSchema.validate().code, StatusCode.INVALID_ARGUMENT);
+  const described = schemaToJson(new ActionSchema({name: 'describe',
+    inputs: {prompt: new ActionPortSchema({name: 'prompt', type: 'string',
+      required: true})}}), true);
+  assert.equal(described.inputs[0].name, 'prompt');
+  assert.equal(described.inputs[0].required, true);
+  const parsedSchema = schemaFromJson(described);
+  assert.equal(isOk(parsedSchema), true);
+  assert.ok(parsedSchema instanceof ActionSchema);
+  assert.equal(parsedSchema.inputs.get('prompt').required, true);
+  assert.equal(schemasInDocument({format: 'a11.actions/v1',
+    actions: [described]})[0].name, 'describe');
+  const envelope = {version: 1, chain: ['a.b.c']};
+  const authorization = encodeAuthorization(envelope);
+  assert.equal(isOk(authorization), true);
+  assert.deepEqual(decodeAuthorization(authorization), envelope);
+  const text = authorizationToText(envelope);
+  assert.equal(isOk(text), true);
+  assert.deepEqual(authorizationFromText(text), envelope);
+  const descriptor = {producer_id: 'producer', parent_producer_id: '',
+    node: new NodeRef({id: 'source', storage: {id: 'archive'}}),
+    purpose: 'llm_usage', source: {type: 'a11_action', id: 'call'}};
+  assert.equal(isOk(parseStreamReference(descriptor)), true);
+  const descriptorChunk = streamReferenceToChunk(descriptor);
+  assert.equal(isOk(descriptorChunk), true);
+  const decodedDescriptor = streamReferenceFromChunk(descriptorChunk);
+  assert.equal(isOk(decodedDescriptor), true);
+  assert.ok(decodedDescriptor.node instanceof NodeRef);
+  const generic = await toChunk({topic: 'weather', count: 2});
+  assert.equal(isOk(generic), true);
+  assert.equal(generic.mimetype, 'application/json');
+  assert.deepEqual(await fromChunk(generic),
+    {topic: 'weather', count: 2});
+  const genericMsgpack = await toChunk({topic: 'weather', count: 2},
+    'application/x-msgpack');
+  assert.equal(isOk(genericMsgpack), true);
+  assert.equal(genericMsgpack.mimetype, 'application/x-msgpack');
+  assert.deepEqual(await fromChunk(genericMsgpack),
+    {topic: 'weather', count: 2});
+  assert.deepEqual(await fromChunk(genericMsgpack,
+    ['application/x-msgpack', 'application/json']),
+    {topic: 'weather', count: 2});
+  assert.equal((await fromChunk(genericMsgpack,
+    'application/json')).code, StatusCode.INVALID_ARGUMENT);
+  const textChunk = await toChunk('hello');
+  assert.equal(isOk(textChunk), true);
+  assert.equal(textChunk.mimetype, 'text/plain');
+  assert.equal(await fromChunk(textChunk), 'hello');
+  const byteChunk = await toChunk(encoded.encode('bytes'));
+  assert.equal(isOk(byteChunk), true);
+  assert.equal(byteChunk.mimetype, 'application/octet-stream');
+  assert.deepEqual(await fromChunk(byteChunk), encoded.encode('bytes'));
+  const framed = splitBytesIntoPackets(encoded.encode('native-framing'.repeat(8)),
+    42n, 32);
+  assert.equal(isOk(framed), true);
+  assert.equal(parseBytePacket(framed[0]).transientId, 42n);
+  const reassembler = ByteReassembler.create({packetSize: 32,
+    maxMessageSize: 1024, maxPendingMessages: 4, maxPendingBytes: 1024});
+  assert.equal(isOk(reassembler), true);
+  let rebuilt = null;
+  for (const packet of framed.toReversed()) {
+    rebuilt = reassembler.feed(packet) ?? rebuilt;
+  }
+  assert.deepEqual(rebuilt, encoded.encode('native-framing'.repeat(8)));
+  reassembler.dispose();
+  const pair = InProcessWireStream.createPair();
+  assert.equal(isOk(pair), true);
+  const channelArrivals = [];
+  assert.equal(isOk(await pair[0].start(() => {})), true);
+  assert.equal(isOk(await pair[1].accept(message => {
+    if (message !== null) channelArrivals.push(message);
+  })), true);
+  assert.equal(isOk(await pair[0].send(new WireMessage({
+    nodeFragments: [new NodeFragment({id: 'native-channel',
+      data: new Chunk({data: encoded.encode('packet')})})],
+  }))), true);
+  for (let attempt = 0; attempt < 100 && channelArrivals.length === 0;
+       attempt++) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(channelArrivals[0]?.nodeFragments[0]?.id, 'native-channel');
+  await pair[0].abort({code: StatusCode.CANCELLED, message: 'finished'});
+  await pair[1].abort({code: StatusCode.CANCELLED, message: 'finished'});
   const store = await storeScenario(runtime);
   assert.equal(runtime.backendOf(store), 'wasm');
 
@@ -585,6 +704,9 @@ test('native SDK session calls a second native peer over a host WireStream',
     assert.ok(server instanceof Session);
     const pair = InProcessWireStream.createPair();
     assert.equal(isOk(pair), true);
+    assert.equal((await pair[1].nativeHandle()).__a11NativeChannelStream, true);
+    assert.equal((await pair[1].nativeHandle().then(handle => handle.status())).status.code,
+      StatusCode.OK);
     const client = await runtime.createSession({id: 'remote-graph-client',
       noStreamTimeoutMs: null});
     assert.ok(client instanceof GraphSession);
@@ -592,8 +714,8 @@ test('native SDK session calls a second native peer over a host WireStream',
       server.addStream(pair[1], StreamMode.ACCEPT),
       client.addStream(pair[0], StreamMode.START),
     ]);
-    assert.equal(isOk(accepted), true);
-    assert.equal(isOk(connected), true);
+    assert.equal(isOk(accepted), true, JSON.stringify(accepted));
+    assert.equal(isOk(connected), true, JSON.stringify(connected));
     const call = await client.createAction(schema, 'remote-graph-call');
     assert.ok(call instanceof GraphAction);
     const input = await call.getInput('text');
@@ -611,6 +733,30 @@ test('native SDK session calls a second native peer over a host WireStream',
   } finally {
     await runtime.dispose();
     await serverRuntime.dispose();
+  }
+});
+
+test('same-runtime session actions use the attached public channel id',
+  {skip: !builtNative}, async () => {
+  const runtime = await createA11Runtime(options());
+  assert.ok(runtime instanceof A11Runtime);
+  try {
+    const pair = InProcessWireStream.createPair();
+    assert.equal(isOk(pair), true);
+    const session = await runtime.createSession({id: 'direct-channel-session',
+      noStreamTimeoutMs: null});
+    assert.ok(session instanceof GraphSession);
+    const [accepted, attached] = await Promise.all([
+      pair[1].accept(), session.addStream(pair[0]),
+    ]);
+    assert.equal(isOk(accepted), true);
+    assert.equal(isOk(attached), true);
+    const schema = new ActionSchema({name: 'direct_channel_action'});
+    const action = await session.createAction(schema);
+    assert.ok(action instanceof GraphAction, JSON.stringify(action));
+    assert.equal(isOk(await session.abort()), true);
+  } finally {
+    await runtime.dispose();
   }
 });
 
@@ -636,8 +782,8 @@ test('native receiving session exposes typed inbound messages',
       peer.addStream(pair[1], StreamMode.ACCEPT),
       session.addStream(pair[0]),
     ]);
-    assert.equal(isOk(accepted), true);
-    assert.equal(isOk(connected), true);
+    assert.equal(isOk(accepted), true, JSON.stringify(accepted));
+    assert.equal(isOk(connected), true, JSON.stringify(connected));
     const sent = new WireMessage({nodeFragments: [new NodeFragment({
       id: 'sdk-received-node', data: new Chunk({data: encoded.encode('hello')}),
     })]});
@@ -646,7 +792,7 @@ test('native receiving session exposes typed inbound messages',
     assert.equal(isOk(received), true);
     assert.ok(received.message instanceof WireMessage);
     assert.equal(received.message.nodeFragments[0].id, 'sdk-received-node');
-    assert.ok(received.streamId.startsWith(`${pair[0].getId()}-`));
+    assert.ok(received.streamId.endsWith(pair[0].getId()));
     assert.equal(isOk(await session.dispatchWireMessage(received.message,
       received.streamId)), true);
     const dispatched = await session.getNodeMap().node('sdk-received-node');
@@ -656,6 +802,8 @@ test('native receiving session exposes typed inbound messages',
     assert.deepEqual(stored.data, encoded.encode('hello'));
     assert.equal(isOk(await peer.halfClose()), true);
     assert.equal(await session.receive(2000), null);
+    assert.equal((await pair[0].getTrailers())?.has('x-a11-session-status'),
+      true);
     assert.equal(isOk(await session.halfClose()), true);
     assert.equal(isOk(await session.done(2000)), true);
   } finally {

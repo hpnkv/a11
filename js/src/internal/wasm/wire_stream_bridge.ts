@@ -15,17 +15,17 @@
  */
 
 import {WireMessage, wireMessageFromJsonValue,
-  wireMessageToJsonValue} from './data.js';
-import {isOk, type Status} from './status.js';
-import {type WireStream} from './wire_stream.js';
+  wireMessageToJsonValue} from '../../data.js';
+import {isOk, type Status} from '../../status.js';
+import {type WireStream} from '../../wire_stream.js';
 
 export interface WireStreamBridge {
   readonly id: string;
   readonly host: WireStream;
-  send(message: Record<string, unknown>): Status;
-  halfClose(message: Record<string, unknown>): Status;
-  abort(status: Status): Status;
-  getStatus(): Status;
+  send(message: Record<string, unknown>): Promise<Status>;
+  halfClose(message: Record<string, unknown>): Promise<Status>;
+  abort(status: Status): Promise<Status>;
+  getStatus(): Promise<Status>;
   start(onMessage: (message: Record<string, unknown> | null,
       trailers?: Record<string, unknown>) =>
       Promise<Status>, onDone: () => Promise<Status>): Promise<Status>;
@@ -41,7 +41,7 @@ export function bridgeWireStream(stream: WireStream): WireStreamBridge {
       Promise<Status>) => async (message: WireMessage | null): Promise<Status> => {
     if (message === null) {
       const trailers = wireMessageToJsonValue(new WireMessage({
-        headers: stream.getTrailers() ?? new Map(),
+        headers: await stream.getTrailers() ?? new Map(),
       }));
       return isOk(trailers) ? onMessage(null, trailers) : trailers;
     }
@@ -51,16 +51,16 @@ export function bridgeWireStream(stream: WireStream): WireStreamBridge {
   return {
     id: `${stream.getId()}-${globalThis.crypto.randomUUID()}`,
     host: stream,
-    send(value) {
+    async send(value) {
       const decoded = wireMessageFromJsonValue(value);
-      return isOk(decoded) ? stream.send(decoded) : decoded;
+      return isOk(decoded) ? await stream.send(decoded) : decoded;
     },
-    halfClose(value) {
+    async halfClose(value) {
       const decoded = wireMessageFromJsonValue(value);
-      return isOk(decoded) ? stream.halfClose(decoded.headers) : decoded;
+      return isOk(decoded) ? await stream.halfClose(decoded.headers) : decoded;
     },
-    abort: status => stream.abort(status),
-    getStatus: () => stream.getStatus(),
+    abort: async status => stream.abort(status),
+    getStatus: async () => stream.getStatus(),
     start: (onMessage, onDone) => stream.start(incoming(onMessage), onDone),
     accept: (onMessage, onDone) => stream.accept(incoming(onMessage), onDone),
   };

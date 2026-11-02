@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-import type {Deadline} from './runtime_options.js';
+import type {Deadline} from '../../runtime_options.js';
 import {NodeFragment, WireMessage, wireMessageFromJsonValue,
-  wireMessageToJsonValue} from './data.js';
+  wireMessageToJsonValue} from '../../data.js';
 import {invalidArgumentError, isOk, type NonOkStatus,
-  type StatusOr} from './status.js';
+  type StatusOr} from '../../status.js';
 import {statusFromBridgeFailure} from './status_bridge.js';
 
 export function checkedDeadline(deadline: Deadline | undefined): StatusOr<Deadline> {

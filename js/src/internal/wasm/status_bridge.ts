@@ -16,7 +16,7 @@
 
 import {StatusCode, isStatus, statusFromUnknown,
   type NonOkStatus, type Status}
-  from './status.js';
+  from '../../status.js';
 
 /** Convert one native rejection to the SDK's structured status value. */
 export function statusFromBridgeFailure(error: unknown,

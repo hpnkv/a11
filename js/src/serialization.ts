@@ -18,6 +18,8 @@ import { decode, encode } from '@msgpack/msgpack';
 
 import { toBytesAsync, utf8Decode, utf8Encode, type AsyncByteSource } from './bytes.js';
 import { Chunk, ChunkMetadata } from './data.js';
+import {serializationBridge} from './internal/wasm/native_serialization.js';
+import {statusFromBridgeFailure} from './internal/wasm/status_bridge.js';
 import {
   wireValueCodecCount,
   wireValueCodecFor,
@@ -26,6 +28,7 @@ import {
 } from './wire_values.js';
 import {
   alreadyExistsError,
+  failedPreconditionError,
   invalidArgumentError,
   isOk,
   notFoundError,
@@ -201,6 +204,31 @@ function canonicalJsonTag(value: unknown): string | null {
       if (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null) return 'object';
   }
   return null;
+}
+
+function isPlainJsonTree(value: unknown): boolean {
+  const pending = [value];
+  const seen = new Set<object>();
+  while (pending.length > 0) {
+    const item = pending.pop();
+    if (item === null || typeof item === 'string' ||
+        typeof item === 'boolean') continue;
+    if (typeof item === 'number') {
+      if (!Number.isFinite(item) ||
+          (Number.isInteger(item) && !Number.isSafeInteger(item))) return false;
+      continue;
+    }
+    if (typeof item !== 'object' || seen.has(item)) return false;
+    seen.add(item);
+    if (Array.isArray(item)) {
+      for (const value of item) pending.push(value);
+    }
+    else if (Object.getPrototypeOf(item) === Object.prototype ||
+             Object.getPrototypeOf(item) === null) {
+      for (const value of Object.values(item)) pending.push(value);
+    } else return false;
+  }
+  return true;
 }
 
 /**
@@ -418,9 +446,13 @@ export class SerializationRegistry {
   private nextOrder = 0;
   private wireValueCache: RegisteredCodec[] | null = null;
   private wireValueGeneration = -1;
+  private readonly nativeDefaults: boolean;
+  private readonly defaultCodecCount: number;
 
   constructor(options: { registerDefaults?: boolean } = {}) {
-    if (options.registerDefaults ?? false) this.installDefaults();
+    this.nativeDefaults = options.registerDefaults ?? false;
+    if (this.nativeDefaults) this.installDefaults();
+    this.defaultCodecCount = this.codecs.length;
   }
 
   /** Add one codec; duplicate tag/media-type pairs are rejected. */
@@ -614,6 +646,33 @@ export class SerializationRegistry {
           'A Promise cannot be serialized: await the value before writing it.',
         );
       }
+      const native = serializationBridge();
+      if (native === null) return failedPreconditionError(
+        'Initialize A11 WASM before serializing values.');
+      const customMatches = this.codecs.slice(this.defaultCodecCount)
+        .some(codec => codec.test(value));
+      if (this.nativeDefaults && !customMatches) {
+        const byteValue = typeof value === 'string' ? utf8Encode(value)
+          : value instanceof Uint8Array ? value : null;
+        const byteMimetype = mimetype ||
+          (typeof value === 'string' ? TEXT_MIMETYPE : OCTET_STREAM_MIMETYPE);
+        if (byteValue !== null &&
+            (byteMimetype === TEXT_MIMETYPE ||
+             byteMimetype === OCTET_STREAM_MIMETYPE)) {
+          try { return Chunk.fromMsgpack(native.bytesToChunk(
+            byteValue, byteMimetype)); }
+          catch (error) { return statusFromBridgeFailure(error,
+            'Native byte serialization failed.'); }
+        }
+        if (isPlainJsonTree(value) &&
+            !this.wireValueCodecs().some(codec => codec.test(value)) &&
+            (typeof value !== 'string' ||
+             mimetype === JSON_MIMETYPE || mimetype === MSGPACK_MIMETYPE)) {
+          try { return Chunk.fromMsgpack(native.jsonToChunk(value, mimetype)); }
+          catch (error) { return statusFromBridgeFailure(error,
+            'Native generic serialization failed.'); }
+        }
+      }
       const selection = mimetype === '' ? null : parseMimetype(mimetype, true);
       if (selection !== null && !isOk(selection)) return selection;
       // A selector picks a representation; the value's own type decides the
@@ -678,6 +737,39 @@ export class SerializationRegistry {
     expectedTag?: string,
   ): Promise<StatusOr<T>> {
     try {
+      const native = serializationBridge();
+      if (native === null) return failedPreconditionError(
+        'Initialize A11 WASM before deserializing values.');
+      const parsedChunk = parseMimetype(chunk.mimetype);
+      const customMatches = isOk(parsedChunk) &&
+        this.codecs.slice(this.defaultCodecCount).some(codec =>
+          registrationMatches(codec.parsed, parsedChunk));
+      if (this.nativeDefaults && !customMatches &&
+          expectedTag === undefined) {
+        const bytes = chunk.toMsgpack();
+        if (!isOk(bytes)) return bytes;
+        if ((chunk.mimetype === TEXT_MIMETYPE ||
+             chunk.mimetype === OCTET_STREAM_MIMETYPE) &&
+            (mimetypePatterns === '' ||
+             (Array.isArray(mimetypePatterns) &&
+              mimetypePatterns.length === 0))) {
+          try {
+            const value = native.bytesFromChunk(bytes);
+            return (chunk.mimetype === TEXT_MIMETYPE
+              ? utf8Decode(value) : value) as StatusOr<T>;
+          } catch (error) { return statusFromBridgeFailure(error,
+            'Native byte deserialization failed.'); }
+        }
+        if (chunk.mimetype === JSON_MIMETYPE ||
+            chunk.mimetype === MSGPACK_MIMETYPE) {
+        const patterns = typeof mimetypePatterns === 'string'
+          ? (mimetypePatterns === '' ? [] : [mimetypePatterns])
+          : [...mimetypePatterns];
+        try { return native.jsonFromChunk(bytes, patterns) as T; }
+        catch (error) { return statusFromBridgeFailure(error,
+          'Native generic deserialization failed.'); }
+        }
+      }
       const validation = chunk.validate();
       if (!isOk(validation)) return validation;
       if (chunk.metadata === null || chunk.mimetype === '') {

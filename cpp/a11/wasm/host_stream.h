@@ -32,6 +32,9 @@ struct HostStreamPair {
   static absl::StatusOr<std::shared_ptr<HostStreamPair>> Create(std::string id);
 };
 
+absl::Status HostStreamEvent(const std::string& id, const char* kind,
+                             const std::string& payload);
+
 }  // namespace a11::wasm
 
 #endif  // A11_WASM_HOST_STREAM_H_

@@ -80,6 +80,11 @@ absl::StatusOr<std::string> EncodeMessage(const data::WireMessage& message) {
 
 }  // namespace
 
+absl::Status HostStreamEvent(const std::string& id, const char* kind,
+                             const std::string& payload) {
+  return HostWireEvent(id, kind, payload);
+}
+
 absl::StatusOr<std::shared_ptr<HostStreamPair>> HostStreamPair::Create(
     std::string id) {
   ABSL_ASSIGN_OR_RETURN(auto endpoints,

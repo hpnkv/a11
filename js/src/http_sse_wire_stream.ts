@@ -282,7 +282,7 @@ export class HttpSseClientWireStream implements WireStream {
     }
   }
 
-  send(message: WireMessage): Status { return this.application.send(message); }
+  send(message: WireMessage): Promise<Status> { return this.application.send(message); }
 
   start(onMessage?: OnWireMessage, onDone?: OnWireDone): Promise<Status> {
     return this.startEndpoint(false, onMessage, onDone);
@@ -345,19 +345,21 @@ export class HttpSseClientWireStream implements WireStream {
     }
   }
 
-  halfClose(trailers?: ByteMapInput): Status { return this.application.halfClose(trailers); }
+  halfClose(trailers?: ByteMapInput): Promise<Status> { return this.application.halfClose(trailers); }
   drainOutgoingMessages(): Promise<Status> { return this.application.drainOutgoingMessages(); }
-  abort(status: Status): Status { return this.application.abort(status); }
+  abort(status: Status): Promise<Status> { return this.application.abort(status); }
 
-  setDeadline(deadline?: WireDeadline): Status {
-    const first = this.application.setDeadline(deadline);
+  async setDeadline(deadline?: WireDeadline): Promise<Status> {
+    const first = await this.application.setDeadline(deadline);
     if (!isOk(first)) return first;
     return this.bridge.setDeadline(deadline);
   }
 
-  getDeadline(): number | null { return this.application.getDeadline(); }
-  getStatus(): Status { return this.transportStatus ?? this.application.getStatus(); }
-  getTrailers(): ByteMap | null { return this.application.getTrailers(); }
+  getDeadline(): Promise<number | null> { return this.application.getDeadline(); }
+  async getStatus(): Promise<Status> {
+    return this.transportStatus ?? await this.application.getStatus();
+  }
+  getTrailers(): Promise<ByteMap | null> { return this.application.getTrailers(); }
   getId(): string { return this.id; }
   getImpl(): unknown | null { return this.response; }
   wait(): Promise<Status> { return this.application.wait(); }
@@ -439,7 +441,8 @@ export class HttpSseClientWireStream implements WireStream {
   }
 
   private async handleBridgeMessage(message: WireMessage | null): Promise<Status> {
-    const outgoing = message ?? makeHalfCloseMessage(this.bridge.getTrailers() ?? new Map());
+    const outgoing = message ?? makeHalfCloseMessage(
+      await this.bridge.getTrailers() ?? new Map());
     const terminal = outgoing.isHalfClose;
     const status = await this.transmit(outgoing);
     if (isOk(status) && terminal) this.localTerminalTransmitted = true;

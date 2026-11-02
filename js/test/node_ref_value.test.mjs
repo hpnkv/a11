@@ -16,7 +16,12 @@
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {NodeRef, StatusCode, isOk} from '../dist/index.js';
+import {
+  createA11Runtime,NodeRef, StatusCode, isOk} from '../dist/index.js';
+
+const nativeRuntime = await createA11Runtime();
+assert.equal(isOk(nativeRuntime), true);
+test.after(async () => { await nativeRuntime.dispose(); });
 const need = value => { assert.ok(isOk(value), value.message); return value; };
 
 test('reference credentials are typed, copied, and redacted', () => {

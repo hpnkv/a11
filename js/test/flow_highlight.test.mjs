@@ -19,7 +19,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import test from 'node:test';
+import test, {after} from 'node:test';
 
 import {
   FLOW_BUILTINS,
@@ -28,8 +28,14 @@ import {
   FLOW_OPERATOR_WORDS,
   FLOW_STAGES,
   FLOW_TYPES,
+  createA11Runtime,
+  isOk,
   tokenizeFlow,
 } from '../dist/index.js';
+
+const runtime = await createA11Runtime();
+assert.equal(isOk(runtime), true);
+after(async () => { await runtime.dispose(); });
 
 const LEXER = fileURLToPath(
   new URL('../../editors/pygments/a11flow_lexer.py', import.meta.url),
@@ -124,13 +130,15 @@ test('a word is read as what it stands for where it stands', () => {
 });
 
 
-test('new Flow syntax uses the generated browser vocabulary', () => {
+test('new Flow syntax follows native semantic token categories', () => {
   const source = 'declare flow f exported { from "m" import x\n values | take until it == 3 | consume -> out }';
   const tokens = tokenizeFlow(source);
-  for (const word of ['declare', 'exported', 'from', 'import']) {
+  for (const word of ['declare', 'from', 'import']) {
     assert.equal(tokens.find((token) => token.text === word)?.kind, 'keyword');
   }
-  assert.equal(tokens.find((token) => token.text === 'take until')?.kind, 'stage');
+  assert.equal(tokens.find((token) => token.text === 'exported')?.kind, 'type');
+  assert.equal(tokens.find((token) => token.text === 'take')?.kind, 'stage');
+  assert.equal(tokens.find((token) => token.text === 'until')?.kind, 'stage');
   assert.equal(tokens.find((token) => token.text === 'consume')?.kind, 'stage');
   assert.equal(tokens.map((token) => token.text).join(''), source);
 });

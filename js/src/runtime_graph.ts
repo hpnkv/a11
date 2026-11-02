@@ -16,7 +16,7 @@
 
 import {ActionSchema, type ActionSettings} from './action_schema.js';
 import {actionSchemaFromBridge, actionSchemaToBridge}
-  from './action_schema_bridge.js';
+  from './internal/wasm/action_schema_bridge.js';
 import {type A11Runtime} from './runtime_backend.js';
 import type {SessionOptions, ChunkStoreReaderOptions,
   ChunkStoreWriterOptions} from './runtime_options.js';
@@ -25,7 +25,7 @@ import {base64Decode, base64Encode, toBytes, type ByteMap,
   type ByteSource} from './bytes.js';
 import {ActionMessage, Chunk, NodeFragment, NodeRef, validateName,
   WireMessage, wireMessageFromJsonValue, wireMessageToJsonValue} from './data.js';
-import {fromRaw, toRaw} from './fragment_bridge.js';
+import {fromRaw, toRaw} from './internal/wasm/fragment_bridge.js';
 import {fromChunk, getGlobalSerializationRegistry,
   toChunk} from './serialization.js';
 import {parseStreamReference, type StreamReference}
@@ -33,8 +33,9 @@ import {parseStreamReference, type StreamReference}
 import {failedPreconditionError, invalidArgumentError, isOk, isStatus,
   okStatus,
   type Status, type StatusOr} from './status.js';
-import {statusFromBridgeFailure, statusFromBridgeValue} from './status_bridge.js';
-import {bridgeWireStream} from './wire_stream_bridge.js';
+import {statusFromBridgeFailure, statusFromBridgeValue} from './internal/wasm/status_bridge.js';
+import {bridgeWireStream} from './internal/wasm/wire_stream_bridge.js';
+import {type ChannelHandle} from './internal/wasm/native_channel.js';
 import {type WireStream} from './wire_stream.js';
 
 /** Worker operations used by the typed node convenience. */
@@ -125,7 +126,7 @@ export interface SessionBinding {
   action(name: string, id?: string, streamId?: string,
     settings?: ActionSettings,
     schema?: Record<string, unknown>): ActionBinding;
-  addStream(stream: ReturnType<typeof bridgeWireStream>,
+  addStream(stream: ReturnType<typeof bridgeWireStream> | ChannelHandle,
     mode?: 'start' | 'accept'): Promise<string>;
   halfClose(): Promise<unknown>;
   cancelActions(): Promise<unknown>;
@@ -818,8 +819,11 @@ export class GraphSession {
   async addStream(stream: WireStream, mode: 'start' | 'accept' = 'start'):
       Promise<Status> {
     try {
-      this.defaultStreamId = await this.binding.addStream(
-        bridgeWireStream(stream), mode);
+      const channel = 'nativeHandle' in stream &&
+        typeof stream.nativeHandle === 'function'
+        ? await stream.nativeHandle() : bridgeWireStream(stream);
+      if ('__a11NativeChannelStream' in channel) channel.host = stream;
+      this.defaultStreamId = await this.binding.addStream(channel, mode);
       return okStatus();
     }
     catch (error) { return statusFromBridgeFailure(error, 'Session stream failed.'); }

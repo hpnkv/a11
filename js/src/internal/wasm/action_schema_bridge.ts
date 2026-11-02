@@ -14,18 +14,22 @@
  * limitations under the License.
  */
 
-import {ActionSchema} from './action_schema.js';
-import {base64Decode, base64Encode} from './bytes.js';
+import {ActionPortSchema, ActionSchema} from '../../action_schema.js';
+import {base64Decode, base64Encode} from '../../bytes.js';
 import {fromRaw, toRaw} from './fragment_bridge.js';
-import {schemaFromJson, schemaToJson, type SchemaEntry}
-  from './schema_json.js';
-import {invalidArgumentError, isOk, type StatusOr} from './status.js';
+import {schemaFromJson, type SchemaEntry}
+  from '../../schema_json.js';
+import {invalidArgumentError, isOk, type StatusOr} from '../../status.js';
 
 /** Describe an SDK action using the C++ registry's JSON boundary shape. */
 export function actionSchemaToBridge(schema: ActionSchema):
     StatusOr<Record<string, unknown>> {
-  const entry = schemaToJson(schema, true, 'all');
-  const inputs = (entry.inputs ?? []).map(port => ({...port,
+  const portEntry = (port: ActionPortSchema) => ({
+    name: port.name, type: port.type, description: port.description,
+    required: port.required, unary: port.unary,
+    json_schema: port.jsonSchema ? parseSchema(port.jsonSchema) : null,
+  });
+  const inputs = [...schema.inputs.values()].map(port => ({...portEntry(port),
     autofills: [] as Array<Record<string, unknown> | null>}));
   for (const port of inputs) {
     const original = schema.inputs.get(port.name);
@@ -40,12 +44,22 @@ export function actionSchemaToBridge(schema: ActionSchema):
       }
     }
   }
-  const headers = (entry.headers ?? []).map(header => ({...header,
+  const headers = [...schema.headers.values()].map(header => ({
+    name: header.name, description: header.description,
     ...(schema.headers.get(header.name)?.defaultValue === null ? {} :
       {default_base64: base64Encode(
         schema.headers.get(header.name)!.defaultValue!)}),
   }));
-  return {...entry, inputs, headers};
+  return {
+    name: schema.name, description: schema.description, inputs,
+    outputs: [...schema.outputs.values()].map(portEntry), headers,
+    output_to_json_field: Object.fromEntries(schema.outputToJsonField),
+  };
+}
+
+function parseSchema(text: string): unknown {
+  try { return JSON.parse(text) as unknown; }
+  catch { return null; }
 }
 
 /** Decode a native action's full schema, including runtime-only defaults. */

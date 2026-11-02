@@ -34,6 +34,7 @@ import {fileURLToPath} from 'node:url';
 import test from 'node:test';
 
 import {
+  createA11Runtime,
   BlockKind,
   Chunk,
   ChunkMetadata,
@@ -47,6 +48,10 @@ import {
   presentConversation,
   valueOrThrow,
 } from '../dist/index.js';
+
+const nativeRuntime = await createA11Runtime();
+assert.equal(isOk(nativeRuntime), true);
+test.after(async () => { await nativeRuntime.dispose(); });
 import {parseUnifiedPatch} from '../dist/presentation/index.js';
 
 const GOLDEN = fileURLToPath(new URL('../../testdata/presentation_events.json', import.meta.url));

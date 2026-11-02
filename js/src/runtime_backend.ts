@@ -17,16 +17,30 @@
 import { ActionSchema, type ActionSettings } from './action_schema.js';
 import {base64Encode, normalizeByteMap} from './bytes.js';
 import { WorkerChunkStore, type WorkerStoreHandle } from './worker_chunk_store.js';
+import {installFramingBridge, type FramingBridge} from './internal/wasm/native_framing.js';
+import {installDataCodecBridge, type DataCodecBridge} from './internal/wasm/native_data_codec.js';
+import {installSchemaBridge} from './internal/wasm/native_schema.js';
+import {installChannelBridge, type ChannelBridge} from './internal/wasm/native_channel.js';
+import {installStreamReferenceBridge,
+  type StreamReferenceBridge} from './internal/wasm/native_stream_reference.js';
+import {installAuthorizationBridge,
+  type AuthorizationBridge} from './internal/wasm/native_authorization.js';
+import {installSerializationBridge,
+  type SerializationBridge} from './internal/wasm/native_serialization.js';
+import {actionSchemaToBridge} from './internal/wasm/action_schema_bridge.js';
+import {statusFromBridgeFailure} from './internal/wasm/status_bridge.js';
+import {installStatusCodecBridge,
+  type StatusCodecBridge} from './internal/wasm/native_status_codec.js';
 import { WireMessage } from './data.js';
 import { invalidArgumentError, isOk, okStatus, statusFromUnknown,
   unimplementedError, type Status,
   type StatusOr } from './status.js';
-import {flowToolBridge, runFlowBridge,
-  type FlowRunnerBridge} from './flow_bridge.js';
+import {flowToolBridge, installFlowToolingService, runFlowBridge,
+  type FlowRunnerBridge} from './internal/wasm/flow_bridge.js';
 import {GraphAction, GraphNode, GraphSession, GraphSessionWithRecv, RuntimeGraph,
   type GraphBinding, type SessionCreateOptions} from './runtime_graph.js';
 import {decodeWireBridge, encodeWireBridge,
-  type WireCodecBridge} from './wire_bridge.js';
+  type WireCodecBridge} from './internal/wasm/wire_bridge.js';
 
 /** The runtime executes through the native WASM backend. */
 export type A11Backend = 'wasm';
@@ -36,6 +50,19 @@ export type A11Feature = 'codecs' | 'flowTooling' | 'chunkStore' |
 export interface A11WasmModule {
   flow(request: Record<string, unknown>): Record<string, unknown>;
   wire: WireCodecBridge;
+  data: DataCodecBridge;
+  schema: {
+    validate(value: Record<string, unknown>): Uint8Array;
+    describe(value: Record<string, unknown>, runnable: boolean,
+      allPorts: boolean): Record<string, unknown>;
+    parse(value: Record<string, unknown>): Record<string, unknown>;
+    entries(value: unknown): Array<Record<string, unknown>>;
+  };
+  streamReference: StreamReferenceBridge;
+  authorization: AuthorizationBridge;
+  serialization: SerializationBridge;
+  status: StatusCodecBridge;
+  framing: FramingBridge;
 }
 
 /** Host persistence for a WASM store namespace. */
@@ -55,7 +82,8 @@ export interface A11WasmWorkerOptions {
   httpTransport?: unknown;
 }
 
-export interface A11FlowRunnerBridge extends FlowRunnerBridge, GraphBinding {
+export interface A11FlowRunnerBridge extends FlowRunnerBridge, GraphBinding,
+    ChannelBridge {
   store(id: string): WorkerStoreHandle;
   flushPersistence?(): Promise<void>;
 }
@@ -196,6 +224,29 @@ export class A11Runtime {
           nativeFlow = await loaded.createA11WasmRuntime(workerOptions);
         }
       }
+      installFramingBridge(native!.framing);
+      installFlowToolingService(native!);
+      installDataCodecBridge(native!.data);
+      installStreamReferenceBridge(native!.streamReference);
+      installAuthorizationBridge(native!.authorization);
+      installSerializationBridge(native!.serialization);
+      installSchemaBridge({validate(schema) {
+        const value = actionSchemaToBridge(schema);
+        if (!isOk(value)) return value;
+        try { native!.schema.validate(value); return okStatus(); }
+        catch (error) { return statusFromBridgeFailure(error,
+          'Native action schema validation failed.'); }
+      }, describe(schema, runnable, allPorts) {
+        const value = actionSchemaToBridge(schema);
+        if (!isOk(value)) throw new Error(value.message);
+        return native!.schema.describe(value, runnable, allPorts);
+      }, parse(entry) {
+        return native!.schema.parse(entry);
+      }, entries(document) {
+        return native!.schema.entries(document);
+      }});
+      if (nativeFlow) installChannelBridge(nativeFlow);
+      installStatusCodecBridge(native!.status);
       return new A11Runtime(choices, native, nativeFlow,
         options.wasm?.persistence);
     } catch (error) {

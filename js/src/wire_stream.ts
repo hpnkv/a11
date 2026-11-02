@@ -16,7 +16,9 @@
 
 import { copyByteMap, normalizeByteMap, type ByteMap, type ByteMapInput } from './bytes.js';
 import { Deferred } from './concurrency.js';
-import { WireMessage, validateName } from './data.js';
+import {WireMessage, wireMessageFromJsonValue, validateName} from './data.js';
+import {type ChannelHandle} from './internal/wasm/native_channel.js';
+import {statusFromBridgeFailure} from './internal/wasm/status_bridge.js';
 import {
   deadlineExceededError,
   failedPreconditionError,
@@ -51,17 +53,6 @@ export interface WireStreamOptions {
   messageTimeoutMs?: number | null;
   /** Absolute endpoint deadline, or `null` for none. */
   deadline?: WireDeadline;
-  /**
-   * Omit a fragment's mimetype when the fragment before it on the same node
-   * carried the same one, and mark the frame so the peer puts it back.
-   *
-   * Off by default, and a sending decision only: a receiver always expands a
-   * frame that says it was elided. Enable it when the peer is another build of
-   * this library, or any A11 endpoint that understands
-   * `x-a11-sticky-metadata` -- the C++ and Python runtimes do not, and would
-   * deliver chunks whose mimetype had been dropped.
-   */
-  stickyMetadata?: boolean;
 }
 
 /** Validated, default-filled form of {@link WireStreamOptions}. */
@@ -74,8 +65,6 @@ export interface NormalizedWireStreamOptions {
   maxBufferedIncomingBytes: number;
   /** Delivery timeout per buffered message, or `null`. */
   messageTimeoutMs: number | null;
-  /** Whether contiguous fragment MIME types may be elided. */
-  stickyMetadata: boolean;
   /** Absolute deadline as Unix milliseconds, or `null`. */
   deadline: number | null;
 }
@@ -106,25 +95,25 @@ export type OnWireDone = () => void | Status | Promise<void | Status>;
  */
 export interface WireStream {
   /** Queue a message for asynchronous transport; this does not await delivery. */
-  send(message: WireMessage): Status;
+  send(message: WireMessage): Status | Promise<Status>;
   /** Drive the initiating side and install inbound lifecycle callbacks. */
   start(onMessage?: OnWireMessage, onDone?: OnWireDone): Promise<Status>;
   /** Drive the responding side and install inbound lifecycle callbacks. */
   accept(onMessage?: OnWireMessage, onDone?: OnWireDone): Promise<Status>;
   /** Stop sending after queued messages, while continuing to receive. */
-  halfClose(trailers?: ByteMapInput): Status;
+  halfClose(trailers?: ByteMapInput): Status | Promise<Status>;
   /** Await queued outbound delivery after requesting a half-close. */
   drainOutgoingMessages(): Promise<Status>;
   /** End both directions with a structured non-OK status. */
-  abort(status: Status): Status;
+  abort(status: Status): Status | Promise<Status>;
   /** Change the absolute deadline; omit it to disable the deadline. */
-  setDeadline(deadline?: WireDeadline): Status;
+  setDeadline(deadline?: WireDeadline): Status | Promise<Status>;
   /** Return the normalized epoch deadline, or `null` when disabled. */
-  getDeadline(): number | null;
+  getDeadline(): number | null | Promise<number | null>;
   /** Return the current terminal error, or OK while healthy/cleanly done. */
-  getStatus(): Status;
+  getStatus(): Status | Promise<Status>;
   /** Return peer half-close trailers once received. */
-  getTrailers(): ByteMap | null;
+  getTrailers(): ByteMap | null | Promise<ByteMap | null>;
   /** Return the transport-assigned stream identifier. */
   getId(): string;
   /** Return an advanced transport handle, when the implementation has one. */
@@ -182,12 +171,8 @@ function normalizeWireStreamOptionsUnchecked(
     maxBufferedIncomingBytes:
       options.maxBufferedIncomingBytes ?? 32 * 1024 * 1024,
     messageTimeoutMs: options.messageTimeoutMs ?? null,
-    stickyMetadata: options.stickyMetadata ?? false,
     deadline,
   };
-  if (typeof result.stickyMetadata !== 'boolean') {
-    return invalidArgumentError('stickyMetadata must be boolean.');
-  }
   if (
     !Number.isSafeInteger(result.maxBufferedIncomingMessages) ||
     result.maxBufferedIncomingMessages < 1 ||
@@ -321,6 +306,7 @@ export class WireStreamWithRecv implements WireStream {
   private done = false;
   private remoteHalfClosed = false;
   private eofDelivered = false;
+  private nativeReceiver: ChannelHandle | null = null;
 
   private constructor(private readonly wrapped: WireStream, id: string) {
     this.id = id;
@@ -346,9 +332,9 @@ export class WireStreamWithRecv implements WireStream {
     return this.wrapped;
   }
 
-  send(message: WireMessage): Status {
+  async send(message: WireMessage): Promise<Status> {
     try {
-      return returnedStatus(this.wrapped.send(message), 'WireStream.send()');
+      return returnedStatus(await this.wrapped.send(message), 'WireStream.send()');
     } catch (error) {
       return statusFromUnknown(error, 'WireStream.send() raised an exception.');
     }
@@ -368,6 +354,17 @@ export class WireStreamWithRecv implements WireStream {
     doneObserver?: OnWireDone,
   ): Promise<Status> {
     try {
+      if ('nativeHandle' in this.wrapped &&
+          typeof this.wrapped.nativeHandle === 'function' &&
+          'nativeReceiveStart' in this.wrapped &&
+          typeof this.wrapped.nativeReceiveStart === 'function') {
+        const handle = await this.wrapped.nativeHandle() as ChannelHandle;
+        const started = await this.wrapped.nativeReceiveStart(
+          accept ? 'accept' : 'start', observer, doneObserver) as Status;
+        if (!isOk(started)) return started;
+        this.nativeReceiver = handle;
+        return okStatus();
+      }
       const start = accept ? this.wrapped.accept.bind(this.wrapped) : this.wrapped.start.bind(this.wrapped);
       const status = await start(
         async (message) => this.handleMessage(message, observer),
@@ -386,10 +383,10 @@ export class WireStreamWithRecv implements WireStream {
     }
   }
 
-  halfClose(trailers?: ByteMapInput): Status {
+  async halfClose(trailers?: ByteMapInput): Promise<Status> {
     try {
       return returnedStatus(
-        this.wrapped.halfClose(trailers),
+        await this.wrapped.halfClose(trailers),
         'WireStream.halfClose()',
       );
     } catch (error) {
@@ -411,16 +408,16 @@ export class WireStreamWithRecv implements WireStream {
     }
   }
 
-  abort(status: Status): Status {
+  async abort(status: Status): Promise<Status> {
     if (!isStatus(status) || isOk(status)) {
       return invalidArgumentError('WireStream abort status must be non-OK.');
     }
     try {
       const result = returnedStatus(
-        this.wrapped.abort(status),
+        await this.wrapped.abort(status),
         'WireStream.abort()',
       );
-      this.recordCurrentStatus();
+      await this.recordCurrentStatus();
       return result;
     } catch (error) {
       const result = statusFromUnknown(error, 'WireStream.abort() raised an exception.');
@@ -429,13 +426,13 @@ export class WireStreamWithRecv implements WireStream {
     }
   }
 
-  setDeadline(deadline?: WireDeadline): Status {
+  async setDeadline(deadline?: WireDeadline): Promise<Status> {
     try {
       const result = returnedStatus(
-        this.wrapped.setDeadline(deadline),
+        await this.wrapped.setDeadline(deadline),
         'WireStream.setDeadline()',
       );
-      this.recordCurrentStatus();
+      await this.recordCurrentStatus();
       return result;
     } catch (error) {
       const result = statusFromUnknown(
@@ -447,26 +444,26 @@ export class WireStreamWithRecv implements WireStream {
     }
   }
 
-  getDeadline(): number | null {
+  async getDeadline(): Promise<number | null> {
     try {
-      const deadline = this.wrapped.getDeadline();
+      const deadline = await this.wrapped.getDeadline();
       return deadline === null || Number.isFinite(deadline) ? deadline : null;
     } catch {
       return null;
     }
   }
 
-  getStatus(): Status {
+  async getStatus(): Promise<Status> {
     try {
-      return returnedStatus(this.wrapped.getStatus(), 'WireStream.getStatus()');
+      return returnedStatus(await this.wrapped.getStatus(), 'WireStream.getStatus()');
     } catch (error) {
       return statusFromUnknown(error, 'WireStream.getStatus() raised an exception.');
     }
   }
 
-  getTrailers(): ByteMap | null {
+  async getTrailers(): Promise<ByteMap | null> {
     try {
-      const trailers = this.wrapped.getTrailers();
+      const trailers = await this.wrapped.getTrailers();
       return trailers === null ? null : copyByteMap(trailers);
     } catch {
       return null;
@@ -502,8 +499,7 @@ export class WireStreamWithRecv implements WireStream {
   }
 
   /** Await one message, or `null` once for the peer's clean half-close. */
-  receive(timeoutMs?: number): Promise<StatusOr<WireMessage | null>> {
-    this.recordCurrentStatus();
+  async receive(timeoutMs?: number): Promise<StatusOr<WireMessage | null>> {
     if (
       timeoutMs !== undefined &&
       (!Number.isFinite(timeoutMs) || timeoutMs < 0)
@@ -512,6 +508,15 @@ export class WireStreamWithRecv implements WireStream {
         invalidArgumentError('timeoutMs must be a non-negative finite number.'),
       );
     }
+    if (this.nativeReceiver !== null) {
+      try {
+        const value = await this.nativeReceiver.receive(timeoutMs);
+        return value === null ? null : wireMessageFromJsonValue(value);
+      } catch (error) {
+        return statusFromBridgeFailure(error, 'Native stream receive failed.');
+      }
+    }
+    await this.recordCurrentStatus();
     if (this.error !== null) return Promise.resolve(this.error);
     if (this.eofDelivered) {
       return Promise.resolve(
@@ -588,7 +593,7 @@ export class WireStreamWithRecv implements WireStream {
 
   private async handleDone(observer?: OnWireDone): Promise<Status> {
     this.done = true;
-    this.recordCurrentStatus();
+    await this.recordCurrentStatus();
     if (this.error === null && !this.remoteHalfClosed && this.slot === undefined) {
       this.signalError(
         internalError('WireStream finished without a remote half-close.'),
@@ -598,8 +603,8 @@ export class WireStreamWithRecv implements WireStream {
     return status;
   }
 
-  private recordCurrentStatus(): void {
-    const status = this.getStatus();
+  private async recordCurrentStatus(): Promise<void> {
+    const status = await this.getStatus();
     if (!isOk(status)) this.signalError(status);
   }
 

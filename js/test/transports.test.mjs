@@ -40,8 +40,12 @@ import {
   unavailableError,
   okStatus,
   utf8Encode,
-  elideStickyMetadata,
+  createA11Runtime,
 } from '../dist/index.js';
+
+const transportRuntime = await createA11Runtime();
+if (!isOk(transportRuntime)) throw new Error(transportRuntime.message);
+test.after(async () => { await transportRuntime.dispose(); });
 
 function messageWithByte(id, byte, headers) {
   return new WireMessage({
@@ -80,16 +84,16 @@ test('in-process streams preserve messages, trailers, and abort details', async 
   const started = await Promise.all([sender.start(), receiver.accept()]);
   assert.ok(started.every(isOk));
 
-  assert.equal(isOk(sender.send(messageWithByte('node', 7))), true);
+  assert.equal(isOk(await sender.send(messageWithByte('node', 7))), true);
   const received = await receiver.receive(1000);
   assert.equal(isOk(received), true);
   assert.equal(received.nodeFragments[0].data.data[0], 7);
 
   const trailers = new Map([['x-a11-test', new Uint8Array([8, 9])]]);
-  assert.equal(isOk(sender.halfClose(trailers)), true);
+  assert.equal(isOk(await sender.halfClose(trailers)), true);
   assert.equal(await receiver.receive(1000), null);
-  assert.deepEqual(receiver.getTrailers().get('x-a11-test'), new Uint8Array([8, 9]));
-  assert.equal(isOk(receiver.halfClose()), true);
+  assert.deepEqual((await receiver.getTrailers()).get('x-a11-test'), new Uint8Array([8, 9]));
+  assert.equal(isOk(await receiver.halfClose()), true);
   assert.ok((await Promise.all([pair[0].wait(), pair[1].wait()])).every(isOk));
 
   const abortedPair = InProcessWireStream.createPair();
@@ -100,12 +104,42 @@ test('in-process streams preserve messages, trailers, and abort details', async 
   assert.equal(isOk(right), true);
   assert.ok((await Promise.all([left.start(), right.accept()])).every(isOk));
   const failure = unavailableError('peer unavailable', [{ retry_after_ms: 25 }]);
-  assert.equal(isOk(left.abort(failure)), true);
+  assert.equal(isOk(await left.abort(failure)), true);
   const remoteFailure = await right.receive(1000);
   assert.equal(isOk(remoteFailure), false);
-  assert.equal(remoteFailure.code, StatusCode.UNAVAILABLE);
+  assert.equal(remoteFailure.code, StatusCode.UNAVAILABLE,
+    JSON.stringify({remoteFailure, left: await left.getStatus(),
+      right: await right.getStatus(), rawLeft: await abortedPair[0].getStatus(),
+      rawRight: await abortedPair[1].getStatus()}));
   assert.equal(remoteFailure.message, 'peer unavailable');
   assert.deepEqual(remoteFailure.details, [{ retry_after_ms: 25 }]);
+});
+
+test('native pull stream also delivers observer callbacks', async () => {
+  const pair = InProcessWireStream.createPair();
+  assert.equal(isOk(pair), true);
+  const reader = WireStreamWithRecv.create(pair[1]);
+  assert.equal(isOk(reader), true);
+  let observed;
+  const notified = new Promise(resolve => { observed = resolve; });
+  assert.ok((await Promise.all([
+    pair[0].start(),
+    reader.accept(message => {
+      if (message !== null) observed(message);
+      return okStatus();
+    }),
+  ])).every(isOk));
+  const sent = new WireMessage({nodeFragments: [new NodeFragment({
+    id: 'observed', data: new Chunk({data: utf8Encode('hello')}),
+  })]});
+  assert.equal(isOk(await pair[0].send(sent)), true);
+  const pulled = await reader.receive(1000);
+  assert.equal(isOk(pulled), true);
+  assert.equal(pulled.nodeFragments[0].id, 'observed');
+  assert.equal((await notified).nodeFragments[0].id, 'observed');
+  assert.equal(isOk(await pair[0].halfClose()), true);
+  assert.equal(await reader.receive(1000), null);
+  assert.equal(isOk(await reader.halfClose()), true);
 });
 
 test('the sender folds queued messages together without losing or reordering any', async () => {
@@ -117,9 +151,9 @@ test('the sender folds queued messages together without losing or reordering any
 
   // Queued together and header-compatible, so these fold into one frame. What
   // must survive is every fragment, in order -- not the message boundaries.
-  for (let index = 0; index < 8; ++index) {
-    assert.equal(isOk(sender.send(messageWithByte(`n${index}`, index))), true);
-  }
+  const sends = Array.from({length: 8}, (_, index) =>
+    sender.send(messageWithByte(`n${index}`, index)));
+  assert.ok((await Promise.all(sends)).every(isOk));
   const seen = [];
   let receives = 0;
   while (seen.length < 8) {
@@ -132,7 +166,7 @@ test('the sender folds queued messages together without losing or reordering any
   // Without this the test would still pass with the merge removed entirely,
   // which is the one thing it exists to detect.
   assert.ok(receives < 8, `8 sends arrived as ${receives} messages, so none folded`);
-  assert.equal(isOk(sender.halfClose()), true);
+  assert.equal(isOk(await sender.halfClose()), true);
   assert.equal(await receiver.receive(1000), null);
 });
 
@@ -145,8 +179,8 @@ test('the sender does not fold messages whose headers differ', async () => {
 
   // Headers are per-message and a merge cannot pick one set over another, so
   // differing headers must keep the messages -- and their headers -- separate.
-  assert.equal(isOk(sender.send(unmergeableMessageWithByte('a', 1))), true);
-  assert.equal(isOk(sender.send(unmergeableMessageWithByte('b', 2))), true);
+  assert.equal(isOk(await sender.send(unmergeableMessageWithByte('a', 1))), true);
+  assert.equal(isOk(await sender.send(unmergeableMessageWithByte('b', 2))), true);
   const first = await receiver.receive(1000);
   assert.equal(isOk(first), true);
   assert.equal(first.nodeFragments.length, 1);
@@ -170,13 +204,13 @@ test('a half-close is never folded into the messages queued ahead of it', async 
 
   // The closure barrier: data queued before a half-close is observed before the
   // peer is told the direction ended, and the marker itself carries no payload.
-  assert.equal(isOk(sender.send(messageWithByte('before', 5))), true);
-  assert.equal(isOk(sender.halfClose(new Map([['x-a11-test', new Uint8Array([1])]]))), true);
+  assert.equal(isOk(await sender.send(messageWithByte('before', 5))), true);
+  assert.equal(isOk(await sender.halfClose(new Map([['x-a11-test', new Uint8Array([1])]]))), true);
   const data = await receiver.receive(1000);
   assert.equal(isOk(data), true);
   assert.equal(data.nodeFragments[0].data.data[0], 5);
   assert.equal(await receiver.receive(1000), null);
-  assert.deepEqual(receiver.getTrailers().get('x-a11-test'), new Uint8Array([1]));
+  assert.deepEqual((await receiver.getTrailers()).get('x-a11-test'), new Uint8Array([1]));
 });
 
 test('messages at the merge ceiling pass through with their boundaries intact', async () => {
@@ -199,8 +233,8 @@ test('messages at the merge ceiling pass through with their boundaries intact', 
       continued: false,
     })],
   });
-  assert.equal(isOk(sender.send(large(1))), true);
-  assert.equal(isOk(sender.send(large(2))), true);
+  assert.equal(isOk(await sender.send(large(1))), true);
+  assert.equal(isOk(await sender.send(large(2))), true);
   for (const expected of [1, 2]) {
     const message = await receiver.receive(5000);
     assert.equal(isOk(message), true);
@@ -209,117 +243,6 @@ test('messages at the merge ceiling pass through with their boundaries intact', 
     assert.equal(payload.byteLength, 96 * 1024);
     assert.ok(payload.every((byte) => byte === expected), 'payload arrived whole');
   }
-});
-
-test('sticky metadata elides repeated mimetypes and the peer restores them', async () => {
-  const pair = InProcessWireStream.createPair({ stickyMetadata: true });
-  assert.equal(isOk(pair), true);
-  const sender = WireStreamWithRecv.create(pair[0]);
-  const receiver = WireStreamWithRecv.create(pair[1]);
-  assert.ok((await Promise.all([sender.start(), receiver.accept()])).every(isOk));
-
-  const json = (seq) => new NodeFragment({
-    id: 'sticky',
-    data: new Chunk({
-      metadata: new ChunkMetadata({ mimetype: 'application/json' }),
-      data: new TextEncoder().encode(`{"seq":${seq}}`),
-    }),
-    seq,
-    continued: true,
-  });
-  const message = new WireMessage({ nodeFragments: [json(0), json(1), json(2)] });
-
-  // Asserted on the encoder directly, because the round trip below restores
-  // what it dropped and so cannot tell a working elision from no elision.
-  const elided = elideStickyMetadata(message);
-  assert.deepEqual(
-    elided.nodeFragments.map((fragment) => fragment.data.mimetype),
-    ['application/json', '', ''],
-  );
-  assert.equal(elided.headers.has('x-a11-sticky-metadata'), true);
-  assert.ok(
-    elided.approxBytes < message.approxBytes,
-    'eliding a repeated mimetype makes the frame smaller',
-  );
-
-  assert.equal(isOk(sender.send(message)), true);
-
-  const got = await receiver.receive(1000);
-  assert.equal(isOk(got), true);
-  assert.equal(got.nodeFragments.length, 3);
-  // Every fragment arrives with the mimetype, though only the first was sent
-  // carrying it. The marker header is consumed by the expansion.
-  assert.deepEqual(
-    got.nodeFragments.map((fragment) => fragment.data.mimetype),
-    ['application/json', 'application/json', 'application/json'],
-  );
-  assert.equal(got.headers.has('x-a11-sticky-metadata'), false);
-  // The caller's own message keeps its mimetypes: eliding is the transport's
-  // business and must not reach back into what the application still holds.
-  assert.deepEqual(
-    message.nodeFragments.map((fragment) => fragment.data.mimetype),
-    ['application/json', 'application/json', 'application/json'],
-  );
-});
-
-test('sticky metadata does not inherit across a sequence gap', async () => {
-  const pair = InProcessWireStream.createPair({ stickyMetadata: true });
-  assert.equal(isOk(pair), true);
-  const sender = WireStreamWithRecv.create(pair[0]);
-  const receiver = WireStreamWithRecv.create(pair[1]);
-  assert.ok((await Promise.all([sender.start(), receiver.accept()])).every(isOk));
-
-  // Same rule as the chunk-store writer: a gap means the peer may never have
-  // seen the fragment that established the mimetype, so nothing is elided
-  // across one and the fragment after the gap keeps its own.
-  const fragment = (seq, mimetype) => new NodeFragment({
-    id: 'gapped',
-    data: new Chunk({
-      metadata: new ChunkMetadata({ mimetype }),
-      data: new TextEncoder().encode(`v${seq}`),
-    }),
-    seq,
-    continued: true,
-  });
-  assert.equal(isOk(sender.send(new WireMessage({
-    nodeFragments: [fragment(0, 'text/plain'), fragment(9, 'text/plain')],
-  }))), true);
-
-  const got = await receiver.receive(1000);
-  assert.equal(isOk(got), true);
-  assert.deepEqual(
-    got.nodeFragments.map((f) => f.data.mimetype),
-    ['text/plain', 'text/plain'],
-  );
-});
-
-test('sticky metadata is off by default, so a foreign peer sees every mimetype', async () => {
-  const pair = InProcessWireStream.createPair();
-  assert.equal(isOk(pair), true);
-  const sender = WireStreamWithRecv.create(pair[0]);
-  const receiver = WireStreamWithRecv.create(pair[1]);
-  assert.ok((await Promise.all([sender.start(), receiver.accept()])).every(isOk));
-
-  // The default matters more than the feature: a C++ or Python peer does not
-  // know the marker header, and would deliver a chunk whose mimetype had been
-  // dropped. Nothing is elided unless the sender opted in.
-  const fragment = (seq) => new NodeFragment({
-    id: 'plain',
-    data: new Chunk({
-      metadata: new ChunkMetadata({ mimetype: 'text/plain' }),
-      data: new TextEncoder().encode(`v${seq}`),
-    }),
-    seq,
-    continued: true,
-  });
-  assert.equal(isOk(sender.send(new WireMessage({
-    nodeFragments: [fragment(0), fragment(1)],
-  }))), true);
-
-  const got = await receiver.receive(1000);
-  assert.equal(isOk(got), true);
-  assert.deepEqual(got.nodeFragments.map((f) => f.data.mimetype), ['text/plain', 'text/plain']);
-  assert.equal(got.headers.has('x-a11-sticky-metadata'), false);
 });
 
 test('WebSocket client runs the A11 channel framing over Node ws', async (t) => {
@@ -342,11 +265,11 @@ test('WebSocket client runs the A11 channel framing over Node ws', async (t) => 
   assert.equal(isOk(received), true);
   assert.equal(isOk(await received.start()), true);
 
-  assert.equal(isOk(received.send(messageWithByte('echo', 33))), true);
+  assert.equal(isOk(await received.send(messageWithByte('echo', 33))), true);
   const echo = await received.receive(2000);
   assert.equal(isOk(echo), true);
   assert.equal(echo.nodeFragments[0].data.data[0], 33);
-  assert.equal(isOk(received.halfClose()), true);
+  assert.equal(isOk(await received.halfClose()), true);
   assert.equal(await received.receive(2000), null);
   assert.equal(isOk(await stream.wait()), true);
 });
@@ -408,13 +331,13 @@ test('HTTP SSE client receives events and uses its POST backchannel', async (t) 
   assert.equal(isOk(incoming), true);
   assert.equal(incoming.nodeFragments[0].data.data[0], 44);
 
-  assert.equal(isOk(received.send(messageWithByte('outgoing', 55))), true);
+  assert.equal(isOk(await received.send(messageWithByte('outgoing', 55))), true);
   for (let attempt = 0; attempt < 100 && posted.length === 0; ++attempt) {
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
   assert.ok(posted.some((body) => body.includes('outgoing')));
 
-  assert.equal(isOk(received.halfClose()), true);
+  assert.equal(isOk(await received.halfClose()), true);
   const drained = received.drainOutgoingMessages();
   assert.equal(await received.receive(2000), null);
   assert.equal(isOk(await drained), true);
@@ -493,7 +416,7 @@ test('HTTP SSE client overlaps message POSTs and drains them before a half-close
   // property under test is that four POSTs are open at once, which a single
   // folded message could not show.
   for (let index = 0; index < 4; ++index) {
-    assert.equal(isOk(received.send(unmergeableMessageWithByte(`m${index}`, index))), true);
+    assert.equal(isOk(await received.send(unmergeableMessageWithByte(`m${index}`, index))), true);
   }
   for (let attempt = 0; attempt < 200 && open.length < 4; ++attempt) {
     await new Promise((resolve) => setTimeout(resolve, 5));
@@ -501,7 +424,7 @@ test('HTTP SSE client overlaps message POSTs and drains them before a half-close
   // Serialised delivery could never have more than one POST outstanding.
   assert.equal(peakOpen, 4, `only ${peakOpen} POSTs were ever open at once`);
 
-  assert.equal(isOk(received.halfClose()), true);
+  assert.equal(isOk(await received.halfClose()), true);
   const drained = received.drainOutgoingMessages();
   // The half-close cannot go out while the four data POSTs are unanswered.
   await new Promise((resolve) => setTimeout(resolve, 50));
@@ -545,7 +468,7 @@ test('WebSocket signalling client validates and routes peer messages', async (t)
   assert.equal(received.length, 1);
   assert.equal(received[0].candidate, 'candidate:fixture');
 
-  const sent = client.send(new SignallingMessage({
+  const sent = await client.send(new SignallingMessage({
     type: SignallingMessageType.CANDIDATE,
     sender: 'client',
     recipient: 'peer',
@@ -709,7 +632,8 @@ test('WebRTC signalling and bufferedAmount failures settle as statuses', async (
   assert.equal(isOk(stream), true);
   assert.equal(isOk(await stream.start()), true);
   connection.channel.bufferedAmount = Number.NaN;
-  assert.equal(isOk(stream.send(messageWithByte('invalid-buffer', 67))), true);
+  assert.equal(isOk(await stream.send(messageWithByte('invalid-buffer', 67))), true);
+  assert.equal(isOk(await stream.halfClose()), true);
   const terminal = await stream.wait();
   assert.equal(isOk(terminal), false);
   assert.equal(terminal.code, StatusCode.INTERNAL);
@@ -832,8 +756,8 @@ test('WebRTC client completes offer, answer, ICE, and data-channel startup', asy
 
   // Distinct headers keep these two frames apart: the striping layout pinned
   // below is per-frame, so folding them into one would leave nothing to compare.
-  assert.equal(isOk(stream.send(unmergeableMessageWithByte('rtc', 66))), true);
-  assert.equal(isOk(stream.send(unmergeableMessageWithByte('rtc', 67))), true);
+  assert.equal(isOk(await stream.send(unmergeableMessageWithByte('rtc', 66))), true);
+  assert.equal(isOk(await stream.send(unmergeableMessageWithByte('rtc', 67))), true);
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.ok(connection.channel.sent.length >= 2);
 
@@ -856,7 +780,7 @@ test('WebRTC client completes offer, answer, ICE, and data-channel startup', asy
   // conforming peer answers without knowing anything about A11 -- so there is no
   // probe channel to open, no frame format to agree on, no capability to advertise
   // and nothing for a browser to implement. This file used to assert all four.
-  assert.equal(isOk(stream.abort(unavailableError('fixture complete'))), true);
+  assert.equal(isOk(await stream.abort(unavailableError('fixture complete'))), true);
   assert.equal(isOk(await stream.wait()), false);
   assert.equal(signallingClosed, true);
 });

@@ -68,6 +68,10 @@ target_link_libraries(
   absl::str_format nlohmann_json::nlohmann_json)
 
 add_library(a11_wasm_data STATIC
+  "${A11_CPP_ROOT}/a11/actions/schema.cc"
+  "${A11_CPP_ROOT}/a11/actions/schema_json.cc"
+  "${A11_CPP_ROOT}/a11/actions/authorization_codec.cc"
+  "${A11_CPP_ROOT}/a11/actions/stream_reference.cc"
   "${A11_CPP_ROOT}/a11/json_codec.cc"
   "${A11_CPP_ROOT}/a11/status.cc"
   "${A11_CPP_ROOT}/a11/data/json.cc"
@@ -95,6 +99,9 @@ add_executable(a11_wasm
   bridge_core.cc
   bridge_flow.cc
   bridge_codec.cc
+  bridge_schema.cc
+  bridge_authorization.cc
+  bridge_stream_reference.cc
   bridge_framing.cc
   bridge_runtime.cc)
 set_target_properties(a11_wasm PROPERTIES OUTPUT_NAME a11 SUFFIX ".mjs")
@@ -109,7 +116,7 @@ target_link_options(a11_wasm PRIVATE
   -sALLOW_MEMORY_GROWTH=1
   -sMAXIMUM_MEMORY=${A11_WASM_MAXIMUM_MEMORY_BYTES}
   -sFILESYSTEM=0
-  -sEXPORTED_FUNCTIONS=_malloc,_free,_a11_wasm_flow_request,_a11_wasm_wire_encode,_a11_wasm_wire_decode,_a11_wasm_fragment_decode,_a11_wasm_frame_split,_a11_wasm_reassembler_new,_a11_wasm_reassembler_free,_a11_wasm_reassembler_feed,_a11_wasm_runtime_new,_a11_wasm_runtime_free,_a11_wasm_runtime_register,_a11_wasm_runtime_invoke,_a11_wasm_runtime_next_action,_a11_wasm_runtime_finish_action,_a11_wasm_runtime_node_append,_a11_wasm_runtime_node_append_ref,_a11_wasm_runtime_node_put_fragment,_a11_wasm_runtime_node_put_many,_a11_wasm_runtime_node_close,_a11_wasm_runtime_node_read,_a11_wasm_runtime_node_read_arrival,_a11_wasm_runtime_node_read_data,_a11_wasm_runtime_node_clear_data,_a11_wasm_runtime_node_arrival_seq,_a11_wasm_runtime_node_final_seq,_a11_wasm_runtime_node_count,_a11_wasm_runtime_node_closed,_a11_wasm_runtime_resolve,_a11_wasm_runtime_export_snapshot,_a11_wasm_runtime_import_snapshot,_a11_wasm_result_data,_a11_wasm_result_size,_a11_wasm_result_code,_a11_wasm_result_ready,_a11_wasm_result_free
+  -sEXPORTED_FUNCTIONS=_malloc,_free,_a11_wasm_flow_request,_a11_wasm_name_validate,_a11_wasm_data_encode,_a11_wasm_data_decode,_a11_wasm_json_to_chunk,_a11_wasm_json_from_chunk,_a11_wasm_bytes_to_chunk,_a11_wasm_bytes_from_chunk,_a11_wasm_schema_validate,_a11_wasm_schema_describe,_a11_wasm_schema_parse,_a11_wasm_schema_entries,_a11_wasm_authorization_encode,_a11_wasm_authorization_decode,_a11_wasm_authorization_to_text,_a11_wasm_authorization_from_text,_a11_wasm_stream_reference_to_chunk,_a11_wasm_stream_reference_from_chunk,_a11_wasm_status_pack,_a11_wasm_status_unpack,_a11_wasm_status_chunk,_a11_wasm_status_from_chunk,_a11_wasm_wire_encode,_a11_wasm_wire_decode,_a11_wasm_fragment_decode,_a11_wasm_frame_options_validate,_a11_wasm_frame_parse,_a11_wasm_frame_split,_a11_wasm_reassembler_new,_a11_wasm_reassembler_free,_a11_wasm_reassembler_clear,_a11_wasm_reassembler_pending_messages,_a11_wasm_reassembler_pending_bytes,_a11_wasm_reassembler_feed,_a11_wasm_runtime_new,_a11_wasm_runtime_free,_a11_wasm_runtime_register,_a11_wasm_runtime_invoke,_a11_wasm_runtime_next_action,_a11_wasm_runtime_finish_action,_a11_wasm_runtime_node_append,_a11_wasm_runtime_node_append_ref,_a11_wasm_runtime_node_put_fragment,_a11_wasm_runtime_node_put_many,_a11_wasm_runtime_node_close,_a11_wasm_runtime_node_read,_a11_wasm_runtime_node_read_arrival,_a11_wasm_runtime_node_read_data,_a11_wasm_runtime_node_clear_data,_a11_wasm_runtime_node_arrival_seq,_a11_wasm_runtime_node_final_seq,_a11_wasm_runtime_node_count,_a11_wasm_runtime_node_closed,_a11_wasm_runtime_resolve,_a11_wasm_runtime_export_snapshot,_a11_wasm_runtime_import_snapshot,_a11_wasm_result_data,_a11_wasm_result_size,_a11_wasm_result_code,_a11_wasm_result_ready,_a11_wasm_result_free
   -sEXPORTED_RUNTIME_METHODS=HEAPU8)
 
 add_executable(a11_wasm_ucontext_probe
@@ -347,7 +354,8 @@ if(A11_WASM_BUILD_BOOST_PROBE)
 
     add_executable(a11_wasm_native
       bridge_core.cc bridge_native.cc bridge_native_objects.cc
-      host_stream.cc host_settings.cc graph_snapshot.cc runtime.cc async_task.cc
+      host_stream.cc host_binary_channel.cc host_settings.cc
+      graph_snapshot.cc runtime.cc async_task.cc
       thread/ucontext_compat.cc thread/native_module_main.cc)
     set_target_properties(a11_wasm_native PROPERTIES
       OUTPUT_NAME a11-native SUFFIX ".mjs")

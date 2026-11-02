@@ -12,12 +12,12 @@ async function isolateGuidePageOnce(): Promise<boolean> {
     }
     return true;
   }
-  const legacyScope = new URL('./', location.href).href;
+  const legacyScope = new URL('/guides/', location.href).href;
   const registrations = await navigator.serviceWorker.getRegistrations();
   const legacy = registrations.filter(registration =>
     registration.scope === legacyScope &&
     registration.active?.scriptURL.endsWith('/wasm-isolation-sw.js'));
-  const script = new URL('../wasm-isolation-sw.js', location.href);
+  const script = new URL('/wasm-isolation-sw.js', location.href);
   const controller = navigator.serviceWorker.controller?.scriptURL;
   if (window.crossOriginIsolated && legacy.length === 0 &&
       (!controller || controller === script.href)) return true;
@@ -27,7 +27,7 @@ async function isolateGuidePageOnce(): Promise<boolean> {
   }
   await Promise.all(legacy.map(registration => registration.unregister()));
   const registration = await navigator.serviceWorker.register(script, {
-    scope: new URL('../', location.href).pathname,
+    scope: '/',
   });
   const worker = registration.installing ?? registration.waiting ??
     registration.active;

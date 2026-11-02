@@ -4,11 +4,21 @@
 uses native wire codecs, Flow tooling, fragment stores, nodes, actions,
 sessions, and Flow execution. `backendFor(feature)` reports `wasm` for every
 feature. Requests for the former TypeScript backend return `UNIMPLEMENTED`.
+`backendFor()` describes ownership of the selected runtime feature. The
+remaining host implementations are listed
+in [the export audit](WASM_EXPORT_AUDIT.md).
+
+Initialize the runtime before calling synchronous record, framing, status,
+schema, authorization, stream-reference, or Flow tooling helpers. These
+helpers return `FAILED_PRECONDITION` until their WASM bindings are ready.
+Loading stays asynchronous and lazy at `createA11Runtime()`.
 
 The package root exports the C++ owned stateful classes. Initialize one
 `A11Runtime` and pass it to their factories. The previous TypeScript-only
 runtime implementation has been removed.
 The native classes expose the operations in their TypeScript declarations.
+Private TypeScript↔WASM bindings live in `js/src/internal/wasm/`; application code
+imports the public classes and helpers from the package entry points.
 
 `@curiositystack/a11/runtime` exports the native classes under the familiar
 `AsyncNode`, `Action`, `Session`, `SessionWithRecv`, and `NodeMap` names. For
@@ -63,7 +73,7 @@ Serve COOP and COEP headers with the page and keep the WASM assets on the
 same origin. The runtime uses one scheduling worker and conservative browser
 limits. The packaged WASM binaries have content-hashed names and immutable
 cache headers; stable loaders are revalidated.
-The guide demos register a service worker under `/guides/` and reload once
+The guide demos register a service worker at the site root and reload once
 to add these headers on hosts such as GitHub Pages. Applications outside the
 guides must provide isolation through their own host or navigation worker.
 
@@ -116,7 +126,8 @@ contract without a handler through `await runtime.registerSchema(schema)`.
 Both registration methods return asynchronous unregister functions. A native
 session can attach the SDK's `WireStream` adapters, including in-process,
 WebSocket, SSE, and WebRTC streams. The host bridge forwards session trailers
-on half-close so native receivers see clean EOF.
+on half-close so native receivers see clean EOF. Channel lifecycle and
+pull-style reads run in C++; packet I/O stays in browser or Node APIs.
 
 `runtime.runFlow()` executes native Flow and returns output chunks by port.
 `onOutput` observes chunks during execution; an `AbortSignal` cancels a run.
@@ -139,7 +150,7 @@ Build the compact and threaded native modules as described in
 `cpp/a11/wasm/README.md`, then package the content-hashed assets:
 
 ```sh
-node cpp/a11/wasm/package.mjs cpp/a11/wasm/build/threaded cpp/a11/wasm/build/threaded
+node cpp/a11/wasm/package.mjs cpp/a11/wasm/build cpp/a11/wasm/build/threaded
 npm --prefix js run build
 rm -rf js/dist/wasm
 mkdir -p js/dist/wasm

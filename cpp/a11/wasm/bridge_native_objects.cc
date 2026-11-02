@@ -100,6 +100,80 @@ absl::StatusOr<std::string> RequiredString(const nlohmann::json& request,
   return found->get<std::string>();
 }
 
+absl::Status ReadChannelConfig(
+    const nlohmann::json& request, a11::net::WireStreamOptions* options,
+    a11::net::ChannelFramingOptions* framing,
+    a11::net::ChannelEndpointRole* role) {
+  const auto read_size = [](const nlohmann::json& object, const char* name,
+                            size_t* target) -> absl::Status {
+    const auto value = object.find(name);
+    if (value == object.end()) return absl::OkStatus();
+    if (!value->is_number_unsigned()) {
+      return absl::InvalidArgumentError(std::string(name) + " must be unsigned");
+    }
+    *target = value->get<size_t>();
+    return absl::OkStatus();
+  };
+  if (const auto configured = request.find("options");
+      configured != request.end()) {
+    if (!configured->is_object()) {
+      return absl::InvalidArgumentError("channel options must be an object");
+    }
+    ABSL_RETURN_IF_ERROR(read_size(*configured, "maxBufferedIncomingMessages",
+                                   &options->max_buffered_incoming_messages));
+    ABSL_RETURN_IF_ERROR(read_size(*configured, "maxSingleMessageSize",
+                                   &options->max_single_message_size));
+    ABSL_RETURN_IF_ERROR(read_size(*configured, "maxBufferedIncomingBytes",
+                                   &options->max_buffered_incoming_bytes));
+    if (const auto timeout = configured->find("messageTimeoutMs");
+        timeout != configured->end()) {
+      if (timeout->is_null()) {
+        options->message_timeout = absl::InfiniteDuration();
+      } else if (timeout->is_number_unsigned()) {
+        options->message_timeout =
+            absl::Milliseconds(timeout->get<std::uint64_t>());
+      } else {
+        return absl::InvalidArgumentError("messageTimeoutMs is invalid");
+      }
+    }
+    if (const auto deadline = configured->find("deadline");
+        deadline != configured->end()) {
+      if (deadline->is_null()) {
+        options->deadline = absl::InfiniteFuture();
+      } else if (deadline->is_number_integer()) {
+        options->deadline =
+            absl::FromUnixMillis(deadline->get<std::int64_t>());
+      } else {
+        return absl::InvalidArgumentError("channel deadline is invalid");
+      }
+    }
+  }
+  if (const auto configured = request.find("framing");
+      configured != request.end()) {
+    if (!configured->is_object()) {
+      return absl::InvalidArgumentError("channel framing must be an object");
+    }
+    ABSL_RETURN_IF_ERROR(
+        read_size(*configured, "splitSize", &framing->split_size));
+    ABSL_RETURN_IF_ERROR(read_size(*configured, "maxPendingMessages",
+                                   &framing->max_pending_messages));
+    ABSL_RETURN_IF_ERROR(read_size(*configured, "maxPendingBytes",
+                                   &framing->max_pending_bytes));
+  }
+  if (const auto value = request.find("role"); value != request.end()) {
+    if (!value->is_string()) {
+      return absl::InvalidArgumentError("channel role must be a string");
+    }
+    const auto name = value->get<std::string>();
+    if (name == "client") *role = a11::net::ChannelEndpointRole::kClient;
+    else if (name == "server") *role = a11::net::ChannelEndpointRole::kServer;
+    else if (name == "either") *role = a11::net::ChannelEndpointRole::kEither;
+    else return absl::InvalidArgumentError("unknown channel role");
+  }
+  ABSL_RETURN_IF_ERROR(options->Validate());
+  return framing->Validate();
+}
+
 absl::StatusOr<a11::actions::ActionSettings> ReadActionSettings(
     const nlohmann::json& value, a11::actions::ActionSettings settings) {
   if (!value.is_object()) {
@@ -649,6 +723,271 @@ absl::StatusOr<nlohmann::json> Command(
       return nlohmann::json::object();
     }
     return absl::UnimplementedError("unknown host stream operation");
+  }
+  if (operation == "channel_prepare") {
+    ABSL_ASSIGN_OR_RETURN(auto wire_id, RequiredString(request, "wireId"));
+    a11::net::WireStreamOptions options;
+    a11::net::ChannelFramingOptions framing;
+    auto role = a11::net::ChannelEndpointRole::kEither;
+    ABSL_RETURN_IF_ERROR(ReadChannelConfig(request, &options, &framing, &role));
+    auto channel = std::make_shared<a11::wasm::HostBinaryChannel>(id);
+    ABSL_ASSIGN_OR_RETURN(auto stream,
+                          a11::wasm::HostChannelWireStream::Create(
+                              channel, std::move(wire_id), role, options,
+                              framing));
+    thread::MutexLock lock(&state->graph->mu);
+    if (state->graph->channel_streams.find(id) !=
+            state->graph->channel_streams.end() ||
+        state->graph->host_streams.find(id) !=
+            state->graph->host_streams.end()) {
+      return absl::AlreadyExistsError("channel stream id already exists");
+    }
+    state->graph->binary_channels.emplace(id, std::move(channel));
+    state->graph->channel_streams.emplace(id, std::move(stream));
+    return nlohmann::json{{"id", id}};
+  }
+  if (operation == "channel_event") {
+    ABSL_ASSIGN_OR_RETURN(auto kind, RequiredString(request, "kind"));
+    std::shared_ptr<a11::wasm::HostBinaryChannel> channel;
+    {
+      thread::MutexLock lock(&state->graph->mu);
+      const auto found = state->graph->binary_channels.find(id);
+      if (found == state->graph->binary_channels.end()) {
+        return absl::NotFoundError("channel stream id is unknown");
+      }
+      channel = found->second;
+    }
+    const auto payload = request.find("payload");
+    ABSL_RETURN_IF_ERROR(channel->Emit(
+        kind, payload == request.end() ? nlohmann::json() : *payload));
+    return nlohmann::json::object();
+  }
+  if (operation.rfind("channel_", 0) == 0 ||
+      operation == "session_add_channel_stream") {
+    std::shared_ptr<a11::wasm::HostChannelWireStream> stream;
+    {
+      thread::MutexLock lock(&state->graph->mu);
+      const auto found = state->graph->channel_streams.find(id);
+      if (found == state->graph->channel_streams.end()) {
+        return absl::NotFoundError("channel stream id is unknown");
+      }
+      stream = found->second;
+    }
+    if (operation == "channel_start" || operation == "channel_accept") {
+      const std::weak_ptr<a11::wasm::HostChannelWireStream> weak = stream;
+      auto on_message = [weak, id](
+                            std::optional<a11::data::WireMessage> message) {
+        return a11::SubmitTask(
+            [weak, id, message = std::move(message)]() mutable -> absl::Status {
+              auto locked = weak.lock();
+              if (locked == nullptr) {
+                return absl::CancelledError("channel stream was released");
+              }
+              if (!message.has_value()) {
+                a11::data::WireMessage marker;
+                marker.headers = locked->GetTrailers().value_or(
+                    a11::data::ByteMap{});
+                ABSL_ASSIGN_OR_RETURN(
+                    auto value, a11::data::WireMessageToJsonValue(marker));
+                ABSL_ASSIGN_OR_RETURN(
+                    auto encoded, a11::DumpJson(value, "channel close"));
+                return a11::wasm::HostStreamEvent(id, "half_close", encoded);
+              }
+              ABSL_ASSIGN_OR_RETURN(
+                  auto value, a11::data::WireMessageToJsonValue(*message));
+              ABSL_ASSIGN_OR_RETURN(
+                  auto encoded, a11::DumpJson(value, "channel message"));
+              return a11::wasm::HostStreamEvent(id, "message", encoded);
+            });
+      };
+      auto on_done = [weak, id]() {
+        return a11::SubmitTask([weak, id]() -> absl::Status {
+          const auto active = weak.lock();
+          if (active == nullptr) return absl::OkStatus();
+          ABSL_ASSIGN_OR_RETURN(
+              auto encoded,
+              a11::DumpJson(a11::StatusToJsonOrEmptyDetails(
+                                active->GetStatus()),
+                            "channel completion"));
+          return a11::wasm::HostStreamEvent(id, "done", encoded);
+        });
+      };
+      auto started = operation == "channel_start"
+                         ? stream->Start(std::move(on_message),
+                                         std::move(on_done))
+                         : stream->Accept(std::move(on_message),
+                                          std::move(on_done));
+      ABSL_RETURN_IF_ERROR(started.Await().status());
+      return nlohmann::json::object();
+    }
+    if (operation == "channel_recv_start" ||
+        operation == "channel_recv_accept") {
+      ABSL_ASSIGN_OR_RETURN(
+          auto receiver,
+          a11::net::WireStreamWithRecv::Create(stream));
+      {
+        thread::MutexLock lock(&state->graph->mu);
+        if (state->graph->channel_receivers.find(id) !=
+            state->graph->channel_receivers.end()) {
+          return absl::AlreadyExistsError("channel receiver already started");
+        }
+        state->graph->channel_receivers.emplace(id, receiver);
+      }
+      const std::weak_ptr<a11::wasm::HostChannelWireStream> weak = stream;
+      auto on_message = [weak, id](
+                            std::optional<a11::data::WireMessage> message) {
+        return a11::SubmitTask(
+            [weak, id, message = std::move(message)]() mutable
+                -> absl::Status {
+              const auto active = weak.lock();
+              if (active == nullptr) {
+                return absl::CancelledError("channel stream was released");
+              }
+              if (!message.has_value()) {
+                a11::data::WireMessage marker;
+                marker.headers = active->GetTrailers().value_or(
+                    a11::data::ByteMap{});
+                ABSL_ASSIGN_OR_RETURN(
+                    auto value, a11::data::WireMessageToJsonValue(marker));
+                ABSL_ASSIGN_OR_RETURN(
+                    auto encoded, a11::DumpJson(value, "channel close"));
+                return a11::wasm::HostStreamEvent(id, "half_close", encoded);
+              }
+              ABSL_ASSIGN_OR_RETURN(
+                  auto value, a11::data::WireMessageToJsonValue(*message));
+              ABSL_ASSIGN_OR_RETURN(
+                  auto encoded, a11::DumpJson(value, "channel message"));
+              return a11::wasm::HostStreamEvent(id, "message", encoded);
+            });
+      };
+      auto on_done = [weak, id]() {
+        return a11::SubmitTask([weak, id]() -> absl::Status {
+          const auto active = weak.lock();
+          if (active == nullptr) return absl::OkStatus();
+          ABSL_ASSIGN_OR_RETURN(
+              auto encoded,
+              a11::DumpJson(a11::StatusToJsonOrEmptyDetails(
+                                active->GetStatus()),
+                            "channel completion"));
+          return a11::wasm::HostStreamEvent(id, "done", encoded);
+        });
+      };
+      const absl::Status started =
+          (operation == "channel_recv_start"
+               ? receiver->Start(std::move(on_message), std::move(on_done))
+               : receiver->Accept(std::move(on_message), std::move(on_done)))
+              .Await()
+              .status();
+      if (!started.ok()) {
+        thread::MutexLock lock(&state->graph->mu);
+        state->graph->channel_receivers.erase(id);
+      }
+      ABSL_RETURN_IF_ERROR(started);
+      return nlohmann::json::object();
+    }
+    if (operation == "channel_recv_receive") {
+      std::shared_ptr<a11::net::WireStreamWithRecv> receiver;
+      {
+        thread::MutexLock lock(&state->graph->mu);
+        const auto found = state->graph->channel_receivers.find(id);
+        if (found == state->graph->channel_receivers.end()) {
+          return absl::FailedPreconditionError("channel receiver is not started");
+        }
+        receiver = found->second;
+      }
+      ABSL_ASSIGN_OR_RETURN(auto deadline, ReadDeadline(request));
+      const absl::Duration timeout = deadline == absl::InfiniteFuture()
+                                         ? absl::InfiniteDuration()
+                                         : deadline - absl::Now();
+      ABSL_ASSIGN_OR_RETURN(auto message,
+                            receiver->Receive(timeout).Await(deadline));
+      if (!message.has_value()) return nlohmann::json(nullptr);
+      return a11::data::WireMessageToJsonValue(*message);
+    }
+    if (operation == "channel_send" || operation == "channel_half_close") {
+      const auto value = request.find("message");
+      if (value == request.end()) {
+        return absl::InvalidArgumentError("channel message is required");
+      }
+      ABSL_ASSIGN_OR_RETURN(auto message,
+                            a11::data::WireMessageFromJsonValue(*value));
+      const absl::Status status =
+          operation == "channel_send"
+              ? stream->Send(std::move(message))
+              : stream->HalfClose(std::move(message.headers));
+      ABSL_RETURN_IF_ERROR(status);
+      return nlohmann::json::object();
+    }
+    if (operation == "channel_abort") {
+      const auto value = request.find("status");
+      if (value == request.end()) {
+        return absl::InvalidArgumentError("channel status is required");
+      }
+      ABSL_ASSIGN_OR_RETURN(auto status, a11::StatusFromJson(*value));
+      ABSL_RETURN_IF_ERROR(stream->Abort(std::move(status)));
+      return nlohmann::json::object();
+    }
+    if (operation == "channel_drain") {
+      ABSL_RETURN_IF_ERROR(stream->DrainOutgoingMessages().Await().status());
+      return nlohmann::json::object();
+    }
+    if (operation == "channel_deadline") {
+      absl::Time deadline = absl::InfiniteFuture();
+      const auto value = request.find("deadlineMs");
+      if (value != request.end() && !value->is_null()) {
+        ABSL_ASSIGN_OR_RETURN(deadline, ReadDeadline(request));
+      }
+      ABSL_RETURN_IF_ERROR(stream->SetDeadline(deadline));
+      return nlohmann::json::object();
+    }
+    if (operation == "channel_status") {
+      nlohmann::json result{{"status", a11::StatusToJsonOrEmptyDetails(
+                                             stream->GetStatus())}};
+      const auto deadline = stream->deadline();
+      result["deadlineMs"] = deadline == absl::InfiniteFuture()
+                                  ? nlohmann::json()
+                                  : nlohmann::json(absl::ToUnixMillis(deadline));
+      if (const auto trailers = stream->GetTrailers(); trailers.has_value()) {
+        a11::data::WireMessage marker;
+        marker.headers = *trailers;
+        ABSL_ASSIGN_OR_RETURN(auto encoded_trailers,
+                              a11::data::WireMessageToJsonValue(marker));
+        result["trailers"] = std::move(encoded_trailers);
+      }
+      return result;
+    }
+    if (operation == "channel_release") {
+      thread::MutexLock lock(&state->graph->mu);
+      state->graph->channel_receivers.erase(id);
+      state->graph->channel_streams.erase(id);
+      state->graph->binary_channels.erase(id);
+      return nlohmann::json::object();
+    }
+    if (operation == "session_add_channel_stream") {
+      ABSL_ASSIGN_OR_RETURN(auto session_id,
+                            RequiredString(request, "sessionId"));
+      ABSL_ASSIGN_OR_RETURN(auto mode, RequiredString(request, "mode"));
+      std::shared_ptr<a11::service::Session> session;
+      {
+        thread::MutexLock lock(&state->graph->mu);
+        const auto found = state->graph->sessions.find(session_id);
+        if (found == state->graph->sessions.end()) {
+          return absl::NotFoundError("session id is unknown");
+        }
+        session = found->second;
+      }
+      if (mode != "start" && mode != "accept") {
+        return absl::InvalidArgumentError("mode must be start or accept");
+      }
+      ABSL_ASSIGN_OR_RETURN(
+          auto started, session->AddStream(
+                            stream, mode == "start"
+                                        ? a11::service::StreamMode::kStart
+                                        : a11::service::StreamMode::kAccept));
+      ABSL_RETURN_IF_ERROR(started.Await().status());
+      return nlohmann::json{{"id", stream->GetId()}};
+    }
+    return absl::UnimplementedError("unknown channel operation");
   }
   if (operation == "session_add_host_stream") {
     ABSL_ASSIGN_OR_RETURN(auto session_id,

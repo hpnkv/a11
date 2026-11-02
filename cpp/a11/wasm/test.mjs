@@ -23,6 +23,48 @@ const {createA11Wasm} = await import(process.argv[2]
 const a11 = await createA11Wasm();
 const encoded = new TextEncoder();
 
+const statusBytes = a11.status.pack({code: 7, message: 'denied',
+  details: [{reason: 'test'}]});
+assert.deepEqual(a11.status.unpack(statusBytes), {code: 7,
+  message: 'denied', details: [{reason: 'test'}]});
+const statusChunk = a11.status.chunk({code: 7, message: 'denied',
+  details: []}, true);
+assert.equal(a11.status.fromChunk(statusChunk).code, 7);
+assert.equal(a11.data.decode('chunk', statusChunk).metadata.attributes['a11-close'],
+  'MQ==');
+for (const [kind, value] of [
+  ['chunk_metadata', {mimetype: 'text/plain'}],
+  ['chunk', {data: 'aGk='}],
+  ['node_ref', {id: 'source', storage: {id: 'archive'}}],
+  ['node_fragment', {id: 'source', data: {data: 'aGk='}}],
+  ['port', {name: 'input', id: 'source'}],
+  ['action_message', {id: 'call', name: 'query'}],
+  ['wire_message', {node_fragments: [{id: 'source', data: {data: 'aGk='}}]}],
+]) {
+  assert.deepEqual(a11.data.decode(kind, a11.data.encode(kind, value)), value);
+}
+a11.data.validateName('source_1');
+assert.throws(() => a11.data.validateName('bad name'));
+a11.schema.validate({name: 'good', inputs: [{name: 'request', type: 'string'}]});
+assert.throws(() => a11.schema.validate({name: 'bad',
+  inputs: [{name: 'same', type: 'string'}],
+  outputs: [{name: 'same', type: 'string'}]}));
+const authorization = {version: 1, chain: ['a.b.c']};
+assert.deepEqual(a11.authorization.decode(a11.authorization.encode(authorization)),
+  authorization);
+assert.deepEqual(a11.authorization.fromText(
+  a11.authorization.toText(authorization)), authorization);
+const streamReference = {producer_id: 'producer', parent_producer_id: '',
+  node: {id: 'source', storage: {id: 'archive'}},
+  purpose: 'llm_usage', source: {type: 'a11_action', id: 'call'}};
+assert.deepEqual(a11.streamReference.fromChunk(
+  a11.streamReference.toChunk(streamReference)), streamReference);
+for (const mimetype of ['', 'application/x-msgpack']) {
+  const value = {topic: 'weather', count: 2};
+  const chunk = a11.serialization.jsonToChunk(value, mimetype);
+  assert.deepEqual(a11.serialization.jsonFromChunk(chunk), value);
+}
+
 const checked = a11.flow({ method: "check", source: "flow main { }" });
 assert.equal(checked.ok, true);
 assert.deepEqual(checked.result.diagnostics, []);
@@ -55,12 +97,20 @@ assert.deepEqual(a11.wire.decode(a11.wire.encode(withAccess)), withAccess);
 const bytes = encoded.encode("a message long enough for many little packets");
 const packets = a11.framing.split(bytes, 123n, 18);
 assert.ok(packets.length > 1);
+const firstPacket = a11.framing.parse(packets[0]);
+assert.equal(firstPacket.transientId, 123n);
+assert.equal(firstPacket.sequence, 0);
+assert.equal(firstPacket.packetCount, packets.length);
 const reassembler = a11.framing.reassembler({ packetSize: 18 });
+assert.equal(reassembler.pendingMessageCount, 0);
 let completed = null;
 for (const packet of packets.toReversed()) {
   completed = reassembler.feed(packet) ?? completed;
 }
 assert.deepEqual(completed, bytes);
+assert.equal(reassembler.pendingMessageCount, 0);
+assert.equal(reassembler.pendingByteCount, 0);
+reassembler.clear();
 reassembler.dispose();
 const defaultLimits = a11.framing.reassembler();
 const withinLimit = new Uint8Array(16 * 1024 * 1024);

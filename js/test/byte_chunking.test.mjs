@@ -16,7 +16,12 @@
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {BytePacketType, ByteReassembler, StatusCode, isOk, parseBytePacket, splitBytesIntoPackets} from '../dist/index.js';
+import {BytePacketType, ByteReassembler, StatusCode, isOk, parseBytePacket,
+  splitBytesIntoPackets, createA11Runtime} from '../dist/index.js';
+
+const nativeRuntime = await createA11Runtime();
+assert.equal(isOk(nativeRuntime), true);
+test.after(async () => { await nativeRuntime.dispose(); });
 
 test('byte chunking reassembles out-of-order interleaved messages', () => {
   const first = Uint8Array.from({ length: 137 }, (_, index) => index & 0xff);

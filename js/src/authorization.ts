@@ -1,15 +1,14 @@
 /** Structured A11 authorization metadata and Action header helpers. */
 
-import { decode, encode } from '@msgpack/msgpack';
-
 import {GraphAction} from './runtime_graph.js';
+import {authorizationBridge} from './internal/wasm/native_authorization.js';
+import {statusFromBridgeFailure} from './internal/wasm/status_bridge.js';
 import { AUTHORIZATION_REFERENCE_HEADER } from './action_schema.js';
-import { base64Decode, base64Encode } from './bytes.js';
+import {base64Decode} from './bytes.js';
 import {
+  failedPreconditionError,
   invalidArgumentError,
   isOk,
-  okStatus,
-  statusFromUnknown,
   type Status,
   type StatusOr,
 } from './status.js';
@@ -33,100 +32,52 @@ export interface AuthorizationEnvelope {
   readonly chain: readonly string[];
 }
 
-function validateEnvelope(value: AuthorizationEnvelope): Status {
-  if (value.version !== AUTHORIZATION_VERSION) {
-    return invalidArgumentError('Unsupported A11 authorization version.');
-  }
-  if (value.chain.length < 1 || value.chain.length > MAX_AUTHORIZATION_HOPS) {
-    return invalidArgumentError('Invalid A11 authorization chain length.');
-  }
-  if (value.chain.some((part) =>
-    typeof part !== 'string' || part.length === 0 || part.split('.').length !== 3)) {
-    return invalidArgumentError('Every authorization statement must be compact JWS.');
-  }
-  return okStatus();
-}
-
 /** Validate and encode an authorization envelope as canonical MessagePack. */
 export function encodeAuthorization(
   value: AuthorizationEnvelope,
 ): StatusOr<Uint8Array> {
-  const valid = validateEnvelope(value);
-  if (!isOk(valid)) return valid;
-  try {
-    const result = encode([value.version, [...value.chain]]);
-    return result.byteLength <= MAX_AUTHORIZATION_BYTES
-      ? result
-      : invalidArgumentError('The authorization value is too large.');
-  } catch (error) {
-    return statusFromUnknown(error, 'Could not encode authorization.');
-  }
+  const native = authorizationBridge();
+  if (native === null) return failedPreconditionError(
+    'Initialize A11 WASM before using A11 protocol codecs.');
+  try { return native.encode(value); }
+  catch (error) { return statusFromBridgeFailure(error,
+      'Authorization encoding failed.'); }
 }
 
 /** Decode and validate a canonical MessagePack authorization envelope. */
 export function decodeAuthorization(
   bytes: Uint8Array,
 ): StatusOr<AuthorizationEnvelope> {
-  if (!(bytes instanceof Uint8Array) || bytes.byteLength > MAX_AUTHORIZATION_BYTES) {
-    return invalidArgumentError('The authorization value must be bounded bytes.');
-  }
-  try {
-    const value = decode(bytes);
-    if (!Array.isArray(value) || value.length !== 2 || value[0] !== 1 ||
-      !Array.isArray(value[1]) || value[1].some((part) => typeof part !== 'string')) {
-      return invalidArgumentError('The authorization envelope must be [1, chain].');
-    }
-    const envelope: AuthorizationEnvelope = {
-      version: 1,
-      chain: value[1] as string[],
-    };
-    const valid = validateEnvelope(envelope);
-    if (!isOk(valid)) return valid;
-    const canonical = encodeAuthorization(envelope);
-    if (!isOk(canonical) || canonical.length !== bytes.length ||
-      canonical.some((part, index) => part !== bytes[index])) {
-      return invalidArgumentError('The authorization envelope is not canonical.');
-    }
-    return envelope;
-  } catch (error) {
-    return invalidArgumentError(
-      'The authorization value is not MessagePack.',
-      [],
-      error,
-    );
-  }
+  const native = authorizationBridge();
+  if (native === null) return failedPreconditionError(
+    'Initialize A11 WASM before using A11 protocol codecs.');
+  try { return native.decode(bytes); }
+  catch (error) { return statusFromBridgeFailure(error,
+      'Authorization decoding failed.'); }
 }
 
 /** Encode an envelope as an `a11-auth/1` base64url value. */
 export function authorizationToText(
   value: AuthorizationEnvelope,
 ): StatusOr<string> {
-  const encoded = encodeAuthorization(value);
-  if (!isOk(encoded)) return encoded;
-  const body = base64Encode(encoded)
-    .replaceAll('+', '-')
-    .replaceAll('/', '_')
-    .replace(/=+$/, '');
-  return `a11-auth/1.${body}`;
+  const native = authorizationBridge();
+  if (native === null) return failedPreconditionError(
+    'Initialize A11 WASM before using A11 protocol codecs.');
+  try { return native.toText(value); }
+  catch (error) { return statusFromBridgeFailure(error,
+      'Authorization text encoding failed.'); }
 }
 
 /** Decode an `a11-auth/1` base64url value. */
 export function authorizationFromText(
   value: string,
 ): StatusOr<AuthorizationEnvelope> {
-  const prefix = 'a11-auth/1.';
-  if (!value.startsWith(prefix)) {
-    return invalidArgumentError(`Expected ${prefix}.`);
-  }
-  const encodedBody = value.slice(prefix.length);
-  if (!/^[A-Za-z0-9_-]*$/.test(encodedBody)) {
-    return invalidArgumentError('The authorization value is not base64url.');
-  }
-  const body = encodedBody
-    .replaceAll('-', '+')
-    .replaceAll('_', '/');
-  const decoded = base64Decode(body + '='.repeat((4 - body.length % 4) % 4));
-  return isOk(decoded) ? decodeAuthorization(decoded) : decoded;
+  const native = authorizationBridge();
+  if (native === null) return failedPreconditionError(
+    'Initialize A11 WASM before using A11 protocol codecs.');
+  try { return native.fromText(value); }
+  catch (error) { return statusFromBridgeFailure(error,
+      'Authorization text decoding failed.'); }
 }
 
 /** Read the inline envelope from an action that carries no reference. */

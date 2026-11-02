@@ -42,10 +42,13 @@ import {
   ActionPortSchema,
   ActionSchema,
 } from './action_schema.js';
+import {schemaBridge} from './internal/wasm/native_schema.js';
+import {statusFromBridgeFailure} from './internal/wasm/status_bridge.js';
 import { utf8Decode } from './bytes.js';
 import {
   invalidArgumentError,
   isOk,
+  StatusException,
   type StatusOr,
 } from './status.js';
 
@@ -177,6 +180,15 @@ export function schemaToJson(
   runnable = true,
   ports: PortView = 'callable',
 ): SchemaEntry {
+  const native = schemaBridge();
+  if (native !== null) {
+    try {
+      return native.describe(schema, runnable, ports === 'all') as unknown as SchemaEntry;
+    } catch (error) {
+      throw new StatusException(statusFromBridgeFailure(error,
+        'Native action schema description failed.'));
+    }
+  }
   const entry: SchemaEntry = { name: schema.name };
   if (schema.description) entry.description = schema.description;
   entry.runnable = runnable;
@@ -230,6 +242,12 @@ export function schemaToJson(
  * log port, which no schema declares.
  */
 export function schemaFromJson(entry: SchemaEntry): StatusOr<ActionSchema> {
+  const native = schemaBridge();
+  if (native !== null) {
+    try { entry = native.parse(entry as unknown as Record<string, unknown>) as unknown as SchemaEntry; }
+    catch (error) { return statusFromBridgeFailure(error,
+      'Native action schema parsing failed.'); }
+  }
   if (entry === null || typeof entry !== 'object') {
     return invalidArgumentError('An action schema entry must be an object.');
   }
@@ -294,6 +312,12 @@ export function schemaFromJson(entry: SchemaEntry): StatusOr<ActionSchema> {
 export function schemasInDocument(
   document: unknown,
 ): StatusOr<SchemaEntry[]> {
+  const native = schemaBridge();
+  if (native !== null) {
+    try { return native.entries(document) as unknown as SchemaEntry[]; }
+    catch (error) { return statusFromBridgeFailure(error,
+      'Native action schema document parsing failed.'); }
+  }
   if (Array.isArray(document)) return document as SchemaEntry[];
   if (document === null || typeof document !== 'object') {
     return invalidArgumentError(

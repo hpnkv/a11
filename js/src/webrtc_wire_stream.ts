@@ -1368,17 +1368,18 @@ export class WebRtcWireStream implements WireStream {
   /** Signalling transport used to negotiate this peer connection. */
   get signallingEndpoint(): SignallingTransport { return this.channel.signalling; }
 
-  send(message: WireMessage): Status { return this.stream.send(message); }
+  send(message: WireMessage): Promise<Status> { return this.stream.send(message); }
   start(onMessage?: OnWireMessage, onDone?: OnWireDone): Promise<Status> { return this.stream.start(onMessage, onDone); }
   accept(onMessage?: OnWireMessage, onDone?: OnWireDone): Promise<Status> { return this.stream.accept(onMessage, onDone); }
-  halfClose(trailers?: ByteMapInput): Status { return this.stream.halfClose(trailers); }
+  halfClose(trailers?: ByteMapInput): Promise<Status> { return this.stream.halfClose(trailers); }
   drainOutgoingMessages(): Promise<Status> { return this.stream.drainOutgoingMessages(); }
-  abort(status: Status): Status { return this.stream.abort(status); }
-  setDeadline(deadline?: WireDeadline): Status { return this.stream.setDeadline(deadline); }
-  getDeadline(): number | null { return this.stream.getDeadline(); }
-  getStatus(): Status { return this.stream.getStatus(); }
-  getTrailers(): ByteMap | null { return this.stream.getTrailers(); }
+  abort(status: Status): Promise<Status> { return this.stream.abort(status); }
+  setDeadline(deadline?: WireDeadline): Promise<Status> { return this.stream.setDeadline(deadline); }
+  getDeadline(): Promise<number | null> { return this.stream.getDeadline(); }
+  getStatus(): Promise<Status> { return this.stream.getStatus(); }
+  getTrailers(): Promise<ByteMap | null> { return this.stream.getTrailers(); }
   getId(): string { return this.stream.getId(); }
   getImpl(): unknown | null { return this.stream.getImpl(); }
+  nativeHandle() { return this.stream.nativeHandle(); }
   wait(): Promise<Status> { return this.stream.wait(); }
 }

@@ -77,7 +77,7 @@ test('native session delivers typed stream callbacks', {skip: !built},
       ]);
       assert.equal(isOk(accepted), true);
       assert.equal(isOk(connected), true);
-      assert.equal(isOk(pair[1].send(new WireMessage({nodeFragments: [
+      assert.equal(isOk(await pair[1].send(new WireMessage({nodeFragments: [
         new NodeFragment({id: 'callback-node', data: new Chunk({
           data: new TextEncoder().encode('callback'),
         })}),
@@ -99,7 +99,7 @@ test('native session delivers typed stream callbacks', {skip: !built},
       assert.equal(delivered.stream, pair[0]);
       assert.equal(delivered.owner, session);
       assert.equal(isOk(await session.halfClose()), true);
-      assert.equal(isOk(pair[1].halfClose()), true);
+      assert.equal(isOk(await pair[1].halfClose()), true);
       await Promise.race([closedPromise, new Promise((_, reject) =>
         setTimeout(() => reject(new Error('session close callback timed out')),
           2000))]);

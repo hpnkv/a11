@@ -17,6 +17,12 @@ import {StatusCode} from "./status.mjs";
 
 export { A11WasmError } from "./bridge.mjs";
 
+const PACKET_TYPE_SIZE = 1;
+const PACKET_ID_OFFSET = PACKET_TYPE_SIZE;
+const PACKET_SEQUENCE_OFFSET = PACKET_ID_OFFSET + BigUint64Array.BYTES_PER_ELEMENT;
+const PACKET_COUNT_OFFSET = PACKET_SEQUENCE_OFFSET + Uint32Array.BYTES_PER_ELEMENT;
+const PACKET_PAYLOAD_OFFSET = PACKET_COUNT_OFFSET + Uint32Array.BYTES_PER_ELEMENT;
+
 export async function createA11Wasm(options = {}) {
   const factory = options.factory ??
     (await import(new URL("./build/a11.mjs", import.meta.url))).default;
@@ -37,7 +43,133 @@ export async function createA11Wasm(options = {}) {
     },
   };
 
+  const status = {
+    pack(value) {
+      return input(encoder.encode(JSON.stringify(value)), (p, n) =>
+        result(module._a11_wasm_status_pack(p, n)));
+    },
+    unpack(bytes) {
+      return input(bytes, (p, n) =>
+        jsonResult(module._a11_wasm_status_unpack(p, n)));
+    },
+    chunk(value, closing = false) {
+      return input(encoder.encode(JSON.stringify(value)), (p, n) =>
+        result(module._a11_wasm_status_chunk(p, n, closing ? 1 : 0)));
+    },
+    fromChunk(bytes) {
+      return input(bytes, (p, n) =>
+        jsonResult(module._a11_wasm_status_from_chunk(p, n)));
+    },
+  };
+
+  const data = {
+    validateName(value) {
+      return string(value, (p, n) =>
+        result(module._a11_wasm_name_validate(p, n)));
+    },
+    encode(kind, value) {
+      return string(kind, (kp, kn) =>
+        input(encoder.encode(JSON.stringify(value)), (p, n) =>
+          result(module._a11_wasm_data_encode(kp, kn, p, n))));
+    },
+    decode(kind, bytes) {
+      return string(kind, (kp, kn) =>
+        input(bytes, (p, n) =>
+          jsonResult(module._a11_wasm_data_decode(kp, kn, p, n))));
+    },
+  };
+
+  const schema = {
+    validate(value) {
+      return input(encoder.encode(JSON.stringify(value)), (p, n) =>
+        result(module._a11_wasm_schema_validate(p, n)));
+    },
+    describe(value, runnable, allPorts) {
+      return input(encoder.encode(JSON.stringify(value)), (p, n) =>
+        jsonResult(module._a11_wasm_schema_describe(
+          p, n, runnable ? 1 : 0, allPorts ? 1 : 0)));
+    },
+    parse(value) {
+      return input(encoder.encode(JSON.stringify(value)), (p, n) =>
+        jsonResult(module._a11_wasm_schema_parse(p, n)));
+    },
+    entries(value) {
+      return input(encoder.encode(JSON.stringify(value)), (p, n) =>
+        jsonResult(module._a11_wasm_schema_entries(p, n)));
+    },
+  };
+
+  const streamReference = {
+    toChunk(value) {
+      return input(encoder.encode(JSON.stringify(value)), (p, n) =>
+        result(module._a11_wasm_stream_reference_to_chunk(p, n)));
+    },
+    fromChunk(bytes) {
+      return input(bytes, (p, n) =>
+        jsonResult(module._a11_wasm_stream_reference_from_chunk(p, n)));
+    },
+  };
+
+  const authorization = {
+    encode(value) {
+      return input(encoder.encode(JSON.stringify(value)), (p, n) =>
+        result(module._a11_wasm_authorization_encode(p, n)));
+    },
+    decode(bytes) {
+      return input(bytes, (p, n) =>
+        jsonResult(module._a11_wasm_authorization_decode(p, n)));
+    },
+    toText(value) {
+      return input(encoder.encode(JSON.stringify(value)), (p, n) =>
+        decoder.decode(result(module._a11_wasm_authorization_to_text(p, n))));
+    },
+    fromText(value) {
+      return string(value, (p, n) =>
+        jsonResult(module._a11_wasm_authorization_from_text(p, n)));
+    },
+  };
+
+  const serialization = {
+    jsonToChunk(value, mimetype = '') {
+      return string(mimetype, (mp, mn) =>
+        input(encoder.encode(JSON.stringify(value)), (p, n) =>
+          result(module._a11_wasm_json_to_chunk(p, n, mp, mn))));
+    },
+    jsonFromChunk(bytes, patterns = []) {
+      return input(bytes, (p, n) =>
+        input(encoder.encode(JSON.stringify(patterns)), (sp, sn) =>
+          jsonResult(module._a11_wasm_json_from_chunk(p, n, sp, sn))));
+    },
+    bytesToChunk(bytes, mimetype) {
+      return string(mimetype, (mp, mn) =>
+        input(bytes, (p, n) =>
+          result(module._a11_wasm_bytes_to_chunk(p, n, mp, mn))));
+    },
+    bytesFromChunk(bytes) {
+      return input(bytes, (p, n) =>
+        result(module._a11_wasm_bytes_from_chunk(p, n)));
+    },
+  };
+
   const framing = {
+    validateOptions(options) {
+      result(module._a11_wasm_frame_options_validate(options.packetSize,
+        options.maxMessageSize, options.maxPendingMessages,
+        options.maxPendingBytes));
+    },
+    parse(bytes) {
+      const packed = input(bytes, (p, n) => result(
+        module._a11_wasm_frame_parse(p, n)));
+      const view = new DataView(packed.buffer, packed.byteOffset,
+        packed.byteLength);
+      return {
+        type: view.getUint8(0),
+        transientId: view.getBigUint64(PACKET_ID_OFFSET, true),
+        sequence: view.getUint32(PACKET_SEQUENCE_OFFSET, true),
+        packetCount: view.getUint32(PACKET_COUNT_OFFSET, true),
+        payload: packed.subarray(PACKET_PAYLOAD_OFFSET),
+      };
+    },
     split(bytes, transientId, packetSize = 64 * 1024) {
       const packed = input(bytes, (p, n) => result(
         module._a11_wasm_frame_split(p, n, BigInt(transientId), packetSize)));
@@ -62,6 +194,18 @@ export async function createA11Wasm(options = {}) {
       if (!handle) throw new RangeError("invalid reassembler limits");
       let disposed = false;
       return {
+        get pendingMessageCount() {
+          if (disposed) throw new Error("reassembler is disposed");
+          return module._a11_wasm_reassembler_pending_messages(handle);
+        },
+        get pendingByteCount() {
+          if (disposed) throw new Error("reassembler is disposed");
+          return module._a11_wasm_reassembler_pending_bytes(handle);
+        },
+        clear() {
+          if (disposed) throw new Error("reassembler is disposed");
+          module._a11_wasm_reassembler_clear(handle);
+        },
         feed(packet) {
           if (disposed) throw new Error("reassembler is disposed");
           return input(packet, (p, n) => result(module._a11_wasm_reassembler_feed(handle, p, n)));
@@ -314,6 +458,12 @@ export async function createA11Wasm(options = {}) {
         jsonResult(module._a11_wasm_flow_request(p, n)));
     },
     wire,
+    data,
+    schema,
+    streamReference,
+    authorization,
+    serialization,
+    status,
     framing,
     runtime,
     async openPersistentRuntime(adapter, storageId = "local", options = {}) {

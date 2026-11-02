@@ -42,6 +42,10 @@ import {
   schemasInDocument,
 } from '../dist/index.js';
 
+const nativeRuntime = await createA11Runtime();
+assert.equal(isOk(nativeRuntime), true);
+test.after(async () => { await nativeRuntime.dispose(); });
+
 const fixture = JSON.parse(
   readFileSync(
     fileURLToPath(new URL('../../testdata/actions/schema_document.json', import.meta.url)),

@@ -35,6 +35,7 @@ try {
   const running = new Map();
   const hostCalls = new Map();
   const wireCalls = new Map();
+  const binaryCalls = new Map();
   let hostCallId = 0;
   globalThis.__a11WasmInvokeAction = (actionId, name) =>
     new Promise(resolve => {
@@ -58,10 +59,16 @@ try {
       wireCalls.set(id, resolve);
       send({wireEvent: {id, streamId, kind, payload}});
     });
+  globalThis.__a11WasmBinaryEvent = (streamId, kind, payload) =>
+    new Promise(resolve => {
+      const id = ++hostCallId;
+      binaryCalls.set(id, resolve);
+      send({binaryEvent: {id, streamId, kind, payload}});
+    });
   const objects = await module._a11_wasm_native_objects_new();
   if (!objects) throw new Error("native object state allocation failed");
   listen(async ({ id, request, command, cancel, callbackResult,
-      wireResult }) => {
+      wireResult, binaryResult }) => {
     if (callbackResult) {
       const resolve = hostCalls.get(callbackResult.id);
       if (resolve) {
@@ -75,6 +82,14 @@ try {
       if (resolve) {
         wireCalls.delete(wireResult.id);
         resolve(wireResult.status);
+      }
+      return;
+    }
+    if (binaryResult) {
+      const resolve = binaryCalls.get(binaryResult.id);
+      if (resolve) {
+        binaryCalls.delete(binaryResult.id);
+        resolve(binaryResult.answer);
       }
       return;
     }

@@ -14,15 +14,19 @@
  * limitations under the License.
  */
 
-import { type ByteMap, type ByteSource, toBytes } from './bytes.js';
-import { Chunk, ChunkMetadata, NodeFragment, validateName } from './data.js';
-import { decodeStatus, packStatus, type DecodedStatus } from './status_codec.js';
+import { type ByteSource, toBytes } from './bytes.js';
+import { Chunk, NodeFragment, validateName } from './data.js';
+import {schemaBridge} from './internal/wasm/native_schema.js';
+import {statusCodecBridge} from './internal/wasm/native_status_codec.js';
+import {statusFromBridgeFailure} from './internal/wasm/status_bridge.js';
+import { type DecodedStatus } from './status_codec.js';
 import {
   failedPreconditionError,
   invalidArgumentError,
   isOk,
   notFoundError,
   okStatus,
+  statusToJson,
   type Status,
   type StatusOr,
 } from './status.js';
@@ -140,29 +144,11 @@ export class ActionPortSchema {
   /** Validate the port contract and autofill fragments. */
   validate(): Status {
     try {
-      const name = validateName(this.name);
-      if (!isOk(name)) return name;
-      if (typeof this.type !== 'string' || this.type.length === 0) {
-        return invalidArgumentError('Action port type must not be empty.');
-      }
-      if (typeof this.description !== 'string') {
-        return invalidArgumentError('Action port description must be a string.');
-      }
-      if (typeof this.required !== 'boolean' || typeof this.unary !== 'boolean') {
-        return invalidArgumentError('Action port required and unary flags must be boolean.');
-      }
-      if (!Array.isArray(this.autofills)) {
-        return invalidArgumentError('Action port autofills must be an array.');
-      }
-      for (const fragment of this.autofills) {
-        if (fragment === null) continue;
-        if (!(fragment instanceof NodeFragment)) {
-          return invalidArgumentError('Each Action port autofill must be a NodeFragment or null.');
-        }
-        const validation = fragment.validate();
-        if (!isOk(validation)) return validation;
-      }
-      return okStatus();
+      const native = schemaBridge();
+      if (native === null) return failedPreconditionError(
+        'Initialize A11 WASM before validating action ports.');
+      return native.validate(new ActionSchema({name: 'a11_port_validation',
+        inputs: {[this.name]: this}}));
     } catch (error) {
       return invalidArgumentError('Invalid ActionPortSchema value.', [], error);
     }
@@ -221,19 +207,11 @@ export class ActionHeaderSchema {
   validate(): Status {
     try {
       if (!isOk(this.constructionStatus)) return this.constructionStatus;
-      const name = validateName(this.name);
-      if (!isOk(name)) return name;
-      if (
-        this.defaultValue !== null &&
-        !(this.defaultValue instanceof Uint8Array)
-      ) {
-        return invalidArgumentError(
-          'Action header defaultValue must be byte data or null.',
-        );
-      }
-      return typeof this.description === 'string'
-        ? okStatus()
-        : invalidArgumentError('Action header description must be a string.');
+      const native = schemaBridge();
+      if (native === null) return failedPreconditionError(
+        'Initialize A11 WASM before validating action headers.');
+      return native.validate(new ActionSchema({name: 'a11_header_validation',
+        headers: {[this.name]: this}}));
     } catch (error) {
       return invalidArgumentError('Invalid ActionHeaderSchema value.', [], error);
     }
@@ -319,78 +297,13 @@ export class ActionSchema {
   /** Validate names, contracts, reserved ports, and output mappings. */
   validate(): Status {
     try {
-      return this.validateUnchecked();
+      const native = schemaBridge();
+      if (native === null) return failedPreconditionError(
+    'Initialize A11 WASM before using A11 protocol codecs.');
+      return native.validate(this);
     } catch (error) {
       return invalidArgumentError('Invalid ActionSchema value.', [], error);
     }
-  }
-
-  private validateUnchecked(): Status {
-    const name = validateName(this.name);
-    if (!isOk(name)) return name;
-    if (typeof this.description !== 'string') {
-      return invalidArgumentError('Action description must be a string.');
-    }
-    const reserved = new Set([
-      ACTION_STATUS_OUTPUT,
-      ACTION_DISPATCH_STATUS_OUTPUT,
-      ACTION_LOG_OUTPUT,
-      ACTION_STREAMS_OUTPUT,
-    ]);
-    for (const ports of [this.inputs, this.outputs]) {
-      if (!(ports instanceof Map)) return invalidArgumentError('Action ports must be a Map.');
-      for (const [key, port] of ports) {
-        const validKey = validateName(key);
-        if (!isOk(validKey)) return validKey;
-        if (!(port instanceof ActionPortSchema)) {
-          return invalidArgumentError(`Action port '${key}' must be an ActionPortSchema.`);
-        }
-        const validPort = port.validate();
-        if (!isOk(validPort)) return validPort;
-        if (key !== port.name) {
-          return invalidArgumentError(
-            `Action port key '${key}' does not match port name '${port.name}'.`,
-          );
-        }
-        if (reserved.has(key)) {
-          return invalidArgumentError(`Action port name '${key}' is reserved.`);
-        }
-      }
-    }
-    for (const [key, header] of this.headers) {
-      const validKey = validateName(key);
-      if (!isOk(validKey)) return validKey;
-      if (!(header instanceof ActionHeaderSchema)) {
-        return invalidArgumentError(`Action header '${key}' must be an ActionHeaderSchema.`);
-      }
-      const validHeader = header.validate();
-      if (!isOk(validHeader)) return validHeader;
-      if (key !== header.name) {
-        return invalidArgumentError(
-          `Action header key '${key}' does not match header name '${header.name}'.`,
-        );
-      }
-    }
-    let wholeValues = 0;
-    for (const [output, field] of this.outputToJsonField) {
-      if (!this.outputs.has(output)) {
-        return notFoundError(`Output '${output}' is not in the Action schema.`);
-      }
-      if (field === WHOLE_JSON_OUTPUT) ++wholeValues;
-      else {
-        const validField = validateName(field);
-        if (!isOk(validField)) return validField;
-      }
-    }
-    if (
-      wholeValues > 1 ||
-      (wholeValues === 1 && this.outputToJsonField.size !== 1)
-    ) {
-      return failedPreconditionError(
-        'Only one output can map to the complete JSON value.',
-      );
-    }
-    return okStatus();
   }
 
   /** Map an output into a JSON field, or `$` as the whole result value. */
@@ -446,25 +359,26 @@ export interface ActionSettings {
  * status. See {@link CLOSE_STATUS_ATTRIBUTE}.
  */
 export function statusToChunk(status: Status, closing = false): StatusOr<Chunk> {
-  const bytes = packStatus(status);
-  if (!isOk(bytes)) return bytes;
-  const attributes: ByteMap = new Map();
-  if (closing) attributes.set(CLOSE_STATUS_ATTRIBUTE, Uint8Array.from([0x31])); // '1'
-  return Chunk.create({
-    metadata: new ChunkMetadata({ mimetype: ACTION_STATUS_MIMETYPE, attributes }),
-    data: bytes,
-  });
+  const native = statusCodecBridge();
+  if (native === null) return failedPreconditionError(
+    'Initialize A11 WASM before using A11 protocol codecs.');
+
+    try { return Chunk.fromMsgpack(native.chunk(statusToJson(status), closing)); }
+  catch (error) { return statusFromBridgeFailure(error,
+      'Native status chunk encoding failed.'); }
 }
 
 /** Decode a status chunk while retaining outer parsing errors separately. */
 export function decodeStatusChunk(chunk: Chunk): StatusOr<DecodedStatus> {
   if (!(chunk instanceof Chunk)) return invalidArgumentError('chunk must be a Chunk.');
-  const validation = chunk.validate();
-  if (!isOk(validation)) return validation;
-  if (!isStatusChunk(chunk)) {
-    return invalidArgumentError('Chunk does not contain an Action status.');
-  }
-  return decodeStatus(chunk.data);
+  const native = statusCodecBridge();
+  if (native === null) return failedPreconditionError(
+    'Initialize A11 WASM before using A11 protocol codecs.');
+  const bytes = chunk.toMsgpack();
+    if (!isOk(bytes)) return bytes;
+    try { return {status: native.fromChunk(bytes)}; }
+  catch (error) { return statusFromBridgeFailure(error,
+      'Native status chunk decoding failed.'); }
 }
 
 /** Decode an Action status; malformed status chunks return their parsing status. */

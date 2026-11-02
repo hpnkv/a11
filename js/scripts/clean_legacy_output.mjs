@@ -16,9 +16,17 @@ import {rmSync} from 'node:fs';
 
 const obsolete = ['legacy', 'action', 'action_builtins', 'action_registry',
   'async_node', 'chunk_store', 'chunk_store_reader', 'chunk_store_writer',
-  'reference_mirror', 'session'];
+  'reference_mirror', 'session', 'wire_bridge', 'status_bridge',
+  'flow_bridge', 'action_schema_bridge', 'fragment_bridge',
+  'wire_stream_bridge', 'native_framing', 'native_schema',
+  'native_status_codec', 'native_stream_reference', 'native_data_codec',
+  'native_serialization', 'native_authorization', 'native_channel'];
 for (const name of obsolete) {
   for (const suffix of ['.js', '.js.map', '.d.ts', '.d.ts.map']) {
     rmSync(new URL(`../dist/${name}${suffix}`, import.meta.url), {force: true});
+    if (name.endsWith('_bridge') || name.startsWith('native_')) {
+      rmSync(new URL(`../dist/wasm/${name}${suffix}`, import.meta.url),
+        {force: true});
+    }
   }
 }

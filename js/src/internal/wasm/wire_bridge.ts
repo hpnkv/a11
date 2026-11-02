@@ -15,8 +15,8 @@
  */
 
 import {WireMessage, wireMessageFromJsonValue,
-  wireMessageToJsonValue} from './data.js';
-import {isOk, type StatusOr} from './status.js';
+  wireMessageToJsonValue} from '../../data.js';
+import {isOk, type StatusOr} from '../../status.js';
 import {statusFromBridgeFailure} from './status_bridge.js';
 
 /** Native wire codec with TypeScript WireMessage values at its public edge. */

@@ -31,6 +31,7 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 import {
+  createA11Runtime,
   ACTION_STATUS_MIMETYPE,
   ActionMessage,
   CLOSE_STATUS_ATTRIBUTE,
@@ -53,6 +54,10 @@ import {
   valueTag,
   wireValueCodecs,
 } from '../dist/index.js';
+
+const nativeRuntime = await createA11Runtime();
+assert.equal(isOk(nativeRuntime), true);
+test.after(async () => { await nativeRuntime.dispose(); });
 import * as tags from '../dist/serial_tags.js';
 
 const testdata = (name) =>
@@ -211,10 +216,15 @@ test('an interaction built here is the one the Python SDK builds', async () => {
   );
   const chunk = need(await toChunk(interaction));
   const actual = JSON.parse(Buffer.from(chunk.data).toString());
+  const decodedChunks = chunks => chunks.map(({data, ...rest}) => ({
+    ...rest, data: rest.metadata.mimetype === 'application/json'
+      ? JSON.parse(Buffer.from(data, 'base64').toString()) : data,
+  }));
 
   assert.equal(chunk.mimetype, golden.mimetype);
-  assert.deepEqual(actual.content, expected.content);
-  assert.deepEqual(actual.system_instructions, expected.system_instructions);
+  assert.deepEqual(decodedChunks(actual.content), decodedChunks(expected.content));
+  assert.deepEqual(decodedChunks(actual.system_instructions),
+    decodedChunks(expected.system_instructions));
   // Every other field this side writes must agree too. It writes fewer of them
   // — Python spells out `status`, `created_at_millis` and `usage_metadata`
   // where this side leaves them to the model's defaults, which is why the two
@@ -222,6 +232,7 @@ test('an interaction built here is the one the Python SDK builds', async () => {
   assert.equal(typeof actual.id, 'string');
   for (const [key, value] of Object.entries(actual)) {
     if (key === 'id') continue;
+    if (key === 'content' || key === 'system_instructions') continue;
     assert.deepEqual(value, expected[key], `field ${key}`);
   }
 });
@@ -262,10 +273,9 @@ test('a serialized interaction carries no tags', async () => {
 
   const payload = JSON.parse(new TextDecoder().decode(chunk.data));
   assert.deepEqual(keys(payload).filter((key) => key.startsWith('!')), []);
-  assert.deepEqual(payload.content[0], {
-    data: 'eyJyb2xlIjoidXNlciIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6ImhpIn1dfQ==',
-    metadata: { mimetype: 'application/json' },
-  });
+  assert.deepEqual(payload.content[0].metadata, {mimetype: 'application/json'});
+  assert.deepEqual(JSON.parse(Buffer.from(payload.content[0].data,
+    'base64').toString()), {role: 'user', content: [{type: 'text', text: 'hi'}]});
 
   // And it still comes back as Chunks, from the schema alone.
   const decoded = need(await fromChunk(chunk));

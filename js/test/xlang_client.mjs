@@ -29,8 +29,13 @@ import {
   WireMessage,
   WireStreamWithRecv,
   isOk,
+  createA11Runtime,
 } from '../dist/index.js';
 import { WebSocketWireStream } from '../dist/index.js';
+
+const runtime = await createA11Runtime();
+if (!isOk(runtime)) throw new Error(runtime.message);
+export async function disposeEchoRuntime() { await runtime.dispose(); }
 
 export async function driveEcho(transport, port, count) {
   const stream = transport === 'websocket'
@@ -43,8 +48,9 @@ export async function driveEcho(transport, port, count) {
   if (!isOk(started)) return started;
 
   // Sent without awaiting, so they queue together and the sender folds them.
+  const sends = [];
   for (let index = 0; index < count; index += 1) {
-    const sent = endpoint.send(new WireMessage({
+    sends.push(endpoint.send(new WireMessage({
       nodeFragments: [new NodeFragment({
         id: 'probe',
         data: new Chunk({
@@ -54,9 +60,9 @@ export async function driveEcho(transport, port, count) {
         seq: index,
         continued: true,
       })],
-    }));
-    if (!isOk(sent)) return sent;
+    })));
   }
+  for (const sent of await Promise.all(sends)) if (!isOk(sent)) return sent;
 
   const payloads = [];
   while (payloads.length < count) {
@@ -70,7 +76,7 @@ export async function driveEcho(transport, port, count) {
       });
     }
   }
-  endpoint.halfClose();
+  await endpoint.halfClose();
   await endpoint.drainOutgoingMessages();
   return payloads;
 }

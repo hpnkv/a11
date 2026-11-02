@@ -25,7 +25,9 @@ import { spawn, spawnSync } from 'node:child_process';
 import path from 'node:path';
 import test from 'node:test';
 
-import { driveEcho } from './xlang_client.mjs';
+import { driveEcho, disposeEchoRuntime } from './xlang_client.mjs';
+
+test.after(disposeEchoRuntime);
 
 // Absolute, and the peer runs from the repository root: `import a11` resolves
 // against the source tree there, and a relative interpreter path is resolved

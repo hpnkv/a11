@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import {unimplementedError, type StatusOr} from './status.js';
+import {unimplementedError, type StatusOr} from '../../status.js';
 import {statusFromBridgeFailure} from './status_bridge.js';
 
 /** The worker owns Flow state; this interface is only its transport boundary. */
@@ -24,6 +24,18 @@ export interface FlowRunnerBridge {
     Promise<Record<string, unknown>>;
   dispose(): void | Promise<void>;
   store(id: string): unknown;
+}
+
+let toolingService: {flow(request: Record<string, unknown>):
+  Record<string, unknown>} | null = null;
+
+export function installFlowToolingService(service: {flow(request:
+    Record<string, unknown>): Record<string, unknown>}): void {
+  toolingService = service;
+}
+
+export function currentFlowToolingService(): typeof toolingService {
+  return toolingService;
 }
 
 /** Native Flow language tooling is a separate, synchronous WASM module. */

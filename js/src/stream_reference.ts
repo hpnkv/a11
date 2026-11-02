@@ -14,9 +14,12 @@
  * limitations under the License.
  */
 
-import {NodeRef} from './data.js';
+import {Chunk, NodeRef} from './data.js';
+import {streamReferenceBridge} from './internal/wasm/native_stream_reference.js';
+import {statusFromBridgeFailure} from './internal/wasm/status_bridge.js';
 import {NODE_REF_TAG} from './serial_tags.js';
-import {invalidArgumentError, isOk, type StatusOr} from './status.js';
+import {failedPreconditionError, invalidArgumentError, isOk,
+  type StatusOr} from './status.js';
 import {wireValueCodecByTag} from './wire_values.js';
 
 /** Locate an auxiliary producer independently of its stream payload. */
@@ -30,23 +33,52 @@ export interface StreamReference {
 
 /** Decode a stream descriptor through the existing NodeRef wire codec. */
 export function parseStreamReference(value: unknown): StatusOr<StreamReference> {
-  if (!value || typeof value !== 'object') return invalidArgumentError('Invalid stream reference.');
-  const fields = value as Record<string, unknown>;
-  if (typeof fields.producer_id !== 'string' || !fields.producer_id ||
-      typeof fields.purpose !== 'string' || !fields.purpose ||
-      (fields.parent_producer_id !== undefined && typeof fields.parent_producer_id !== 'string') ||
-      !fields.source || typeof fields.source !== 'object' || Array.isArray(fields.source) ||
-      !fields.node || typeof fields.node !== 'object' || Array.isArray(fields.node)) {
-    return invalidArgumentError('Invalid stream reference fields.');
-  }
-  const node = fields.node instanceof NodeRef ? fields.node
-    : wireValueCodecByTag(NODE_REF_TAG)!.load(fields.node as Record<string, unknown>);
+  const native = streamReferenceBridge();
+  if (native === null) return failedPreconditionError(
+    'Initialize A11 WASM before using A11 protocol codecs.');
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return invalidArgumentError('Invalid stream reference.');
+    }
+    try {
+      const encoded = native.toChunk(value as Record<string, unknown>);
+      return hydrateStreamReference(native.fromChunk(encoded));
+    } catch (error) {
+      return statusFromBridgeFailure(error, 'Stream reference is invalid.');
+    }
+}
+
+function hydrateStreamReference(fields: Record<string, unknown>):
+    StatusOr<StreamReference> {
+  const node = wireValueCodecByTag(NODE_REF_TAG)!.load(
+    fields.node as Record<string, unknown>);
   if (!isOk(node)) return node;
-  if (!(node instanceof NodeRef)) return invalidArgumentError('Invalid node reference.');
-  const valid = node.validate();
-  if (!isOk(valid)) return valid;
-  return {
-    producer_id: fields.producer_id, parent_producer_id: fields.parent_producer_id as string ?? '',
-    node, purpose: fields.purpose, source: fields.source as Record<string, unknown>,
-  };
+  if (!(node instanceof NodeRef)) {
+    return invalidArgumentError('Invalid node reference.');
+  }
+  return {producer_id: fields.producer_id as string,
+    parent_producer_id: fields.parent_producer_id as string,
+    node, purpose: fields.purpose as string,
+    source: fields.source as Record<string, unknown>};
+}
+
+/** Encode a stream descriptor using the native C++ reference protocol. */
+export function streamReferenceToChunk(value: StreamReference): StatusOr<Chunk> {
+  const native = streamReferenceBridge();
+  if (native === null) return failedPreconditionError(
+    'Initialize A11 WASM before encoding stream references.');
+  try { return Chunk.fromMsgpack(native.toChunk(value as unknown as Record<string, unknown>)); }
+  catch (error) { return statusFromBridgeFailure(error,
+    'Stream reference encoding failed.'); }
+}
+
+/** Decode a reference chunk through the native C++ reference protocol. */
+export function streamReferenceFromChunk(chunk: Chunk): StatusOr<StreamReference> {
+  const native = streamReferenceBridge();
+  if (native === null) return failedPreconditionError(
+    'Initialize A11 WASM before decoding stream references.');
+  const bytes = chunk.toMsgpack();
+  if (!isOk(bytes)) return bytes;
+  try { return hydrateStreamReference(native.fromChunk(bytes)); }
+  catch (error) { return statusFromBridgeFailure(error,
+    'Stream reference decoding failed.'); }
 }

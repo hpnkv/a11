@@ -71,8 +71,8 @@ createServer(async (request, response) => {
     const pathname = new URL(request.url, "http://localhost").pathname;
     if (pathname === '/guides/isolation-test/') {
       path = resolve(root, 'test-guide-isolation.html');
-    } else if (pathname === '/guides/wasm-isolation-sw.js') {
-      path = resolve(root, '../../../doc/docs/guides/wasm-isolation-sw.js');
+    } else if (pathname === '/wasm-isolation-sw.js') {
+      path = resolve(root, '../../../doc/docs/wasm-isolation-sw.js');
     } else if (pathname === '/assets/guide-isolation-test.mjs') {
       path = resolve(root, 'build/guide-isolation-test.mjs');
     } else if (pathname.startsWith('/assets/wasm/')) {
@@ -85,9 +85,9 @@ createServer(async (request, response) => {
     response.writeHead(400, headers).end();
     return;
   }
-  const docGuide = resolve(root, '../../../doc/docs/guides');
+  const docRoot = resolve(root, '../../../doc/docs');
   const packageAssets = resolve(root, '../../../js/dist/wasm');
-  if (![root, docGuide, packageAssets].some(base =>
+  if (![root, docRoot, packageAssets].some(base =>
     path.startsWith(base + sep))) {
     response.writeHead(403, headers).end();
     return;

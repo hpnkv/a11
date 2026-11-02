@@ -332,6 +332,11 @@ class Classifier {
         // whatever else it might mean elsewhere.
         return SemanticKind::kIdentifier;
       case State::kAfterCast:
+        if (word == "into" && index_ > 0 &&
+            vocabulary::Canonical(At(index_ - 1).text) != "as" &&
+            At(index_ - 1).kind != TokenKind::kScope) {
+          return SemanticKind::kStatementKeyword;
+        }
         return TypeKind(word);
       case State::kInHeader:
         // `as` and `default` are the declaration's own words; the alias and a
@@ -562,6 +567,9 @@ class Classifier {
       return;
     }
     if (state_ == State::kAfterCast) {
+      if (word == "into" && produced == SemanticKind::kStatementKeyword) {
+        state_ = State::kDefault;
+      }
       return;
     }
     if (word == "header" && produced == SemanticKind::kDeclarationKeyword) {

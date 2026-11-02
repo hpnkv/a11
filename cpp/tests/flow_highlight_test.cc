@@ -264,6 +264,17 @@ TEST(FlowHighlight, ACastNamesAType) {
                                       "punctuation:::", "type:AudioBuffer"}));
 }
 
+TEST(FlowHighlight, IntoAfterACastNamesAnErrorDestination) {
+  const auto tokens =
+      Coloured("docs | try map it as Order into rejected -> orders");
+  EXPECT_NE(std::find(tokens.begin(), tokens.end(), "type:Order"),
+            tokens.end());
+  EXPECT_NE(std::find(tokens.begin(), tokens.end(), "statement-keyword:into"),
+            tokens.end());
+  EXPECT_NE(std::find(tokens.begin(), tokens.end(), "identifier:rejected"),
+            tokens.end());
+}
+
 TEST(FlowHighlight, StringEscapesAreSeparateNonoverlappingSpans) {
   const std::string source = R"("a\0b\n\"\\c" "plain")";
   EXPECT_EQ(Coloured(source),

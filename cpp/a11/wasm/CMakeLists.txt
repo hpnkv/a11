@@ -21,6 +21,11 @@ endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+option(A11_WASM_BUILD_BOOST_PROBE "Build the Boost.Context fiber probe" OFF)
+if(A11_WASM_BUILD_BOOST_PROBE)
+  # Shared dependencies must use atomics before FetchContent builds them.
+  add_compile_options(-pthread)
+endif()
 option(A11_WASM_OPTIMIZE_SIZE "Optimize release modules for download size" ON)
 set(A11_WASM_MAXIMUM_MEMORY_MB 512 CACHE STRING
   "Maximum WebAssembly linear memory in MiB for the public module")
@@ -114,7 +119,6 @@ target_link_options(a11_wasm_ucontext_probe PRIVATE -sASYNCIFY=1
   -sENVIRONMENT=node -sEXIT_RUNTIME=1)
 set_target_properties(a11_wasm_ucontext_probe PROPERTIES SUFFIX ".mjs")
 
-option(A11_WASM_BUILD_BOOST_PROBE "Build the Boost.Context fiber probe" OFF)
 if(A11_WASM_BUILD_BOOST_PROBE)
   if(NOT A11_WASM_BOOST_INCLUDE_DIR OR NOT A11_WASM_BOOST_CONTEXT_SOURCE
       OR NOT A11_WASM_BOOST_FIBER_SOURCE)

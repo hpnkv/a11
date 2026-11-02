@@ -16,10 +16,16 @@
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', event => event.waitUntil(self.clients.claim()));
 self.addEventListener('fetch', event => {
-  if (event.request.mode !== 'navigate') return;
+  const isGuide = new URL(event.request.url).pathname.startsWith('/guides/');
+  if (event.request.mode === 'navigate' && !isGuide) return;
+  if (event.request.mode !== 'navigate' &&
+      event.request.destination !== 'worker' &&
+      event.request.destination !== 'sharedworker') return;
   event.respondWith(fetch(event.request).then(response => {
     const headers = new Headers(response.headers);
-    headers.set('Cross-Origin-Opener-Policy', 'same-origin');
+    if (event.request.mode === 'navigate') {
+      headers.set('Cross-Origin-Opener-Policy', 'same-origin');
+    }
     headers.set('Cross-Origin-Embedder-Policy', 'require-corp');
     return new Response(response.body, {
       status: response.status,

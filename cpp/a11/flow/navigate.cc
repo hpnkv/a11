@@ -1013,51 +1013,54 @@ Description Describe(std::string_view source, size_t offset,
     }
   }
 
-  for (const auto& flow : parsed.flows) {
-    const syntax::Wait* selected = nullptr;
-    syntax::VisitSubtree(*flow, [&](const syntax::Node& node) {
-      const auto* wait = syntax::As<syntax::Wait>(&node);
-      if (wait != nullptr && wait->location.start <= offset &&
-          (wait->scope_barrier || !wait->subjects.empty())) {
-        if (selected == nullptr ||
-            selected->location.start < wait->location.start) {
-          selected = wait;
-        }
-      }
-    });
-    if (selected == nullptr) {
+  // Code examples need the same hover as a complete flow, even when the
+  // fragment has no enclosing declaration for the parser to visit.
+  size_t token_index = 0;
+  while (token_index < lexed.tokens.size() &&
+         lexed.tokens[token_index].start != here->start) {
+    ++token_index;
+  }
+  for (size_t start = token_index > 2 ? token_index - 2 : 0;
+       start <= token_index && start + 1 < lexed.tokens.size(); ++start) {
+    if (!lexed.tokens[start].IsWord() ||
+        vocabulary::Canonical(lexed.tokens[start].text) != "wait") {
       continue;
     }
-    const std::string_view phrase = selected->scope_barrier
-                                        ? "wait all"
-                                        : selected->race ? "wait first of"
-                                                         : "wait all of";
-    size_t end = selected->location.start;
-    size_t words = 0;
-    while (end < source.size() && words < (selected->scope_barrier ? 2U : 3U)) {
-      while (end < source.size() &&
-             (source[end] == ' ' || source[end] == '\t')) {
-        ++end;
-      }
-      while (end < source.size() &&
-             (absl::ascii_isalpha(static_cast<unsigned char>(source[end])))) {
-        ++end;
-      }
-      ++words;
+    const auto* keyword = TokenAt(semantic, lexed.tokens[start].start);
+    if (keyword == nullptr ||
+        keyword->kind != SemanticKind::kStatementKeyword ||
+        !lexed.tokens[start + 1].IsWord()) {
+      continue;
     }
-    if (offset < end) {
-      if (const auto* doc = vocabulary::Documentation(
-              vocabulary::WordRole::kStatement, phrase);
-          doc != nullptr) {
-        about.text = phrase;
-        about.range = lines.Between(selected->location.start, end);
-        about.kind = SymbolClass::kExternal;
-        about.summary = absl::StrCat("`", phrase, "` — a statement: ",
-                                     doc->summary);
-        about.detail = doc->detail;
-        about.markdown = DocMarkdown(phrase, "statement", *doc);
-        return about;
-      }
+    const std::string next = vocabulary::Canonical(lexed.tokens[start + 1].text);
+    std::string_view phrase;
+    size_t last = start + 1;
+    const bool has_of = start + 2 < lexed.tokens.size() &&
+                        lexed.tokens[start + 2].IsWord() &&
+                        vocabulary::Canonical(lexed.tokens[start + 2].text) ==
+                            "of";
+    if (next == "first" && has_of) {
+      phrase = "wait first of";
+      last = start + 2;
+    } else if (next == "all") {
+      phrase = has_of ? "wait all of" : "wait all";
+      last += has_of;
+    }
+    if (phrase.empty() || token_index > last) {
+      continue;
+    }
+    if (const auto* doc = vocabulary::Documentation(
+            vocabulary::WordRole::kStatement, phrase);
+        doc != nullptr) {
+      about.text = phrase;
+      about.range = lines.Between(lexed.tokens[start].start,
+                                  lexed.tokens[last].end);
+      about.kind = SymbolClass::kExternal;
+      about.summary =
+          absl::StrCat("`", phrase, "` — a statement: ", doc->summary);
+      about.detail = doc->detail;
+      about.markdown = DocMarkdown(phrase, "statement", *doc);
+      return about;
     }
   }
 

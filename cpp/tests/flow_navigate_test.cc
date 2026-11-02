@@ -125,6 +125,18 @@ TEST(FlowNavigate, CompositeWaitsHaveDistinctDocumentation) {
   }
 }
 
+TEST(FlowNavigate, CompositeWaitInStandaloneExampleHasDocumentation) {
+  const std::string source =
+      "search = call web-search(query: q)\n"
+      "model = call ask-model(question: q)\n"
+      "wait all of search, model\n";
+  const auto hover = Describe(source, source.find("all of") + 1);
+  EXPECT_EQ(hover.text, "wait all of");
+  EXPECT_NE(hover.markdown.find("Only the listed subjects"),
+            std::string::npos)
+      << hover.markdown;
+}
+
 TEST(FlowNavigate, QualifiedSourceFunctionsHaveDocumentation) {
   const std::string source =
       "flow f { std::interleave(first, second) -> combined }";

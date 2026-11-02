@@ -23,7 +23,17 @@ permissions:
   id-token: write
 
 jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate npm release tag
+        run: python3 scripts/check_release_version.py npm "$GITHUB_REF_NAME"
+  wasm:
+    needs: validate
+    uses: ./.github/workflows/wasm.yml
   publish:
+    needs: wasm
     runs-on: ubuntu-latest
     environment: npm
     steps:
@@ -36,12 +46,13 @@ jobs:
           registry-url: https://registry.npmjs.org
           cache: npm
           cache-dependency-path: js/package-lock.json
-      - name: Validate npm release tag
-        run: python3 scripts/check_release_version.py npm "$GITHUB_REF_NAME"
-      - run: npm ci --prefix js
-      - run: npm --prefix js test
+      - name: Reuse tested SDK package
+        uses: actions/download-artifact@v4
+        with:
+          name: a11-js-dist
+          path: js/dist
       - name: Inspect package contents
         working-directory: js
         run: npm pack --dry-run
       - name: Publish @curiositystack/a11 and aeleven
-        run: npm --prefix js run publish:registries
+        run: npm --prefix js run publish:registries:prebuilt

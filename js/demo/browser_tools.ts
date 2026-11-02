@@ -44,6 +44,7 @@ import {
     type Action,
     type Status,
 } from '../src/index.js';
+import {demoRuntime} from './runtime.js';
 
 import {
     BackendControls,
@@ -627,11 +628,11 @@ async function refuse(
 }
 
 /** Register the page's actions, each backed by the canvas. */
-function pageRegistry(scene: Scene, onLog: (text: string) => void): ActionRegistry {
-    const registry = new ActionRegistry();
+async function pageRegistry(scene: Scene, onLog: (text: string) => void): Promise<ActionRegistry> {
+    const registry = new ActionRegistry(await demoRuntime());
 
     need(
-        registry.register(DESCRIBE_SCENE_SCHEMA.name, DESCRIBE_SCENE_SCHEMA, async (action): Promise<Status> => {
+        await registry.register(DESCRIBE_SCENE_SCHEMA.name, DESCRIBE_SCENE_SCHEMA, async (action): Promise<Status> => {
             try {
                 const node = need(await action.getOutput('blobs'));
                 // Named fields rather than the blob itself: it holds the `THREE.Mesh`
@@ -650,14 +651,15 @@ function pageRegistry(scene: Scene, onLog: (text: string) => void): ActionRegist
     );
 
     need(
-        registry.register(SET_COLOR_SCHEMA.name, SET_COLOR_SCHEMA, async (action): Promise<Status> => {
+        await registry.register(SET_COLOR_SCHEMA.name, SET_COLOR_SCHEMA, async (action): Promise<Status> => {
             try {
                 const [ids, colors] = await Promise.all([readAll(action, 'ids'), readAll(action, 'colors')]);
                 const blobs = blobsFor(scene, ids);
                 if (isStatus(blobs)) return await refuse(action, blobs, onLog);
                 // One colour is broadcast to every id; otherwise they pair up in order.
                 const wanted: string[] = [];
-                for (const [index, blob] of blobs.entries()) {
+                for (let index = 0; index < blobs.length; index += 1) {
+                    const blob = blobs[index]!;
                     const color = colorFor(colors[Math.min(index, colors.length - 1)], blob.id);
                     if (isStatus(color)) return await refuse(action, color, onLog);
                     wanted.push(color);
@@ -679,7 +681,7 @@ function pageRegistry(scene: Scene, onLog: (text: string) => void): ActionRegist
     );
 
     need(
-        registry.register(SHIFT_POSITION_SCHEMA.name, SHIFT_POSITION_SCHEMA, async (action): Promise<Status> => {
+        await registry.register(SHIFT_POSITION_SCHEMA.name, SHIFT_POSITION_SCHEMA, async (action): Promise<Status> => {
             try {
                 const ids = await readAll(action, 'ids');
                 const raw: Record<string, unknown> = {};
@@ -775,7 +777,7 @@ class BrowserToolsDemo {
      */
     private async connected(): Promise<Connection> {
         if (this.connection !== null) return this.connection;
-        const registry = pageRegistry(this.scene, (text) => addLine(this.log, text));
+        const registry = await pageRegistry(this.scene, (text) => addLine(this.log, text));
         const connection = await connect(this.backend.server.value.trim() || DEFAULT_SERVER_URL, registry);
         addLine(this.log, `serving: ${PAGE_TOOLS.map((one) => one.name).join(', ')}`, 'done');
         this.connection = connection;

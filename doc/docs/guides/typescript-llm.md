@@ -42,7 +42,7 @@ values that need a shape more specific than their MIME type.
 import {z} from 'zod';
 import {getToolDefinitions, valueOrThrow} from '@curiositystack/a11';
 
-const tools = valueOrThrow(getToolDefinitions(
+const tools = valueOrThrow(await getToolDefinitions(
     registry,
     ['search_documents'],
     {

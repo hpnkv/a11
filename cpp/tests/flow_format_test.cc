@@ -248,6 +248,32 @@ TEST(FlowFormat, AfterBlocksAreDistinctFromContinuedCallModifiers) {
   EXPECT_EQ(Formatted(result), result);
 }
 
+TEST(FlowFormat, AfterBlockStartsAtSiblingIndent) {
+  const std::string source =
+      "flow main {\n"
+      "  checks = 1\n"
+      "  after checks {\n"
+      "    close checks\n"
+      "  }\n"
+      "  total = checks | count\n"
+      "}\n";
+  EXPECT_EQ(Formatted(source), source);
+  EXPECT_EQ(Tree(Formatted(source)), Tree(source));
+}
+
+TEST(FlowFormat, CallableStageWordsStartAtSiblingIndent) {
+  const std::string source =
+      "flow main {\n"
+      "  1 -> result\n"
+      "  where(2) -> result\n"
+      "  parallel(3) -> result\n"
+      "}\n";
+  const auto formatted = Formatted(source);
+  EXPECT_EQ(formatted, source);
+  EXPECT_EQ(Tree(formatted), Tree(source));
+  EXPECT_EQ(Formatted(formatted), formatted);
+}
+
 TEST(FlowFormat, IndentsBlocksAndSpacesTokensTheOneWay) {
   const std::string source =
       "flow t{\n"

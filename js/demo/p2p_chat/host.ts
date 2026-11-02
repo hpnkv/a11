@@ -28,6 +28,7 @@ import {
   ActionPortSchema,
   ActionRegistry,
   ActionSchema,
+  type A11Runtime,
   Session,
   StreamMode,
   cancelledError,
@@ -39,6 +40,7 @@ import {
   type Status,
   type WireStream,
 } from '../../src/index.js';
+import {createDemoRuntime} from '../wasm_runtime.js';
 
 import { watchPeerConnection } from './connection_monitor.js';
 import { WebRtcServer } from './webrtc_server.js';
@@ -158,7 +160,9 @@ function aborted(signal: AbortSignal): Promise<void> {
 // ----------------------------------------------------------- ChatHost
 
 export class ChatHost {
-  private readonly registry = new ActionRegistry();
+  private registry!: ActionRegistry;
+  private runtime!: A11Runtime;
+  private initialized: Promise<void> | null = null;
   private readonly peers = new Map<string, ConnectedPeer>();
   private events: RoomEvent[];
   private readonly onStateChange: OnStateChange;
@@ -177,7 +181,19 @@ export class ChatHost {
     this.events = [...initialEvents];
     this.onStateChange = onStateChange;
     this.onServerError = onServerError;
-    this.registerActions();
+  }
+
+  private async initialize(): Promise<void> {
+    const runtime = await createDemoRuntime();
+    this.runtime = runtime;
+    this.registry = new ActionRegistry(runtime);
+    await this.registerActions();
+  }
+
+  async getRuntime(): Promise<A11Runtime> {
+    this.initialized ??= this.initialize();
+    await this.initialized;
+    return this.runtime;
   }
 
   /** Return a snapshot of the event log for failover handoff. */
@@ -208,30 +224,31 @@ export class ChatHost {
 
   // -------------------------------------------------------- actions
 
-  private registerActions(): void {
-    const need = (s: ReturnType<ActionRegistry['register']>) => {
+  private async registerActions(): Promise<void> {
+    const need = (s: Status) => {
       if (!isOk(s)) throw new Error(`Action registration failed: ${s.message}`);
     };
 
-    need(this.registry.register('send_message', sendMessageSchema, (action) =>
+    need(await this.registry.register('send_message', sendMessageSchema, (action) =>
       this.handleSendMessage(action),
     ));
-    need(this.registry.register('set_name', setNameSchema, (action) =>
+    need(await this.registry.register('set_name', setNameSchema, (action) =>
       this.handleSetName(action),
     ));
-    need(this.registry.register('replicate', replicateSchema, (action) =>
-      this.handleReplicate(action),
+    need(await this.registry.register('replicate', replicateSchema, (action, context) =>
+      this.handleReplicate(action, context.signal),
     ));
-    need(this.registry.register('get_peers', getPeersSchema, (action) =>
+    need(await this.registry.register('get_peers', getPeersSchema, (action) =>
       this.handleGetPeers(action),
     ));
   }
 
-  private peerIdForAction(action: Action): string | null {
+  private async peerIdForAction(action: Action): Promise<string | null> {
     // Find which connected peer owns this action's session.
-    const actionSession = action.getSession();
+    const actionSessionId = await action.getSessionId();
+    if (!isOk(actionSessionId)) return null;
     for (const [peerId, peer] of this.peers) {
-      if (peer.session === actionSession) {
+      if (peer.session.getId() === actionSessionId) {
         return peerId;
       }
     }
@@ -249,7 +266,7 @@ export class ChatHost {
     }
 
     const trimmed = String(textResult).slice(0, MAX_MESSAGE_LENGTH);
-    const peerId = this.peerIdForAction(action) ?? 'unknown';
+    const peerId = await this.peerIdForAction(action) ?? 'unknown';
 
     const event: RoomEvent = {
       type: 'message',
@@ -273,7 +290,7 @@ export class ChatHost {
       return;
     }
 
-    const peerId = this.peerIdForAction(action) ?? 'unknown';
+    const peerId = await this.peerIdForAction(action) ?? 'unknown';
     const event: RoomEvent = {
       type: 'name_change',
       peerId,
@@ -286,11 +303,12 @@ export class ChatHost {
     if (isOk(out)) await out.finalize({ ok: true });
   }
 
-  private async handleReplicate(action: Action): Promise<void> {
+  private async handleReplicate(action: Action,
+      signal?: AbortSignal): Promise<void> {
     const eventsNode = await action.getOutput('events');
     if (!isOk(eventsNode)) return;
 
-    const peerId = this.peerIdForAction(action);
+    const peerId = await this.peerIdForAction(action);
     const peer = peerId === null ? undefined : this.peers.get(peerId);
     if (peer === undefined) {
       // A caller with no peer record receives the log as it stands.
@@ -305,7 +323,8 @@ export class ChatHost {
 
     // Returning closes the `events` output, so the handler stays on the
     // peer's lifetime and unwinds on cancellation.
-    await Promise.race([peer.replicationDone, aborted(action.signal)]);
+    await Promise.race([peer.replicationDone,
+      signal ? aborted(signal) : new Promise<void>(() => {})]);
   }
 
   private async handleGetPeers(action: Action): Promise<void> {
@@ -365,6 +384,7 @@ export class ChatHost {
     claimToken: string,
     iceServers: RTCIceServer[],
   ): Promise<Status> {
+    await this.getRuntime();
     const base = signallingUrl.endsWith('/')
       ? signallingUrl.slice(0, -1) : signallingUrl;
     const urlWithClaim = `${base}/{id}?claim=${encodeURIComponent(claimToken)}`;
@@ -438,8 +458,8 @@ export class ChatHost {
     wireStream: WireStream,
     peerConnection: RTCPeerConnection,
   ): Promise<void> {
-    const session = Session.create({
-      actionRegistry: this.registry,
+    await this.getRuntime();
+    const session = await Session.create(this.runtime, {
       noStreamTimeoutMs: PEER_TIMEOUT_MS,
     });
     if (!isOk(session)) {
@@ -525,6 +545,9 @@ export class ChatHost {
       }
     }
     this.peers.clear();
+    if (this.initialized !== null) {
+      void this.initialized.then(() => this.runtime.dispose()).catch(() => {});
+    }
   }
 
   /** Return the underlying RTCPeerConnection for a connected peer. */

@@ -157,8 +157,9 @@ A page handler reads the declared inputs, modifies page state, writes the
 declared outputs, and closes them.
 
 ```ts
-const registry = new ActionRegistry();
-need(registry.register(SET_COLOR_SCHEMA.name, SET_COLOR_SCHEMA, async (action) => {
+const runtime = need(await createA11Runtime());
+const registry = new ActionRegistry(runtime);
+need(await registry.register(SET_COLOR_SCHEMA.name, SET_COLOR_SCHEMA, async (action) => {
     const [ids, colors] = await Promise.all([readAll(action, 'ids'), readAll(action, 'colors')]);
     const blobs = blobsFor(scene, ids);
     if (isStatus(blobs)) return await refuse(action, blobs, onLog);
@@ -191,11 +192,11 @@ Apply two constraints in each handler:
 - **Enforce the scene's bounds in the handler.** Clamp moves at the canvas edge
   and record the adjustment in the action log.
 
-The registry is bound to the session **before** the stream is attached, so an
+The registry is populated **before** the stream is attached, so an
 inbound call cannot arrive before there is something to serve it:
 
 ```ts
-const session = need(Session.create({actionRegistry: registry}));
+const session = need(await Session.create(runtime));
 const stream = need(WebSocketWireStream.connect(serverUrl));
 need(await session.addStream(stream, StreamMode.START));
 ```
@@ -210,7 +211,7 @@ operate on state in one page.
 The page supplies its existing registry:
 
 ```ts
-const connection = await connect(serverUrl, pageRegistry(scene, log));
+const connection = await connect(serverUrl, await pageRegistry(scene, log));
 ```
 
 The response is an `a11.actions/v1` document containing one JSON

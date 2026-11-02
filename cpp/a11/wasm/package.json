@@ -1,0 +1,17 @@
+{
+  "name": "@a11/wasm-experimental",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.mjs"
+    },
+    "./persistence-node": "./persistence-node.mjs",
+    "./persistence-browser": "./persistence-browser.mjs"
+  },
+  "scripts": {
+    "test": "node test.mjs",
+    "package": "node package.mjs"
+  }
+}

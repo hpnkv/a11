@@ -32,7 +32,7 @@ FULL_PATH_NAMES        = YES
 STRIP_FROM_PATH        = ../..
 STRIP_FROM_INC_PATH    = ../..
 FILE_PATTERNS          = *.h *.cc *.md
-EXCLUDE_PATTERNS       = */internal/* */tests/*
+EXCLUDE_PATTERNS       = */internal/* */tests/* */wasm/build/*
 EXCLUDE_SYMBOLS        = *::internal::* pybind11::* absl::*
 
 OUTPUT_DIRECTORY       = ../site

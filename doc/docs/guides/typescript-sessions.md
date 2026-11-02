@@ -12,17 +12,18 @@ in-process streams. A client starts a transport; a service accepts it.
 ```ts
 import {
     ActionRegistry,
+    createA11Runtime,
     Session,
     StreamMode,
     WebSocketWireStream,
     valueOrThrow,
 } from '@curiositystack/a11';
 
-const registry = new ActionRegistry();
-valueOrThrow(registry.register('embed', embedSchema));
+const runtime = valueOrThrow(await createA11Runtime());
+const registry = new ActionRegistry(runtime);
+valueOrThrow(await registry.register('embed', embedSchema));
 
-const session = valueOrThrow(Session.create({
-    actionRegistry: registry,
+const session = valueOrThrow(await Session.create(runtime, {
     noStreamTimeoutMs: 30_000,
 }));
 const stream = valueOrThrow(WebSocketWireStream.createClient(
@@ -38,16 +39,12 @@ lifecycle for tests and two endpoints in one JavaScript runtime.
 
 ## Call a remote action
 
-Bind the action to the session's node map, transport, and session. The dispatch
+Bind the action to the session. The dispatch
 status confirms that the peer accepted the contract. The completion status
 covers the remote handler and its output cleanup.
 
 ```ts
-const action = valueOrThrow(registry.makeAction('embed', {
-    nodeMap: session.getNodeMap(),
-    stream,
-    session,
-}));
+const action = valueOrThrow(await registry.makeAction('embed', {session}));
 
 valueOrThrow(await action.call());
 const text = valueOrThrow(await action.getInput('text'));
@@ -55,7 +52,7 @@ valueOrThrow(await text.finalize('cooperative cancellation'));
 valueOrThrow(await action.waitForDispatch(10_000));
 
 const vectors = valueOrThrow(await action.getOutput('vectors', false));
-for await (const vector of vectors) index.add(vector);
+for await (const vector of vectors) index.add(valueOrThrow(vector));
 valueOrThrow(await action.wait(60_000));
 ```
 
@@ -66,7 +63,7 @@ Incoming work may continue until the peer also closes. `abort(status)` cancels
 active actions and carries the failure to every stream.
 
 ```ts
-valueOrThrow(session.halfClose());
+valueOrThrow(await session.halfClose());
 valueOrThrow(await session.done());
 ```
 
@@ -80,7 +77,7 @@ interactive agent connection. A service that fans out heavily should set
 `action.cancel()` sends the reserved cancellation action for a remote call.
 The receiving session resolves the target action and aborts its signal. Each
 runtime then recursively cancels that action's active children. Session abort
-and `cancelAllActions()` cover every tracked root and nested action.
+and `cancelActions()` cover every tracked root and nested action.
 
 See [Run a WebSocket echo session](echo-session.md) for a two-process example
 and [Call an A11 service from a browser](browser-clients.md) for HTTP SSE.

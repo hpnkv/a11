@@ -1,0 +1,190 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>A11 native WASM browser test</title>
+<pre id="result">RUNNING</pre>
+<script type="module">
+import {createA11WasmRuntime} from './build/dist/native.mjs';
+
+const result = document.getElementById('result');
+let runtime;
+let stage = 'load';
+try {
+  if (!crossOriginIsolated) throw new Error('cross-origin isolation required');
+  runtime = await createA11WasmRuntime({
+    environment: {A11_BROWSER_TEST: 'yes'},
+  });
+  stage = 'simple Flow';
+  const streamed = [];
+  const simple = await runtime.runFlow({
+    source: 'flow simple { out result: string\n "hi" -> result\n }',
+    flow: 'simple',
+  }, {onOutput: (port, chunk) => streamed.push([port, chunk])});
+  if (simple.result.length !== 1) throw new Error('simple Flow output');
+  if (streamed.length !== 1 || streamed[0][0] !== 'result') {
+    throw new Error('simple Flow did not stream its output');
+  }
+  stage = 'system Flow';
+  const output = await runtime.runFlow({
+    source: `flow browser {
+      out ids: string stream
+      out values: object
+      new = run new_uuid(options: {count: 2})
+      new.ids -> ids
+      env = run env_get(names: ["A11_BROWSER_TEST"])
+      env.values -> values
+    }`,
+    flow: 'browser',
+  });
+  if (output.ids.length !== 2 || output.values.length !== 1) {
+    throw new Error('native Flow outputs are incomplete');
+  }
+  const values = JSON.parse(atob(output.values[0].data));
+  if (values.A11_BROWSER_TEST !== 'yes') {
+    throw new Error('host environment was not passed to native Flow');
+  }
+  stage = 'host Action';
+  runtime.registerAction({
+    name: 'browser_echo',
+    inputs: [{name: 'text', type: 'string', required: true, unary: true}],
+    outputs: [{name: 'result', type: 'string', unary: true}],
+  }, async action => {
+    const input = await action.input('text');
+    const output = await action.output('result');
+    const chunk = await input.nextChunk({timeoutMs: 2000});
+    if (JSON.parse(atob(chunk.data)) !== 'browser') {
+      return {code: 3, message: 'unexpected host input'};
+    }
+    await output.putChunk({data: btoa(JSON.stringify('handled')),
+      metadata: {mimetype: 'application/json'}});
+    await output.finalize();
+  });
+  const called = await runtime.runFlow({
+    source: `flow host {
+      out result: string
+      called = run browser_echo(text: "browser")
+      called.result -> result
+    }`,
+    flow: 'host',
+  });
+  if (JSON.parse(atob(called.result[0].data)) !== 'handled') {
+    throw new Error('host Action output is incomplete');
+  }
+  stage = 'direct host Action';
+  const unregisterDirect = await runtime.registerRunnableAction({
+    name: 'browser_direct',
+    outputs: [{name: 'result', type: 'string', unary: true}],
+  }, async action => {
+    const output = await action.output('result');
+    await output.putChunk({data: btoa(JSON.stringify('direct')),
+      metadata: {mimetype: 'application/json'}});
+    await output.finalize();
+  });
+  const direct = runtime.action('browser_direct', 'browser-direct-test');
+  await direct.ready();
+  const directOutput = await direct.output('result');
+  await direct.run();
+  await direct.wait({timeoutMs: 2000});
+  if (JSON.parse(atob((await directOutput.nextChunk({timeoutMs: 2000})).data))
+      !== 'direct') {
+    throw new Error('direct host Action output is incomplete');
+  }
+  await unregisterDirect();
+  stage = 'HTTP Flow actions';
+  const url = new URL('/__http_test/stream', location.href).href;
+  const http = await runtime.runFlow({
+    source: `flow http {
+      out body: bytes stream
+      response = run make_http_request(url: ${JSON.stringify(url)})
+      response.body -> body
+    }`, flow: 'http',
+  });
+  if (http.body.map(chunk => atob(chunk.data)).join('') !== 'hello world') {
+    throw new Error('HTTP Flow body is incomplete');
+  }
+  const fetched = await runtime.runFlow({
+    source: `flow fetched {
+      out text: string
+      response = run web-fetch(url: ${JSON.stringify(url)})
+      response.text -> text
+    }`, flow: 'fetched',
+  });
+  if (atob(fetched.text[0].data) !== 'hello world') {
+    throw new Error('web-fetch Flow text is incomplete');
+  }
+  stage = 'host WireStream';
+  const session = runtime.session('browser-host-stream-session');
+  await session.ready();
+  let received;
+  const delivered = new Promise(resolve => { received = resolve; });
+  const stream = {
+    id: 'browser-host-stream',
+    start(onMessage) {
+      this.onMessage = onMessage;
+      return {code: 0, message: ''};
+    },
+    send(message) { received(message); return {code: 0, message: ''}; },
+    halfClose() { return {code: 0, message: ''}; },
+    abort(status) { return status; },
+    getStatus() { return {code: 0, message: ''}; },
+  };
+  await session.addStream(stream);
+  const fragment = {node_fragments: [{id: 'browser-wire-node',
+    data: {data: btoa('browser')}}]};
+  await session.send(fragment);
+  const actual = await Promise.race([delivered,
+    new Promise((_, reject) => setTimeout(() => reject(
+      new Error('host stream did not receive the fragment')), 2000))]);
+  if (actual.node_fragments?.[0]?.id !== 'browser-wire-node' ||
+      actual.node_fragments[0].data?.data !== btoa('browser')) {
+    throw new Error(`host stream fragment differs: ${JSON.stringify(actual)}`);
+  }
+  const acknowledged = await stream.onMessage({node_fragments: [{
+    id: 'browser-wire-reply', data: {data: btoa('received')},
+  }]});
+  if (acknowledged.code !== 0) throw new Error('native session rejected reply');
+  const replyChunk = await runtime.node('browser-wire-reply').nextChunk({
+    timeoutMs: 2000,
+  });
+  if (atob(replyChunk.data) !== 'received') {
+    throw new Error('native session did not persist the reply');
+  }
+  await session.halfClose();
+  if ((await stream.onMessage(null)).code !== 0) {
+    throw new Error('native session rejected peer half-close');
+  }
+  if ((await session.done({timeoutMs: 2000})).code !== 0) {
+    throw new Error('native session did not complete');
+  }
+  await runtime.detachWireStream(stream.id);
+  stage = 'native persistence';
+  let saved = null;
+  const persistence = {
+    load: async () => saved,
+    save: async bytes => { saved = bytes; },
+  };
+  const writer = await createA11WasmRuntime({storageId: 'browser-persist',
+    persistence});
+  try {
+    const node = writer.node('browser-persist-node');
+    await node.putChunk({data: btoa('stored'),
+      metadata: {mimetype: 'text/plain'}});
+    await node.finalize();
+    await writer.flushPersistence();
+  } finally { writer.dispose(); }
+  const reader = await createA11WasmRuntime({storageId: 'browser-persist',
+    persistence});
+  try {
+    const chunk = await reader.node('browser-persist-node').nextChunk({
+      timeoutMs: 2000,
+    });
+    if (atob(chunk.data) !== 'stored') {
+      throw new Error('restored native node differs');
+    }
+  } finally { reader.dispose(); }
+  result.textContent = 'PASS';
+} catch (error) {
+  result.textContent = `FAIL: ${stage}: ${error.stack ?? error}`;
+} finally {
+  runtime?.dispose();
+}
+</script>

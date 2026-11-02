@@ -9,12 +9,9 @@
   "excludePrivate": true,
   "excludeProtected": true,
   "intentionallyNotExported": [
-    "NormalizedReaderOptions",
-    "NormalizedWriterOptions",
     "HeaderCollection",
     "PortCollection",
     "StringCollection",
-    "Builtin",
     "WebSocketEventLike",
     "interactionSchema",
     "JsonValue"

@@ -15,6 +15,7 @@ import {
     ActionPortSchema,
     ActionRegistry,
     ActionSchema,
+    createA11Runtime,
     cancelledError,
     okStatus,
     valueOrThrow,
@@ -43,20 +44,23 @@ Returning a non-OK status ends the action and propagates that status to output
 readers.
 
 ```ts
-const summarize = async (action) => {
+const summarize = async (action, {signal}) => {
     const documents = valueOrThrow(await action.getInput('documents'));
     const paragraphs = [];
-    for await (const document of documents) paragraphs.push(String(document));
+    for await (const document of documents) {
+        paragraphs.push(String(valueOrThrow(document)));
+    }
 
-    if (action.signal.aborted) return cancelledError('Summary cancelled.');
+    if (signal?.aborted) return cancelledError('Summary cancelled.');
 
     const summary = valueOrThrow(await action.getOutput('summary'));
     valueOrThrow(await summary.finalize(paragraphs.join(' ').slice(0, 240)));
     return okStatus();
 };
 
-const registry = new ActionRegistry();
-valueOrThrow(registry.register('summarize', summarizeSchema, summarize));
+const runtime = valueOrThrow(await createA11Runtime());
+const registry = new ActionRegistry(runtime);
+valueOrThrow(await registry.register('summarize', summarizeSchema, summarize));
 ```
 
 ## Run and read the action
@@ -66,8 +70,8 @@ Create the action from its registry, start the handler, and write the input.
 output closure, and terminal status publication.
 
 ```ts
-const action = valueOrThrow(registry.makeAction('summarize'));
-valueOrThrow(action.run());
+const action = valueOrThrow(await registry.makeAction('summarize'));
+valueOrThrow(await action.run());
 
 const documents = valueOrThrow(await action.getInput('documents'));
 valueOrThrow(await documents.put('A stream can publish partial work.'));
@@ -90,15 +94,16 @@ headers. Parent cancellation recursively cancels active children, including
 children created with `propagateIo` set to `false`.
 
 ```ts
-const child = valueOrThrow(action.makeNested('retrieve_context'));
-valueOrThrow(child.run());
-
-action.signal.addEventListener('abort', () => closeLocalResource(), {
-    once: true,
-});
+const runWithChild = async (action, {signal}) => {
+    const child = valueOrThrow(await action.makeNested('retrieve_context'));
+    valueOrThrow(await child.run());
+    signal?.addEventListener('abort', () => closeLocalResource(), {
+        once: true,
+    });
+};
 ```
 
-Handlers should observe `action.signal` around browser APIs, provider requests,
+Handlers should observe their callback's `signal` around browser APIs, provider requests,
 and long local loops. Call `action.cancel()`, then await `action.wait()` when
 resource teardown must finish before the surrounding task continues.
 

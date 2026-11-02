@@ -28,6 +28,7 @@ import {
   ActionPortSchema,
   ActionRegistry,
   ActionSchema,
+  type A11Runtime,
   PING_NAME,
   Session,
   StreamMode,
@@ -37,6 +38,7 @@ import {
   isOk,
   unavailableError,
 } from '../../src/index.js';
+import {createDemoRuntime} from '../wasm_runtime.js';
 
 import { ConnectionMonitor, watchPeerConnection } from './connection_monitor.js';
 import { electHost } from './election.js';
@@ -182,7 +184,9 @@ export class ChatPeer {
   /** Candidates that did not answer as host, skipped by later elections. */
   private readonly unreachable = new Set<string>();
 
-  private readonly registry = new ActionRegistry();
+  private registry!: ActionRegistry;
+  private runtime!: A11Runtime;
+  private initialized: Promise<void> | null = null;
   private readonly onStateChange: OnStateChange;
   private readonly onBecomeHost: OnBecomeHost;
   private readonly onConnectionTypeChange: OnConnectionTypeChange;
@@ -208,11 +212,23 @@ export class ChatPeer {
     this.onHostChanged = options.onHostChanged ?? (() => {});
     this.onIdentityChanged = options.onIdentityChanged ?? (() => {});
 
-    // Register schemas client-side (no handlers).
-    this.registry.register('send_message', sendMessageSchema);
-    this.registry.register('set_name', setNameSchema);
-    this.registry.register('replicate', replicateSchema);
-    this.registry.register('get_peers', getPeersSchema);
+  }
+
+  private async initialize(): Promise<void> {
+    const runtime = await createDemoRuntime();
+    this.runtime = runtime;
+    this.registry = new ActionRegistry(runtime);
+    for (const schema of [sendMessageSchema, setNameSchema,
+        replicateSchema, getPeersSchema]) {
+      const status = await this.registry.register(schema.name, schema);
+      if (!isOk(status)) throw new Error(status.message);
+    }
+  }
+
+  async getRuntime(): Promise<A11Runtime> {
+    this.initialized ??= this.initialize();
+    await this.initialized;
+    return this.runtime;
   }
 
   /** This peer's current anonymous identity. */
@@ -300,8 +316,8 @@ export class ChatPeer {
       this.signalling = null;
       throw new Error(`WebRTC stream creation failed: ${JSON.stringify(webrtcStream)}`);
     }
-    const session = Session.create({
-      actionRegistry: this.registry,
+    await this.getRuntime();
+    const session = await Session.create(this.runtime, {
       noStreamTimeoutMs: PEER_TIMEOUT_MS,
     });
     if (!isOk(session)) {
@@ -465,11 +481,7 @@ export class ChatPeer {
     const stream = this.stream;
     if (session === null || stream === null) return false;
 
-    const action = this.registry.makeAction(PING_NAME, {
-      nodeMap: session.getNodeMap(),
-      stream,
-      session,
-    });
+    const action = await this.registry.makeAction(PING_NAME, {session});
     if (!isOk(action)) return false;
 
     if (!isOk(await action.call())) return false;
@@ -514,11 +526,8 @@ export class ChatPeer {
     if (!this.session || !this.stream) {
       throw new Error('Not connected to host.');
     }
-    const action = this.registry.makeAction('send_message', {
-      nodeMap: this.session.getNodeMap(),
-      stream: this.stream,
-      session: this.session,
-    });
+    const action = await this.registry.makeAction('send_message',
+      {session: this.session});
     if (!isOk(action)) throw new Error(`makeAction failed: ${JSON.stringify(action)}`);
 
     const callResult = await action.call();
@@ -543,11 +552,8 @@ export class ChatPeer {
     if (!this.session || !this.stream) {
       throw new Error('Not connected to host.');
     }
-    const action = this.registry.makeAction('set_name', {
-      nodeMap: this.session.getNodeMap(),
-      stream: this.stream,
-      session: this.session,
-    });
+    const action = await this.registry.makeAction('set_name',
+      {session: this.session});
     if (!isOk(action)) throw new Error(`makeAction failed: ${JSON.stringify(action)}`);
 
     const callResult = await action.call();
@@ -578,11 +584,8 @@ export class ChatPeer {
     if (!this.session || !this.stream || this.replicating) return;
     this.replicating = true;
 
-    const action = this.registry.makeAction('replicate', {
-      nodeMap: this.session.getNodeMap(),
-      stream: this.stream,
-      session: this.session,
-    });
+    const action = await this.registry.makeAction('replicate',
+      {session: this.session});
     if (!isOk(action)) {
       this.replicating = false;
       throw new Error(`replicate makeAction failed: ${JSON.stringify(action)}`);
@@ -800,6 +803,9 @@ export class ChatPeer {
       } catch { /* ignore */ }
     }
     this.cleanup();
+    if (this.initialized !== null) {
+      void this.initialized.then(() => this.runtime.dispose()).catch(() => {});
+    }
   }
 
   /** Return the underlying RTCPeerConnection for connection monitoring. */

@@ -116,14 +116,10 @@ LlmHeaders.BASE_URL  # x-a11-llm-base-url
 In the browser they are the same names, set on the call before it is dispatched:
 
 ```ts
-const call = need(Action.create(INTERACT_WITH_LLM_SCHEMA, {
-    session,
-    stream,
-    nodeMap: session.getNodeMap(),
-}));
-need(call.setHeader(LlmHeaders.PROVIDER, 'ollama'));
-need(call.setHeader(LlmHeaders.MODEL, 'glm-5.3-flash:cloud'));
-need(call.setHeader(LlmHeaders.BASE_URL, 'https://ollama.com'));
+const call = need(await Action.create(INTERACT_WITH_LLM_SCHEMA, {session}));
+need(await call.setHeader(LlmHeaders.PROVIDER, 'ollama'));
+need(await call.setHeader(LlmHeaders.MODEL, 'glm-5.3-flash:cloud'));
+need(await call.setHeader(LlmHeaders.BASE_URL, 'https://ollama.com'));
 need(await call.call());
 ```
 

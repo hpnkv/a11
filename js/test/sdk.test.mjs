@@ -40,6 +40,7 @@ import {
   parseInteraction,
   setGemmaEngineFactory,
   resetGemmaEngineFactory,
+  createA11Runtime,
 } from '../dist/index.js';
 
 const need = (value) => {
@@ -104,16 +105,20 @@ test('A11Peer round-trips through its URL form', () => {
 });
 
 test('Interaction round-trips through an AsyncNode', async () => {
-  const node = need(await AsyncNode.create('interaction_node'));
+  const runtime = need(await createA11Runtime());
+  try {
+  const node = need(await AsyncNode.create('interaction_node', {runtime}));
   const original = need(makeInteraction({ role: 'user', content: [{ text: 'hi' }] }));
   need(await node.put(original, { final: true }));
   const decoded = need(await node.next());
   const parsed = need(parseInteraction(decoded));
   assert.equal(parsed.id, original.id);
   assert.equal(parsed.role, 'user');
+  } finally { await runtime.dispose(); }
 });
 
 test('interact_with_gemma streams tokens and produces an assistant turn', async () => {
+  const runtime = need(await createA11Runtime());
   setGemmaEngineFactory(async () => ({
     async generate(prompt, onToken) {
       assert.ok(prompt.includes('<start_of_turn>model'));
@@ -126,12 +131,12 @@ test('interact_with_gemma streams tokens and produces an assistant turn', async 
     },
   }));
   try {
-    const registry = new ActionRegistry();
-    need(registry.register('interact_with_gemma', INTERACT_WITH_GEMMA_SCHEMA, interactWithGemma));
+    const registry = new ActionRegistry(runtime);
+    need(await registry.register('interact_with_gemma', INTERACT_WITH_GEMMA_SCHEMA, interactWithGemma));
     const action = need(
-      Action.create(INTERACT_WITH_GEMMA_SCHEMA, { handler: interactWithGemma, registry }),
+      await Action.create(INTERACT_WITH_GEMMA_SCHEMA, {runtime}),
     );
-    need(action.run());
+    need(await action.run());
 
     const interactions = need(await action.getInput('interactions'));
     const user = need(await makeTextMessageInteraction('Hi there'));
@@ -156,10 +161,12 @@ test('interact_with_gemma streams tokens and produces an assistant turn', async 
     need(await action.wait(5_000));
   } finally {
     resetGemmaEngineFactory();
+    await runtime.dispose();
   }
 });
 
 test('interact_with_gemma sends image prompt parts to MediaPipe', async () => {
+  const runtime = need(await createA11Runtime());
   let factoryConfig;
   setGemmaEngineFactory(async (config) => {
     factoryConfig = config;
@@ -177,12 +184,12 @@ test('interact_with_gemma sends image prompt parts to MediaPipe', async () => {
     };
   });
   try {
-    const registry = new ActionRegistry();
-    need(registry.register('interact_with_gemma', INTERACT_WITH_GEMMA_SCHEMA, interactWithGemma));
+    const registry = new ActionRegistry(runtime);
+    need(await registry.register('interact_with_gemma', INTERACT_WITH_GEMMA_SCHEMA, interactWithGemma));
     const action = need(
-      Action.create(INTERACT_WITH_GEMMA_SCHEMA, { handler: interactWithGemma, registry }),
+      await Action.create(INTERACT_WITH_GEMMA_SCHEMA, {runtime}),
     );
-    need(action.run());
+    need(await action.run());
 
     const interactions = need(await action.getInput('interactions'));
     const user = need(makeInteraction({
@@ -208,5 +215,6 @@ test('interact_with_gemma sends image prompt parts to MediaPipe', async () => {
     assert.equal(factoryConfig.max_num_images, 1);
   } finally {
     resetGemmaEngineFactory();
+    await runtime.dispose();
   }
 });

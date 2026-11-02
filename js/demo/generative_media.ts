@@ -82,7 +82,7 @@ class GenerativeMediaDemo {
 
     try {
       const connection = await connect(this.server.value.trim() || DEFAULT_SERVER_URL);
-      const call = makeCall(connection, TEXT_TO_IMAGE_SCHEMA);
+      const call = await makeCall(connection, TEXT_TO_IMAGE_SCHEMA);
       need(await call.call());
 
       const request = need(await call.getInput('request'));

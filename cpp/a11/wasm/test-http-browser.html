@@ -1,0 +1,58 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>A11 browser HTTP client test</title>
+<pre id="result">RUNNING</pre>
+<script type="module">
+import {createHttpClient} from './http-client.mjs';
+
+const result = document.getElementById('result');
+const client = createHttpClient();
+const endpoint = name => new URL(`/__http_test/${name}`, location.href).href;
+const read = async body => {
+  let value = '';
+  for await (const chunk of body) value += new TextDecoder().decode(chunk);
+  return value;
+};
+const check = (condition, message) => {
+  if (!condition) throw new Error(message);
+};
+
+try {
+  const stream = await client.request({url: endpoint('stream')});
+  check(stream.status === 200, 'stream status');
+  check(await read(stream.body) === 'hello world', 'stream body');
+  check(stream.connection.httpVersion === null, 'browser version is unknown');
+  const redirect = await client.request({url: endpoint('redirect')});
+  check(redirect.url.endsWith('/__http_test/stream'), 'redirect URL');
+  check(await read(redirect.body) === 'hello world', 'redirect body');
+  const failure = await client.request({url: endpoint('status')});
+  check(failure.status === 418, 'HTTP error response status');
+  check(await read(failure.body) === 'teapot', 'HTTP error response body');
+  const upload = await client.request({url: endpoint('echo'), method: 'POST',
+    body: 'onetwo'});
+  check(await read(upload.body) === 'onetwo', 'streamed upload');
+  try {
+    const streamed = await client.request({url: endpoint('echo'), method: 'POST',
+      body: (async function* () {
+        yield new TextEncoder().encode('one');
+        yield new TextEncoder().encode('two');
+      })()});
+    check(await read(streamed.body) === 'onetwo', 'streaming upload body');
+  } catch (error) {
+    check(error.code === 12, 'unsupported streaming upload status');
+  }
+  let unsupported = false;
+  try { await client.request({url: endpoint('stream'), httpVersion: '2'}); }
+  catch (error) { unsupported = error.code === 12; }
+  check(unsupported, 'HTTP/2 control should be unsupported');
+  const cancelled = new AbortController();
+  cancelled.abort();
+  let aborted = false;
+  try { await client.request({url: endpoint('stream'), signal: cancelled.signal}); }
+  catch (error) { aborted = error.code === 1; }
+  check(aborted, 'pre-aborted request');
+  result.textContent = 'PASS';
+} catch (error) {
+  result.textContent = `FAIL: ${error.stack ?? error}`;
+}
+</script>

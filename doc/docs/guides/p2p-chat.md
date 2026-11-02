@@ -151,11 +151,8 @@ WebRTC data channel, and wraps it in a `Session` with `StreamMode.START`.
 Sending a message is a standard A11 action call:
 
 ```typescript
-const action = registry.makeAction('send_message', {
-  nodeMap: session.getNodeMap(),
-  stream: webrtcStream,
-  session,
-});
+const action = valueOrThrow(await registry.makeAction('send_message',
+  {session}));
 await action.call();
 const input = await action.getInput('text');
 await input.finalize('Hello, room!');
@@ -190,7 +187,7 @@ active participants are always retained.
 The `replicate` handler stays suspended for as long as the peer is
 connected. An action's output ports close when its handler returns, so a
 handler that pushes live values holds itself open — here on the peer's
-departure and on `action.signal`.
+departure and on the handler's `context.signal`.
 
 ## 5. Handle departures and elect a host
 

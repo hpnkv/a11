@@ -26,6 +26,14 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./runtime": {
+      "types": "./dist/runtime.d.ts",
+      "import": "./dist/runtime.js"
+    },
+    "./runtime/llm": {
+      "types": "./dist/runtime_llm.d.ts",
+      "import": "./dist/runtime_llm.js"
+    },
     "./presentation": {
       "types": "./dist/presentation/index.d.ts",
       "import": "./dist/presentation/index.js"
@@ -33,13 +41,28 @@
     "./presentation/browser": {
       "types": "./dist/presentation/browser/index.d.ts",
       "import": "./dist/presentation/browser/index.js"
+    },
+    "./wasm": {
+      "types": "./dist/wasm/index.d.ts",
+      "import": "./dist/wasm/index.mjs"
+    },
+    "./wasm/native": {
+      "types": "./dist/wasm/native-index.d.mts",
+      "import": "./dist/wasm/native.mjs"
+    },
+    "./wasm/http": {
+      "types": "./dist/wasm/http-client.d.mts",
+      "import": "./dist/wasm/http-client.mjs"
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "!dist/**/*.js.map",
+    "!dist/**/*.d.ts.map",
+    "WASM_RUNTIME.md"
   ],
   "scripts": {
-    "build": "tsc --project tsconfig.json",
+    "build": "node scripts/clean_legacy_output.mjs && tsc --project tsconfig.json",
     "build:demo": "esbuild demo/browser_clients.ts --bundle --format=esm --outfile=../doc/docs/assets/browser-clients.js",
     "build:demo:local": "esbuild demo/local_models.ts --bundle --format=esm --outfile=../doc/docs/assets/local-models.js",
     "build:demo:chat": "esbuild demo/chat_sessions.ts --bundle --format=esm --outfile=../doc/docs/assets/chat-sessions.js",
@@ -54,6 +77,7 @@
     "test": "npm run build && node --test test/*.test.mjs",
     "test:demo:p2p": "esbuild demo/p2p_chat/tests/p2p_chat.test.ts --bundle --format=esm --platform=node --packages=external --outfile=demo/p2p_chat/tests/p2p_chat.test.mjs && node --test demo/p2p_chat/tests/p2p_chat.test.mjs",
     "publish:registries": "npm run build && node scripts/publish_registries.mjs",
+    "publish:registries:prebuilt": "node scripts/publish_registries.mjs",
     "prepublishOnly": "npm run build"
   },
   "publishConfig": {

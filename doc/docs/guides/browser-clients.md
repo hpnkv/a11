@@ -137,9 +137,10 @@ mode. The server attaches the other end in `ACCEPT` mode. The stream is created
 against an origin, with the two endpoint paths given relative to it:
 
 ```ts
-const registry = new ActionRegistry();
-need(registry.register('echo', echoSchema));
-const session = need(Session.create({actionRegistry: registry}));
+const runtime = need(await createA11Runtime());
+const registry = new ActionRegistry(runtime);
+need(await registry.register('echo', echoSchema));
+const session = need(await Session.create(runtime));
 const stream = need(HttpSseClientWireStream.create('https://a11.to', {
     connectEndpoint: '/sse/demoserver',
     messageEndpoint: '/streams/{id}/message',
@@ -149,14 +150,12 @@ need(await session.addStream(stream, StreamMode.START));
 
 ## 5. Wire the interface through `AsyncNode`s
 
-Make the action against the session's shared node map and stream. `call()`
+Make the action against the session. `call()`
 sends the action description; writing the input and marking it final sends its
 node fragments. The response arrives through the output `AsyncNode`:
 
 ```ts
-const action = need(registry.makeAction('echo', {
-    nodeMap: session.getNodeMap(), stream, session,
-}));
+const action = need(await registry.makeAction('echo', {session}));
 need(await action.call());
 const input = need(await action.getInput('input'));
 need(await input.finalize(text));

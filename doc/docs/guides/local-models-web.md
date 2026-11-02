@@ -50,8 +50,8 @@ ports and registers like any other schema.
 
 ```ts
 import {
-    Action,
     ActionRegistry,
+    createA11Runtime,
     INTERACT_WITH_GEMMA_SCHEMA,
     interactWithGemma,
     makeTextMessageInteraction,
@@ -69,19 +69,17 @@ const need = <T>(value: T | Status): T => {
 
 ## 2. Register and run the action locally
 
-There is no session and no transport. Create the action from its schema, bind
+There is no session and no transport. Register the schema and handler, then
 the handler, and `run()` it. `run()` starts the handler on the same node map, so
 the ports opened next are the ones the handler reads and writes.
 
 ```ts
-const registry = new ActionRegistry();
-need(registry.register('interact_with_gemma', INTERACT_WITH_GEMMA_SCHEMA, interactWithGemma));
+const runtime = need(await createA11Runtime());
+const registry = new ActionRegistry(runtime);
+need(await registry.register('interact_with_gemma', INTERACT_WITH_GEMMA_SCHEMA, interactWithGemma));
 
-const action = need(Action.create(INTERACT_WITH_GEMMA_SCHEMA, {
-    handler: interactWithGemma,
-    registry,
-}));
-need(action.run());
+const action = need(await registry.makeAction('interact_with_gemma'));
+need(await action.run());
 ```
 
 ## 3. Feed the conversation and the model URL

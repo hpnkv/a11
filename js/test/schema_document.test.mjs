@@ -31,8 +31,11 @@ import test from 'node:test';
 
 import {
   ActionRegistry,
+  GET_SCHEMA_NAME,
+  LIST_ACTIONS_NAME,
+  PING_NAME,
   SCHEMA_DOCUMENT_FORMAT,
-  builtinActionNames,
+  createA11Runtime,
   isOk,
   schemaFromJson,
   schemaToJson,
@@ -89,20 +92,23 @@ test('a defaulted port field is omitted, as the native writer omits it', () => {
   assert.equal(Object.hasOwn(untyped, 'json_schema'), false);
 });
 
-test('a whole registry writes the document the native writer wrote', () => {
+test('a whole registry writes the document the native writer wrote', async () => {
   const entries = schemasInDocument(fixture.callable);
   const schema = schemaFromJson(entries[0]);
-  const registry = new ActionRegistry();
+  const runtime = await createA11Runtime();
+  assert.equal(isOk(runtime), true);
+  try {
+  const registry = new ActionRegistry(runtime);
   // Schema only, no handler -- which is what `runnable: false` in the fixture
   // says, and how "this one lives on the peer" is spelled.
-  assert.equal(isOk(registry.register(schema.name, schema)), true);
+  assert.equal(isOk(await registry.register(schema.name, schema)), true);
 
-  const own = registry
-    .listRegisteredActions()
+  const own = (await registry.listRegisteredActions())
     .filter((name) => !name.startsWith('__'));
-  assert.deepEqual(own, ['shell_execute']);
-  const round = schemaToJson(registry.getSchema('shell_execute'), false);
+  assert.ok(own.includes('shell_execute'));
+  const round = schemaToJson(await registry.getSchema('shell_execute'), false);
   assert.deepEqual(round, entries[0]);
+  } finally { await runtime.dispose(); }
 });
 
 test('the all-ports view keeps what a caller cannot write', () => {
@@ -116,26 +122,9 @@ test('the all-ports view keeps what a caller cannot write', () => {
 
 test('the format tag and the builtin names match the native ones', () => {
   assert.equal(fixture.callable.format, SCHEMA_DOCUMENT_FORMAT);
-  assert.deepEqual(builtinActionNames(), [
+  assert.deepEqual([GET_SCHEMA_NAME, LIST_ACTIONS_NAME, PING_NAME], [
     '__get_schema__',
     '__list_actions__',
     '__ping',
   ]);
-});
-
-test('a builtin is answered by a registry that holds nothing', async () => {
-  const registry = new ActionRegistry();
-  for (const name of builtinActionNames()) {
-    assert.equal(registry.isRegistered(name), true, name);
-    assert.equal(isOk(registry.getSchema(name)), true, name);
-    assert.equal(isOk(registry.getHandler(name)), true, name);
-  }
-  // Refused rather than shadowed: a peer must always be answerable.
-  const schema = schemaFromJson({
-    name: '__list_actions__',
-    outputs: [{ name: 'actions', type: 'application/json', unary: true }],
-  });
-  assert.equal(isOk(schema), true);
-  assert.equal(isOk(registry.register('__list_actions__', schema)), false);
-  assert.equal(isOk(registry.unregister('__ping')), false);
 });

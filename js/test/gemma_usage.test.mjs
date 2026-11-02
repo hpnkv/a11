@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  Action, INTERACT_WITH_GEMMA_SCHEMA, interactWithGemma, isOk,
+  Action, INTERACT_WITH_GEMMA_SCHEMA, createA11Runtime,
+  interactWithGemma, isOk,
   makeTextMessageInteraction, setGemmaEngineFactory, resetGemmaEngineFactory,
 } from '../dist/index.js';
 
@@ -9,6 +10,7 @@ const need = value => { assert.ok(isOk(value), value.message); return value; };
 
 for (const fails of [false, true]) {
   test(`Gemma retains engine counters before teardown (${fails ? 'failure' : 'stop filtering'})`, async () => {
+    const runtime = need(await createA11Runtime());
     let closed = false;
     setGemmaEngineFactory(async () => ({
       async generate(_prompt, token) {
@@ -23,8 +25,11 @@ for (const fails of [false, true]) {
       close() { closed = true; },
     }));
     try {
-      const action = need(Action.create(INTERACT_WITH_GEMMA_SCHEMA, {handler: interactWithGemma}));
-      need(action.run());
+      need(await runtime.registerAction(INTERACT_WITH_GEMMA_SCHEMA,
+        interactWithGemma));
+      const action = need(await Action.create(INTERACT_WITH_GEMMA_SCHEMA,
+        {runtime}));
+      need(await action.run());
       const events = [];
       const drain = async name => {
         const node = need(await action.getOutput(name, false));
@@ -51,6 +56,9 @@ for (const fails of [false, true]) {
       assert.equal(usage[1].usage.output_tokens, 7);
       assert.equal(usage[1].usage.complete, !fails);
       if (!fails) assert.equal(text.join(''), 'Hello');
-    } finally { resetGemmaEngineFactory(); }
+    } finally {
+      resetGemmaEngineFactory();
+      await runtime.dispose();
+    }
   });
 }

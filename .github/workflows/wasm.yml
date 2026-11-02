@@ -1,0 +1,114 @@
+# Copyright 2026 The A11 Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: WASM native parity
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  native-wasm:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: emscripten-core/setup-emsdk@v15
+        with:
+          version: 6.0.13
+          actions-cache-folder: emsdk-cache
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y ninja-build cmake
+      - uses: actions/cache@v4
+        with:
+          path: .cache/boost_1_90_0.tar.bz2
+          key: boost-source-1.90.0
+      - name: Prepare Boost source
+        run: |
+          mkdir -p .cache
+          if [ ! -f .cache/boost_1_90_0.tar.bz2 ]; then
+            curl -fsSL https://archives.boost.io/release/1.90.0/source/boost_1_90_0.tar.bz2 \
+              -o .cache/boost_1_90_0.tar.bz2
+          fi
+          tar -xjf .cache/boost_1_90_0.tar.bz2 -C .cache
+      - name: Configure native WASM tests
+        run: |
+          emcmake cmake -S cpp/a11/wasm -B cpp/a11/wasm/build/threaded -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DA11_WASM_BUILD_BOOST_PROBE=ON \
+            -DA11_WASM_BUILD_NATIVE_RUNTIME=ON \
+            -DA11_WASM_BUILD_NATIVE_TESTS=ON \
+            -DA11_WASM_BOOST_INCLUDE_DIR="$GITHUB_WORKSPACE/.cache/boost_1_90_0" \
+            -DA11_WASM_BOOST_CONTEXT_SOURCE="$GITHUB_WORKSPACE/.cache/boost_1_90_0/libs/context" \
+            -DA11_WASM_BOOST_FIBER_SOURCE="$GITHUB_WORKSPACE/.cache/boost_1_90_0/libs/fiber"
+      - name: Build native and public WASM modules
+        run: >-
+          cmake --build cpp/a11/wasm/build/threaded
+          --target a11_wasm a11_wasm_native a11_wasm_native_test
+          a11_wasm_thread_probe -j 4
+      - name: Package built modules
+        run: >-
+          node cpp/a11/wasm/package.mjs
+          cpp/a11/wasm/build/threaded cpp/a11/wasm/build/threaded
+      - name: Install TypeScript dependencies
+        run: npm ci --prefix js
+      - name: Build SDK and include tested WASM assets
+        run: |
+          npm --prefix js run build
+          rm -rf js/dist/wasm
+          mkdir -p js/dist/wasm
+          cp -a cpp/a11/wasm/build/dist/. js/dist/wasm/
+      - name: Run native behavior tests under Emscripten
+        env:
+          A11_POOL_THREADS: "1"
+          A11_FIBER_WATCHDOG: "5"
+        # The 1,000-call stress case has a fixed 20-second native deadline.
+        # Single-worker WASM runs it slower; native CI covers that case.
+        run: >-
+          node cpp/a11/wasm/test-native-core.mjs
+          --gtest_filter=-FlowRuntimeTest.PerPassCallNodeBookkeepingStaysBounded
+          --gtest_brief=1
+      - name: Run JavaScript bridge tests
+        run: |
+          node cpp/a11/wasm/test.mjs cpp/a11/wasm/build/dist/index.mjs
+          node cpp/a11/wasm/test-native-objects.mjs
+          node cpp/a11/wasm/test-native-store.mjs
+          node cpp/a11/wasm/test-native-persistence.mjs
+          node cpp/a11/wasm/test-native-actions.mjs
+          node cpp/a11/wasm/test-native-host-stream.mjs
+          node cpp/a11/wasm/test-native-host-action.mjs
+          node cpp/a11/wasm/test-native-flow-stream.mjs
+          node cpp/a11/wasm/test-native-http-flow.mjs
+          node cpp/a11/wasm/test-native-system.mjs
+          node cpp/a11/wasm/test-http.mjs
+      - name: Run browser transport and Flow tests
+        run: node cpp/a11/wasm/test-browser.mjs
+      - name: Test TypeScript facade
+        run: |
+          node --test js/test/*.test.mjs
+          npm --prefix js run test:demo:p2p
+          node cpp/a11/wasm/test-sdk-host-stream.mjs
+          node cpp/a11/wasm/test-sdk-host-action-call.mjs
+      - name: Share tested SDK package
+        uses: actions/upload-artifact@v4
+        with:
+          name: a11-js-dist
+          path: js/dist/
+          if-no-files-found: error
+          compression-level: 0

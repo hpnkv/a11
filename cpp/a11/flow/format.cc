@@ -479,6 +479,9 @@ class Formatter {
   /// operand.
   [[nodiscard]] bool ContinuesStatement(size_t index) const {
     const Token& token = code_[index];
+    if (statement_starts_.contains(token.start)) {
+      return false;
+    }
     const bool inside_group = !brackets_.empty();
     switch (token.kind) {
       case TokenKind::kPipe:

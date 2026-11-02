@@ -1,22 +1,29 @@
 import {utf8Decode, utf8Encode} from '../bytes.js';
 import {failedPreconditionError, invalidArgumentError, isOk, okStatus, type Status, type StatusOr} from '../status.js';
-import {parseStreamReference, type Action, type StreamReference} from '../action.js';
-import {AsyncNode} from '../async_node.js';
-import {ChunkStoreReader} from '../chunk_store_reader.js';
+import {GraphAction, GraphNode} from '../runtime_graph.js';
+import {parseStreamReference, type StreamReference}
+  from '../stream_reference.js';
 import {fromChunk} from '../serialization.js';
 import {usageMetadataSchema, type Interaction, type UsageMetadata} from './llm.js';
 
 /** Request usage streams for an action subtree, or suppress them with false. */
-export function enableUsageTracking(action: Action, enabled = true): Status {
-  if (action.hasBeenRun() || action.hasBeenCalled()) {
-    return failedPreconditionError('Configure usage tracking before starting the action.');
+export async function enableUsageTracking(action: GraphAction,
+    enabled = true): Promise<Status> {
+  const run = await action.hasBeenRun();
+  if (!isOk(run)) return run;
+  const called = await action.hasBeenCalled();
+  if (!isOk(called)) return called;
+  if (run || called) {
+    return failedPreconditionError(
+      'Configure usage tracking before starting the action.');
   }
   return action.setHeader('x-a11-usage-tracking', enabled ? 'on' : 'off');
 }
 
 /** Read the inherited opt-in for dedicated usage streams. */
-export function usageTrackingEnabled(action: Action): StatusOr<boolean> {
-  const raw = action.getHeader('x-a11-usage-tracking');
+export async function usageTrackingEnabled(action: GraphAction):
+    Promise<StatusOr<boolean>> {
+  const raw = await action.getHeader('x-a11-usage-tracking');
   if (!isOk(raw)) return raw;
   if (raw === null) return false;
   const value = utf8Decode(raw);
@@ -189,24 +196,30 @@ export class UsageAccounting {
   readonly errors = new Map<string, Status>();
   finished = false;
   private collecting = false;
-  private readonly directory: Promise<StatusOr<AsyncNode>> | null;
+  private readonly directory: Promise<StatusOr<GraphNode>> | null;
 
-  private constructor(readonly action: Action, readonly enabled: boolean) {
+  private constructor(private readonly action: GraphAction,
+      readonly enabled: boolean) {
     this.directory = enabled ? action.getStreamSourcesNode() : null;
   }
 
   /** Request tracking before starting an action; an explicit off is respected. */
-  static create(action: Action): StatusOr<UsageAccounting> {
-    const raw = action.getHeader('x-a11-usage-tracking');
-    if (!isOk(raw)) return raw;
-    const setting = raw === null ? null : utf8Decode(raw);
-    if (setting !== null && !isOk(setting)) return setting;
-    if (!action.hasBeenRun() && !action.hasBeenCalled() && setting !== 'off') {
-      const requested = enableUsageTracking(action);
-      if (!isOk(requested)) return requested;
-    }
-    const enabled = usageTrackingEnabled(action);
-    return isOk(enabled) ? new UsageAccounting(action, enabled) : enabled;
+  static async create(action: GraphAction):
+      Promise<StatusOr<UsageAccounting>> {
+        const raw = await action.getHeader('x-a11-usage-tracking');
+        if (!isOk(raw)) return raw;
+        const setting = raw === null ? null : utf8Decode(raw);
+        if (setting !== null && !isOk(setting)) return setting;
+        const run = await action.hasBeenRun();
+        if (!isOk(run)) return run;
+        const called = await action.hasBeenCalled();
+        if (!isOk(called)) return called;
+        if (!run && !called && setting !== 'off') {
+          const requested = await enableUsageTracking(action);
+          if (!isOk(requested)) return requested;
+        }
+        const enabled = await usageTrackingEnabled(action);
+        return isOk(enabled) ? new UsageAccounting(action, enabled) : enabled;
   }
 
   async collect(): Promise<Status> {
@@ -229,7 +242,7 @@ export class UsageAccounting {
       const ledger = new UsageLedger();
       this.ledgers.set(reference.producer_id, ledger);
       tasks.push((async () => {
-        const stream = await this.action.getNodeMap().resolve(reference.node);
+        const stream = await this.action.resolveNode(reference.node);
         const status = isOk(stream) ? await this.read(stream, async value => {
           const update = usageUpdate(value);
           if (!update || (update.producer_id != null && update.producer_id !== reference.producer_id)) {
@@ -249,12 +262,11 @@ export class UsageAccounting {
     return directoryStatus;
   }
 
-  private async read(node: AsyncNode, consume: (value: unknown) => Promise<Status>): Promise<Status> {
-    const reader = ChunkStoreReader.create(node.chunkStore);
-    if (!isOk(reader)) return reader;
+  private async read(node: GraphNode,
+      consume: (value: unknown) => Promise<Status>): Promise<Status> {
     try {
       for (;;) {
-        const fragment = await reader.next();
+        const fragment = await node.nextFragment();
         if (!isOk(fragment)) return fragment;
         if (fragment === null) return okStatus();
         const chunk = fragment.getChunk();
@@ -265,7 +277,7 @@ export class UsageAccounting {
         const status = await consume(value);
         if (!isOk(status)) return status;
       }
-    } finally { reader.cancel(); }
+    } finally { await node.cancelReader(); }
   }
 
   private ledger(producers: Iterable<string>): UsageLedger {

@@ -50,6 +50,7 @@ import {
     type Status,
     type WireStream,
 } from '../src/index.js';
+import {demoRuntime} from './runtime.js';
 
 /** Unwrap a `StatusOr`, turning a failure into an error the page can show. */
 export const need = <T>(value: T | Status): T => {
@@ -171,6 +172,7 @@ export function LlmHeadersFor(backend: Backend): Array<[string, string]> {
 export interface Connection {
     session: Session;
     stream: WireStream;
+    registry: ActionRegistry;
 }
 
 /**
@@ -221,13 +223,15 @@ function deviceFingerprint(): string {
  * A lightweight device fingerprint is appended to the URL so the server
  * can rate-limit by device without custom WebSocket headers.
  */
-export async function connect(url: string, registry = new ActionRegistry()): Promise<Connection> {
-    const session = need(Session.create({actionRegistry: registry, noStreamTimeoutMs: null}));
+export async function connect(url: string, registry?: ActionRegistry): Promise<Connection> {
+    const runtime = await demoRuntime();
+    registry ??= new ActionRegistry(runtime);
+    const session = need(await Session.create(runtime, {noStreamTimeoutMs: null}));
     const wsUrl = new URL(webSocketUrl(url));
     wsUrl.searchParams.set('fp', deviceFingerprint());
     const stream = need(WebSocketWireStream.connect(wsUrl.toString()));
     need(await session.addStream(stream, StreamMode.START));
-    return {session, stream};
+    return {session, stream, registry};
 }
 
 /**
@@ -258,12 +262,10 @@ export async function probeConnection(
 }
 
 /** Make an action on a connection, ready to be `call`ed on the far side. */
-export function makeCall(connection: Connection, schema: ActionSchema): Action {
+export async function makeCall(connection: Connection, schema: ActionSchema): Promise<Action> {
     return need(
-        Action.create(schema, {
+        await Action.create(schema, {
             session: connection.session,
-            stream: connection.stream,
-            nodeMap: connection.session.getNodeMap(),
         }),
     );
 }
@@ -366,16 +368,16 @@ export interface TurnRequest extends TurnCallbacks {
  */
 export async function runTurn(request: TurnRequest): Promise<Interaction[]> {
     const {connection, backend, prompt, history} = request;
-    const registry = connection.session.getActionRegistry();
+    const registry = connection.registry;
 
-    const call = makeCall(connection, INTERACT_WITH_LLM_SCHEMA);
-    need(call.setHeader(DEADLINE_HEADER, String(Date.now() + TURN_DEADLINE_MS)));
-    for (const [header, value] of LlmHeadersFor(backend)) need(call.setHeader(header, value));
+    const call = await makeCall(connection, INTERACT_WITH_LLM_SCHEMA);
+    need(await call.setHeader(DEADLINE_HEADER, String(Date.now() + TURN_DEADLINE_MS)));
+    for (const [header, value] of LlmHeadersFor(backend)) need(await call.setHeader(header, value));
     const toolNames = (request.tools ?? []).map((schema) => schema.name);
     if (toolNames.length > 0) {
         // The allow-list is the request: a tool the model is not offered here
         // cannot be called, and is not even described to it.
-        need(call.setHeader(LlmHeaders.ALLOWED_LLM_ACTIONS, toolNames.join(',')));
+        need(await call.setHeader(LlmHeaders.ALLOWED_LLM_ACTIONS, toolNames.join(',')));
     }
     need(await call.call());
 
@@ -391,7 +393,7 @@ export async function runTurn(request: TurnRequest): Promise<Interaction[]> {
     const config = need(await call.getInput('config'));
     need(await config.finalize());
 
-    const definitions = need(getToolDefinitions(registry, toolNames, request.portSchemas ?? {}));
+    const definitions = need(await getToolDefinitions(registry, toolNames, request.portSchemas ?? {}));
     const tools = need(await call.getInput('tools'));
     for (const definition of definitions) need(await tools.put(definition));
     need(await tools.finalize());

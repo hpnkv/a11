@@ -157,7 +157,7 @@ class ChatDemo {
     this.errors.textContent = '';
     try {
       const connection = await this.connected();
-      const call = makeCall(connection, GET_CONVERSATION_SCHEMA);
+      const call = await makeCall(connection, GET_CONVERSATION_SCHEMA);
       need(await call.call());
       const idInput = need(await call.getInput('id'));
       need(await idInput.finalize(id));

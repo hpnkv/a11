@@ -921,6 +921,31 @@ std::string ActionMarkdown(const catalogue::ActionInfo& action) {
   return out;
 }
 
+std::string InvocationNote(std::string_view mode) {
+  if (mode == "run") {
+    return "\n\n**Local run.** The action runs on the host executing this "
+           "Flow.";
+  }
+  if (mode == "call") {
+    return "\n\n**Peer call.** The action runs on the connected peer.";
+  }
+  return "";
+}
+
+const syntax::CallExpression* CallAt(const ParseResult& parsed, size_t offset) {
+  const syntax::CallExpression* found = nullptr;
+  for (const auto& flow : parsed.flows) {
+    syntax::VisitSubtree(*flow, [&](const syntax::Node& node) {
+      const auto* call = syntax::As<syntax::CallExpression>(&node);
+      if (call != nullptr && call->action_location.start <= offset &&
+          offset < call->action_location.end) {
+        found = call;
+      }
+    });
+  }
+  return found;
+}
+
 std::string PortMarkdown(std::string_view name, std::string_view type,
                          bool required, bool unary,
                          std::string_view description) {
@@ -1684,7 +1709,32 @@ Description Describe(std::string_view source, size_t offset,
         }
       }
       if (symbol.kind == SymbolKind::kCall) {
-        absl::StrAppend(&about.summary, ", running `", symbol.action, "`");
+        const syntax::CallExpression* call = nullptr;
+        syntax::VisitSubtree(*flow.declaration, [&](const syntax::Node& node) {
+          if (const auto* invoked = syntax::As<syntax::CallExpression>(&node);
+              invoked != nullptr &&
+              invoked->location.start == symbol.location.start &&
+              invoked->action == symbol.action) {
+            call = invoked;
+          }
+        });
+        const std::string_view mode =
+            call == nullptr ? std::string_view() : std::string_view(call->mode);
+        about.summary = absl::StrCat("`", about.text, "` — ",
+                                     mode == "run"    ? "local run"
+                                     : mode == "call" ? "peer call"
+                                                      : "call",
+                                     " of `", symbol.action, "`");
+        about.markdown = about.summary + InvocationNote(mode);
+        if (const auto* action = editor_known.Action(symbol.action);
+            action != nullptr) {
+          absl::StrAppend(&about.markdown, "\n\n", ActionMarkdown(*action));
+        } else if (const FlowPlan* target =
+                       resolved.program.Flow(symbol.action);
+                   target != nullptr) {
+          absl::StrAppend(&about.markdown, "\n\n",
+                          FlowMarkdown(documentation.Flow(*target)));
+        }
       }
       if (symbol.kind == SymbolKind::kValue && symbol.value_type.has_value()) {
         absl::StrAppend(&about.summary, ": ", symbol.value_type->ToString());
@@ -1751,6 +1801,10 @@ Description Describe(std::string_view source, size_t offset,
   // An action, whether a flow of this file or one the world has.
   if (!about.has_definition && index < lexed.tokens.size() &&
       lexed.tokens[index].IsWord()) {
+    const syntax::CallExpression* invocation = CallAt(parsed, offset);
+    const std::string_view mode = invocation == nullptr
+                                      ? std::string_view()
+                                      : std::string_view(invocation->mode);
     const auto [dotted, first] = DottedAround(lexed.tokens, index);
     if (editor_known.Action(dotted) != nullptr ||
         resolved.program.Flow(dotted) != nullptr) {
@@ -1774,8 +1828,13 @@ Description Describe(std::string_view source, size_t offset,
           about.origin = action->origin;
         }
       }
-      about.markdown =
-          FlowMarkdown(documentation.Flow(*sibling)) + pipeline_note;
+      if (!mode.empty()) {
+        about.summary = absl::StrCat("`", about.text, "` — ",
+                                     mode == "run" ? "local run" : "peer call",
+                                     " of a flow of this file");
+      }
+      about.markdown = FlowMarkdown(documentation.Flow(*sibling)) +
+                       InvocationNote(mode) + pipeline_note;
       size_t count = 0;
       for (const auto& declaration : parsed.flows) {
         if (declaration->name.text == sibling->name) {
@@ -1799,9 +1858,14 @@ Description Describe(std::string_view source, size_t offset,
     if (const catalogue::ActionInfo* action = editor_known.Action(about.text);
         action != nullptr) {
       about.kind = SymbolClass::kExternal;
-      about.summary = absl::StrCat("`", about.text, "` — an action");
+      about.summary =
+          mode.empty()
+              ? absl::StrCat("`", about.text, "` — an action")
+              : absl::StrCat("`", about.text, "` — ",
+                             mode == "run" ? "local run" : "peer call");
       about.detail = action->description;
-      about.markdown = ActionMarkdown(*action) + pipeline_note;
+      about.markdown =
+          ActionMarkdown(*action) + InvocationNote(mode) + pipeline_note;
       // An action declared in a file something read has somewhere to go, which
       // is new: before a scan there was nothing to point at and hovering one of
       // these said "action name".

@@ -98,6 +98,21 @@ TEST(FlowComplete, PredicatePrefixCompletionOffersWordsAndValues) {
       Offers(Names("flow main { a = {}\n b = {}\n after a, |CARET|"), "b"));
 }
 
+TEST(FlowComplete, LogfOffersLevelsFormatAndFollowingValues) {
+  const std::string prefix =
+      "flow f {\n  in item: string\n  out result: string\n";
+  EXPECT_TRUE(Offers(Names(prefix + "  logf |CARET|"), "info"));
+  const auto* format = Find(prefix + "  logf info |CARET|", "format string");
+  ASSERT_NE(format, nullptr);
+  EXPECT_EQ(format->insert, "\"\"");
+  EXPECT_EQ(format->caret, 1);
+  EXPECT_NE(format->documentation.find("logf"), std::string::npos);
+  EXPECT_TRUE(Offers(Names(prefix + "  logf |CARET|"), "format string"));
+  EXPECT_FALSE(Offers(Names(prefix + "  logf |CARET|"), "where"));
+  EXPECT_TRUE(
+      Offers(Names(prefix + "  logf info \"item: %s\" |CARET|"), "item"));
+}
+
 TEST(FlowComplete, OutsideAFlowOffersModuleDeclarations) {
   const std::vector<std::string> declarations = {
       "mod", "export", "flow", "struct", "declare", "import", "from"};

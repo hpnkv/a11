@@ -472,6 +472,34 @@ TEST(FlowNavigate, AnActionHoversAsItsDescriptionAndItsPorts) {
   EXPECT_FALSE(about.has_definition);
 }
 
+TEST(FlowNavigate, ActionCallsExplainTheirLocationAndContract) {
+  const std::string source = R"(flow lookup {
+  in q: string
+  local = run web-search(query: q)
+  remote = call web-search(query: q)
+})";
+  const auto local = Describe(source, source.find("web-search"), Known());
+  EXPECT_NE(local.summary.find("local run"), std::string::npos);
+  EXPECT_NE(local.markdown.find("host executing this Flow"), std::string::npos);
+  EXPECT_NE(local.markdown.find("Search the web."), std::string::npos);
+  EXPECT_NE(local.markdown.find("**Inputs**"), std::string::npos);
+  EXPECT_NE(local.markdown.find("**Outputs**"), std::string::npos);
+
+  const auto remote = Describe(source, source.rfind("web-search"), Known());
+  EXPECT_NE(remote.summary.find("peer call"), std::string::npos);
+  EXPECT_NE(remote.markdown.find("connected peer"), std::string::npos);
+  EXPECT_NE(remote.markdown.find("**Inputs**"), std::string::npos);
+  EXPECT_NE(remote.markdown.find("**Outputs**"), std::string::npos);
+
+  const auto bound = Describe(source, source.find("local ="), Known());
+  EXPECT_NE(bound.summary.find("local run"), std::string::npos)
+      << bound.summary << "\n"
+      << bound.markdown;
+  EXPECT_NE(bound.markdown.find("Search the web."), std::string::npos);
+  EXPECT_NE(bound.markdown.find("**Inputs**"), std::string::npos);
+  EXPECT_NE(bound.markdown.find("**Outputs**"), std::string::npos);
+}
+
 TEST(FlowNavigate, EveryFormOfTheLanguageHoversAsWhatItDoes) {
   // The regression this exists for: a hover on a mark or a keyword
   struct Case {

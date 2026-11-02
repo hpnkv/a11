@@ -581,6 +581,15 @@ class Completer {
     }
   }
 
+  void AddLogFormat() {
+    Add("format string", ProposalKind::kConstant,
+        " quoted text, then values for its placeholders");
+    Proposal& proposal = proposals_.back();
+    proposal.insert = "\"\"";
+    proposal.caret = 1;
+    proposal.documentation = WordMarkdown("logf", vocabulary::WordRole::kStage);
+  }
+
   void AddConstants(bool with_it) {
     Add("true", ProposalKind::kConstant);
     Add("false", ProposalKind::kConstant);
@@ -1622,11 +1631,29 @@ class Completer {
       AddStatusCodes();
       return true;
     }
-    if (previous == "log" || previous == "logf") {
+    if (previous == "logf") {
+      AddLogLevels();
+      AddLogFormat();
+      return true;
+    }
+    if (previous == "log") {
       // A level, and then whatever a value may be: the level is optional, so
       // both are offered rather than the level alone.
       AddLogLevels();
       return false;
+    }
+    if (LineHasWord("logf")) {
+      bool after_level = false;
+      for (const std::string_view level : vocabulary::LogLevels()) {
+        if (previous == level) {
+          after_level = true;
+          break;
+        }
+      }
+      if (after_level) {
+        AddLogFormat();
+        return true;
+      }
     }
     if (previous == "all" && PreviousWord(1) == "wait") {
       Add("of", ProposalKind::kModifier, " subjects");
@@ -1678,6 +1705,12 @@ class Completer {
     const Token* previous = Previous();
     if (previous == nullptr) {
       return false;
+    }
+    if (previous->kind == TokenKind::kString && LineHasWord("logf")) {
+      ProposeSources();
+      AddFunctions();
+      AddConstants(LineHas(TokenKind::kPipe));
+      return true;
     }
     bool value_wanted = false;
     switch (previous->kind) {

@@ -75,6 +75,19 @@ TEST(FlowComplete, PlainPipelineNamesOfferCompletionSubjects) {
              "take until"));
 }
 
+TEST(FlowComplete, VariablesCarryKnownTypesIntoSuggestions) {
+  const auto* inferred =
+      Find("flow f {\n  answer = \"ready\"\n  next = |CARET|", "answer");
+  ASSERT_NE(inferred, nullptr);
+  EXPECT_EQ(inferred->kind, ProposalKind::kVariable);
+  EXPECT_EQ(inferred->type, "string");
+
+  const auto* declared =
+      Find("flow f {\n  int count = 1\n  next = |CARET|", "count");
+  ASSERT_NE(declared, nullptr);
+  EXPECT_EQ(declared->type, "int");
+}
+
 TEST(FlowComplete, PredicatePrefixCompletionOffersWordsAndValues) {
   EXPECT_TRUE(Offers(Names("flow main { [1] | |CARET|"), "take while"));
   EXPECT_TRUE(Offers(Names("flow main { [1] | take |CARET|"), "while"));

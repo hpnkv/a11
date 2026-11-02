@@ -84,9 +84,29 @@ class FlowCompletionContributor : CompletionContributor() {
         )
         // The language's order is the useful one, and the platform sorts by
         // priority: highest first, so the list is walked backwards into it.
-        for ((index, proposal) in proposals.withIndex()) {
-            prefixed.addElement(element(proposal, proposals.size - index))
+        val entries = groupActions(proposals)
+        for ((index, entry) in entries.withIndex()) {
+            prefixed.addElement(element(entry.first, entry.second, entries.size - index))
         }
+    }
+
+    private fun groupActions(proposals: List<FlowProposal>): List<Pair<FlowProposal, FlowProposal?>> {
+        val entries = mutableListOf<Pair<FlowProposal, FlowProposal?>>()
+        var index = 0
+        while (index < proposals.size) {
+            val primary = proposals[index]
+            val action = primary.name.takeIf { primary.kind == "call" && it.startsWith("run ") }
+                ?.removePrefix("run ")
+            val next = proposals.getOrNull(index + 1)
+            if (action != null && next?.kind == "call" && next.name == "call $action") {
+                entries.add(primary to next)
+                index += 2
+            } else {
+                entries.add(primary to null)
+                index++
+            }
+        }
+        return entries
     }
 
     private fun proposalsOf(payload: Map<String, Any?>): List<FlowProposal> {
@@ -118,16 +138,23 @@ class FlowCompletionContributor : CompletionContributor() {
     private fun isPrefixChar(char: Char): Boolean =
         char.isLetterOrDigit() || char == '_' || char == '$' || char == '-'
 
-    private fun element(proposal: FlowProposal, rank: Int): LookupElement {
+    private fun element(proposal: FlowProposal, call: FlowProposal?, rank: Int): LookupElement {
+        val action = if (call != null) proposal.name.removePrefix("run ") else null
+        val tail = if (call != null) {
+            val summary = proposal.documentation.split(Regex("\\n\\s*\\n"))
+                .getOrNull(1)?.lineSequence()?.firstOrNull()?.trim().orEmpty()
+            "  Run locally · Tab: Call peer" +
+                if (summary.isEmpty()) "" else " — $summary"
+        } else proposal.tail
         var element = LookupElementBuilder
             .create(proposal, proposal.filter)
-            .withPresentableText(proposal.name)
-            .withTailText(proposal.tail, true)
+            .withPresentableText(action ?: proposal.name)
+            .withTailText(tail, true)
             .withIcon(iconFor(proposal.kind))
         if (proposal.type.isNotEmpty()) {
             element = element.withTypeText(proposal.type)
         }
-        element = element.withInsertHandler(Insert(proposal))
+        element = element.withInsertHandler(Insert(proposal, call))
         return PrioritizedLookupElement.withPriority(element, rank.toDouble())
     }
 
@@ -149,19 +176,24 @@ class FlowCompletionContributor : CompletionContributor() {
     }
 
     /** Writes what the proposal actually inserts, and puts the caret in it. */
-    private class Insert(private val proposal: FlowProposal) :
+    private class Insert(
+        private val proposal: FlowProposal,
+        private val call: FlowProposal?,
+    ) :
         InsertHandler<LookupElement> {
 
         override fun handleInsert(context: InsertionContext, item: LookupElement) {
-            val start = proposal.replaceStart ?: context.startOffset
+            val selected = if (call != null && context.completionChar == '\t') call else proposal
+            if (call != null) context.setAddCompletionChar(false)
+            val start = selected.replaceStart ?: context.startOffset
             context.document.replaceString(
                 start,
                 context.tailOffset,
-                proposal.insert,
+                selected.insert,
             )
             context.commitDocument()
             context.editor.caretModel.moveToOffset(
-                start + proposal.caret.coerceIn(0, proposal.insert.length),
+                start + selected.caret.coerceIn(0, selected.insert.length),
             )
         }
     }

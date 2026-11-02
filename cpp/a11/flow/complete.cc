@@ -622,6 +622,9 @@ class Completer {
     if (symbol.kind == SymbolKind::kSink) {
       return "continuation-sink";
     }
+    if (symbol.value_type.has_value()) {
+      return symbol.value_type->ToString();
+    }
     if (flow_ == nullptr) {
       return "";
     }

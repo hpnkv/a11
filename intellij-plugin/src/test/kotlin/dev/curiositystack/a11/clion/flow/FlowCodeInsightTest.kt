@@ -18,6 +18,7 @@ package dev.curiositystack.a11.clion.flow
 
 import com.intellij.codeInsight.CodeInsightSettings
 import com.intellij.codeInsight.documentation.DocumentationManager
+import com.intellij.codeInsight.lookup.LookupElementPresentation
 import com.intellij.lang.documentation.psi.psiDocumentationTargets
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assume.assumeTrue
@@ -186,5 +187,24 @@ class FlowCodeInsightTest : BasePlatformTestCase() {
         assertEquals("interact_with_llm", target.computePresentation().presentableText)
         val html = provider.generateDoc(element, null)
         assertTrue(html.orEmpty(), html.orEmpty().contains("Route a conversation"))
+    }
+
+    fun `test action completion groups local and peer choices`() {
+        myFixture.configureByText(
+            "t.flow",
+            source.replace("call interact_with_llm(prompt: question)", "i"),
+        )
+        myFixture.editor.caretModel.moveToOffset(
+            myFixture.editor.document.text.indexOf("hits = i") + "hits = i".length,
+        )
+        val elements = myFixture.completeBasic()
+        assertNotNull("nothing was offered at the binding", elements)
+        val action = elements!!.filter { it.lookupString == "interact_with_llm" }
+        assertEquals("run and call should share one row", 1, action.size)
+        val presentation = LookupElementPresentation()
+        action.single().renderElement(presentation)
+        assertEquals("interact_with_llm", presentation.itemText)
+        assertTrue(presentation.tailText.orEmpty(),
+            presentation.tailText.orEmpty().contains("Tab: Call peer"))
     }
 }

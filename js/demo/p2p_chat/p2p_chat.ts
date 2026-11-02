@@ -322,7 +322,7 @@ function startCredentialRefresh(): void {
  */
 function leaveRoom(): void {
   if (host) {
-    host.shutdown();
+    void host.shutdown().catch(() => {});
     host = null;
   }
   if (peer) {

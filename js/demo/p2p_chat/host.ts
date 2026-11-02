@@ -163,6 +163,7 @@ export class ChatHost {
   private registry!: ActionRegistry;
   private runtime!: A11Runtime;
   private initialized: Promise<void> | null = null;
+  private shutdownPromise: Promise<void> | null = null;
   private readonly peers = new Map<string, ConnectedPeer>();
   private events: RoomEvent[];
   private readonly onStateChange: OnStateChange;
@@ -529,7 +530,8 @@ export class ChatHost {
   }
 
   /** Shut down all peer sessions and the host service. */
-  shutdown(): void {
+  shutdown(): Promise<void> {
+    if (this.shutdownPromise !== null) return this.shutdownPromise;
     if (this.server) {
       this.server.close();
       this.server = null;
@@ -539,10 +541,13 @@ export class ChatHost {
       return peer.session.abort(cancelledError('The host left the room.'));
     });
     this.peers.clear();
-    if (this.initialized !== null) {
-      void Promise.allSettled(closing).then(() => this.initialized)
-        .then(() => this.runtime.dispose()).catch(() => {});
-    }
+    this.shutdownPromise = Promise.allSettled(closing)
+      .then(async () => {
+        if (this.initialized === null) return;
+        await this.initialized;
+        await this.runtime.dispose();
+      });
+    return this.shutdownPromise;
   }
 
   /** Return the underlying RTCPeerConnection for a connected peer. */

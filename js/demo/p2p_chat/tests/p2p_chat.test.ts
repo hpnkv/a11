@@ -491,7 +491,7 @@ describe('replication over a session', () => {
       );
     }
 
-    host.shutdown();
+    await host.shutdown();
   });
 });
 
@@ -698,10 +698,11 @@ async function attachFramedPeer(
   });
   assert.ok(isOk(session));
 
-  await Promise.all([
+  const [, addResult] = await Promise.all([
     (host as any).onPeerConnected(myId, serverStream, null),
     session.addStream(clientStream, StreamMode.START),
   ]);
+  assert.ok(isOk(addResult), `client stream failed: ${JSON.stringify(addResult)}`);
   if (options.ping === false) {
     (peer as any).session = session;
     (peer as any).stream = clientStream;
@@ -738,7 +739,7 @@ describe('departures', () => {
       'the remaining peer sees the leave event',
     );
 
-    host.shutdown();
+    await host.shutdown();
   });
 
   test('a peer whose channel dies is removed before the timeout elapses', async () => {
@@ -758,7 +759,7 @@ describe('departures', () => {
     assert.ok(!deriveState(host.getEventLog()).participants.has('peer-bbb'));
     assert.ok(!deriveState(cee.peer.getEventLog()).participants.has('peer-bbb'));
 
-    host.shutdown();
+    await host.shutdown();
   });
 
   test('a host that leaves hands the room to the elected peer', async () => {
@@ -799,7 +800,7 @@ describe('departures', () => {
     await delay(150);
 
     const started = Date.now();
-    host.shutdown();
+    await host.shutdown();
     // The peer waits out its convergence delay before taking over.
     await delay(1_600);
 
@@ -808,7 +809,7 @@ describe('departures', () => {
     // The promoted peer starts from a log with the departed host removed.
     const promoted = new ChatHost('peer-bbb', elected ?? [], () => {});
     assert.ok(!deriveState(promoted.getEventLog()).participants.has('host-aaa'));
-    promoted.shutdown();
+    await promoted.shutdown();
   });
 });
 
@@ -825,7 +826,7 @@ describe('liveness', () => {
     assert.equal((bee.peer as any).hostGone, false);
     assert.ok(deriveState(host.getEventLog()).participants.has('peer-bbb'));
 
-    host.shutdown();
+    await host.shutdown();
   });
 
   test('a peer that stops sending is dropped when the stream goes idle', async () => {
@@ -839,7 +840,7 @@ describe('liveness', () => {
     await delay(1_800);
     assert.ok(!deriveState(host.getEventLog()).participants.has('peer-bbb'));
 
-    host.shutdown();
+    await host.shutdown();
   });
 });
 

@@ -384,6 +384,28 @@ slow = call searched(query: q)
 wait first of fast, slow -> whose_answer
 ```
 
+**Wait for named subjects.** `wait all of` holds until every listed call, node,
+or node-backed port finishes. Other work in the scope continues. This form has
+no winning index or result binding:
+
+```a11flow
+search = call web-search(query: q)
+model = call ask-model(question: q)
+wait all of search, model
+```
+
+**Separate execution phases.** Bare `wait all` holds for all preceding work in
+the current scope before later statements activate. A streaming producer and
+the consumer that finishes it belong in the same phase; separating them with
+`wait all` creates a dependency cycle. Bare `wait all` accepts no timeout,
+deadline, `after` modifier, or result binding:
+
+```a11flow
+rows | count -> total
+wait all
+log info "counted %s rows" total
+```
+
 **Arithmetic over a stream.** `| sum`, `| min`, `| max`, `| avg` and `| sort`
 read the whole stream and are written where they read:
 

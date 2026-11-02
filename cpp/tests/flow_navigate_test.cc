@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <absl/strings/str_join.h>
@@ -103,6 +104,34 @@ TEST(FlowNavigate, PredicateStagesAndAfterBlocksDescribeTheirSyntax) {
   EXPECT_TRUE(after.found);
   EXPECT_NE(after.markdown.find("entire block"), std::string::npos)
       << after.markdown;
+}
+
+TEST(FlowNavigate, CompositeWaitsHaveDistinctDocumentation) {
+  const std::string source =
+      "flow f {\n a = run work()\n b = run work()\n"
+      " wait first of a, b -> winner\n wait all of a, b\n wait all\n}";
+  for (const auto& [phrase, detail] :
+       std::vector<std::pair<std::string_view, std::string_view>>{
+           {"wait first of", "zero-based index"},
+           {"wait all of", "Only the listed subjects"},
+           {"wait all", "current scope"}}) {
+    const size_t start = phrase == "wait all" ? source.rfind(phrase)
+                                                : source.find(phrase);
+    ASSERT_NE(start, std::string::npos);
+    const auto hover = Describe(source, start + phrase.size() - 1);
+    EXPECT_EQ(hover.text, phrase);
+    EXPECT_NE(hover.markdown.find(detail), std::string::npos)
+        << hover.markdown;
+  }
+}
+
+TEST(FlowNavigate, QualifiedSourceFunctionsHaveDocumentation) {
+  const std::string source =
+      "flow f { std::interleave(first, second) -> combined }";
+  const auto hover = Describe(source, source.find("interleave"));
+  EXPECT_NE(hover.markdown.find("Merge values from several streams"),
+            std::string::npos)
+      << hover.markdown;
 }
 
 TEST(FlowNavigate, StageHoverIncludesCompleteFlowExample) {

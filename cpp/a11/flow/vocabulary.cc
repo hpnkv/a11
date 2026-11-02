@@ -1036,13 +1036,41 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StatementDocs() {
         "`| drop n` to trim one pipeline only.",
         "skip 1 rows"}},
       {"wait",
-       {"Waits for a step, node, port or barrier to finish.",
+       {"Wait for a step, node, or port to finish.",
         "a subject, and optionally `timeout`",
-        "Binding the result captures a status record. `wait all` forms a "
-        "barrier over preceding work in the current scope and accepts no "
-        "modifiers or value binding. A repeated wait for the same subject in "
-        "one body is diagnosed.",
+        "Binding the result captures a status record. A repeated wait for "
+        "the same subject in one body is diagnosed. See `wait all` for a "
+        "scope barrier and `wait first of` or `wait all of` for several "
+        "explicit subjects.",
         "done = wait llm timeout 30s"}},
+      {"wait first of",
+       {"Wait until the first of several subjects finishes.",
+        "two or more calls, nodes, or node-backed ports",
+        "Produces the zero-based index of the first completed subject. "
+        "Other subjects continue running. Bind the index or send it to a "
+        "port to identify the winner. This is an explicit-subject wait, "
+        "not a barrier over the scope's other work.",
+        "fast = call cached(query: q)\n"
+        "slow = call searched(query: q)\n"
+        "wait first of fast, slow -> winner"}},
+      {"wait all of",
+       {"Wait until every named subject finishes.",
+        "two or more calls, nodes, or node-backed ports",
+        "Only the listed subjects are awaited; unrelated work continues. "
+        "There is no winner index or result binding. Use `wait all` to "
+        "separate all work in the current scope into phases.",
+        "search = call web-search(query: q)\n"
+        "model = call ask-model(question: q)\n"
+        "wait all of search, model"}},
+      {"wait all",
+       {"Wait for all preceding work in the current scope.", "no arguments",
+        "Following statements activate after the preceding phase completes. "
+        "A producer whose stream is read in a later phase can form a cycle; "
+        "keep producers and their consumers in the same phase. This form "
+        "accepts no timeout, deadline, `after`, or result binding.",
+        "items | count -> total\n"
+        "wait all\n"
+        "log info \"counted %s items\" total"}},
       {"close",
        {"Finish a node and drain its remaining values.", "a node",
         "Marks the node final, closes its writer, and drains remaining values. "
@@ -1422,9 +1450,15 @@ const absl::flat_hash_map<std::string_view, WordDoc>& TypeDocs() {
         "in verbose: std::boolean"}},
       {"status",
        {"An operation outcome carried as data.", "",
-        "Carries canonical code, number, ok, message and structured details. "
-        "Status values preserve errors as data through typed initialization.",
-        "std::status outcome = status work"}},
+        "Fields are `ok`, `code`, `number`, `message`, and `details`. "
+        "Reading `status step` waits for that step to finish. `try` contains "
+        "a failed step so its status can be inspected; an ordinary failed "
+        "step propagates its error. `wait step` can bind the same status. "
+        "The code is an Abseil canonical status code.",
+        "fetch = try run web-fetch(url: address)\n"
+        "std::status outcome = wait fetch\n"
+        "if not outcome.ok { log warning \"fetch failed: %s\" "
+        "outcome.message }"}},
       {"option",
        {"An optional value with explicit presence.", "a payload type",
         "The has_value flag distinguishes EOF from a present null. "
@@ -1440,15 +1474,27 @@ const absl::flat_hash_map<std::string_view, WordDoc>& TypeDocs() {
         "Null is a value and remains distinct from an absent option.",
         "null value = null"}},
       {"duration",
-       {"Duration value.", "",
-        "Supports `ns`, `us`, `ms`, `s`, `m` and `h`, including compound "
-        "literals such as `1m30s`. JSON transport uses a tagged string.",
-        "in budget: std::duration\ntimeout 1m30s"}},
+       {"Elapsed time or a time interval.", "",
+        "Literals accept `ns`, `us`, `ms`, `s`, `m`, and `h`, including "
+        "compound forms such as `1m30s`. Subtracting two `time` values "
+        "produces a duration. `std::seconds` converts it to a number; "
+        "`std::duration` parses text or numeric seconds. JSON transport "
+        "uses a tagged string to preserve the type.",
+        "std::duration budget = 45s\n"
+        "started = std::now()\n"
+        "reply = call ask_model(question: prompt) timeout 45s\n"
+        "after reply { std::seconds(std::now() - started) -> elapsed }"}},
       {"time",
-       {"Absolute time value.", "",
-        "Parses RFC 3339. Flow writes instants in UTC; JSON transport uses a "
-        "tagged string.",
-        "out published: std::time"}},
+       {"An instant on the UTC timeline.", "",
+        "`std::now()` reads the clock. `std::time` accepts RFC 3339 text "
+        "and calendar dates; a missing zone is interpreted as UTC. "
+        "Subtract two instants for a `duration`. A later statement is "
+        "not necessarily a later event: use `after` or `wait` to order "
+        "work before taking a completion timestamp. JSON transport uses "
+        "a tagged string to preserve the type.",
+        "std::time started = std::now()\n"
+        "job = run prepare-report()\n"
+        "after job { std::now() - started -> elapsed }"}},
       {"object",
        {"Record with string keys.", "",
         "`object[T]` constrains mapped values to `T`. `json` is an alias. "

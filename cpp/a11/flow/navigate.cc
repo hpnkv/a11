@@ -997,32 +997,67 @@ Description Describe(std::string_view source, size_t offset,
     if (!canonical.empty() && last + 1 < lexed.tokens.size() &&
         lexed.tokens[last + 1].kind == TokenKind::kLeftParen &&
         (vocabulary::Builtins().contains(canonical) ||
-         vocabulary::TypeNames().contains(canonical))) {
+         vocabulary::TypeNames().contains(canonical) ||
+         vocabulary::Documentation(vocabulary::WordRole::kSource, canonical) !=
+             nullptr)) {
       about.text = qualified;
       about.range =
           lines.Between(lexed.tokens[first].start, lexed.tokens[last].end);
       about.kind = SymbolClass::kExternal;
-      about.markdown = BuiltinMarkdown(canonical);
+      about.markdown = vocabulary::Documentation(
+                           vocabulary::WordRole::kSource, canonical) != nullptr
+                           ? WordMarkdown(canonical, vocabulary::WordRole::kSource)
+                           : BuiltinMarkdown(canonical);
       about.summary = about.markdown.substr(0, about.markdown.find('\n'));
       return about;
     }
   }
 
   for (const auto& flow : parsed.flows) {
-    bool barrier_here = false;
+    const syntax::Wait* selected = nullptr;
     syntax::VisitSubtree(*flow, [&](const syntax::Node& node) {
       const auto* wait = syntax::As<syntax::Wait>(&node);
-      barrier_here |= wait != nullptr && wait->scope_barrier &&
-                      wait->location.start <= offset &&
-                      offset < wait->extent.end;
+      if (wait != nullptr && wait->location.start <= offset &&
+          (wait->scope_barrier || !wait->subjects.empty())) {
+        if (selected == nullptr ||
+            selected->location.start < wait->location.start) {
+          selected = wait;
+        }
+      }
     });
-    if (barrier_here) {
-      about.summary = "wait all — scope-local execution barrier";
-      about.detail =
-          "Wait for all preceding work in this scope before activating "
-          "following statements.";
-      about.markdown = about.summary + "\n\n" + about.detail;
-      return about;
+    if (selected == nullptr) {
+      continue;
+    }
+    const std::string_view phrase = selected->scope_barrier
+                                        ? "wait all"
+                                        : selected->race ? "wait first of"
+                                                         : "wait all of";
+    size_t end = selected->location.start;
+    size_t words = 0;
+    while (end < source.size() && words < (selected->scope_barrier ? 2U : 3U)) {
+      while (end < source.size() &&
+             (source[end] == ' ' || source[end] == '\t')) {
+        ++end;
+      }
+      while (end < source.size() &&
+             (absl::ascii_isalpha(static_cast<unsigned char>(source[end])))) {
+        ++end;
+      }
+      ++words;
+    }
+    if (offset < end) {
+      if (const auto* doc = vocabulary::Documentation(
+              vocabulary::WordRole::kStatement, phrase);
+          doc != nullptr) {
+        about.text = phrase;
+        about.range = lines.Between(selected->location.start, end);
+        about.kind = SymbolClass::kExternal;
+        about.summary = absl::StrCat("`", phrase, "` — a statement: ",
+                                     doc->summary);
+        about.detail = doc->detail;
+        about.markdown = DocMarkdown(phrase, "statement", *doc);
+        return about;
+      }
     }
   }
 

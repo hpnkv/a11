@@ -46,19 +46,24 @@ function presentationKind(kind: string): FlowTokenKind {
     case 'comment': return 'comment';
     case 'string': return 'string';
     case 'string-escape': return 'string-escape';
-    case 'number': return 'number';
+    case 'number':
+    case 'duration': return 'number';
     case 'declaration-keyword':
-    case 'statement-keyword': return 'keyword';
+    case 'statement-keyword':
+    case 'modifier-keyword': return 'keyword';
     case 'builtin-type': return 'type';
     case 'type': return 'type';
     case 'stage': return 'stage';
     case 'builtin': return 'builtin';
     case 'level':
     case 'log-level': return 'level';
-    case 'constant': return 'constant';
+    case 'constant':
+    case 'status-code': return 'constant';
     case 'flow-operator':
+    case 'word-operator':
     case 'operator': return 'operator';
     case 'brace':
+    case 'bracket':
     case 'parenthesis':
     case 'punctuation': return 'punctuation';
     default: return 'plain';

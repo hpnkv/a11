@@ -124,6 +124,9 @@ test('a word is read as what it stands for where it stands', () => {
   // A level is a level only where one may stand.
   assert.equal(kindOf('log error "no"', 'error'), 'level');
   assert.equal(kindOf('error -> out', 'error'), 'plain');
+  assert.equal(kindOf('x = call y() with "h": 1', 'with'), 'keyword');
+  assert.equal(kindOf('x = call y() timeout 4m', 'timeout'), 'keyword');
+  assert.equal(kindOf('x = call y() timeout 4m', '4m'), 'number');
   // And nothing inside a comment or a string is looked up at all.
   assert.equal(tokenizeFlow('# flow map join').length, 1);
   assert.equal(kindOf('"flow map join"', '"flow map join"'), 'string');

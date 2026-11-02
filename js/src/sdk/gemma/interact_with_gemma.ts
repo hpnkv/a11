@@ -31,14 +31,13 @@
 
 import { z } from 'zod';
 
-import type { Action } from '../../action.js';
+import {GraphAction, type GraphNode} from '../../runtime_graph.js';
 import {usageTrackingEnabled} from '../usage.js';
 import {
   ActionHeaderSchema,
   ActionPortSchema,
   ActionSchema,
 } from '../../action_schema.js';
-import type { AsyncNode } from '../../async_node.js';
 import { utf8Decode, utf8Encode } from '../../bytes.js';
 import { Chunk } from '../../data.js';
 import { JSON_MIMETYPE, toChunk } from '../../serialization.js';
@@ -572,14 +571,16 @@ registerInteractionNormalizer(Backend.GEMMA, gemmaToNormalized);
 // --- Handler -----------------------------------------------------------------
 
 /** Run a browser Gemma interaction, streaming its reply. Never throws. */
-export async function interactWithGemma(action: Action): Promise<Status> {
-  const tracking = usageTrackingEnabled(action);
+export async function interactWithGemma(action: GraphAction,
+    context: {signal?: AbortSignal} = {}): Promise<Status> {
+  const signal = context.signal;
+  const tracking = await usageTrackingEnabled(action);
   if (!isOk(tracking)) return tracking;
   if (tracking) {
     const exposed = await action.exposeStreamSources('usage_sources', 'llm_usage');
     if (!isOk(exposed)) return exposed;
   }
-  const parentHeader = action.getHeader('x-a11-usage-producer');
+  const parentHeader = await action.getHeader('x-a11-usage-producer');
   if (!isOk(parentHeader)) return parentHeader;
   const parentProducer = parentHeader === null ? '' : utf8Decode(parentHeader);
   if (!isOk(parentProducer)) return parentProducer;
@@ -595,14 +596,14 @@ export async function interactWithGemma(action: Action): Promise<Status> {
   ]) {
     if (!isOk(result)) return result;
   }
-  const eventNode = eventNodeResult as AsyncNode;
-  const thoughtsNode = thoughtsNodeResult as AsyncNode;
-  const textNode = textNodeResult as AsyncNode;
-  const newInteractionsNode = newInteractionsResult as AsyncNode;
+  const eventNode = eventNodeResult as GraphNode;
+  const thoughtsNode = thoughtsNodeResult as GraphNode;
+  const textNode = textNodeResult as GraphNode;
+  const newInteractionsNode = newInteractionsResult as GraphNode;
 
   try {
     // Model label header, if any.
-    const modelHeader = action.getHeader(LlmHeaders.MODEL);
+    const modelHeader = await action.getHeader(LlmHeaders.MODEL);
     if (!isOk(modelHeader)) return modelHeader;
     let model = DEFAULT_MODEL;
     if (modelHeader !== null) {
@@ -650,7 +651,7 @@ export async function interactWithGemma(action: Action): Promise<Status> {
       : config;
 
     // Load the runtime and stream a reply.
-    const engine = await gemmaEngineFactory(runtimeConfig, action.signal);
+    const engine = await gemmaEngineFactory(runtimeConfig, signal);
     if (!isOk(engine)) return engine;
 
     let writeChain: Promise<StatusOr<number>> = Promise.resolve(0);
@@ -676,16 +677,18 @@ export async function interactWithGemma(action: Action): Promise<Status> {
     const emit = (delta: string): void => show(stopFilter.push(delta));
 
     const usageId = globalThis.crypto.randomUUID();
-    let usageNode: AsyncNode | null = null;
+    let usageNode: GraphNode | null = null;
     if (tracking) {
+      const schema = await action.getSchema();
+      if (!isOk(schema)) return schema;
       const reference = await action.registerStream('llm_usage', {
-        type: 'a11_action', id: action.getId(), name: action.getSchema().name,
+        type: 'a11_action', id: action.getId(), name: schema.name,
       }, usageId, parentProducer);
       if (!isOk(reference)) return reference;
-      const opened = await action.getNodeMap().resolve(reference.node);
+      const opened = await action.resolveNode(reference.node);
       if (!isOk(opened)) return opened;
       usageNode = opened;
-      const attributed = action.setHeader('x-a11-usage-producer', usageId);
+      const attributed = await action.setHeader('x-a11-usage-producer', usageId);
       if (!isOk(attributed)) return attributed;
     }
     const publishUsage = async (usage: UsageMetadata, coverage: string) => {
@@ -711,7 +714,7 @@ export async function interactWithGemma(action: Action): Promise<Status> {
     let measured: UsageMetadata | undefined;
     try {
       try {
-        generated = await engine.generate(prompt, emit, action.signal);
+        generated = await engine.generate(prompt, emit, signal);
       } catch (error) {
         generated = statusFromUnknown(error, 'Gemma generation failed.');
       }

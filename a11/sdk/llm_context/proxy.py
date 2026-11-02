@@ -36,6 +36,17 @@ from a11.sdk.llm_context.runtime import project_view
 from a11.status import Status, StatusCode, StatusException
 
 
+def _require_request_projection(config: LlmContextConfig) -> None:
+    if config.enabled and config.compaction != "off":
+        raise Status(
+            code=StatusCode.FAILED_PRECONDITION,
+            message=(
+                "Provider proxy cannot install compacted history; use a host"
+                " history owner or native session coordinator"
+            ),
+        ).to_exception()
+
+
 async def project_request(
     body: bytes,
     *,
@@ -49,8 +60,8 @@ async def project_request(
     """Project supported JSON messages, preserving unknown request fields.
 
     The profile names a wire format, independently of the harness using it.
-    Stateful response chains require a history-replacement capability and are
-    rejected when summary compaction is selected.
+    History compaction requires a separate host owner or native coordinator.
+    This request-local proxy only applies deterministic content transforms.
 
     Args:
         body: Complete JSON request bytes within the policy byte limit.
@@ -89,6 +100,7 @@ async def project_request(
             code=StatusCode.FAILED_PRECONDITION,
             message="Interaction projection requires A11 Interaction inputs",
         ).to_exception()
+    _require_request_projection(config)
     if len(body) > config.max_bytes:
         raise Status(
             code=StatusCode.RESOURCE_EXHAUSTED,
@@ -165,6 +177,7 @@ def create_proxy(
     """
     config = config or LlmContextConfig(enabled=False)
     services = services or LlmContextServices()
+    _require_request_projection(config)
     if profile not in ("chat", "responses", "anthropic"):
         raise Status(
             code=StatusCode.INVALID_ARGUMENT,

@@ -79,7 +79,7 @@ class DeepResearchDemo {
 
     try {
       const connection = await connect(this.backend.server.value.trim() || DEFAULT_SERVER_URL);
-      const call = makeCall(connection, DEEP_RESEARCH_SCHEMA);
+      const call = await makeCall(connection, DEEP_RESEARCH_SCHEMA);
       // Nested model calls inherit the composition's `x-a11-` headers, so the
       // provider is configured once on the outer action.
       for (const [header, value] of LlmHeadersFor(this.backend.value)) {

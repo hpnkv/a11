@@ -27,6 +27,7 @@ import {
   type WireMessage,
   type WireStream,
 } from '../src/index.js';
+import {demoRuntime} from './runtime.js';
 
 const echoSchema = new ActionSchema({
   name: 'echo',
@@ -68,6 +69,7 @@ class ObservedStream implements WireStream {
 
 class EchoDemo {
   private session: Session | null = null;
+  private registry: ActionRegistry | null = null;
   private stream: ObservedStream | null = null;
   private readonly events: WireEvent[] = [];
   private readonly log = document.querySelector<HTMLDivElement>('#echo-wire-log')!;
@@ -79,9 +81,12 @@ class EchoDemo {
   async connect(): Promise<void> {
     this.errors.textContent = '';
     this.session?.halfClose();
-    const registry = new ActionRegistry();
-    need(registry.register('echo', echoSchema));
-    this.session = need(Session.create({ actionRegistry: registry, noStreamTimeoutMs: null }));
+    const runtime = await demoRuntime();
+    const registry = new ActionRegistry(runtime);
+    need(await registry.register('echo', echoSchema));
+    this.registry = registry;
+    this.session = need(await Session.create(runtime,
+      {noStreamTimeoutMs: null}));
     const base = new URL(this.server.value);
     const transport = need(HttpSseClientWireStream.create(base.origin, {
       connectEndpoint: base.pathname.replace(/\/$/, ''),
@@ -94,16 +99,14 @@ class EchoDemo {
   async send(text: string): Promise<void> {
     try {
       if (!this.session || !this.stream) await this.connect();
-      const registry = this.session!.getActionRegistry()!;
-      const action = need(registry.makeAction('echo', {
-        nodeMap: this.session!.getNodeMap(), stream: this.stream!, session: this.session!,
-      }));
+      const action = need(await this.registry!.makeAction('echo',
+        {session: this.session!}));
       need(await action.call());
       const input = need(await action.getInput('input'));
       need(await input.finalize(text));
       need(await action.waitForDispatch(10_000));
       const output = need(await action.getOutput('output', false));
-      const reply = need(await output.next({ timeoutMs: 10_000 }));
+      const reply = need(await output.next({timeoutMs: 10_000}));
       need(await action.wait(30_000));
       this.addBubble(String(reply), 'reply');
       window.dispatchEvent(
@@ -113,7 +116,8 @@ class EchoDemo {
   }
 
   async reconnect(): Promise<void> { try { await this.connect(); } catch (error) { this.showError(error); } }
-  halfClose(): void { try { if (this.session) need(this.session.halfClose()); } catch (error) { this.showError(error); } }
+  halfClose(): void { void this.session?.halfClose().then(need).catch(error =>
+    this.showError(error)); }
   private addBubble(text: string, kind: 'request' | 'reply'): void {
     const bubble = document.createElement('div'); bubble.className = `echo-bubble ${kind}`; bubble.textContent = text; this.messages.append(bubble);
     this.messages.scrollTop = this.messages.scrollHeight;

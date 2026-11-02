@@ -1,0 +1,20 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>A11 native Thread browser probe</title>
+<pre id="result">Running</pre>
+<script type="module">
+  const result = document.getElementById("result");
+  if (!crossOriginIsolated) {
+    result.textContent = "FAIL: cross-origin isolation is required";
+  } else {
+    const worker = new Worker("./thread/browser_probe.mjs", { type: "module" });
+    worker.onmessage = event => {
+      result.textContent = event.data.ok ? "PASS" : `FAIL: ${event.data.error}`;
+      worker.terminate();
+    };
+    worker.onerror = event => {
+      result.textContent = `FAIL: ${event.message}`;
+      worker.terminate();
+    };
+  }
+</script>

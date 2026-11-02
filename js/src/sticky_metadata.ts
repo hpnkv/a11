@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { cloneChunk } from './chunk_store.js';
+import { cloneChunk } from './chunk_clone.js';
 import { Chunk, ChunkMetadata, NodeFragment, WireMessage } from './data.js';
 
 /**

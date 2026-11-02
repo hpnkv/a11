@@ -99,9 +99,12 @@ existing HTTP deployment configuration.
 
 An endpoint setting establishes wire routing only. Verify the installed host's
 authentication mode and API support separately, especially for subscription or
-login-specific endpoints. Proxy replay compaction cannot replace history kept
-behind `previous_response_id`; such requests return a capability error when
-summary compaction is required. The proxy recorder observes projection/relay
+login-specific endpoints. The proxy applies deterministic content transforms.
+It rejects summary and native compaction because it cannot install the shorter
+history in the host. Recomputing a checkpoint on every request changes the
+prompt prefix and can discard cache reuse. Use `compact_host_history` with an
+atomic host installer, an accepted Interaction view, or a native session
+coordinator for compaction. The proxy recorder observes projection/relay
 metadata and bounded JSON/SSE provider usage. Missing or partial usage retains
 its coverage limits. Automatic owner-backed retention uses host scope resolution
 and authorization callbacks; the standalone CLI requires an embedded host for

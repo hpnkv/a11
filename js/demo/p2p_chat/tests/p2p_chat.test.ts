@@ -24,7 +24,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { test, describe } from 'node:test';
+import { test, describe, after } from 'node:test';
 
 import {
   ActionMessage,
@@ -50,6 +50,9 @@ import { iceExpiryMs, refreshDelayMs } from '../signalling_client.js';
 import { shouldBecomeHost } from '../election.js';
 import { ChatHost } from '../host.js';
 import { ChatPeer, PEER_DESIRED_CHANNELS } from '../peer_client.js';
+import {disposeDemoRuntimes} from '../../wasm_runtime.js';
+
+after(disposeDemoRuntimes);
 import {
   ConnectionType,
   MAX_MESSAGE_HISTORY,
@@ -423,8 +426,7 @@ async function attachPeer(host: ChatHost, myId: string): Promise<ChatPeer> {
     onBecomeHost: () => {},
     onConnectionTypeChange: () => {},
   });
-  const session = Session.create({
-    actionRegistry: (peer as any).registry,
+  const session = await Session.create(await peer.getRuntime(), {
     noStreamTimeoutMs: null,
   });
   assert.ok(isOk(session));
@@ -689,8 +691,7 @@ async function attachFramedPeer(
     onBecomeHost: () => {},
     onConnectionTypeChange: () => {},
   });
-  const session = Session.create({
-    actionRegistry: (peer as any).registry,
+  const session = await Session.create(await peer.getRuntime(), {
     noStreamTimeoutMs: PEER_TIMEOUT_MS,
   });
   assert.ok(isOk(session));
@@ -783,8 +784,7 @@ describe('departures', () => {
       onBecomeHost: (events) => { elected = events; },
       onConnectionTypeChange: () => {},
     });
-    const session = Session.create({
-      actionRegistry: (peer as any).registry,
+    const session = await Session.create(await peer.getRuntime(), {
       noStreamTimeoutMs: PEER_TIMEOUT_MS,
     });
     assert.ok(isOk(session));

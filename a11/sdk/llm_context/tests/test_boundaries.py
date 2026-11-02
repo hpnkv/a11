@@ -117,6 +117,31 @@ async def test_proxy_projects_only_editable_request_spans():
 
 
 @pytest.mark.asyncio
+async def test_proxy_rejects_request_local_compaction_for_every_profile():
+    policy = LlmContextConfig(compaction="summary")
+    for profile, path, field in (
+        ("chat", "/v1/chat/completions", "messages"),
+        ("responses", "/v1/responses", "input"),
+        ("anthropic", "/v1/messages", "messages"),
+    ):
+        body = json.dumps(
+            {field: [{"role": "user", "content": "hello"}]}
+        ).encode()
+        with pytest.raises(
+            StatusException, match="cannot install compacted history"
+        ):
+            await project_request(
+                body, path=path, profile=profile, config=policy
+            )
+    with pytest.raises(
+        StatusException, match="cannot install compacted history"
+    ):
+        create_proxy(
+            "https://api.openai.com", profile="responses", config=policy
+        )
+
+
+@pytest.mark.asyncio
 async def test_retained_pages_survive_reopen_and_scope_isolation(tmp_path):
     scope = {"owner": "host", "conversation": "one"}
     owner = RetainedContentStore(tmp_path, owner="host")

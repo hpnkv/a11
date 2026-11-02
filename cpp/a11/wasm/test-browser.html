@@ -1,0 +1,41 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>A11 WASM browser smoke test</title>
+<pre id="result">Running</pre>
+<script type="module">
+  import { createA11Wasm } from "./index.mjs";
+  import { indexedDbSnapshotStore } from "./persistence-browser.mjs";
+  const output = document.getElementById("result");
+  try {
+    const a11 = await createA11Wasm();
+    const checked = a11.flow({ method: "check", source: "flow main { }" });
+    if (!checked.ok || checked.result.diagnostics.length) throw Error("Flow check failed");
+    const runtime = a11.runtime();
+    runtime.append("browser", new TextEncoder().encode("works"), "text/plain");
+    runtime.close("browser");
+    if (runtime.count("browser") !== 1) throw Error("node store failed");
+    runtime.dispose();
+    output.textContent = "Opening IndexedDB";
+    const adapter = indexedDbSnapshotStore("a11-wasm-browser-smoke");
+    const durable = await a11.openPersistentRuntime(adapter, "local");
+    output.textContent = "Opened IndexedDB";
+    let saved = false;
+    try { saved = durable.closed("browser"); } catch (error) {
+      if (error.code !== 5) throw error;
+    }
+    if (!saved) {
+      await durable.appendDurable("browser", new TextEncoder().encode("stored"));
+      await durable.closeDurable("browser");
+    }
+    await durable.disposeDurable();
+    output.textContent = "Saved IndexedDB";
+    const reopened = await a11.openPersistentRuntime(adapter, "local");
+    output.textContent = "Reopened IndexedDB";
+    if (reopened.count("browser") !== 1) throw Error("IndexedDB store failed");
+    await reopened.disposeDurable();
+    await adapter.close();
+    output.textContent = "PASS";
+  } catch (error) {
+    output.textContent = `FAIL: ${error.stack ?? error}`;
+  }
+</script>

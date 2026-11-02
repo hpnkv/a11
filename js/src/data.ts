@@ -1158,6 +1158,7 @@ function fragmentToJson(fragment: NodeFragment): Record<string, unknown> {
         id: fragment.data.id,
         ...(fragment.data.offset === 0 ? {} : { offset: fragment.data.offset }),
         ...(fragment.data.length === null ? {} : { length: fragment.data.length }),
+        ...(fragment.data.storage === null ? {} : { storage: fragment.data.storage }),
       };
   if (fragment.seq !== null) result.seq = fragment.seq;
   if (fragment.continued) result.continued = true;
@@ -1249,7 +1250,10 @@ function nodeRefFromJson(value: Record<string, unknown>): StatusOr<NodeRef> {
     if (!isOk(decoded)) return decoded;
     length = decoded;
   }
-  return NodeRef.create({ id, offset, length });
+  const storage = value.storage === undefined || value.storage === null
+    ? null : storageIdentityFromValue(value.storage);
+  if (!isOk(storage)) return storage;
+  return NodeRef.create({ id, offset, length, storage });
 }
 
 function fragmentFromJson(value: unknown): StatusOr<NodeFragment> {

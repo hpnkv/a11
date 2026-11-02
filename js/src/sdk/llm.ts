@@ -27,7 +27,7 @@
 
 import { z } from 'zod';
 
-import type { Action } from '../action.js';
+import {GraphAction} from '../runtime_graph.js';
 import { base64Decode, base64Encode, utf8Decode } from '../bytes.js';
 import { ActionMessage, Chunk, NodeFragment } from '../data.js';
 import { toChunk } from '../serialization.js';
@@ -501,8 +501,8 @@ export function asUsageMetadataValue(usage: UsageMetadata): UsageMetadata {
  * {@link LlmHeaders.ALLOWED_LLM_ACTIONS} header; it constrains which registered
  * actions are surfaced to (and callable by) the model.
  */
-export function getAllowedLlmActionPatterns(action: Action): StatusOr<string[]> {
-  const header = action.getHeader(LlmHeaders.ALLOWED_LLM_ACTIONS);
+function allowedPatternsFromHeader(
+    header: StatusOr<Uint8Array | null>): StatusOr<string[]> {
   if (!isOk(header)) return header;
   if (header === null) return [];
   const decoded = utf8Decode(header);
@@ -515,6 +515,12 @@ export function getAllowedLlmActionPatterns(action: Action): StatusOr<string[]> 
     .split(',')
     .map((pattern) => pattern.trim())
     .filter((pattern) => pattern.length > 0);
+}
+
+export async function getAllowedLlmActionPatterns(action: GraphAction):
+    Promise<StatusOr<string[]>> {
+  return allowedPatternsFromHeader(
+    await action.getHeader(LlmHeaders.ALLOWED_LLM_ACTIONS));
 }
 
 /** Whether an action name is fully matched by any allowed regex pattern. */

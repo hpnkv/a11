@@ -27,7 +27,7 @@
  * TypeScript handler exists for them.
  */
 
-import type { Action, ActionHandler } from '../action.js';
+import {GraphAction} from '../runtime_graph.js';
 import {
   ActionHeaderSchema,
   ActionPortSchema,
@@ -38,6 +38,7 @@ import {
   failedPreconditionError,
   invalidArgumentError,
   isOk,
+  okStatus,
   statusFromUnknown,
   type Status,
   type StatusOr,
@@ -47,13 +48,13 @@ import { interactWithGemma } from './gemma/interact_with_gemma.js';
 
 interface Provider {
   /** The handler to run, or `null` when this build ships none for it. */
-  handler: ActionHandler | null;
+  handler: typeof interactWithGemma | null;
   /** Extra hint returned when no TypeScript handler exists. */
   note: string;
 }
 
 const PROVIDERS: Readonly<Record<string, Provider>> = {
-  gemma: { handler: interactWithGemma as ActionHandler, note: '' },
+  gemma: { handler: interactWithGemma, note: '' },
   claude: {
     handler: null,
     note: 'The claude backend is only available in the Python package (a11-kit[claude]).',
@@ -153,16 +154,18 @@ export const INTERACT_WITH_LLM_SCHEMA = new ActionSchema({
   },
 });
 
-function headerString(action: Action, name: string): StatusOr<string | null> {
-  const value = action.getHeader(name);
+async function headerString(action: GraphAction, name: string):
+    Promise<StatusOr<string | null>> {
+  const value = await action.getHeader(name);
   if (!isOk(value)) return value;
   if (value === null) return null;
   return utf8Decode(value);
 }
 
 /** Pick the backend from the provider header, or infer it from the model. */
-function resolveProvider(action: Action): StatusOr<string> {
-  const provider = headerString(action, LlmHeaders.PROVIDER);
+async function resolveProvider(action: GraphAction):
+    Promise<StatusOr<string>> {
+  const provider = await headerString(action, LlmHeaders.PROVIDER);
   if (!isOk(provider)) return provider;
   if (provider !== null && provider.trim() !== '') {
     const normalized = provider.trim().toLowerCase();
@@ -175,7 +178,7 @@ function resolveProvider(action: Action): StatusOr<string> {
     }
     return normalized;
   }
-  const model = headerString(action, LlmHeaders.MODEL);
+  const model = await headerString(action, LlmHeaders.MODEL);
   if (!isOk(model)) return model;
   const modelName = (model ?? '').trim().toLowerCase();
   for (const [prefix, name] of MODEL_PREFIXES) {
@@ -189,16 +192,17 @@ function resolveProvider(action: Action): StatusOr<string> {
 }
 
 /** Route the interaction to the header-selected backend and run it inline. */
-export async function interactWithLlm(action: Action): Promise<Status> {
+export async function interactWithLlm(action: GraphAction,
+    context: {signal?: AbortSignal} = {}): Promise<Status> {
   try {
-    const provider = resolveProvider(action);
+    const provider = await resolveProvider(action);
     if (!isOk(provider)) return provider;
     const entry = PROVIDERS[provider]!;
     if (entry.handler === null) {
       return failedPreconditionError(entry.note);
     }
-    const result = await entry.handler(action);
-    return result ?? { code: 0, message: 'OK' };
+    const result = await entry.handler(action, context);
+    return result ?? okStatus();
   } catch (error) {
     return statusFromUnknown(error, 'Routing the LLM interaction raised an exception.');
   }

@@ -2,7 +2,7 @@
 
 import { decode, encode } from '@msgpack/msgpack';
 
-import { Action } from './action.js';
+import {GraphAction} from './runtime_graph.js';
 import { AUTHORIZATION_REFERENCE_HEADER } from './action_schema.js';
 import { base64Decode, base64Encode } from './bytes.js';
 import {
@@ -130,50 +130,45 @@ export function authorizationFromText(
 }
 
 /** Read the inline envelope from an action that carries no reference. */
-export function getAuthorization(
-  action: Action,
-): StatusOr<AuthorizationEnvelope | null> {
-  const full = action.getHeader(AUTHORIZATION_HEADER);
-  if (!isOk(full) || full === null) return full;
-  const reference = action.getHeader(AUTHORIZATION_REFERENCE_HEADER);
-  if (!isOk(reference)) return reference;
-  return reference === null
-    ? decodeAuthorization(full)
-    : invalidArgumentError('An action cannot carry both authorization forms.');
+export async function getAuthorization(action: GraphAction):
+    Promise<StatusOr<AuthorizationEnvelope | null>> {
+      const full = await action.getHeader(AUTHORIZATION_HEADER);
+      if (!isOk(full) || full === null) return full;
+      const reference = await action.getHeader(AUTHORIZATION_REFERENCE_HEADER);
+      if (!isOk(reference)) return reference;
+      return reference === null ? decodeAuthorization(full) :
+        invalidArgumentError(
+          'An action cannot carry both authorization forms.');
 }
 
 /** Set an inline envelope and remove any authorization reference. */
-export function setAuthorizationHeader(
-  action: Action,
-  value: AuthorizationEnvelope | null,
-): Status {
-  if (value === null) return action.removeHeader(AUTHORIZATION_HEADER);
-  const encoded = encodeAuthorization(value);
-  if (!isOk(encoded)) return encoded;
-  const status = action.setHeader(AUTHORIZATION_HEADER, encoded);
-  if (!isOk(status)) return status;
-  return action.removeHeader(AUTHORIZATION_REFERENCE_HEADER);
+export async function setAuthorizationHeader(action: GraphAction,
+    value: AuthorizationEnvelope | null): Promise<Status> {
+      if (value === null) return action.removeHeader(AUTHORIZATION_HEADER);
+      const encoded = encodeAuthorization(value);
+      if (!isOk(encoded)) return encoded;
+      const status = await action.setHeader(AUTHORIZATION_HEADER, encoded);
+      return isOk(status)
+        ? action.removeHeader(AUTHORIZATION_REFERENCE_HEADER) : status;
 }
 
 /** Set a 128-bit context reference and remove any inline envelope. */
-export function setAuthorizationReference(
-  action: Action,
-  contextId: string | null,
-): Status {
-  if (contextId === null) {
-    return action.removeHeader(AUTHORIZATION_REFERENCE_HEADER);
-  }
-  if (!/^[A-Za-z0-9_-]*$/.test(contextId)) {
-    return invalidArgumentError('The context ID is not base64url.');
-  }
-  const body = contextId.replaceAll('-', '+').replaceAll('_', '/');
-  const decoded = base64Decode(body + '='.repeat((4 - body.length % 4) % 4));
-  if (!isOk(decoded) || decoded.length !== 16) {
-    return invalidArgumentError(
-      'An authorization context ID must contain 128 bits.',
-    );
-  }
-  const status = action.setHeader(AUTHORIZATION_REFERENCE_HEADER, decoded);
-  if (!isOk(status)) return status;
-  return action.removeHeader(AUTHORIZATION_HEADER);
+export async function setAuthorizationReference(action: GraphAction,
+    contextId: string | null): Promise<Status> {
+      if (contextId === null) {
+        return action.removeHeader(AUTHORIZATION_REFERENCE_HEADER);
+      }
+      if (!/^[A-Za-z0-9_-]*$/.test(contextId)) {
+        return invalidArgumentError('The context ID is not base64url.');
+      }
+      const body = contextId.replaceAll('-', '+').replaceAll('_', '/');
+      const decoded = base64Decode(
+        body + '='.repeat((4 - body.length % 4) % 4));
+      if (!isOk(decoded) || decoded.length !== 16) {
+        return invalidArgumentError(
+          'An authorization context ID must contain 128 bits.');
+      }
+      const status = await action.setHeader(
+        AUTHORIZATION_REFERENCE_HEADER, decoded);
+      return isOk(status) ? action.removeHeader(AUTHORIZATION_HEADER) : status;
 }

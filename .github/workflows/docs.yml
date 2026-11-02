@@ -33,7 +33,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  wasm:
+    uses: ./.github/workflows/wasm.yml
+
   build:
+    needs: wasm
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -53,6 +57,12 @@ jobs:
 
       - name: Install TypeScript documentation tooling
         run: npm ci --prefix js
+
+      - name: Download tested WASM SDK assets
+        uses: actions/download-artifact@v4
+        with:
+          name: a11-js-dist
+          path: js/dist
 
       - name: Install documentation tooling
         run: pip install mkdocs-material "mkdocstrings[python]" griffe

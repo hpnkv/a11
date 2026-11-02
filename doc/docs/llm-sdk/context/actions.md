@@ -112,9 +112,11 @@ Set `summarizer="checkpoint"` on the action policy. Alternatively, register a
 summarizer action with a `history` input and `checkpoint` output. Its nested call
 inherits the action deadline and explicitly disables recursive compaction.
 
-Replay-based providers can send the projected history. Resumed Codex/Claude
-Code sessions and Gemini ID chains own history on another service; a client-side
-history edit cannot replace that state. The integration returns
+Replay-based providers can send the projected history after their host installs
+it for later requests. Recomputing a summary from the original prefix on each
+request changes the cache prefix and can repeat summarization work. Resumed
+Codex/Claude Code sessions and Gemini ID chains own history on another service;
+a client-side history edit cannot replace that state. The integration returns
 `FAILED_PRECONDITION` when automatic summary compaction requires that missing
 capability. Use a standalone proposal and a supported host replacement API.
 

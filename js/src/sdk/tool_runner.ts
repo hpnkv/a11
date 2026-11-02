@@ -24,10 +24,11 @@
  * {@link StatusOr} and never throw.
  */
 
-import type { Action, ActionRegistryLike } from '../action.js';
+import {GraphAction} from '../runtime_graph.js';
+import {ActionRegistry as RuntimeActionRegistry}
+  from '../runtime_registry.js';
 import { NodeFragment } from '../data.js';
 import {
-  failedPreconditionError,
   invalidArgumentError,
   isOk,
   notFoundError,
@@ -62,15 +63,14 @@ export interface ActionCall {
 }
 
 /** Build model tool definitions for the allow-listed registry actions. */
-export function getToolDefinitions(
-  registry: ActionRegistryLike | null,
+export async function getToolDefinitions(
+  registry: RuntimeActionRegistry,
   allowedActions: readonly string[] = [],
   portSchemas: Readonly<Record<string, PortValueSchemas>> = {},
-): StatusOr<ToolDefinition[]> {
-  if (registry === null) return [];
+): Promise<StatusOr<ToolDefinition[]>> {
   const definitions: ToolDefinition[] = [];
   for (const name of allowedActions) {
-    const schema = registry.getSchema(name);
+    const schema = await registry.getSchema(name);
     if (!isOk(schema)) {
       // A missing action is skipped; any other failure is propagated, matching
       // the Python NOT_FOUND handling.
@@ -106,85 +106,78 @@ function readActionCalls(interaction: Interaction): StatusOr<ActionCall[]> {
  */
 export async function executeActionsFromInteraction(
   interaction: Interaction,
-  action: Action,
-  registry: ActionRegistryLike | null = null,
-  options: { timeoutMs?: number } = {},
+  action: GraphAction,
+  _registry: RuntimeActionRegistry | null = null,
+  options: {timeoutMs?: number} = {},
 ): Promise<StatusOr<Record<string, NodeFragment[]>>> {
-  try {
-    const effectiveRegistry = registry ?? action.getRegistry();
-    if (effectiveRegistry === null) {
-      return failedPreconditionError(
-        'Cannot execute actions against an empty registry.',
-      );
-    }
-    const allowedPatterns = getAllowedLlmActionPatterns(action);
-    if (!isOk(allowedPatterns)) return allowedPatterns;
+  return executeNativeActionsFromInteraction(interaction, action, options);
+}
 
+async function executeNativeActionsFromInteraction(
+    interaction: Interaction, action: GraphAction,
+    options: {timeoutMs?: number}):
+    Promise<StatusOr<Record<string, NodeFragment[]>>> {
+  try {
+    const allowedPatterns = await getAllowedLlmActionPatterns(action);
+    if (!isOk(allowedPatterns)) return allowedPatterns;
     const calls = readActionCalls(interaction);
     if (!isOk(calls)) return calls;
-
-    const nestedActions: Array<{ call: ActionCall; action: Action }> = [];
+    const nestedActions: GraphAction[] = [];
     for (const call of calls) {
       const allowed = actionNameMatchesAllowed(call.name, allowedPatterns);
       if (!isOk(allowed)) return allowed;
       if (!allowed) {
         return permissionDeniedError(`Action ${call.name} is not allowed`);
       }
-      const nested = action.makeNested(call.name);
+      const nested = await action.makeNested(call.name, {id: call.id});
       if (!isOk(nested)) return nested;
-      const idSet = nested.setId(call.id);
-      if (!isOk(idSet)) return idSet;
-      const started = nested.run();
+      const started = await nested.run();
       if (!isOk(started)) return started;
-
-      const inputFragments = (interaction.action_inputs?.[call.id] ?? []) as unknown[];
-      for (const fragment of inputFragments) {
+      for (const fragment of interaction.action_inputs?.[call.id] ?? []) {
         if (!(fragment instanceof NodeFragment)) {
           return invalidArgumentError(
-            'Action input fragments must be NodeFragment instances.',
-          );
+            'Action input fragments must be NodeFragment instances.');
         }
         const port = await nested.getInput(fragment.id);
         if (!isOk(port)) return port;
-        const stored = await port.putFragment(fragment);
+        const stored = await port.putFragment(new NodeFragment({
+          id: port.getId(), data: fragment.data, seq: fragment.seq,
+          continued: fragment.continued,
+        }));
         if (!isOk(stored)) return stored;
       }
-
-      // Autofilled inputs are written and closed by the native run flow, so the
-      // runner only closes the inputs it fed itself. Closed, not finalized: the
-      // forwarded fragments carry whatever finality the model's arguments had.
-      for (const [inputName, portSchema] of nested.getSchema().inputs) {
+      const schema = await nested.getSchema();
+      if (!isOk(schema)) return schema;
+      for (const [inputName, portSchema] of schema.inputs) {
         if (portSchema.autofills.length > 0) continue;
         const port = await nested.getInput(inputName);
         if (!isOk(port)) return port;
         const closed = await port.close();
         if (!isOk(closed)) return closed;
       }
-      nestedActions.push({ call, action: nested });
+      nestedActions.push(nested);
     }
-
-    for (const { action: nested } of nestedActions) {
+    for (const nested of nestedActions) {
       const waited = await nested.wait(options.timeoutMs);
       if (!isOk(waited)) return waited;
     }
-
     const allOutputs: Record<string, NodeFragment[]> = {};
-    for (const { action: nested } of nestedActions) {
+    for (const nested of nestedActions) {
       const gathered = await gatherActionOutputs(nested);
       if (!isOk(gathered)) return gathered;
       allOutputs[nested.getId()] = gathered;
     }
     return allOutputs;
   } catch (error) {
-    return statusFromUnknown(
-      error,
-      'Executing actions from interaction raised an exception.',
-    );
+    return statusFromUnknown(error,
+      'Executing native actions from interaction raised an exception.');
   }
 }
 
-async function gatherActionOutputs(nested: Action): Promise<StatusOr<NodeFragment[]>> {
-  const schema = nested.getSchema();
+async function gatherActionOutputs(nested: GraphAction):
+    Promise<StatusOr<NodeFragment[]>> {
+  const schema = await nested.getSchema();
+  if (!isOk(schema)) return schema;
   const perOutput: Record<string, NodeFragment[]> = {};
   for (const outputName of schema.outputs.keys()) {
     const node = await nested.getOutput(outputName, false);

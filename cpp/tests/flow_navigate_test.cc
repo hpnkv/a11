@@ -115,13 +115,12 @@ TEST(FlowNavigate, CompositeWaitsHaveDistinctDocumentation) {
            {"wait first of", "zero-based index"},
            {"wait all of", "Only the listed subjects"},
            {"wait all", "current scope"}}) {
-    const size_t start = phrase == "wait all" ? source.rfind(phrase)
-                                                : source.find(phrase);
+    const size_t start =
+        phrase == "wait all" ? source.rfind(phrase) : source.find(phrase);
     ASSERT_NE(start, std::string::npos);
     const auto hover = Describe(source, start + phrase.size() - 1);
     EXPECT_EQ(hover.text, phrase);
-    EXPECT_NE(hover.markdown.find(detail), std::string::npos)
-        << hover.markdown;
+    EXPECT_NE(hover.markdown.find(detail), std::string::npos) << hover.markdown;
   }
 }
 
@@ -132,9 +131,85 @@ TEST(FlowNavigate, CompositeWaitInStandaloneExampleHasDocumentation) {
       "wait all of search, model\n";
   const auto hover = Describe(source, source.find("all of") + 1);
   EXPECT_EQ(hover.text, "wait all of");
-  EXPECT_NE(hover.markdown.find("Only the listed subjects"),
-            std::string::npos)
+  EXPECT_NE(hover.markdown.find("Only the listed subjects"), std::string::npos)
       << hover.markdown;
+}
+
+TEST(FlowNavigate, DelimitersDescribeTheirOwnScopes) {
+  const std::string source = R"(flow f {
+  out result: string
+  tasks = {
+    one = call lookup(query: std::trim(" a "))
+    two = call lookup(query: "b")
+  }
+  after tasks {
+    if (tasks | count) > 0 { "yes" -> result }
+    else { "no" -> result }
+  }
+  for item in ["a"] {
+    std::trim(item) -> result
+  }
+  value = {"kind": "answer"}
+  typed = a11::sdk::Interaction{role: "user"}
+  progress = node("progress")
+})";
+  const auto check = [&](std::string_view needle, std::string_view role,
+                         std::string_view detail) {
+    const size_t at = source.find(needle);
+    ASSERT_NE(at, std::string::npos) << needle;
+    const auto hover = Describe(source, at + needle.size() - 1);
+    EXPECT_NE(hover.markdown.find(role), std::string::npos) << hover.markdown;
+    EXPECT_NE(hover.markdown.find(detail), std::string::npos) << hover.markdown;
+  };
+  check("flow f {", "opening flow body brace", "start concurrently");
+  check("tasks = {", "opening standalone block brace", "one step");
+  check("after tasks {", "opening dependency block brace", "after every");
+  check("if (tasks | count) > 0 {", "opening conditional branch brace",
+        "selected");
+  check("for item in [\"a\"] {", "opening loop body brace", "one pass");
+  const auto record = Describe(source, source.find("{\"kind\":"));
+  EXPECT_NE(record.markdown.find("opening record literal brace"),
+            std::string::npos)
+      << record.markdown;
+  EXPECT_NE(record.markdown.find("Entries form"), std::string::npos)
+      << record.markdown;
+  check("Interaction{", "opening typed value brace", "validates");
+  check("lookup(", "opening action inputs parenthesis", "input port");
+  const auto nested = Describe(source, source.find("std::trim(\" a \"") + 9);
+  EXPECT_NE(nested.markdown.find("opening function arguments parenthesis"),
+            std::string::npos)
+      << nested.markdown;
+  check("std::trim(", "opening function arguments parenthesis", "positional");
+  check("node(", "opening node constructor parenthesis", "generated id");
+  const auto grouped = Describe(source, source.find("(tasks | count)"));
+  EXPECT_NE(grouped.markdown.find("opening grouped expression parenthesis"),
+            std::string::npos)
+      << grouped.markdown;
+  const size_t close = source.find("  }\n  after tasks") + 2;
+  const auto closing = Describe(source, close);
+  EXPECT_NE(closing.markdown.find("closing standalone block brace"),
+            std::string::npos)
+      << closing.markdown;
+  EXPECT_NE(closing.markdown.find("```a11flow\nflow report"), std::string::npos)
+      << closing.markdown;
+  EXPECT_EQ(closing.markdown.find("**Example:**"), std::string::npos)
+      << closing.markdown;
+}
+
+TEST(FlowNavigate, BoundWaitDescribesTheValueItYields) {
+  const std::string source =
+      "flow f {\n"
+      "  moved = call walk()\n"
+      "  other = call walk()\n"
+      "  arrived = wait moved\n"
+      "  first = wait first of moved, other\n"
+      "}\n";
+  const auto status = Describe(source, source.find("arrived"));
+  EXPECT_EQ(status.summary, "`arrived` — status");
+  EXPECT_NE(status.markdown.find("completion barrier"), std::string::npos);
+  const auto winner = Describe(source, source.find("first ="));
+  EXPECT_EQ(winner.summary, "`first` — winner index");
+  EXPECT_NE(winner.markdown.find("zero-based"), std::string::npos);
 }
 
 TEST(FlowNavigate, QualifiedSourceFunctionsHaveDocumentation) {
@@ -287,16 +362,16 @@ TEST(FlowNavigate, NamedCallInputsHoverAsPorts) {
   EXPECT_EQ(input.kind, SymbolClass::kPort);
   EXPECT_EQ(input.summary, "`query` — input-port of `web-search`: str");
   EXPECT_EQ(input.detail, "What to look for.");
-  EXPECT_NE(input.markdown.find("**Takes:** str"), std::string::npos);
+  EXPECT_NE(input.markdown.find("**Takes:** *str*"), std::string::npos);
 }
 
 TEST(FlowNavigate, FlowHoverListsPortsInDeclarationOrder) {
   const Description about = Describe(kSource, At("research"), Known());
   ASSERT_TRUE(about.found);
-  EXPECT_NE(about.markdown.find("- in `question`: string required"),
+  EXPECT_NE(about.markdown.find("- in `question`: *string* required"),
             std::string::npos)
       << about.markdown;
-  EXPECT_NE(about.markdown.find("- out `found`: Source stream"),
+  EXPECT_NE(about.markdown.find("- out `found`: *Source* stream"),
             std::string::npos)
       << about.markdown;
 }
@@ -321,7 +396,7 @@ TEST(FlowNavigate, AShapeHoversAsItsFields) {
   ASSERT_TRUE(about.found);
   EXPECT_EQ(about.kind, SymbolClass::kDto);
   EXPECT_NE(about.markdown.find("**Fields**"), std::string::npos);
-  EXPECT_NE(about.markdown.find("`id`: string *(required)* — Stable id."),
+  EXPECT_NE(about.markdown.find("`id`: *string* *(required)* — Stable id."),
             std::string::npos)
       << about.markdown;
   // Declared here, so there is somewhere to go.
@@ -377,10 +452,10 @@ TEST(FlowNavigate, AnActionHoversAsItsDescriptionAndItsPorts) {
   EXPECT_NE(about.markdown.find("Search the web."), std::string::npos);
   EXPECT_NE(about.markdown.find("**Inputs**"), std::string::npos);
   EXPECT_NE(
-      about.markdown.find("`query`: str *(required)* — What to look for."),
+      about.markdown.find("`query`: *str* *(required)* — What to look for."),
       std::string::npos)
       << about.markdown;
-  EXPECT_NE(about.markdown.find("`results`: dict stream"), std::string::npos);
+  EXPECT_NE(about.markdown.find("`results`: *dict* stream"), std::string::npos);
   const auto mime = catalogue::Catalogue::FromJson(nlohmann::json::parse(R"({
     "actions": [{"name": "web-search", "inputs": [
       {"name": "query", "type": "application/json;type=a11.sdk.Query",
@@ -476,7 +551,7 @@ TEST(FlowNavigate, ARegisteredTypeReadsTheWayAShapeDoes) {
   ASSERT_TRUE(about.found);
   EXPECT_EQ(about.text, "a11::sdk::AudioBuffer");
   EXPECT_NE(about.markdown.find("A block of samples."), std::string::npos);
-  EXPECT_NE(about.markdown.find("`rate`: integer *(required)*"),
+  EXPECT_NE(about.markdown.find("`rate`: *integer* *(required)*"),
             std::string::npos)
       << about.markdown;
   // A caret anywhere in the dotted name describes the whole type, not the one

@@ -101,11 +101,7 @@ DocumentSymbol PortSymbol(const LineIndex& lines, const PortPlan& port) {
 }
 
 void AppendType(std::string* out, std::string_view type) {
-  if (type.find('/') != std::string_view::npos) {
-    absl::StrAppend(out, "*", type, "*");
-  } else {
-    absl::StrAppend(out, type);
-  }
+  absl::StrAppend(out, "*", type, "*");
 }
 
 /// The ports of an action, as one block of Markdown.
@@ -416,8 +412,15 @@ std::string DocMarkdown(std::string_view name, std::string_view kind,
   }
   if (!doc.example.empty()) {
     std::string_view examples = doc.example;
+    const size_t first_line = examples.find('\n');
+    const bool introduced_flow =
+        first_line != std::string_view::npos &&
+        examples.substr(first_line + 1).starts_with("flow ");
     const std::string_view separator =
-        examples.find("\n\n") == std::string_view::npos ? "\n" : "\n\n";
+        introduced_flow || examples.starts_with("flow ") ||
+                examples.find("\n\n") != std::string_view::npos
+            ? "\n\n"
+            : "\n";
     while (!examples.empty()) {
       const size_t end = examples.find(separator);
       const std::string_view example = examples.substr(0, end);
@@ -446,6 +449,288 @@ std::string DocMarkdown(std::string_view name, std::string_view kind,
     }
   }
   return out;
+}
+
+enum class DelimiterContext {
+  kFlow,
+  kConditional,
+  kLoop,
+  kBlock,
+  kAfterBlock,
+  kNodes,
+  kDeclaration,
+  kRecord,
+  kTypedValue,
+  kActionCall,
+  kFunctionCall,
+  kNodeCall,
+  kGroup,
+};
+
+struct DelimiterDoc {
+  std::string_view kind;
+  std::string_view opens;
+  std::string_view closes;
+  std::string_view detail;
+  std::string_view example;
+};
+
+DelimiterDoc DocumentationFor(DelimiterContext context) {
+  switch (context) {
+    case DelimiterContext::kFlow:
+      return {"flow body", "Opens the flow's statement scope.",
+              "Closes the flow's statement scope.",
+              "Statements in a flow start concurrently within each phase. "
+              "Their written order does not wait for earlier work. Use "
+              "`after` or `wait all` to create a dependency; names declared "
+              "inside the flow are not visible to callers.",
+              "Two calls can start together; the barrier waits for both.\n"
+              "flow lookup {\n"
+              "  out result: string stream\n"
+              "  a = call search_one()\n"
+              "  b = call search_two()\n"
+              "  wait all of a, b\n"
+              "  a.text | then b.text -> result\n"
+              "}"};
+    case DelimiterContext::kConditional:
+      return {"conditional branch", "Opens a conditional branch.",
+              "Closes a conditional branch.",
+              "Only the selected `if` or `else` branch runs. Statements "
+              "inside that branch start concurrently. Statements after its "
+              "closing brace remain independent unless they name a "
+              "completion dependency.",
+              "Select a branch after the lookup completes.\n"
+              "flow classify {\n"
+              "  in query: string\n"
+              "  out result: string\n"
+              "  found = try call search(query: query)\n"
+              "  after found {\n"
+              "    ready = wait found\n"
+              "    if ready.ok { found.text -> result }\n"
+              "    else { \"missing\" -> result }\n"
+              "  }\n"
+              "}"};
+    case DelimiterContext::kLoop:
+      return {"loop body", "Opens a loop body.", "Closes a loop body.",
+              "Statements in one pass start concurrently. A `for` reads "
+              "one source value per pass unless `parallel` allows several "
+              "passes at once. A `repeat` carries state between passes; "
+              "closing its body does not itself finish the loop.",
+              "Process a bounded number of requests concurrently.\n"
+              "flow fetch_all {\n"
+              "  in urls: string stream\n"
+              "  out pages: string stream\n"
+              "  for url in urls parallel 3 {\n"
+              "    page = call fetch(url: url)\n"
+              "    page.text -> pages\n"
+              "  }\n"
+              "}"};
+    case DelimiterContext::kBlock:
+      return {"standalone block", "Opens a standalone block.",
+              "Closes a standalone block.",
+              "The block is one step whose statements start concurrently. "
+              "Its completion includes all members. A bound block yields "
+              "a status; `try` contains a failure instead of ending the flow. "
+              "Use a dependency when a member must wait for another.",
+              "Group concurrent requests under one completion subject.\n"
+              "flow report {\n"
+              "  batch = {\n"
+              "    first = call lookup_one()\n"
+              "    second = call lookup_two()\n"
+              "  }\n"
+              "  wait batch\n"
+              "}"};
+    case DelimiterContext::kAfterBlock:
+      return {"dependency block", "Opens an `after` block.",
+              "Closes an `after` block.",
+              "The block starts after every named subject completes. Its "
+              "own statements then start concurrently; their written "
+              "order does not create another dependency.",
+              "Run both follow-up steps after planning finishes.\n"
+              "flow planned {\n"
+              "  plan = call make_plan()\n"
+              "  after plan {\n"
+              "    call reserve()\n"
+              "    call notify()\n"
+              "  }\n"
+              "}"};
+    case DelimiterContext::kNodes:
+      return {"node-map block", "Opens a local node-map scope.",
+              "Closes a local node-map scope.",
+              "Calls in this scope use the named node map. Its nodes stay "
+              "local to the flow rather than entering the dispatched wire "
+              "graph. Statements inside the scope still start concurrently.",
+              "flow local_work {\n"
+              "  nodes scratch {\n"
+              "    call prepare()\n"
+              "    call inspect()\n"
+              "  }\n"
+              "}"};
+    case DelimiterContext::kDeclaration:
+      return {"declaration body", "Opens a declaration body.",
+              "Closes a declaration body.",
+              "A `struct` body declares fields; a module body groups "
+              "declarations. These braces delimit definitions, not "
+              "concurrent executable statements.",
+              "struct Result {\n  value: string required\n}"};
+    case DelimiterContext::kRecord:
+      return {"record literal", "Opens a record literal.",
+              "Closes a record literal.",
+              "Entries form a value. Later entries overwrite earlier "
+              "entries with the same key, including keys introduced by a "
+              "spread. A record brace does not create a statement scope.",
+              "{...defaults, \"limit\": 10}"};
+    case DelimiterContext::kTypedValue:
+      return {"typed value", "Opens a typed value's fields.",
+              "Closes a typed value's fields.",
+              "The named registered type validates the fields and applies "
+              "its defaults. This is a value expression, not a statement "
+              "block. Parenthesize it where `{` would otherwise open a "
+              "condition or loop body.",
+              "a11::sdk::Interaction{role: \"user\", content: []}"};
+    case DelimiterContext::kActionCall:
+      return {"action inputs", "Opens an action's input arguments.",
+              "Closes an action's input arguments.",
+              "Each named argument feeds an input port. A pipeline can feed "
+              "a streaming port. Call modifiers such as `with`, `timeout`, "
+              "`via`, and `after` follow the closing parenthesis.",
+              "answer = call ask_model(question: prompt, context: notes) "
+              "timeout 30s"};
+    case DelimiterContext::kFunctionCall:
+      return {"function arguments", "Opens function arguments.",
+              "Closes function arguments.",
+              "Arguments are expressions in positional order. The "
+              "function's own documentation specifies accepted types and "
+              "results; these parentheses do not start an action.",
+              "std::join([\"alpha\", \"beta\"], \", \")"};
+    case DelimiterContext::kNodeCall:
+      return {"node constructor", "Opens a node constructor.",
+              "Closes a node constructor.",
+              "`node()` creates a node with a generated id; `node(id)` "
+              "uses the supplied id. A following `in` places it in a named "
+              "node map.",
+              "progress = node(\"progress\") in scratch"};
+    case DelimiterContext::kGroup:
+      return {"grouped expression", "Opens a grouped expression.",
+              "Closes a grouped expression.",
+              "Grouping controls precedence. It also permits a pipeline "
+              "value where an expression is required. Grouping alone "
+              "does not wait for a concurrently running step.",
+              "if (hits | count) > 0 { \"found\" -> result }"};
+  }
+  return {};
+}
+
+bool IsDelimiter(TokenKind kind) {
+  return kind == TokenKind::kLeftBrace || kind == TokenKind::kRightBrace ||
+         kind == TokenKind::kLeftParen || kind == TokenKind::kRightParen;
+}
+
+size_t OpeningDelimiter(absl::Span<const Token> tokens, size_t index) {
+  const TokenKind closing = tokens[index].kind;
+  if (closing == TokenKind::kLeftBrace || closing == TokenKind::kLeftParen) {
+    return index;
+  }
+  const TokenKind opening = closing == TokenKind::kRightBrace
+                                ? TokenKind::kLeftBrace
+                                : TokenKind::kLeftParen;
+  int depth = 0;
+  for (size_t at = index + 1; at-- > 0;) {
+    if (tokens[at].kind == closing) {
+      ++depth;
+    }
+    if (tokens[at].kind == opening && --depth == 0) {
+      return at;
+    }
+  }
+  return index;
+}
+
+DelimiterContext BraceContext(absl::Span<const Token> tokens, size_t opening,
+                              const ParseResult& parsed) {
+  const size_t start = tokens[opening].start;
+  if (std::binary_search(parsed.tagged_braces.begin(),
+                         parsed.tagged_braces.end(), start)) {
+    return DelimiterContext::kTypedValue;
+  }
+  if (std::binary_search(parsed.value_braces.begin(), parsed.value_braces.end(),
+                         start)) {
+    return DelimiterContext::kRecord;
+  }
+  size_t first = opening;
+  while (first > 0 && tokens[first - 1].kind != TokenKind::kNewline &&
+         tokens[first - 1].kind != TokenKind::kSemicolon &&
+         tokens[first - 1].kind != TokenKind::kLeftBrace &&
+         tokens[first - 1].kind != TokenKind::kRightBrace) {
+    --first;
+  }
+  for (size_t at = first; at < opening; ++at) {
+    if (!tokens[at].IsWord()) {
+      continue;
+    }
+    const std::string word = vocabulary::Canonical(tokens[at].text);
+    if (word == "flow") {
+      return DelimiterContext::kFlow;
+    }
+    if (word == "if" || word == "else") {
+      return DelimiterContext::kConditional;
+    }
+    if (word == "for" || word == "repeat") {
+      return DelimiterContext::kLoop;
+    }
+    if (word == "nodes") {
+      return DelimiterContext::kNodes;
+    }
+    if (word == "struct" || word == "module") {
+      return DelimiterContext::kDeclaration;
+    }
+    if (word == "after") {
+      return DelimiterContext::kAfterBlock;
+    }
+  }
+  return DelimiterContext::kBlock;
+}
+
+DelimiterContext ParenthesisContext(absl::Span<const Token> tokens,
+                                    size_t opening) {
+  if (opening == 0 || !tokens[opening - 1].IsWord()) {
+    return DelimiterContext::kGroup;
+  }
+  const std::string before = vocabulary::Canonical(tokens[opening - 1].text);
+  if (before == "if" || before == "while" || before == "until" ||
+      before == "for" || before == "take") {
+    return DelimiterContext::kGroup;
+  }
+  if (before == "node") {
+    return DelimiterContext::kNodeCall;
+  }
+  size_t first = opening - 1;
+  while (first > 0 && tokens[first - 1].kind != TokenKind::kNewline &&
+         tokens[first - 1].kind != TokenKind::kSemicolon &&
+         tokens[first - 1].kind != TokenKind::kLeftBrace &&
+         tokens[first - 1].kind != TokenKind::kRightBrace) {
+    --first;
+  }
+  for (size_t at = first; at + 1 < opening; ++at) {
+    if (!tokens[at].IsWord()) {
+      continue;
+    }
+    const std::string word = vocabulary::Canonical(tokens[at].text);
+    if (word != "run" && word != "call") {
+      continue;
+    }
+    bool inside_arguments = false;
+    for (size_t between = at + 1; between < opening; ++between) {
+      if (tokens[between].kind == TokenKind::kLeftParen) {
+        inside_arguments = true;
+        break;
+      }
+    }
+    if (!inside_arguments) {
+      return DelimiterContext::kActionCall;
+    }
+  }
+  return DelimiterContext::kFunctionCall;
 }
 
 }  // namespace
@@ -643,8 +928,9 @@ std::string PortMarkdown(std::string_view name, std::string_view type,
   if (!description.empty()) {
     absl::StrAppend(&out, description, "\n");
   }
-  absl::StrAppend(&out, "\n**Takes:** ", type.empty() ? "any" : type,
-                  unary ? " (one value)" : " (a stream)",
+  absl::StrAppend(&out, "\n**Takes:** ");
+  AppendType(&out, type.empty() ? "any" : type);
+  absl::StrAppend(&out, unary ? " (one value)" : " (a stream)",
                   required ? ", required" : ", optional", ".\n");
   return out;
 }
@@ -655,8 +941,10 @@ std::string FlowMarkdown(const FlowPlan& flow) {
     absl::StrAppend(
         &ports,
         port.direction == syntax::PortDirection::kInput ? "- in `" : "- out `",
-        port.name, "`: ", port.declared.empty() ? port.type : port.declared,
-        port.unary ? "" : " stream", port.required ? " required" : "");
+        port.name, "`: ");
+    AppendType(&ports, port.declared.empty() ? port.type : port.declared);
+    absl::StrAppend(&ports, port.unary ? "" : " stream",
+                    port.required ? " required" : "");
     if (!port.description.empty()) {
       absl::StrAppend(&ports, " — ", port.description);
     }
@@ -965,6 +1253,31 @@ Description Describe(std::string_view source, size_t offset,
     linked = &owned_linked;
   }
   const auto& parsed = linked->parsed;
+  if (index < lexed.tokens.size() && IsDelimiter(lexed.tokens[index].kind)) {
+    const size_t opening = OpeningDelimiter(lexed.tokens, index);
+    const bool is_closing =
+        lexed.tokens[index].kind == TokenKind::kRightBrace ||
+        lexed.tokens[index].kind == TokenKind::kRightParen;
+    if (!is_closing || opening != index) {
+      const bool brace = lexed.tokens[opening].kind == TokenKind::kLeftBrace;
+      const DelimiterContext context =
+          brace ? BraceContext(lexed.tokens, opening, parsed)
+                : ParenthesisContext(lexed.tokens, opening);
+      const DelimiterDoc doc = DocumentationFor(context);
+      const std::string label =
+          absl::StrCat(is_closing ? "closing " : "opening ", doc.kind,
+                       brace ? " brace" : " parenthesis");
+      const std::string_view summary = is_closing ? doc.closes : doc.opens;
+      about.kind = SymbolClass::kExternal;
+      about.summary =
+          absl::StrCat("`", about.text, "` — ", label, ": ", summary);
+      about.detail = std::string(doc.detail);
+      about.markdown = DocMarkdown(
+          about.text, label,
+          vocabulary::WordDoc{summary, "", doc.detail, doc.example});
+      return about;
+    }
+  }
   const internal::EditorDocumentation documentation(linked->source, parsed,
                                                     limits, budget);
   auto local =
@@ -1004,10 +1317,11 @@ Description Describe(std::string_view source, size_t offset,
       about.range =
           lines.Between(lexed.tokens[first].start, lexed.tokens[last].end);
       about.kind = SymbolClass::kExternal;
-      about.markdown = vocabulary::Documentation(
-                           vocabulary::WordRole::kSource, canonical) != nullptr
-                           ? WordMarkdown(canonical, vocabulary::WordRole::kSource)
-                           : BuiltinMarkdown(canonical);
+      about.markdown =
+          vocabulary::Documentation(vocabulary::WordRole::kSource, canonical) !=
+                  nullptr
+              ? WordMarkdown(canonical, vocabulary::WordRole::kSource)
+              : BuiltinMarkdown(canonical);
       about.summary = about.markdown.substr(0, about.markdown.find('\n'));
       return about;
     }
@@ -1032,13 +1346,13 @@ Description Describe(std::string_view source, size_t offset,
         !lexed.tokens[start + 1].IsWord()) {
       continue;
     }
-    const std::string next = vocabulary::Canonical(lexed.tokens[start + 1].text);
+    const std::string next =
+        vocabulary::Canonical(lexed.tokens[start + 1].text);
     std::string_view phrase;
     size_t last = start + 1;
-    const bool has_of = start + 2 < lexed.tokens.size() &&
-                        lexed.tokens[start + 2].IsWord() &&
-                        vocabulary::Canonical(lexed.tokens[start + 2].text) ==
-                            "of";
+    const bool has_of =
+        start + 2 < lexed.tokens.size() && lexed.tokens[start + 2].IsWord() &&
+        vocabulary::Canonical(lexed.tokens[start + 2].text) == "of";
     if (next == "first" && has_of) {
       phrase = "wait first of";
       last = start + 2;
@@ -1049,12 +1363,12 @@ Description Describe(std::string_view source, size_t offset,
     if (phrase.empty() || token_index > last) {
       continue;
     }
-    if (const auto* doc = vocabulary::Documentation(
-            vocabulary::WordRole::kStatement, phrase);
+    if (const auto* doc =
+            vocabulary::Documentation(vocabulary::WordRole::kStatement, phrase);
         doc != nullptr) {
       about.text = phrase;
-      about.range = lines.Between(lexed.tokens[start].start,
-                                  lexed.tokens[last].end);
+      about.range =
+          lines.Between(lexed.tokens[start].start, lexed.tokens[last].end);
       about.kind = SymbolClass::kExternal;
       about.summary =
           absl::StrCat("`", phrase, "` — a statement: ", doc->summary);
@@ -1337,6 +1651,38 @@ Description Describe(std::string_view source, size_t offset,
                        " of `", flow.plan.name, "`");
       about.has_definition = true;
       about.definition = RangeOf(lines, symbol.location);
+      if (symbol.kind == SymbolKind::kBarrier) {
+        bool race = false;
+        bool closing = false;
+        syntax::VisitSubtree(*flow.declaration, [&](const syntax::Node& node) {
+          const auto* bind = syntax::As<syntax::Bind>(&node);
+          if (bind == nullptr ||
+              bind->name.location.start != symbol.location.start) {
+            return;
+          }
+          if (const auto* wait = syntax::As<syntax::Wait>(bind->value.get());
+              wait != nullptr) {
+            race = wait->race;
+          }
+          closing = syntax::As<syntax::Close>(bind->value.get()) != nullptr;
+        });
+        if (race) {
+          about.summary = absl::StrCat("`", about.text, "` — winner index");
+          about.detail =
+              "A `wait first of` completes when one named subject finishes. "
+              "This value is that subject's zero-based position in the list; "
+              "the remaining subjects continue running.";
+        } else {
+          about.summary = absl::StrCat("`", about.text, "` — status");
+          about.detail =
+              closing
+                  ? "A bound `close` waits for the node's writers and buffered "
+                    "values, then exposes their completion status."
+                  : "A bound `wait` is a completion barrier. It waits for the "
+                    "named subject, then exposes that subject's status. Read "
+                    "the subject's output ports separately for payload values.";
+        }
+      }
       if (symbol.kind == SymbolKind::kCall) {
         absl::StrAppend(&about.summary, ", running `", symbol.action, "`");
       }

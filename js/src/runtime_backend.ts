@@ -164,7 +164,7 @@ export class A11Runtime {
           const moduleUrl = options.wasm?.moduleUrl ?? (options.wasm?.assetsBaseUrl
             ? new URL('index.mjs', options.wasm.assetsBaseUrl)
             : new URL('./wasm/index.mjs', import.meta.url));
-          const loaded = await import(String(moduleUrl)) as {
+          const loaded = await import(/* webpackIgnore: true */ String(moduleUrl)) as {
             createA11Wasm?: () => Promise<A11WasmModule>;
           };
           if (!loaded.createA11Wasm) return unimplementedError('WASM module has no createA11Wasm export.');
@@ -188,7 +188,7 @@ export class A11Runtime {
             (options.wasm?.assetsBaseUrl
               ? new URL('native.mjs', options.wasm.assetsBaseUrl)
               : new URL('./wasm/native.mjs', import.meta.url));
-          const loaded = await import(String(flowRuntimeUrl)) as {
+          const loaded = await import(/* webpackIgnore: true */ String(flowRuntimeUrl)) as {
             createA11WasmRuntime?: (options: A11WasmWorkerOptions) =>
               Promise<A11FlowRunnerBridge>;
           };

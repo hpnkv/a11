@@ -1625,13 +1625,11 @@ ActionSchema MakeHttpRequestSchema() {
   ActionSchema schema;
   schema.name = std::string(kMakeHttpRequestAction);
   schema.description =
-      "Make one HTTP request, with every part of the response on a port of its "
-      "own: the status and headers as soon as they arrive, the body as it "
-      "streams, the trailer section after it, the redirects that were "
-      "followed, and any responses the server pushed. A 4xx or 5xx is a "
-      "response and is delivered like any other -- the action fails only when "
-      "there is no response at all. Action headers that do not begin with "
-      "x-a11- are sent as HTTP request headers.";
+      "Perform one HTTP request. Status and headers arrive before the body; "
+      "body chunks stream as received. Trailers, redirect history, connection "
+      "details and supported server pushes have separate ports. HTTP error "
+      "responses still produce a status_code and body. Action headers without "
+      "the x-a11- prefix become HTTP request headers.";
   AddRequestInputs(
       schema,
       "Request settings, all optional: max_redirects (5), timeout (seconds), "
@@ -1704,11 +1702,11 @@ ActionSchema WebFetchSchema() {
   ActionSchema schema;
   schema.name = std::string(kWebFetchAction);
   schema.description =
-      "Fetch a URL and hand back the body the way it is wanted: as text, as "
-      "parsed JSON, as bytes, or decoded into a stream of items. A 4xx or 5xx "
-      "is reported on `ok` rather than failing, so an error document can still "
-      "be read. Action headers that do not begin with x-a11- are sent as HTTP "
-      "request headers. Use make_http_request for the protocol itself.";
+      "Fetch a URL and decode its body as text, JSON, bytes or streamed items. "
+      "HTTP 4xx and 5xx responses set ok to false and retain the response "
+      "body. "
+      "Action headers without the x-a11- prefix become request headers. Use "
+      "make_http_request to inspect trailers, redirects and connection data.";
   AddRequestInputs(
       schema,
       "Request settings, all optional: max_redirects (5), timeout (seconds), "
@@ -1759,11 +1757,9 @@ ActionSchema WebRenderSchema() {
   schema.name = std::string(kWebRenderAction);
   schema.description =
       "Render an HTTP(S) page with the platform WebKit engine and return the "
-      "post-script HTML and rendered page text. Set options.include_image for "
-      "a bounded PNG snapshot. In Flow, omit large representations that are "
-      "not needed and filter or truncate `text` before routing it to a flow "
-      "output. "
-      "Use web-fetch when raw HTTP content is sufficient.";
+      "post-script HTML and rendered text. `options.include_image` adds a "
+      "bounded PNG snapshot. Filter or truncate `text` before forwarding "
+      "large results. Use `web-fetch` for raw HTTP content.";
   schema.inputs.emplace("url", Port("url", std::string(data::kTextMimetype),
                                     "Absolute HTTP(S) URL to render.",
                                     /*required=*/true, /*unary=*/true));

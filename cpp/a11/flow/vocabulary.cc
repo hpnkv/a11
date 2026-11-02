@@ -96,7 +96,7 @@ const absl::flat_hash_map<std::string_view, StageArgument>& StageTable() {
           {"text", StageArgument::kNone},
           {"json", StageArgument::kNone},
           {"packb", StageArgument::kNone},
-  };
+      };
   return *table;
 }
 
@@ -107,13 +107,28 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StageDocs() {
        {"Read a node through an independent configured cursor.",
         "a reader option record",
         "The record overlays the reader defaults for this pipeline. Other "
-        "subscriptions keep their own cursor and options.",
-        "page.text | read_with {offset: 2} -> selected"}},
+        "subscriptions keep their own cursor and options. `offset` counts "
+        "fragments, so a separate reader can inspect a later portion without "
+        "advancing an earlier reader.",
+        "page.text | read_with {offset: 2} -> selected\n\n"
+        R"(Read a fragment window without changing other readers.
+flow inspect-articles {
+  in articles: string stream required
+  out selected: string stream
+  articles | read_with {offset: 1, max_chunks_to_read: 2} -> selected
+})"}},
       {"ref",
        {"Write a reference to a direct source node.",
         "optionally a fragment window record",
-        "The destination reads the source's retained fragments when needed.",
-        "page.text | ref -> archive"}},
+        "The destination reads the source's retained fragments when needed. "
+        "The referenced source must remain accessible to the reader.",
+        "page.text | ref -> archive\n\n"
+        R"(Forward a reference to retained findings for later reading.
+flow retain-findings {
+  in findings: string stream required
+  out archive: string stream
+  findings | ref -> archive
+})"}},
       {"take while",
        {"Forwards the prefix for which the condition stays true.",
         "a condition with 'it' bound",
@@ -121,67 +136,102 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StageDocs() {
         "items "
         "are excluded. Ends this subscription without cancelling its producer. "
         "Predicate failures propagate unless the stage uses 'try'.",
-        "lines | take while std::lower(it) != \"/exit\" -> work.input"}},
+        "lines | take while std::lower(it) != \"/exit\" -> work.input\n\n"
+        R"(Stop forwarding rows at the first blank row.
+flow valid-prefix {
+  in rows: string stream required
+  out valid: string stream
+  rows | take while std::len(it) > 0 -> valid
+})"}},
       {"take until",
        {"Forwards the prefix before the condition first becomes true.",
         "a condition with 'it' bound",
         "Evaluates one item at a time. The first true item and all later items "
         "are excluded. Ends this subscription without cancelling its producer. "
         "A tolerated predicate failure drops that item and keeps looking.",
-        "lines | take until std::lower(it) == \"/exit\" -> work.input"}},
+        "lines | take until std::lower(it) == \"/exit\" -> work.input\n\n"
+        R"(A sentinel ends the exposed event stream without being forwarded.
+flow active-events {
+  in events: string stream required
+  out active: string stream
+  events | take until it == "STOP" -> active
+})"}},
       {"first",
-       {"The first `n` values of the stream, and then nothing.",
+       {"Emit at most the first `n` values.",
         "a scalar integer expression, evaluated once",
-        "Stops reading upstream as soon as it has them, so nothing downstream "
-        "waits for values nobody will see. It does not *cancel* whoever is "
-        "producing: a step feeding a node that nobody drains would stall, and "
-        "a "
-        "`first 3` must not be able to wedge what it reads from. An action "
-        "that "
-        "can be asked to finish takes that on a control port of its own. "
-        "`| first 1` is how a stream becomes one value.",
-        "hits | first 3 -> shown"}},
+        "Stops this subscription after `n` values. The producer continues "
+        "unless its own control port or cancellation mechanism stops it. "
+        "`first 1` yields a stream with at most one value. `last` waits for "
+        "the source to finish before selecting values.",
+        "hits | first 3 -> shown\n\n"
+        R"(Sort scores, retain the two leaders, and emit their names.
+flow top-scores {
+  out leaders: string stream
+  [{name: "Ada", points: 91}, {name: "Bo", points: 98}, {name: "Cy", points: 86}]
+    | flatten | sort by it.points desc | first 2 | map it.name -> leaders
+})"}},
       {"last",
-       {"The last `n` values of the stream.",
+       {"Emit the final `n` values.",
         "a scalar integer expression, evaluated once",
-        "Reads the whole stream to find out which those are, holding `n` "
-        "values "
-        "while it does, so nothing comes out until the stream ends.",
-        "lines | last 20 -> tail"}},
+        "Reads upstream to completion and retains at most `n` values. Output "
+        "begins after the source ends. Use `first` for a prefix that can be "
+        "emitted while upstream is still producing values.",
+        "lines | last 20 -> tail\n\n"
+        R"(Filter errors before selecting the last two.
+flow trailing-errors {
+  out recent: string stream
+  ["ok", "error: disk", "ok", "error: network"]
+    | flatten | where std::startswith(it, "error:") | last 2 -> recent
+})"}},
       {"drop",
-       {"Everything except the first `n` values.",
+       {"Discard the first `n` values in this pipeline.",
         "a scalar integer expression, evaluated once",
-        "Only this pipeline sees fewer values. `skip n port` is the other half "
-        "of the pair: it takes them off the node itself, for every reader of "
-        "it, "
-        "which is how a header row stops being everybody's problem.",
-        "rows | drop 1 -> body"}},
+        "Other readers retain their positions. `skip n port` advances the "
+        "shared port for every reader.",
+        "rows | drop 1 -> body\n\n"
+        R"(Skip the first CSV row while preserving the data rows.
+flow without-header {
+  out rows: string stream
+  ["name,age", "Ada,31", "Bo,29"] | flatten | drop 1 -> rows
+})"}},
       {"truncate",
-       {"Shortens each value. The stream keeps its length.",
+       {"Limit the size of each value.",
         "a scalar integer expression, evaluated once",
-        "`n` characters of a string, `n` bytes of a byte string, `n` items of "
-        "a "
-        "list, `n` keys of a record. Anything else goes through unchanged. "
-        "Cutting a page down before it reaches a model is the difference "
-        "between a cheap call and an expensive one.",
-        "page.text | truncate 4000 -> brief.pages"}},
+        "Retains at most `n` characters of text, bytes of a byte string, "
+        "items of a list or keys of a record. Other types pass through. The "
+        "number of stream values is unchanged.",
+        "page.text | truncate 4000 -> brief.pages\n\n"
+        R"(Each description is shortened independently before it is streamed.
+flow bounded-previews {
+  out previews: string stream
+  ["A long description", "A short note"] | flatten
+    | truncate 12 -> previews
+})"}},
       {"batch",
-       {"Gathers values into lists of `n`.",
+       {"Emit consecutive groups of at most `n` values as lists.",
         "a scalar integer expression, evaluated once",
-        "Each list goes on as one value, so what follows reads a stream of "
-        "lists. Whatever is left when the stream ends goes on too, short.",
-        "samples | batch 100 -> frames"}},
+        "Each group is one output value. The final group may contain fewer "
+        "than `n` values. `window` emits overlapping groups instead.",
+        "samples | batch 100 -> frames\n\n"
+        R"(Group five samples into consecutive batches of at most two.
+flow minute-buckets {
+  out buckets: list stream
+  [10, 20, 15, 30, 25] | flatten | batch 2 -> buckets
+})"}},
       {"window",
-       {"Gathers values into overlapping lists of the last `n`.",
+       {"Emit overlapping windows of `n` values.",
         "a scalar integer expression, evaluated once",
-        "One list per value once `n` have arrived, each sharing all but one "
-        "value with the list before it. This is `batch` for a question about "
-        "neighbours rather than about groups: a pattern spanning two lines is "
-        "invisible to a `batch`, because a boundary falls somewhere and half "
-        "the matches fall on it. Holds `n` values and no more, so a window "
-        "over "
-        "a stream that never ends costs nothing that grows.",
-        R"(lines | window 3 | map std::join(it, "\n") -> paragraphs)"}},
+        "The first output follows the `n`th input. Each subsequent output "
+        "replaces the oldest item. Memory is bounded by `n` values. Use "
+        "`batch` for disjoint groups.",
+        R"(lines | window 3 | map std::join(it, "\n") -> paragraphs
+
+Compute a two-sample total as the window advances.
+flow rolling-sums {
+  out totals: int stream
+  [80, 100, 120, 90] | flatten | window 2
+    | map (it[0] + it[1]) -> totals
+})"}},
       {"context",
        {"Matching excerpts extended by nearby matches.",
         "predicate before COUNT after COUNT [numbered [base EXPR]]",
@@ -195,224 +245,326 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StageDocs() {
         "bound endless sources upstream. Predicate failures propagate; try "
         "context treats them as nonmatches and reports them.",
         "lines | context std::contains(it, \"error\") before 3 after 5 "
-        "numbered -> excerpts"}},
+        "numbered -> excerpts\n\n"
+        R"(Retain one line before and two lines after an error marker.
+flow log-context {
+  out excerpts: list stream
+  ["ready", "connected", "ERROR", "retrying", "done"]
+    | flatten | context it == "ERROR" before 1 after 2 -> excerpts
+})"}},
       {"group",
-       {"Gathers values into lists, closed by a question rather than a count.",
+       {"Collect values until a predicate closes the group.",
         "an expression, with `it` bound to the value in hand",
-        "Values pile up until the expression is true of the one just added; "
-        "that list goes on and gathering starts again. Whatever is left when "
-        "the stream ends goes on too. This is `batch` for a stream whose own "
-        "values say where the boundaries are.",
-        "words | group it.final -> sentences"}},
+        "The value satisfying the predicate is included in its group. A final "
+        "incomplete group is emitted at end of stream. Use `batch` for fixed "
+        "group sizes.",
+        "words | group it.final -> sentences\n\n"
+        R"(Close each paragraph at a final marker and count its entries.
+flow paragraph-sizes {
+  out sizes: int stream
+  [{text: "A", final: false}, {text: "B", final: true}, {text: "C", final: true}]
+    | flatten | group it.final | map std::len(it) -> sizes
+})"}},
       {"where",
-       {"Keeps the values the expression is true of.",
+       {"Filter values by a predicate.",
         "an expression, with `it` bound to the value in hand",
-        "A kept value goes on exactly as it arrived, bytes and mimetype and "
-        "all, so filtering costs nothing beyond reading it. May be written "
-        "without the leading `|`, which reads as a word joining two things: "
-        "`hits where it.ok`.",
-        "hits | where it.score > 0.5 -> kept"}},
+        "Retained values preserve their bytes and metadata. `where` also "
+        "accepts the infix form without `|`. `map` changes each retained "
+        "value; `where` retains its original representation.",
+        "hits | where it.score > 0.5 -> kept\n\n"
+        R"(Keep expensive orders and project only their IDs.
+flow expensive-orders {
+  out ids: string stream
+  [{id: "A", price: 25}, {id: "B", price: 5}]
+    | flatten | where it.price >= 20 | map it.id -> ids
+})"}},
       {"map",
-       {"Replaces each value with what the expression makes of it.",
+       {"Transform each value with an expression.",
         "an expression, with `it` bound to the value in hand",
-        "`map Shape{...}` and `map it as Shape` also tell the language what "
-        "the "
-        "stream now carries, so the fields are completed and checked "
-        "downstream. Anything else makes something the language cannot name, "
-        "and it says nothing about it rather than guessing.",
-        "hits | map Source{url: it.url} -> sources"}},
+        "`map Shape{...}` and `map it as Shape` declare the output type for "
+        "downstream field completion and validation. Other expressions "
+        "produce values without a declared output type. Use `where` to remove "
+        "values before mapping; a `map` expression runs once per input.",
+        "hits | map Source{url: it.url} -> sources\n\n"
+        R"(Parse log records, retain warnings, and emit their messages.
+flow warning-lines {
+  out messages: string stream
+  ["INFO: ready", "WARN: cache low", "WARN: disk full"]
+    | flatten | match "{level:word}: {message:line}"
+    | where it.level == "WARN" | map it.message -> messages
+})"}},
       {"log",
        {"Logs each value and passes it on unchanged.",
-        "optionally a level, and an expression with `it` bound to the value in "
-        "hand",
-        "Written without an expression it logs the value itself, so a stage "
-        "may "
-        "be dropped into a pipeline to see what is going through it without "
-        "changing what comes out. The log goes to the flow's own log, which no "
-        "port has to declare and nothing has to drain.",
+        "an optional level and expression with `it` bound",
+        "Without an expression, logs the input value. The flow log requires "
+        "no declared port and no reader.",
         "hits | log warning it.error | collect -> problems"}},
       {"logf",
        {"Logs a formatted line per value and passes the value on unchanged.",
         "optionally a level, a format, and the values to fill it with",
-        "The format is `strformat`'s, and `it` is the value in hand, so the "
-        "usual shape is one format and one field of it. Like `log` it changes "
-        "nothing about the stream.",
-        "pages | logf \"fetched %s\" it.url -> fetched"}},
+        "Uses the `strformat` conversion rules. `it` refers to the current "
+        "value. Logging does not change the output stream.",
+        "pages | logf \"fetched %s\" it.url -> fetched\n\n"
+        R"(Log each URL while forwarding the original values.
+flow logged-downloads {
+  out urls: string stream
+  ["/a", "/b"] | flatten
+    | logf info "downloading %s" it -> urls
+})"}},
       {"match",
-       {"Pulls named fields out of each value, and drops the ones that do not "
-        "fit.",
-        "a pattern",
-        "Literal text matches itself, a run of spaces or tabs matches any run, "
-        "and `{name}` captures up to whatever follows it: "
-        "`match(\"name={name} age={age:int}\")` turns `name=Alice   age=27` "
-        "into a record with `name` and `age`. A hole may say what it is: "
-        "`int`, "
-        "`number`, `bool`, `word`, `line`, `rest`, `duration`, `time`, `json`. "
-        "The pattern searches, so it matches anywhere in the value and needs "
-        "no "
-        "leading or trailing wildcards. A value the pattern does not fit is "
-        "dropped, which is what makes this a `where` and a `map` at once; the "
-        "function of the same name answers null for one value instead. Where "
-        "the "
-        "pattern is written out, the fields are known, so `it.name` is "
-        "completed "
-        "and a typo in it is reported.",
+       {"Extract named fields from matching stream values.", "a pattern",
+        "Literal text matches itself. Whitespace runs match flexible spaces "
+        "or tabs. `{name}` captures text; typed captures accept `int`, "
+        "`number`, `bool`, `word`, `line`, `rest`, `duration`, `time`, and "
+        "`json`. The pattern searches within each value. Unmatched values "
+        "are dropped. A literal pattern exposes captured field names to "
+        "completion. `std::match` returns null for one unmatched value.",
         "lines | match \"{level:word}: {message:line}\" | map it.level -> "
-        "levels"}},
+        "levels\n\n"
+        R"(Parse log records, retain warnings, and emit their messages.
+flow warning-lines {
+  out messages: string stream
+  ["INFO: ready", "WARN: cache low", "WARN: disk full"]
+    | flatten | match "{level:word}: {message:line}"
+    | where it.level == "WARN" | map it.message -> messages
+})"}},
       {"distinct",
-       {"Drops a value equal to one already seen.", "",
-        "Equal as text, which is what makes it work on records as well as on "
-        "strings. Every distinct value seen so far is remembered for as long "
-        "as "
-        "the stream runs.",
-        "urls | distinct -> once_each"}},
+       {"Emit each distinct text representation once.", "",
+        "Values are compared as text, including records and lists. Retains "
+        "every representation seen until the stream ends. For an unbounded "
+        "source, the set of previously seen values can grow without limit.",
+        "urls | distinct -> once_each\n\n"
+        R"(Remove repeated domains in first-seen order.
+flow unique-domains {
+  out domains: string stream
+  ["a.example", "b.example", "a.example"]
+    | flatten | distinct -> domains
+})"}},
       {"then",
-       {"All of this stream, and then all of another.", "another stream",
-        "Two writers to one node interleave by arrival, which is right for "
-        "pages and wrong for a conversation; this is how a flow says which "
-        "comes first. May be written without the leading `|`.",
-        "history then asked -> prompt"}},
+       {"Concatenate two streams in source order.", "another stream",
+        "Reads the left stream to completion before reading the right. "
+        "May be written without the leading `|`. Flow statements start "
+        "concurrently, so statement position does not order independent "
+        "writes; `then` orders values at this read.",
+        "history then asked -> prompt\n\n"
+        R"(Emit instructions before requests even when sources run concurrently.
+flow ordered-prompt {
+  in instructions: string stream required
+  in request: string stream required
+  out prompt: string stream
+  instructions then request -> prompt
+})"}},
       {"mime",
-       {"Keeps the values whose mimetype matches.",
-        "a mimetype, which may end in `*`",
-        "Looks at how the value was written rather than at the value, so "
-        "nothing is decoded to decide. On a mixed stream this is how a flow "
-        "takes the part it understands.",
+       {"Filter values by their stored media type.",
+        "a media type, optionally ending in `*`",
+        "Matches chunk metadata without decoding the payload.",
         "parts | mime \"text/*\" -> readable"}},
       {"strformat",
        {"Formats each value into a string.", "a format string",
-        "Exactly `| map strformat(\"...\", it)`, which is the shape almost "
-        "every "
-        "use of it has. printf's conversions: `%s` for anything, `%d` and "
-        "`%.2f` for numbers, `%%` for a literal per cent. The function of the "
-        "same name is there for when more than one value goes in.",
-        "elapsed | strformat \"took %s\" -> log"}},
+        "Equivalent to `| map strformat(\"...\", it)`. Supports `%s`, numeric "
+        "conversions such as `%d` and `%.2f`, and `%%` for a literal percent "
+        "sign. Use `std::strformat` to format multiple arguments.",
+        "elapsed | strformat \"took %s\" -> log\n\n"
+        R"(Prefix each state with a stable label.
+flow formatted-states {
+  out states: string stream
+  ["ready", "busy"] | flatten | strformat "state=%s" -> states
+})"}},
       {"chunk",
-       {"Cuts each value into pieces of at most `n` bytes.",
+       {"Split text or bytes into values of at most `n` bytes.",
         "a scalar integer size in bytes, evaluated once",
-        "One value becomes a stream of pieces, "
-        "which is what an upload wanting 64 KiB frames and a model wanting a "
-        "paragraph are both asking for. Text is cut on a character boundary, "
-        "so "
-        "every piece is something that can be read. A value that is neither "
-        "text nor bytes is not cut and goes through whole.",
-        "body | chunk 65536 -> upload.parts"}},
+        "Text splits only at character boundaries. Other value types pass "
+        "through unchanged.",
+        "body | chunk 65536 -> upload.parts\n\n"
+        R"(Split a long string into bounded text fragments.
+flow utf8-parts {
+  out parts: string stream
+  ["abcdefghij"] | flatten | chunk 4 -> parts
+})"}},
       {"collect",
-       {"The whole stream, as one list.", "",
-        "Reads to the end and yields exactly one value, which changes the "
-        "arithmetic of everything after it: `| drop 2` yields nothing and "
-        "`| count` is 1 however long the stream was.",
-        "hits | collect -> all"}},
+       {"Collect the complete stream into one list.", "",
+        "Reads upstream to completion and emits exactly one list, including "
+        "an empty list for an empty stream. Subsequent stages receive one "
+        "value. `join` produces one string instead; `count` produces one "
+        "integer without retaining the values.",
+        "hits | collect -> all\n\n"
+        R"(Collect text fragments, then join the resulting list.
+flow page-summary {
+  out summary: string
+  ["one", "two", "three"] | flatten | collect
+    | map std::join(it, ", ") -> summary
+})"}},
       {"consume",
        {"Exactly one complete value, checked before it is yielded.", "",
         "An empty stream or a second item fails with FAILED_PRECONDITION. "
         "Waits for normal termination after the sole value; upstream errors "
         "retain their status. A null value counts as an item.",
-        "result | consume -> answer"}},
+        "result | consume -> answer\n\n"
+        R"(Require exactly one accepted result.
+flow sole-result {
+  out answer: string
+  ["accepted"] | flatten | consume -> answer
+})"}},
       {"count",
-       {"How many values the stream had.", "",
-        "Reads to the end and yields exactly one integer. Nothing is decoded "
-        "to "
-        "count it, so counting a stream of pages costs nothing per page.",
-        "pages | count -> how_many"}},
+       {"Count stream values.", "",
+        "Reads upstream to completion and emits one integer. Does not decode "
+        "value payloads. `collect` retains the values when downstream work "
+        "needs them.",
+        "pages | count -> how_many\n\n"
+        R"(Count emitted records without collecting their contents.
+flow counted {
+  out count: int
+  ["one", "two", "three"] | flatten | count -> count
+})"}},
       {"sum",
-       {"The values added together, as one value.",
-        "an expression over each value, or nothing for the values themselves",
-        "Reads to the end and yields exactly one value. Numbers add as numbers "
-        "and durations as durations; a stream with nothing in it sums to 0. "
-        "`| sum it.price` is the shorthand for `| map it.price | sum`.",
-        "orders | sum it.price -> revenue"}},
+       {"Sum stream values or projected fields.",
+        "an optional expression over each value",
+        "Reads upstream to completion and emits one value. Numbers and "
+        "durations retain their respective types. An empty stream sums to "
+        "zero. `sum it.price` is equivalent to `map it.price | sum`.",
+        "orders | sum it.price -> revenue\n\n"
+        R"(Project each order price and sum the revenue.
+flow revenue {
+  out total: int
+  [{price: 19}, {price: 8}, {price: 13}]
+    | flatten | sum it.price -> total
+})"}},
       {"min",
-       {"The smallest value of the stream.",
-        "an expression over each value, or nothing for the values themselves",
-        "Reads to the end and yields exactly one value, compared the way `<` "
-        "compares them. An empty stream yields nothing rather than a zero, "
-        "because the smallest of no values is not a value.",
-        "samples | min it.latency -> fastest"}},
+       {"Return the minimum stream value or projected field.",
+        "an optional expression over each value",
+        "Uses the `<` comparison. Emits no value for an empty stream.",
+        "samples | min it.latency -> fastest\n\n"
+        R"(Two reductions expose the shortest and longest samples.
+flow duration-range {
+  out shortest: int
+  out longest: int
+  [8, 2, 5] | flatten | min -> shortest
+  [8, 2, 5] | flatten | max -> longest
+})"}},
       {"max",
-       {"The largest value of the stream.",
-        "an expression over each value, or nothing for the values themselves",
-        "The counterpart of `min`, and the same about an empty stream.",
-        "samples | max it.latency -> slowest"}},
+       {"Return the maximum stream value or projected field.",
+        "an optional expression over each value",
+        "Uses the `>` comparison. Emits no value for an empty stream.",
+        "samples | max it.latency -> slowest\n\n"
+        R"(Two reductions expose the shortest and longest samples.
+flow duration-range {
+  out shortest: int
+  out longest: int
+  [8, 2, 5] | flatten | min -> shortest
+  [8, 2, 5] | flatten | max -> longest
+})"}},
       {"avg",
-       {"The mean of the stream's values.",
-        "an expression over each value, or nothing for the values themselves",
-        "Reads to the end and yields exactly one number; an empty stream "
-        "yields nothing. Durations average as durations, which is what makes "
-        "`| avg it.elapsed` the useful form.",
-        "runs | avg it.elapsed -> typical"}},
+       {"Compute the mean of stream values or projected fields.",
+        "an optional expression over each value",
+        "Reads upstream to completion. Emits no value for an empty stream. "
+        "Duration inputs produce a duration mean.",
+        "runs | avg it.elapsed -> typical\n\n"
+        R"(Three latency samples reduce to one mean.
+flow average-latency {
+  out typical: number
+  [120, 80, 100] | flatten | avg -> typical
+})"}},
       {"fold",
-       {"The stream folded into one value, carrying what has been seen so far.",
-        "a literal to start from, a name for what it carries, an expression",
-        "Written `fold 0 as total, total + it`: the name is bound to what the "
-        "last pass produced and `it` to the value in hand. The general form of "
-        "`sum`, `min` and `max`, for the shape none of them is.",
-        "orders | fold 0 as total, total + it.price -> revenue"}},
+       {"Reduce the stream to one accumulated value.",
+        "an initial literal, an accumulator name and an expression",
+        "In `fold 0 as total, total + it`, `total` is the previous result and "
+        "`it` is the current input. Emits the final accumulator after the "
+        "stream ends. `scan` emits each intermediate accumulator instead. "
+        "Both read values in source order.",
+        "orders | fold 0 as total, total + it.price -> revenue\n\n"
+        R"(Accumulate invoice line amounts into one final total.
+flow invoice-total {
+  out total: int
+  [19, 8, 13] | flatten
+    | fold 0 as subtotal, subtotal + it -> total
+})"}},
       {"scan",
-       {"Every value the fold passed through, rather than only the last.",
-        "a literal to start from, a name for what it carries, an expression",
-        "Written `scan 0 as n, n + 1`, exactly as `fold` is, and the "
-        "difference "
-        "is where the values go: `fold` yields one when the stream ends and "
-        "this yields one per value as it arrives. It carries state forward and "
-        "reads it at every step, supporting streams whose values depend on "
-        "earlier input without retaining the full stream. The initial state "
-        "may "
-        "be a record with several fields. `scan 0 as n, n + 1` numbers a "
-        "stream, "
-        "the smallest useful one.",
-        "lines | scan 0 as n, n + 1 -> numbered"}},
+       {"Emit each intermediate accumulator value.",
+        "an initial literal, an accumulator name and an expression",
+        "Uses the same accumulation form as `fold` and emits one result per "
+        "input value. State may be a record. The stage retains only the "
+        "current accumulator. `fold` emits only the final state. A downstream "
+        "`first` stops this subscription before later updates are computed.",
+        "lines | scan 0 as n, n + 1 -> numbered\n\n"
+        R"(Emit the balance after each delta, including a withdrawal.
+flow running-total {
+  out balances: int stream
+  [15, -4, 20] | flatten
+    | scan 0 as balance, balance + it -> balances
+})"}},
       {"sort",
-       {"The stream in order.", "optionally `by` an expression, and `desc`",
-        "Reads the whole stream to find out what the order is, so nothing "
-        "comes out until it ends. `by` names what to compare (`sort by "
-        "it.score`) and `desc` reverses it; values compare as `<` does.",
-        "hits | sort by it.score desc | first 10 -> best"}},
+       {"Sort stream values.", "an optional `by` expression and `desc`",
+        "Reads upstream to completion before emitting. `by` selects the "
+        "comparison key; `desc` reverses the order. Uses `<` comparison. "
+        "A following `first` limits the result, but does not make sorting "
+        "incremental.",
+        "hits | sort by it.score desc | first 10 -> best\n\n"
+        R"(Sort scores, retain the two leaders, and emit their names.
+flow top-scores {
+  out leaders: string stream
+  [{name: "Ada", points: 91}, {name: "Bo", points: 98}, {name: "Cy", points: 86}]
+    | flatten | sort by it.points desc | first 2 | map it.name -> leaders
+})"}},
       {"flatten",
-       {"Each list of the stream, as its own values.", "",
-        "The inverse of `batch`: a stream of lists becomes a stream of what "
-        "they held, in order. A value that is not a list goes through as "
-        "itself, so a mixed stream is flattened rather than refused.",
-        "pages | map it.lines | flatten -> lines"}},
+       {"Emit list elements as separate stream values.", "",
+        "Preserves element order. Non-list values pass through as one value.",
+        "pages | map it.lines | flatten -> lines\n\n"
+        R"(Flatten a list of lists into individual lines.
+flow nested-lines {
+  out lines: string stream
+  [["alpha"], ["beta", "gamma"]]
+    | flatten | flatten -> lines
+})"}},
       {"timeout",
-       {"Fails the pipeline when the stream goes quiet for too long.",
-        "how long a gap is too long",
-        "The gap *between* values, not the total: a stream that keeps arriving "
-        "runs for as long as it likes, and one that stops for longer than this "
-        "ends the flow with `deadline_exceeded`. A whole-step budget is "
-        "`wait ... timeout` instead.",
-        "tokens | timeout 30s -> answer"}},
+       {"Fail when the interval between stream values exceeds a limit.",
+        "a duration",
+        "The timer resets after each value. Expiration yields "
+        "`deadline_exceeded`. `wait ... timeout` bounds completion of a "
+        "subject.",
+        "tokens | timeout 30s -> answer\n\n"
+        R"(A feed fails when the gap between messages exceeds two seconds.
+flow bounded-feed {
+  in messages: string stream required
+  out safe: string stream
+  messages | timeout 2s -> safe
+})"}},
       {"pace",
-       {"Slows the stream to at most one value per interval.",
+       {"Limit emission to one value per interval.",
         "the least time between two values",
-        "Nothing is dropped: the values are spaced out and whoever produces "
-        "them is held back behind the buffer, which is what makes this a rate "
-        "limit rather than a sample. What it costs is latency, on purpose.",
-        "requests | pace 100ms -> to_api"}},
+        "No values are dropped. Backpressure delays upstream production when "
+        "buffers fill.",
+        "requests | pace 100ms -> to_api\n\n"
+        R"(Space requests by at least 100 ms while retaining every request.
+flow paced-feed {
+  in requests: string stream required
+  out paced: string stream
+  requests | pace 100ms -> paced
+})"}},
       {"join",
-       {"Every value of the stream as text, concatenated into one string.",
-        "a separator string, or nothing for none",
-        "Reads to the end and yields exactly one value. The function of the "
-        "same name does this to a list that is already one value.",
-        "words | join \", \" -> sentence"}},
+       {"Join stream values into one string.", "an optional separator string",
+        "Reads upstream to completion and renders each value as text. "
+        "`std::join` operates on a list value. `collect | map std::join(it, "
+        "separator)` retains the intermediate list; the stage does not.",
+        "words | join \", \" -> sentence\n\n"
+        R"(Turn three tokens into a single status line.
+flow joined {
+  out sentence: string
+  ["retries", "exceeded", "limit"] | flatten | join " " -> sentence
+})"}},
       {"text",
-       {"Each value of the stream as text.", "",
-        "One value in, one value out: this re-writes each value and does not "
-        "shorten the stream. The function `text(x)` does the same to a single "
-        "value.",
+       {"Render each stream value as text.", "",
+        "Preserves the number of values. `std::text` renders one value.",
         "numbers | text -> labels"}},
       {"json",
-       {"Each value of the stream as JSON.", "",
-        "A value carrying bytes anywhere inside it cannot be written as JSON "
-        "at "
-        "all, and the language says so before anything runs rather than at the "
-        "first value: `| packb` is the encoding that carries bytes.",
+       {"Encode each stream value as JSON.", "",
+        "Values containing bytes cannot be represented as JSON. The "
+        "compiler reports a known incompatible type before execution. "
+        "`packb` supports bytes.",
         "records | json -> payload"}},
       {"packb",
-       {"Says the values travel as MessagePack rather than as JSON.", "",
-        "A value that already arrived packed is passed on untouched, tag and "
-        "all, so this costs nothing when the producer wrote it that way. It is "
-        "also the only encoding here that can carry bytes.",
+       {"Encode stream values as MessagePack.", "",
+        "Already packed values pass through with their metadata intact. "
+        "MessagePack supports byte strings.",
         "clips | packb -> transcribe.audio"}},
   };
   return *table;
@@ -429,41 +581,59 @@ const absl::flat_hash_map<std::string_view, WordDoc>& BuiltinDocs() {
         "fragments.",
         "ref(page.text, for: archive, offset: 2, length: 5)"}},
       {"integer",
-       {"Convert a value to a checked whole number.", "one value",
-        "Convert a value to a checked whole number.", "integer(\"12\")"}},
+       {"Convert a value to an integer.", "one value",
+        "Conversion fails when the value cannot be represented as an integer. "
+        "`number` accepts decimal text and returns zero for non-numeric text; "
+        "`integer` is appropriate when invalid input must fail.",
+        "integer(\"12\")\n\n"
+        R"(Read a retry header with a fallback, then require an integer.
+flow parsed-header {
+  out retries: int
+  header = {retries: "3"}
+  std::integer(std::get(header, "retries", "0")) -> retries
+})"}},
       {"int",
-       {"Convert a value to a checked whole number.", "one value",
-        "Convert a value to a checked whole number.", "int(\"12\")"}},
+       {"Convert a value to an integer.", "one value",
+        "Alias of `integer`. Fractional values are rejected.", "int(\"12\")"}},
       {"string",
-       {"Render a value as text.", "one value", "Render a value as text.",
-        "string(12)"}},
+       {"Render a value as text.", "one value",
+        "See `text` for rendering rules.", "string(12)"}},
       {"bytes",
        {"Convert text to UTF-8 bytes or retain a byte string.", "one value",
-        "Convert text to UTF-8 bytes or retain a byte string.",
-        "bytes(\"hello\")"}},
+        "Non-text values are rendered before encoding.", "bytes(\"hello\")"}},
       {"object",
        {"Require an object value with string keys.", "one value",
-        "Require an object value with string keys.",
+        "Conversion fails for values without object structure.",
         "object({\"answer\": 42})"}},
       {"list",
        {"Convert a value to a list; a scalar becomes one item.", "one value",
-        "Convert a value to a list; a scalar becomes one item.",
+        "An existing list retains its elements. Scalars produce a singleton "
+        "list.",
         "list([1, 2])"}},
       {"status",
        {"Convert a status record while preserving its code, message and "
         "details.",
         "one value",
-        "Convert a status record while preserving its code, message and "
-        "details.",
+        "Accepts a status value or a compatible record. Details retain their "
+        "structured representation.",
         "std::status({\"code\": \"not_found\", \"message\": \"missing\"})"}},
       {"null",
        {"Require an explicit null value.", "one value",
-        "Require an explicit null value.", "null(null)"}},
+        "An absent option is distinct from a present null value.",
+        "null(null)"}},
       {"parse_duration",
        {"Parse duration text or fail.", "one text value",
         "Accepts the same units as duration(), including compound units and "
-        "bare seconds. Invalid text fails instead of falling back to zero.",
-        "std::parse_duration(\"1m30s\")"}},
+        "bare seconds. Invalid text fails instead of falling back to zero. "
+        "`duration` performs the permissive conversion; `seconds` converts "
+        "a duration to a number.",
+        "std::parse_duration(\"1m30s\")\n\n"
+        R"(Parse a strict duration budget and expose its numeric seconds.
+flow deadline-budget {
+  out seconds: number
+  budget = std::parse_duration("1m30s")
+  std::seconds(budget) -> seconds
+})"}},
       {"parse_time",
        {"Parse time text or fail.", "one text value",
         "Accepts RFC 3339 instants and UTC calendar dates. Invalid text fails "
@@ -471,159 +641,209 @@ const absl::flat_hash_map<std::string_view, WordDoc>& BuiltinDocs() {
         "std::parse_time(\"2026-10-30T12:00:00Z\")"}},
       {"boolean",
        {"Convert a value to bool using Flow truth testing.", "one value",
-        "Convert a value to bool using Flow truth testing.",
+        "Empty strings, lists and records, zero, false and null are false.",
         "std::boolean(1)"}},
       {"array",
        {"Convert a value to a list; a scalar becomes one item.", "one value",
-        "Convert a value to a list; a scalar becomes one item.",
+        "Alias of `list`; an existing list retains its elements.",
         "std::array(1)"}},
       {"any",
        {"Retain a value without imposing a payload type.", "one value",
-        "Retain a value without imposing a payload type.", "std::any(null)"}},
+        "No conversion or type validation is applied.", "std::any(null)"}},
       {"json",
        {"Convert a value to its JSON representation.", "one value",
-        "Convert a value to its JSON representation.",
+        "Bytes require a binary representation such as `packb`.",
         "std::json({answer: 42})"}},
       {"option",
        {"Validate an explicit presence and payload record.", "one value",
         "Validate an explicit presence and payload record.",
         "std::option({has_value: true, value: 42})"}},
       {"len",
-       {"How long a value is.", "one value",
-        "Characters of a string, bytes of a byte string, items of a list, keys "
-        "of a record. Anything else is 0.",
+       {"Return a value's length.", "one value",
+        "Counts characters in text, bytes in a byte string, elements in a "
+        "list and keys in a record. Other values return zero.",
         "if std::len(report) < 12 { fail invalid_argument \"too short\" }"}},
       {"lower",
-       {"A value as text, in lower case.", "one value",
-        "ASCII only: a letter outside ASCII is left as it is.",
-        "std::lower(header.value) == \"application/json\""}},
+       {"Convert ASCII letters to lowercase.", "one value",
+        "Renders the value as text. Non-ASCII characters are unchanged. Use "
+        "`trim` first when leading or trailing whitespace is insignificant.",
+        "std::lower(header.value) == \"application/json\"\n\n"
+        R"(Trim surrounding whitespace before applying ASCII lowercase.
+flow normalized-label {
+  out label: string
+  raw = "  Critical  "
+  std::lower(std::trim(raw)) -> label
+})"}},
       {"upper",
-       {"A value as text, in upper case.", "one value",
-        "ASCII only: a letter outside ASCII is left as it is.",
+       {"Convert ASCII letters to uppercase.", "one value",
+        "Renders the value as text. Non-ASCII characters are unchanged.",
         "std::upper(code) -> shouted"}},
       {"trim",
-       {"A value as text, without the whitespace at either end.", "one value",
-        "Spaces, tabs and line breaks. The inside of the text is untouched.",
-        "std::trim(page.title) -> title"}},
+       {"Remove leading and trailing whitespace from text.", "one value",
+        "Removes spaces, tabs and line breaks. Internal whitespace remains. "
+        "`lower` and `upper` change ASCII case without trimming.",
+        "std::trim(page.title) -> title\n\n"
+        R"(Trim surrounding whitespace before applying ASCII lowercase.
+flow normalized-label {
+  out label: string
+  raw = "  Critical  "
+  std::lower(std::trim(raw)) -> label
+})"}},
       {"text",
        {"A value as text.", "one value",
-        "A string is itself; a number, a bool, a duration or an instant is "
-        "written the way this language writes one; a record or a list is its "
-        "JSON. The stage `| text` does the same to every value of a stream.",
+        "Strings pass through. Numbers, booleans, durations and instants use "
+        "their Flow text forms. Records and lists render as JSON. The `text` "
+        "stage applies this conversion to every stream value.",
         "std::text(count) -> label"}},
       {"number",
-       {"A value as a number.", "one value",
-        "Text that reads as a whole number gives an integer and text that "
-        "reads "
-        "as a decimal gives a double; a bool gives 0 or 1; a duration gives "
-        "its "
-        "seconds and an instant its seconds since the epoch. Text that is not "
-        "a "
-        "number at all gives 0 rather than failing.",
+       {"Convert a value to a number.", "one value",
+        "Integer text yields an integer; decimal text yields a floating-point "
+        "number. Booleans become 0 or 1, durations become seconds, and times "
+        "become Unix seconds. Non-numeric text yields zero.",
         "number(header.retries) > 3"}},
       {"bool",
-       {"Whether a value counts as true.", "one value",
+       {"Apply Flow truth testing.", "one value",
         "Null, `false`, 0, an empty string, an empty list and an empty record "
-        "are false; everything else is true. This is the same question an `if` "
-        "asks of its condition.",
+        "are false. Other values are true. `if` uses the same rule.",
         "bool(page.body) -> anything_there"}},
       {"keys",
        {"The keys of a record, sorted, as a list of strings.", "one record",
-        "Sorted so that reading them twice reads them the same way. A value "
-        "that is not a record has no keys, and the list is empty.",
-        "std::keys(headers) | join \", \" -> named"}},
+        "Ordering is stable. Non-record values yield an empty list. "
+        "`values` returns record values in the same sorted-key order.",
+        "std::keys(headers) | join \", \" -> named\n\n"
+        R"(List record keys in deterministic order for display.
+flow names-of-fields {
+  out names: string
+  record = {team: "ops", owner: "Ada"}
+  std::join(std::keys(record), ", ") -> names
+})"}},
       {"values",
        {"The values of a record, in the order their keys sort.", "one value",
-        "A list is already its own values and comes back unchanged, which is "
-        "what makes this safe to write over either.",
+        "Lists pass through unchanged. Record values follow sorted key order.",
         "std::values(scores) | collect -> all"}},
       {"get",
-       {"One field or item of a value, with a fallback.",
+       {"Read a field or indexed item with a fallback.",
         "the value, the key, and what to use instead",
-        "The key is a string for a record and a whole number for a list, where "
-        "a negative index counts from the end. The fallback is used when the "
-        "field is missing or null, which is what tells this from `x.name`.",
-        R"(std::get(page.meta, "title", "untitled") -> title)"}},
+        "Record keys are strings; list indices are integers and may count "
+        "backward from the end. Missing or null results use the fallback. "
+        "`default` also substitutes empty strings, lists and records.",
+        R"(std::get(page.meta, "title", "untitled") -> title
+
+Treat an empty title as absent after reading optional metadata.
+flow fallback-title {
+  out title: string
+  metadata = {title: ""}
+  std::default(std::get(metadata, "title", ""), "Untitled") -> title
+})"}},
       {"join",
-       {"Every item of a list as text, concatenated into one string.",
-        "the list, and a separator",
-        "The stage `| join` does this to a whole stream instead of to a list. "
-        "A "
-        "value that is not a list is simply its own text.",
-        "std::join(std::keys(headers), \", \") -> named"}},
+       {"Join list elements into one string.", "the list, and a separator",
+        "Renders each element as text. A non-list value is rendered as one "
+        "string. The `join` stage operates on a stream. After `collect`, "
+        "`std::join(it, separator)` receives the complete list as one value.",
+        "std::join(std::keys(headers), \", \") -> named\n\n"
+        R"(Collect text fragments, then join the resulting list.
+flow page-summary {
+  out summary: string
+  ["one", "two", "three"] | flatten | collect
+    | map std::join(it, ", ") -> summary
+})"}},
       {"split",
-       {"A value as text, cut into a list.", "the text, and a separator",
-        "With no separator it cuts on runs of whitespace and keeps nothing "
-        "empty, which is what most callers of it want.",
-        "std::split(line, \",\") -> fields"}},
+       {"Split text into a list.", "the text, and a separator",
+        "Without a separator, splits on whitespace runs and omits empty "
+        "fields. For comma-separated text this function does not implement "
+        "CSV quoting or escaping.",
+        "std::split(line, \",\") -> fields\n\n"
+        R"(Extract the first field from simple comma-delimited rows.
+flow csv-first-field {
+  out names: string stream
+  ["Ada,ops", "Bo,infra"] | flatten
+    | map std::split(it, ",")[0] -> names
+})"}},
       {"merge",
-       {"Several records as one.", "two or more records",
-        "A later argument wins where two name the same key. Anything that is "
-        "not a record is ignored rather than refused, so `merge(defaults, "
-        "given)` is safe when `given` turned out to be null.",
-        "std::merge(defaults, page.meta) -> settings"}},
+       {"Merge records.", "two or more records",
+        "Later arguments overwrite duplicate keys. Non-record arguments are "
+        "ignored, including null. Use `get` to read an optional field from "
+        "the resulting record.",
+        "std::merge(defaults, page.meta) -> settings\n\n"
+        R"(Overlay request options on defaults before reading the endpoint.
+flow sanitized-options {
+  out endpoint: string
+  defaults = {endpoint: "https://api.example", timeout: "5s"}
+  overrides = {timeout: "2s"}
+  options = std::merge(defaults, overrides)
+  std::get(options, "endpoint", "") -> endpoint
+})"}},
       {"contains",
-       {"Whether a value holds another.", "the container, and the member",
-        "A substring of text, an equal item of a list, or a key of a record. "
-        "Anything else is false.",
+       {"Test whether a value contains a member.", "a container and a member",
+        "Matches a text substring, a list element, or a record key. Other "
+        "container types return false.",
         "std::contains(page.text, \"error\")"}},
       {"startswith",
-       {"Whether a value, as text, begins with another.",
-        "the text, and one prefix or a list of them",
-        "A list of candidates is one question rather than three: a mimetype "
-        "starts with any of `[\"text/\", \"application/json\"]`.",
+       {"Test whether text begins with a prefix.",
+        "a value and one prefix or a list of prefixes",
+        "Renders the value as text. A list succeeds when any prefix matches.",
         R"(std::startswith(part.mime, ["text/", "application/json"]))"}},
       {"endswith",
-       {"Whether a value, as text, ends with another.",
-        "the text, and one suffix or a list of them",
-        "A list of candidates is one question rather than three: a piece that "
-        "ends a sentence ends with any of `[\".\", \"?\", \"!\"]`.",
+       {"Test whether text ends with a suffix.",
+        "a value and one suffix or a list of suffixes",
+        "Renders the value as text. A list succeeds when any suffix matches.",
         R"(std::endswith(piece, [".", "?", "!"]))"}},
       {"match",
-       {"The fields a pattern pulls out of a value, or null where it does not "
-        "fit.",
-        "a pattern, and the text to read",
-        "The same pattern language the stage reads: literal text matches "
-        "itself, "
-        "`{name}` captures, and `{name:int}` says what to read it as. "
-        "`match(\"name={name} age={age:int}\", line)` gives a record, so "
-        "`obj.name` and `obj.age` are there; a line the pattern does not fit "
-        "gives null, which `if not obj` asks about. Where the pattern is "
-        "written "
-        "out rather than computed, the fields are known and completed.",
-        "who = std::match(\"name={name}\", line)"}},
+       {"Extract named fields from text or return null.",
+        "a pattern and a text value",
+        "Uses the same pattern syntax as the `match` stage. `{name}` "
+        "captures text; `{name:int}` converts the capture to an integer. "
+        "Literal patterns expose captured fields to completion. The `match` "
+        "stage drops unmatched stream values; this function returns null for "
+        "one unmatched value.",
+        "who = std::match(\"name={name}\", line)\n\n"
+        R"(Extract a typed status code from a request log line.
+flow named-capture {
+  out code: int
+  result = std::match("status={code:int}", "GET /health status=503")
+  result.code -> code
+})"}},
       {"replace",
-       {"A value as text, with every occurrence of one string replaced by "
-        "another.",
-        "the text, what to find, and what to put there",
-        "Plain text and not a pattern: nothing in the language interprets `.` "
-        "or `*`. An empty string to find changes nothing.",
+       {"Replace every occurrence of a text substring.",
+        "a value, a search string and a replacement string",
+        "Search text is literal; `.` and `*` have no pattern meaning. An "
+        "empty search string leaves the value unchanged.",
         R"(std::replace(path, "\\", "/") -> posix)"}},
       {"slice",
-       {"The part of a value between two positions.",
-        "the value, where to start, and where to stop",
-        "Characters of a string, bytes of a byte string, items of a list. "
-        "Either position may be negative, counting from the end, and leaving "
-        "the second one off runs to the end.",
-        "std::slice(page.text, 0, 200) -> preview"}},
+       {"Extract a range from text, bytes, or a list.",
+        "a value, start index and optional end index",
+        "Negative indices count from the end. An omitted end index includes "
+        "the remaining elements. `truncate` applies a size limit to every "
+        "value in a stream; `slice` selects a range from one value.",
+        "std::slice(page.text, 0, 200) -> preview\n\n"
+        R"(Take a fixed prefix from each title.
+flow title-previews {
+  out previews: string stream
+  ["Distributed systems", "Observability"] | flatten
+    | map std::slice(it, 0, 11) -> previews
+})"}},
       {"default",
-       {"A value, or something else where it is empty.",
+       {"Substitute a value when the first is empty.",
         "the value, and what to use instead",
-        "Empty means null, an empty string, an empty list or an empty record. "
-        "Not 0 and not `false`: those are values somebody meant.",
-        "std::default(header.locale, \"en\") -> locale"}},
+        "Null and empty strings, lists and records use the substitute. Zero "
+        "and false remain unchanged. `get` only substitutes a missing or null "
+        "field; compose them when an empty field also needs a fallback.",
+        "std::default(header.locale, \"en\") -> locale\n\n"
+        R"(Treat an empty title as absent after reading optional metadata.
+flow fallback-title {
+  out title: string
+  metadata = {title: ""}
+  std::default(std::get(metadata, "title", ""), "Untitled") -> title
+})"}},
       {"to_chunk",
-       {"A value written as a chunk in one mimetype.",
-        "the value, and the mimetype to write it as",
-        "What an action expecting a fragment of a particular type is handed. "
-        "The mimetype may name a registered type, as in "
+       {"Encode a value as a chunk with a media type.",
+        "a value and media type",
+        "The media type may name a registered value type, as in "
         "`\"application/json;type=a11.sdk.Interaction\"`.",
         R"(std::to_chunk({"type": "text", "text": said}, "application/json"))"}},
       {"from_chunk",
-       {"The value inside a chunk.", "one chunk",
-        "Anything already decoded comes back as it is, so this is safe to "
-        "write "
-        "over a value that may or may not have arrived as a chunk.",
+       {"Decode a chunk's value.", "one chunk or decoded value",
+        "A value that is already decoded passes through unchanged.",
         "std::from_chunk(it) -> decoded"}},
       {"strformat",
        {"A string with values written into it.",
@@ -634,64 +854,108 @@ const absl::flat_hash_map<std::string_view, WordDoc>& BuiltinDocs() {
         "format in parentheses, as in `%(%H:%M)s`. A conversion with no "
         "argument for it is left in the output as written, because a visible "
         "`%3$s` is easier to diagnose than a flow that died formatting a log "
-        "line.",
-        "std::strformat(\"%s took %s\", name, elapsed) -> line"}},
+        "line. The `strformat` stage formats each stream value with one "
+        "template; this function accepts multiple arguments.",
+        "std::strformat(\"%s took %s\", name, elapsed) -> line\n\n"
+        R"(Format two counters into a compact report line.
+flow formatted-report {
+  out report: string
+  requests = 35
+  failures = 2
+  std::strformat("%d requests; %d failed", requests, failures) -> report
+})"}},
       {"b64encode",
        {"A value as base64 text.", "one value",
         "Produces padded text suitable for a JSON field or header.",
         "std::b64encode(page.bytes) -> encoded"}},
       {"b64decode",
-       {"The bytes that base64 text encodes.", "one value",
-        "Gives bytes, because bytes are what was encoded; write "
-        "`text(b64decode(x))` where they were a string. Padding is not "
-        "required "
-        "on the way back. Text that is not base64 ends the flow with "
-        "`invalid_argument`.",
+       {"Decode base64 text to bytes.", "one value",
+        "Padding is optional. Invalid input fails with `invalid_argument`. "
+        "Use `utf8decode` to interpret decoded UTF-8 bytes as text.",
         "std::b64decode(header.token) -> raw"}},
       {"b64urlencode",
-       {"A value as base64 text, in the web-safe alphabet.", "one value",
-        "`-` and `_` where `b64encode` writes `+` and `/`, which is what a URL "
-        "or a JWT carries.",
-        "std::b64urlencode(claims) -> segment"}},
+       {"Encode a value with the URL-safe base64 alphabet.", "one value",
+        "Uses `-` and `_` in place of `+` and `/`. `b64urldecode` reverses "
+        "this encoding; `utf8encode` makes a text-to-bytes conversion "
+        "explicit.",
+        "std::b64urlencode(claims) -> segment\n\n"
+        R"(Encode a text label as a URL-safe base64 segment.
+flow encoded-label {
+  out encoded: string
+  ["project/blue"] | flatten
+    | map std::b64urlencode(std::utf8encode(it)) -> encoded
+})"}},
       {"b64urldecode",
-       {"The bytes that web-safe base64 text encodes.", "one value",
-        "Padding is not required, since the web-safe alphabet is routinely "
-        "sent "
-        "without it.",
-        "std::b64urldecode(segment) -> claims"}},
+       {"Decode URL-safe base64 text to bytes.", "one value",
+        "Padding is optional. The result is bytes; `utf8decode` validates "
+        "and converts UTF-8 text.",
+        "std::b64urldecode(segment) -> claims\n\n"
+        R"(Decode a URL-safe base64 segment and validate its UTF-8 payload.
+flow decoded-label {
+  out label: string
+  ["cHJvamVjdC9ibHVl"] | flatten
+    | map std::utf8decode(std::b64urldecode(it)) -> label
+})"}},
       {"utf8encode",
        {"Text encoded as UTF-8 bytes.", "one value",
         "Produces bytes suitable for an application/octet-stream input. The "
-        "textual representation of a non-text value is encoded.",
-        "std::utf8encode(request.text) -> body"}},
+        "textual representation of a non-text value is encoded. "
+        "`utf8decode` validates bytes before interpreting them as text.",
+        "std::utf8encode(request.text) -> body\n\n"
+        R"(Encode a text label as a URL-safe base64 segment.
+flow encoded-label {
+  out encoded: string
+  ["project/blue"] | flatten
+    | map std::b64urlencode(std::utf8encode(it)) -> encoded
+})"}},
       {"utf8decode",
        {"UTF-8 bytes decoded as text.", "one value",
         "Produces text suitable for a text/plain input. Malformed UTF-8 ends "
-        "the flow with invalid_argument instead of replacing bytes.",
-        "std::utf8decode(response.body) -> std::text"}},
+        "the flow with invalid_argument instead of replacing bytes. "
+        "`b64decode` and `b64urldecode` also produce bytes.",
+        "std::utf8decode(response.body) -> std::text\n\n"
+        R"(Decode a URL-safe base64 segment and validate its UTF-8 payload.
+flow decoded-label {
+  out label: string
+  ["cHJvamVjdC9ibHVl"] | flatten
+    | map std::utf8decode(std::b64urldecode(it)) -> label
+})"}},
       {"now",
-       {"The instant this is evaluated.", "",
-        "Read once, where it is written. An expression naming it twice may see "
-        "two different instants, so a flow that wants one instant names it "
-        "once with an initializer.",
-        "started = std::now()"}},
+       {"Return the current instant.", "",
+        "Each call reads the clock separately. Bind the result once when "
+        "several expressions must use the same instant. Flow statements start "
+        "concurrently; statement order alone does not make one timestamp "
+        "follow another operation. Use `after` or `wait` for that dependency.",
+        "started = std::now()\n\n"
+        R"(Bind one clock reading and reuse it in two outputs.
+flow stamped {
+  out started: string
+  out line: string
+  clock = std::now()
+  std::text(clock) -> started
+  std::strformat("started at %s", clock) -> line
+})"}},
       {"duration",
-       {"A value as a duration.", "one value",
-        "Text is parsed the way the language writes one: `500ns`, `250ms`, "
-        "`30s`, `5m`, `1h`, and compounds like `1m30s`. A bare number is a "
-        "count of seconds.",
+       {"Convert a value to a duration.", "one value",
+        "Accepts unit suffixes such as `ms`, `s`, and `h`, including compound "
+        "forms such as `1m30s`. A bare number represents seconds.",
         "std::duration(header.budget) -> budget"}},
       {"time",
-       {"A value as an instant.", "one value",
-        "RFC 3339, with or without a zone, and a bare date. Text with no zone "
-        "is read as UTC, which is the zone every instant this language writes "
-        "is in.",
+       {"Convert a value to an instant.", "one value",
+        "Accepts RFC 3339 timestamps and calendar dates. A missing time zone "
+        "is interpreted as UTC.",
         "std::time(page.published) -> published"}},
       {"seconds",
-       {"A duration as a number of seconds.", "one duration",
-        "A double, so a fraction of a second survives. This is how a duration "
-        "reaches an action whose port wants a number.",
-        "std::seconds(std::now() - started) -> elapsed"}},
+       {"Convert a duration to numeric seconds.", "one duration",
+        "Returns a floating-point number, preserving subsecond values. "
+        "`parse_duration` validates text before conversion.",
+        "std::seconds(std::now() - started) -> elapsed\n\n"
+        R"(Parse a strict duration budget and expose its numeric seconds.
+flow deadline-budget {
+  out seconds: number
+  budget = std::parse_duration("1m30s")
+  std::seconds(budget) -> seconds
+})"}},
   };
   return *table;
 }
@@ -700,89 +964,63 @@ const absl::flat_hash_map<std::string_view, WordDoc>& BuiltinDocs() {
 // Everything below documents the forms an editor
 
 constexpr WordDoc kStreamDoc = {
-    "Says the port carries many values rather than one.", "",
-    "Everything moving through a flow is a stream, and this is how a port says "
-    "its own side of the boundary is too. Without it the port is one value: a "
-    "caller sends a single value rather than a list, and a second value "
-    "arriving ends the flow with `invalid_argument` rather than passing "
-    "unnoticed. That promise is also what lets the language *share* such a "
-    "stream between readers instead of making them take turns on it.",
+    "Marks a port as multi-valued.", "",
+    "A port without `stream` accepts at most one value; a second value fails "
+    "with `invalid_argument`. Unary ports can be shared between readers.",
     "out briefs: string stream \"One instruction per investigation.\""};
 
 constexpr WordDoc kRequiredDoc = {
-    "Says the port or field has to be there.", "",
-    "On a port, a caller that sends nothing is refused before the flow runs. "
-    "On "
-    "a `struct` field, a record that leaves it out is not a value of that "
-    "shape. A port that is not required and receives nothing is simply an "
-    "empty "
-    "stream. Use try take and inspect its has_value flag to detect EOF.",
+    "Requires a port value or struct field.", "",
+    "A missing required port fails before execution. A missing required "
+    "struct field fails validation. Optional ports may be empty; `try take` "
+    "reports absence through `has_value`.",
     "in topic: string required \"What to research.\""};
 
 // The two forms written as two words. Each is documented under its full
 // spelling, which is how the ordered lists carry it, and under each word on its
 // own, which is what a hover on one of them asks for.
 constexpr WordDoc kOneOfDoc = {
-    "The values the field is allowed to hold.", "a list of literals",
-    "Written `one of [..]`, which is what another language calls an "
-    "enumeration. A value outside the list is not a value of the shape, and "
-    "the "
-    "list travels with the field, so something completing it knows what to "
-    "offer.",
+    "Constrains a field to listed literals.", "a list of literals",
+    "Values outside the list fail struct validation. The alternatives are "
+    "published in the field schema for completion.",
     R"(role: string one of ["user", "assistant"])"};
 
 constexpr WordDoc kForwardHeadersDoc = {
-    "Passes on headers this flow was called with, as they arrived.",
+    "Forwards selected incoming headers to a step.",
     "one or more names, `*` matching a family",
-    "Every `x-a11-` header already reaches a step, so this is for the others: "
-    "what a gateway or a caller set that the flow itself has no opinion about. "
-    "An explicit `with` of the same name wins.",
+    "`x-a11-` headers propagate automatically. This clause forwards other "
+    "headers, including wildcard families. Explicit `with` values take "
+    "precedence.",
     R"(llm = run ask_model(..) forward headers "x-tenant", "x-trace-*")"};
 
 constexpr WordDoc kNodesDoc = {
-    "Declares a node map, which keeps a step's traffic local.",
-    "a name, and optionally a block",
-    "Nodes made inside the block, and steps named `via` it, keep their streams "
-    "on this side instead of replicating them to whoever dispatched the "
-    "composition. That is the difference between fetching three pages here and "
-    "sending three pages across the wire. A map nothing is placed in, by a "
-    "block or by a `via`, is reported.",
+    "Declares a local node map.", "a name, and optionally a block",
+    "Nodes created in the block and steps using `via` retain streams in the "
+    "local map. The compiler reports maps with no member nodes or steps.",
     "nodes fetched { for hit in search.hits { .. } }"};
 
 const absl::flat_hash_map<std::string_view, WordDoc>& StatementDocs() {
   static const auto* table = new absl::flat_hash_map<std::string_view, WordDoc>{
       {"run",
-       {"Dispatches an action where this flow is running.",
+       {"Starts a locally registered action.",
         "an action, its arguments in parentheses, and any modifiers",
-        "Needs a handler registered in the runtime the flow runs in, and keeps "
-        "the step's nodes off the wire. A `run` of something with no handler "
-        "is "
-        "refused rather than quietly sent to the peer, which is what `call` is "
-        "for. Either verb may name another flow of the same file, in any order "
-        "and with nothing registered for it, which is how one composition is "
-        "factored into several. Naming the step binds it: `x.port` reads its "
-        "outputs and `status x` its outcome. After a pipe, `| run flow_name()` "
-        "invokes once for the whole stream, connecting the unique unsupplied "
-        "input and unique output.",
+        "Requires a local handler or a flow declared in the same file. The "
+        "step's nodes stay local. A bound step exposes outputs through "
+        "`step.port` and its outcome through `status step`. Pipeline form "
+        "requires one unbound input and one output.",
         "search = run web-search(query: question, limit: 3)"}},
       {"call",
-       {"Dispatches an action on the stream this flow is attached to, for the "
-        "peer to run.",
+       {"Dispatches an action to the connected peer.",
         "an action, its arguments in parentheses, and any modifiers",
-        "Needs nothing registered on this side, and the step's nodes cross the "
-        "wire, which is what a `nodes` block or a `via` is for. `run` is the "
-        "other verb, for an action this side has a handler for. After a pipe, "
-        "`| call flow_name()` is a whole-stream peer invocation with a known "
-        "interface, one unsupplied input, and one output.",
+        "The peer resolves the action. Its nodes cross the transport unless a "
+        "`nodes` block or `via` places them locally. Pipeline form requires a "
+        "known interface with one unbound input and one output.",
         "said = call text-upper(text: words)"}},
       {"try",
-       {"Lets a step or a block fail without ending the flow.",
-        "a `run`, a `call`, or a block",
-        "Without it a failing step ends the whole flow. With it the failure "
-        "becomes a value: `wait x` or `status x` says how it went, and the "
-        "ports the step feeds are left empty. A `try` whose status nothing "
-        "reads is reported, because a failure then leaves those ports silently "
-        "empty and nothing says why.",
+       {"Contains a step or block failure.", "a `run`, a `call`, or a block",
+        "A failure leaves the step's output ports empty and remains available "
+        "through `wait step` or `status step`. The compiler reports an unread "
+        "`try` status.",
         "page = try run web-fetch(url: hit.url)"}},
       {"take",
        {"Reads the next item from a stream.", "a stream",
@@ -798,55 +1036,37 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StatementDocs() {
         "`| drop n` to trim one pipeline only.",
         "skip 1 rows"}},
       {"wait",
-       {"Holds until a step, node, port or barrier has finished.",
+       {"Waits for a step, node, port or barrier to finish.",
         "a subject, and optionally `timeout`",
-        "Naming it binds how it went, as a status record, which is how a "
-        "`try`'s failure is read. This is also the way to say that a statement "
-        "is the last word about a step rather than a line racing it, though "
-        "`after` says the same thing without a name. Waiting twice in one body "
-        "is over as soon as it starts the second time, and is reported. Bare "
-        "`wait all` waits for all preceding work in this scope before "
-        "activating "
-        "following statements. It accepts no modifiers or value binding. "
-        "`wait all of a, b` remains an explicit-subject wait.",
+        "Binding the result captures a status record. `wait all` forms a "
+        "barrier over preceding work in the current scope and accepts no "
+        "modifiers or value binding. A repeated wait for the same subject in "
+        "one body is diagnosed.",
         "done = wait llm timeout 30s"}},
       {"close",
-       {"Ends a node and says how it ended.", "a node",
-        "Writes both of the two facts that end a stream: the node is marked "
-        "*final*, so an ordered reader stops, and the writer is *closed*, so "
-        "the store admits nothing more. Then it reads what is left, so every "
-        "reader sees the end rather than waiting on a stream nobody will write "
-        "to again. The name binds the outcome, as `wait` does. `abort` is the "
-        "other ending, for a stream that failed rather than finished.",
+       {"Finish a node and drain its remaining values.", "a node",
+        "Marks the node final, closes its writer, and drains remaining values. "
+        "A bound name receives the completion status. Use `abort` for a failed "
+        "node.",
         "ended = close findings"}},
       {"abort",
-       {"Ends a node with a failure rather than with an end.",
-        "a node, and optionally a code and a message",
-        "The other ending a stream can have. `close` marks a node final and "
-        "closes it, which says the stream is over; this aborts it, which says "
-        "it went wrong. A reader cannot otherwise tell the two apart, and a "
-        "stream cut short by something the flow noticed looks exactly like one "
-        "that finished. Takes the same code and message a `fail` does, and "
-        "reads its code and message before aborting. A data-dependent reason "
-        "synchronizes the abort; constant reasons need an `if`, a loop body "
-        "or an `after`.",
+       {"End a node with a failure status.",
+        "a node and an optional code and message",
+        "Readers receive the failure status. The code and message use the "
+        "same form as `fail`. Data-dependent arguments synchronize the "
+        "statement; constant arguments require `if`, a loop body, or `after`.",
         "if not status page.ok { abort findings unavailable \"gone\" }"}},
       {"cancel",
-       {"Asks a step to stop.", "a step",
-        "Waits for nothing, so at the top of a body it runs at once and races "
-        "every other statement; it belongs in an `if` or a loop body, or "
-        "carries an `after` saying what it waits for. Cancelling something "
-        "this "
-        "body already waited for leaves nothing to stop, and is reported.",
+       {"Request cancellation of a step.", "a step",
+        "The request does not wait for completion. Use `if`, a loop body, or "
+        "`after` to control when it executes. Cancelling a step already "
+        "awaited in the same body is diagnosed.",
         "if code == 429 { cancel fetch }"}},
       {"fail",
-       {"Ends the flow with a status.", "a code or a number, and a message",
-        "`fail invalid_argument \"..\"`, `fail 5 \"..\"`, or `fail STATUS` to "
-        "pass one on. Reads its code and message before failing. "
-        "An optional message can continue on the next line; a string that "
-        "starts a separate transfer keeps its statement boundary. "
-        "Data-dependent arguments synchronize it; constant-only arguments "
-        "need an `if`, a loop body, or an `after`.",
+       {"End the flow with a status.", "a code or status and optional message",
+        "Accepts a canonical code name, its numeric value, or a status "
+        "record. Data-dependent arguments synchronize the statement; "
+        "constant arguments require `if`, a loop body, or `after`.",
         "fail invalid_argument \"the topic is empty\""}},
       {"log",
        {"Writes a line to the flow's log.",
@@ -875,46 +1095,32 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StatementDocs() {
         "initializers run only when earlier branches were not selected.",
         "if row = try take rows { row.name -> names }"}},
       {"for",
-       {"Runs a block per stream value or bare list literal element.",
+       {"Execute a block for each source value.",
         "one or more names, a stream or list literal, and optionally "
         "`parallel`",
-        "Several names take a tuple apart, which is what `for x, y in zip(a, "
-        "b)` reads. A pass that reads none of its variables is reported. This "
-        "is one pass per stream value: a stream of lists keeps each list as "
-        "one value. A bare list literal in the header expands one level, so "
-        "`for x in [1, 2, 3] { .. }` visits three items. Empty literals make "
-        "no passes. Named lists and pipelines use `| flatten` to expand list "
-        "values. `until`/`while` in the "
-        "body ends it early, as it ends a `repeat`; a `for` carries nothing "
-        "between passes, so `<-` is a `repeat`'s and not this one's. Bound to "
-        "a "
-        "name it reads as its own outcome, which is how a flow says what "
-        "happens once the loop is over: `close taken after done`.",
+        "Multiple names destructure tuple values, including `zip` output. "
+        "A stream of lists supplies one list per pass; a bare list literal "
+        "supplies its elements. Use `flatten` to expand list values from a "
+        "stream. `until` and `while` can stop iteration early. A bound loop "
+        "name exposes its completion status.",
         "for hit in search.hits parallel 2 { .. }"}},
       {"repeat",
-       {"Runs a block again and again, carrying a value from each pass to the "
-        "next.",
-        "a name and what it starts as, and optionally `max`",
-        "Bound to a name it reads as its own outcome, as a `for` does. "
-        "`name <- source` inside the body is what the next pass starts from. A "
-        "`repeat` needs an `until`/`while`, or a `max n`, or both: there is no "
-        "default bound, and a loop with nothing ending it is refused rather "
-        "than quietly stopping after some number of passes and calling that "
-        "success.",
+       {"Repeat a block with state carried between passes.",
+        "a name, its initial value, and an optional `max` count",
+        "`name <- source` sets the next pass's state. Requires an `until` or "
+        "`while` condition, a `max` count, or both. A bound loop name exposes "
+        "its completion status.",
         "repeat asked = question max 4 { .. }"}},
       {"until",
        {"Ends a `repeat` or a `for` when a condition holds.", "a condition",
-        "Asked at the tail of a pass, so the body always runs at least once "
-        "however the condition starts out. `while` is the same statement with "
-        "the question the other way round. In a `for` it is how a loop over a "
-        "stream stops before the stream does; it stops reading, which is what "
-        "`| first n` does, and does not cancel whatever was producing.",
+        "Evaluated after each pass. In a `for`, stops reading the source "
+        "without cancelling its producer. `while` continues while its "
+        "condition holds.",
         "until std::len(answer) > 0"}},
       {"while",
        {"Keeps a `repeat` or a `for` going while a condition holds.",
         "a condition",
-        "Asked at the tail of a pass, like `until`, so the body always runs at "
-        "least once however the condition starts out.",
+        "Evaluated after each pass, so the body executes at least once.",
         "while not found"}},
       {"nodes", kNodesDoc},
   };
@@ -958,83 +1164,62 @@ const absl::flat_hash_map<std::string_view, WordDoc>& DeclarationDocs() {
         "Use aliases to keep distinct symbols under separate names.",
         "from \"./render.flow\" import render, Report as RenderReport"}},
       {"flow",
-       {"Declares a composition, which is itself an action.",
-        "a name, and a block",
-        "The name is what a caller dispatches, and what another flow of the "
-        "same file may `run` or `call`. Its `in` and `out` ports are its whole "
-        "interface: a caller sees those and nothing else of what is inside, "
-        "which is what makes the intermediate values of a composition free.",
+       {"Declares an executable composition of actions.", "a name, and a block",
+        "The declared name is callable from a peer or another flow. `in` and "
+        "`out` ports form its public action interface; intermediate values "
+        "remain internal.",
         "flow answer-from-the-web { .. }"}},
       {"struct",
-       {"Declares a shape: a record with named, typed, constrained fields.",
+       {"Declares a record type with named fields.",
         "a name, and a block of fields",
-        "A port may be typed with it and a value may be made into one, "
-        "defaults and all. A shape this file declares outranks a serialisation "
-        "tag of the same name, because what the file says about a name is what "
-        "the file means by it, and a shape may hold and be held by another. "
-        "One "
-        "nothing names is reported. A file of nothing but shapes is a file of "
-        "types, which is a reasonable thing to write.",
+        "Fields may declare types, defaults and constraints. A local struct "
+        "takes precedence over a serial tag of the same name. Unused structs "
+        "are diagnosed.",
         "struct Finding { url: string required }"}},
       {"describe",
-       {"What a flow or a shape is for.", "a string",
-        "Read by everything that lists what may be composed, so this is what a "
-        "caller, a tool listing or a model is told the thing does. A "
-        "`\"\"\"..\"\"\"` string holds line breaks and gives back the "
-        "indentation the source put in front of it, so a paragraph needs no "
-        "escaping.",
+       {"Documents a flow or struct.", "a string",
+        "The text appears in action and type descriptions. Triple-quoted "
+        "strings preserve line breaks and source indentation.",
         "describe \"Search, read the best hits, and answer from them.\""}},
       {"in",
-       {"Declares an input port: what a caller sends.",
+       {"Declares an input port.",
         "a name, a type, any of `stream`/`required`, and a description",
-        "Without `stream` the port carries one value. The description travels "
-        "with the port, so it is what a caller reading the interface sees, and "
-        "what a model choosing whether to call this reads.",
+        "A port without `stream` accepts one value. The description is "
+        "published with the action schema.",
         "in question: string required \"What to find out.\""}},
       {"out",
-       {"Declares an output port: what a caller reads back.",
+       {"Declares an output port.",
         "a name, a type, any of `stream`/`required`, and a description",
-        "Outputs cross back to the caller, so keep them focused on requested "
-        "results. Returning every fetched page also returns all intermediate "
-        "data. "
-        "Nothing in the flow writing to a declared output is reported, because "
-        "a caller reading it would get nothing.",
+        "Output values are visible to the caller. The compiler diagnoses "
+        "declared outputs with no writer. Use `stream` when the port emits "
+        "multiple values.",
         "out answer: string \"The answer, as it is written.\""}},
       {"header",
-       {"Reads one of the headers this flow was called with.",
-        "a header name, `as` and an alias, and optionally `default`",
-        "Every `x-a11-` header reaches a step anyway, so a declaration here is "
-        "for *reading* the value inside the flow: the alias then stands where "
-        "an expression does. An alias nothing uses is reported, since the "
-        "header would have travelled either way.",
+       {"Bind an incoming header to a Flow name.",
+        "a header name, `as` alias, and optional `default`",
+        "The alias can be read in expressions. `x-a11-` headers propagate to "
+        "steps automatically. An unused alias is diagnosed.",
         R"(header "x-a11-locale" as locale default "en")"}},
       {"as",
-       {"Names the thing just declared, or the type a value is made into.",
+       {"Bind an alias or convert a value to a named type.",
         "an alias, or a type",
-        "In a `header` it gives the alias the flow reads the value by. In an "
-        "expression `value as Type` makes the value that type, partial in and "
-        "valid out. That is the other way of writing `Type{..}`, and the way "
-        "that works where a `{` would open a block.",
+        "`header ... as name` binds a header value. `value as Type` "
+        "validates and converts a value to `Type`; it can be used where "
+        "`Type{...}` conflicts with block syntax.",
         R"({...it, "role": "user"} as a11::sdk::Interaction)"}},
       {"default",
-       {"What a header falls back to when the caller sent none.", "a literal",
-        "Written out rather than computed: this is read before anything in the "
-        "body runs, so there is nothing yet for an expression here to read. A "
-        "`struct` field's `default` is the same word doing the same job one "
-        "level down.",
+       {"Supply a missing header or struct field value.", "a literal",
+        "Header defaults are evaluated before the flow body begins. Struct "
+        "field defaults apply during value validation.",
         R"(header "x-a11-locale" as locale default "en")"}},
       // `stream` and `required` are in [OrderedDeclarations] because a port
       // declaration is where they are offered, but they are documented in
       // [PortModifierDocs] rather than here:
       {"node",
-       {"Makes a stream of the flow's own.",
+       {"Create a flow-owned node.",
         "optionally an id, and optionally `in` a map",
-        "Somewhere to write values that no step's port is the right home for: "
-        "several statements may write to one, and its readers see the values "
-        "as "
-        "they arrive. The keyword only where its parentheses open, so a port "
-        "called `node` is a name like any other. `n.id` is its id, which is "
-        "what a caller filling it from outside the flow needs.",
+        "Several statements may write to the node. Readers receive values "
+        "as they arrive. `n.id` exposes its ID to external callers.",
         "findings = node()"}},
       {"nodes", kNodesDoc},
   };
@@ -1044,22 +1229,17 @@ const absl::flat_hash_map<std::string_view, WordDoc>& DeclarationDocs() {
 const absl::flat_hash_map<std::string_view, WordDoc>& ClauseDocs() {
   static const auto* table = new absl::flat_hash_map<std::string_view, WordDoc>{
       {"else",
-       {"The block an `if` runs when its condition does not hold.", "a block",
-        "A condition blocks only what is in the braces, which is what a block "
-        "is for: the statements outside it are not waiting on the question.",
+       {"Execute a block when the preceding `if` condition is false.",
+        "a block",
+        "Statements outside the conditional block remain independent.",
         "if ok { page.text -> body } else { \"\" -> body }"}},
       {"parallel",
-       {"How many passes of a `for`, or values of a stage, run at a time.",
+       {"Bound concurrent loop passes or stage evaluations.",
         "a positive integer expression",
-        "Without it they run one after another. The number is a ceiling rather "
-        "than a target, and it bounds the passes rather than the work inside "
-        "one: a pass waiting on a step it dispatched is still one of the `n`. "
-        "On a stage it says how many values may be in hand at once, and what "
-        "follows still reads them in order. Variables, field reads, and "
-        "arithmetic expressions are evaluated once when the loop or stage "
-        "starts and must yield a positive signed 32-bit integer. Dynamic loop "
-        "counts retain the restrictions on parallel outer-variable updates "
-        "and trailing conditions.",
+        "The count is a maximum; a pass waiting for its child step occupies "
+        "one slot. Parallel stages preserve input order unless `unordered` "
+        "is set. The count is evaluated once at activation and must be a "
+        "positive signed 32-bit integer.",
         "for hit in search.hits parallel 2 { .. }"}},
       {"unordered",
        {"Lets a parallel stage publish its values as they finish.", "",
@@ -1068,11 +1248,9 @@ const absl::flat_hash_map<std::string_view, WordDoc>& ClauseDocs() {
         "that does not depend on ordering.",
         "urls | map fetch(it) parallel 8 unordered -> bodies"}},
       {"by",
-       {"What to compare, where a stage orders values.",
-        "an expression, with "
-        "`it` bound to the value",
-        "Only `sort` takes one. Without it the values compare as themselves, "
-        "which is what a stream of numbers or of text wants.",
+       {"Select the comparison key for `sort`.",
+        "an expression with `it` bound",
+        "Without `by`, `sort` compares the input values directly.",
         "hits | sort by it.score desc -> ranked"}},
       {"before",
        {"Preceding items included by a context stage.", "a count expression",
@@ -1092,23 +1270,18 @@ const absl::flat_hash_map<std::string_view, WordDoc>& ClauseDocs() {
         "items | context it.failed before 2 after 3 numbered base 0 -> "
         "excerpts"}},
       {"desc",
-       {"Reverses the order a `sort` puts values in.", "",
-        "Largest first, by the same comparison `>` uses. Ascending is the "
-        "default and has no word of its own.",
+       {"Sort in descending order.", "",
+        "Uses the same ordering as `>`. Ascending is the default.",
         "hits | sort by it.score desc -> ranked"}},
       {"into",
-       {"Where a `try` stage sends a value it could not do.",
-        "a node or an "
-        "out-port",
-        "The failure arrives as a status record, the same shape `status x` "
-        "yields, so a stream of failures is an ordinary stream. Without it a "
-        "tolerated failure is logged at warning and the value is dropped.",
+       {"Send `try` stage failures to a destination.", "a node or output port",
+        "Each failure is emitted as a status record. Without `into`, "
+        "failures are logged at warning level and the input value is dropped.",
         "docs | try map parse(it) into bad -> good"}},
       {"max",
-       {"The most passes a `repeat` may make.", "a count",
-        "One of the two things that may end a `repeat`, and either is enough: "
-        "with no `until`/`while` and no `max` a loop is refused. With both, "
-        "whichever comes first ends it.",
+       {"Limit the number of `repeat` passes.", "a count",
+        "A `repeat` requires `max`, `until`, or `while`. If both a count and "
+        "condition are present, the first reached ends the loop.",
         "repeat asked = question max 4 { .. }"}},
   };
   return *table;
@@ -1117,17 +1290,15 @@ const absl::flat_hash_map<std::string_view, WordDoc>& ClauseDocs() {
 const absl::flat_hash_map<std::string_view, WordDoc>& ModifierDocs() {
   static const auto* table = new absl::flat_hash_map<std::string_view, WordDoc>{
       {"tee",
-       {"Gives every reader of the step's outputs its own copy.", "",
-        "Without it the readers of one output take turns on one view of it, so "
-        "two of them see two different values rather than the same value "
-        "twice. With it each reader gets the whole stream, at the cost of "
-        "holding what the slowest has not read yet.",
+       {"Gives each reader an independent output cursor.", "",
+        "Each reader receives the full output stream. Values remain buffered "
+        "until the slowest reader advances.",
         "page = run web-fetch(url: url) tee"}},
       {"via",
-       {"Puts the step's nodes in a node map.", "a map name",
-        "The other half of `nodes`: a step named `via` a map keeps its streams "
-        "on this side instead of replicating them to whoever dispatched the "
-        "composition. A map nothing is placed in is reported.",
+       {"Places a step's nodes in a named node map.", "a map name",
+        "The step's streams remain in the named local map instead of being "
+        "replicated across the caller transport. Unused maps are diagnosed. "
+        "See `nodes`.",
         "page = call web-fetch(url: url) via fetched"}},
       {"deadline",
        {"Bounds completion by an absolute time.", "a std::time expression",
@@ -1135,41 +1306,29 @@ const absl::flat_hash_map<std::string_view, WordDoc>& ModifierDocs() {
         "An 'after' clause delays evaluation of the whole expression.",
         "run fetch() deadline std::now() + 30s after prepared"}},
       {"timeout",
-       {"How long the step may take before it is given up on.", "a duration",
-        "Reaching it fails the step with `deadline_exceeded`, which ends the "
-        "flow unless the step was a `try`. A negative duration is infinite, "
-        "which is this language's way of writing no bound rather than a bound "
-        "in the past.",
+       {"Bounds a step's execution duration.", "a duration",
+        "Expiration gives the step `deadline_exceeded`. A `try` step keeps "
+        "that status available to its caller. A negative duration removes "
+        "the bound.",
         "llm = run ask_model(interactions: asked, config: {}) timeout 90s"}},
       {"after",
-       {"What has to have finished before the statement starts.",
+       {"Delay a statement until named subjects finish.",
         "one or more steps, ports or nodes",
-        "Order in a flow comes from the data, so this is for the order the "
-        "data does not imply: a log line that should read as the last word "
-        "about a step rather than a line racing it. It holds the whole "
-        "statement, arguments included, so `run act(p: now() - started) after "
-        "done` reads the clock once `done` has happened: what a barriered "
-        "statement reports is what was true by then. It is also what lets a "
-        "`fail` or a `cancel` stand at the top of a body, by saying what it "
-        "waits for. A named loop is a step like any other, so `after done` is "
-        "how the rest of a flow waits for one. The prefix form "
-        "'after a, b { ... }' gates a concurrent block, including argument "
-        "evaluation and nested action activation. It is not a finally handler.",
+        "Argument evaluation also waits. A named loop can be a subject. "
+        "The prefix form `after a, b { ... }` gates the entire block, "
+        "including nested action activation.",
         "std::strformat(\"[done] %s\", brief) -> user_log after done"}},
       {"with",
-       {"Headers to send on this step.", "one or more names and their values",
-        "The value is an expression rather than a literal, so a header may "
-        "carry something the flow worked out. Every `x-a11-` header this flow "
-        "was called with already reaches a step; `forward headers` is for "
-        "passing on the others, and an explicit `with` of the same name wins "
-        "over it.",
+       {"Sets a header on a call or run step.",
+        "one or more names and their values",
+        "Header values are expressions. Inherited `x-a11-` headers reach "
+        "steps automatically. An explicit `with` value overrides a header "
+        "forwarded by `forward headers`.",
         "llm = run ask_model(..) with \"x-a11-provider\": provider"}},
       {"id",
-       {"The id the step's node is made with.", "an expression",
-        "What a caller outside the flow needs in order to write to or read "
-        "from "
-        "that node, which is how a client with a session of its own fills a "
-        "port while the flow runs rather than before it starts.",
+       {"Set the node ID used by a step.", "an expression",
+        "An external session can use this ID to read or write the node while "
+        "the flow executes.",
         "sink = run collect-audio(frames: mic.audio) id session"}},
       {"forward headers", kForwardHeadersDoc},
       {"forward", kForwardHeadersDoc},
@@ -1181,31 +1340,20 @@ const absl::flat_hash_map<std::string_view, WordDoc>& ModifierDocs() {
 const absl::flat_hash_map<std::string_view, WordDoc>& SourceDocs() {
   static const auto* table = new absl::flat_hash_map<std::string_view, WordDoc>{
       {"status",
-       {"The outcome of a call, a node or a barrier, as a record.", "a subject",
-        "`{\"ok\": .., \"code\": .., \"number\": .., \"message\": ..}`. "
-        "Reading one waits for the subject to finish, which makes it a barrier "
-        "as well as a value. `wait x` is the other way to the same record, and "
-        "gives it a name.",
+       {"Read a subject's completion status as a record.", "a subject",
+        "Contains `ok`, `code`, `number`, `message`, and `details`. Reading "
+        "it waits for the subject to finish. `wait` can bind the same status.",
         "if not status fetch.ok { \"\" -> body }"}},
       {"zip",
-       {"Reads several streams in step, as one stream of tuples.",
-        "two or more streams",
-        "Read as `it[0]` and `it[1]`, or taken apart by `for x, y in zip(a, "
-        "b)`. A source that ends *well* contributes a null to every tuple "
-        "after "
-        "it, so the longer stream is still read to its end; one that ends with "
-        "an error ends the iteration with that status. It stops when every "
-        "source has, and it is a stream like any other, so `wait`, `close`, "
-        "`| first n` and `| count` all work on one.",
+       {"Combine streams into a stream of tuples.", "two or more streams",
+        "Each tuple has one position per source. A completed source "
+        "contributes null until all sources finish. A source failure ends "
+        "the combined stream with that status.",
         "for url, body in std::zip(urls, bodies) { .. }"}},
       {"interleave",
-       {"Reads several streams at once, as one stream of their values.",
-        "two or more streams",
-        "Each value goes on as it arrives, so a fast stream is not held behind "
-        "a slow one and the order between the sources is whatever the values "
-        "did. `zip` is the other shape: one tuple per round, in step. A source "
-        "that ends well is simply done; one that ends with an error ends the "
-        "stream with that status.",
+       {"Merge values from several streams by arrival.", "two or more streams",
+        "Preserves order within each source. A completed source contributes "
+        "no further values; a source failure ends the merged stream.",
         "std::interleave(tokens, progress) -> events"}},
   };
   return *table;
@@ -1223,28 +1371,22 @@ const absl::flat_hash_map<std::string_view, WordDoc>& FieldModifierDocs() {
   static const auto* table = new absl::flat_hash_map<std::string_view, WordDoc>{
       {"required", kRequiredDoc},
       {"unique",
-       {"Says a list field holds no value twice.", "",
-        "Checked when a value is made into the shape, so a record with a "
-        "repeat "
-        "in that field is not a value of it. Says nothing about the order of "
-        "the list.",
+       {"Require distinct elements in a list field.", "",
+        "Checked during struct validation. Element order remains unchanged.",
         "tags: std::list[string] unique"}},
       {"matching",
-       {"A regular expression the field's text has to fit.",
-        "a pattern, as one string literal",
-        "The argument is a literal rather than an expression, since a name "
-        "there could not be told from the description that may follow it. A "
-        "value that does not fit is not a value of the shape.",
+       {"Require a field's text to match a regular expression.",
+        "a string literal pattern",
+        "The pattern is fixed in the declaration and checked during struct "
+        "validation.",
         "url: string matching \"^https?://\""}},
       {"one of", kOneOfDoc},
       {"one", kOneOfDoc},
       {"of", kOneOfDoc},
       {"default",
-       {"What the field is when a record does not name it.", "a literal",
-        "Filled in when a value is made into the shape, so a reader of the "
-        "shape never sees the field missing. A field with a default is not "
-        "`required`: the two say opposite things about a record that leaves it "
-        "out.",
+       {"Supply a field value when the input record omits it.", "a literal",
+        "Applied during struct validation. A field with a default cannot "
+        "also be `required`.",
         "limit: int default 10"}},
   };
   return *table;
@@ -1253,35 +1395,30 @@ const absl::flat_hash_map<std::string_view, WordDoc>& FieldModifierDocs() {
 const absl::flat_hash_map<std::string_view, WordDoc>& TypeDocs() {
   static const auto* table = new absl::flat_hash_map<std::string_view, WordDoc>{
       {"string",
-       {"Text.", "",
-        "The type most ports have. It crosses as `text/plain`, which is what a "
-        "caller sending one sends. `text` is the same type under the other "
-        "name.",
-        "in question: string required"}},
+       {"UTF-8 text.", "", "Serialized as `text/plain`. `text` is an alias.",
+        "in question: string required\nout answer: string stream"}},
       {"text",
-       {"Text. The other spelling of `string`.", "",
-        "The same type: both are here because both read naturally, and a file "
-        "may use whichever fits the sentence it is in.",
+       {"Alias of `string`.", "", "Serialized as `text/plain`.",
         "out answer: std::text"}},
       {"number",
-       {"A number, whole or not.", "",
-        "A whole number stays whole and a decimal stays decimal. `int` is "
-        "the one that admits only whole numbers.",
+       {"Integer or floating-point number.", "",
+        "Integral values retain their integer representation. Use `int` to "
+        "exclude fractional values.",
         "in temperature: number"}},
       {"integer",
-       {"A whole number; alias of int.", "",
-        "`int` is the default spelling. A value with a fraction is not one.",
+       {"Alias of `int`.", "", "Fractional values fail type validation.",
         "in limit: integer"}},
       {"int",
-       {"A whole number.", "",
-        "The same type. A value with a fraction is not one.", "in limit: int"}},
+       {"Integer value.", "",
+        "Fractional values fail type validation. `integer` is an alias.",
+        "in limit: int"}},
       {"bool",
-       {"True or false.", "",
-        "`boolean` is the same type. What counts as true where a *condition* "
-        "asks is a wider question, and `bool()` is what answers it.",
+       {"Boolean value.", "",
+        "`boolean` is an alias. Conditional expressions use truth testing; "
+        "`bool()` applies that conversion explicitly.",
         "in verbose: bool"}},
       {"boolean",
-       {"True or false. The other spelling of `bool`.", "", "The same type.",
+       {"Alias of `bool`.", "", "Accepts `true` and `false`.",
         "in verbose: std::boolean"}},
       {"status",
        {"An operation outcome carried as data.", "",
@@ -1303,54 +1440,45 @@ const absl::flat_hash_map<std::string_view, WordDoc>& TypeDocs() {
         "Null is a value and remains distinct from an absent option.",
         "null value = null"}},
       {"duration",
-       {"A length of time.", "",
-        "Written `500ns`, `250ms`, `30s`, `2m`, `1h`, or compound as `1m30s`. "
-        "JSON has no word for one, so it crosses as a string carrying the "
-        "format that says how to read it, which is what makes the round trip "
-        "lossless.",
-        "in budget: std::duration"}},
+       {"Duration value.", "",
+        "Supports `ns`, `us`, `ms`, `s`, `m` and `h`, including compound "
+        "literals such as `1m30s`. JSON transport uses a tagged string.",
+        "in budget: std::duration\ntimeout 1m30s"}},
       {"time",
-       {"An instant.", "",
-        "RFC 3339, and every instant this language writes is in UTC. JSON has "
-        "no word for one either, so it crosses as a string with the format "
-        "beside it.",
+       {"Absolute time value.", "",
+        "Parses RFC 3339. Flow writes instants in UTC; JSON transport uses a "
+        "tagged string.",
         "out published: std::time"}},
       {"object",
-       {"A record: keys with values.", "",
-        "May say what it maps, as `object[string]`. `json` is the same type "
-        "under the name a caller thinks in. A `struct` is the version with "
-        "named, typed, constrained fields, and says far more to everything "
-        "reading the interface.",
+       {"Record with string keys.", "",
+        "`object[T]` constrains mapped values to `T`. `json` is an alias. "
+        "Use `struct` to declare named fields with individual types and "
+        "constraints.",
         "out settings: object"}},
       {"json",
-       {"A record or a list: whatever JSON can carry.", "",
-        "`object` is the same type. A value holding `bytes` anywhere in it "
-        "cannot go through `| json`, which has nothing to carry them in; "
-        "`| packb` can.",
+       {"JSON-compatible record or list.", "",
+        "Alias of `object`. Values containing bytes require `packb` for "
+        "serialization.",
         "out result: std::json"}},
       {"list",
-       {"Several values in order, as one value.", "",
-        "May say what it holds, as `list[string]` or `list[a11.NodeFragment]`, "
-        "and `T[]` is the same thing. A list is *one* value: a port of "
-        "`list[string]` carries one list and a port of `string stream` carries "
-        "many strings, which are different things. The type and list(value) "
-        "conversion are available without an import; std::list is equivalent.",
+       {"Ordered collection held as one value.", "",
+        "`list[T]` and `T[]` constrain element type. A `list[string]` port "
+        "carries one list; a `string stream` port carries many values. "
+        "`std::list` is equivalent.",
         "in frames: list[a11::NodeFragment] stream"}},
       {"array",
-       {"Several values in order. The other spelling of `list`.", "",
-        "The same type, and it may say what it holds in the same way.",
+       {"Alias of `list`.", "",
+        "Accepts an element type parameter, as in `array[string]`.",
         "in tags: std::array[string]"}},
       {"bytes",
        {"Raw bytes.", "",
-        "Crosses as `application/octet-stream`. A shape holding bytes anywhere "
-        "in it cannot go through `| json`; `| packb` can.",
+        "Serialized as `application/octet-stream`. Values containing bytes "
+        "require `packb` for structured serialization.",
         "out audio: bytes stream"}},
       {"any",
-       {"Whatever arrives.", "",
-        "The escape hatch, for a port that really does carry anything: nothing "
-        "is checked and nothing is converted. A named type, a shape or a "
-        "quoted "
-        "mimetype provides validation and a more specific interface.",
+       {"Unconstrained value.", "",
+        "Skips payload type validation. Named types, structs and quoted media "
+        "types provide a checked interface.",
         "in payload: std::any"}},
   };
   return *table;
@@ -1359,42 +1487,32 @@ const absl::flat_hash_map<std::string_view, WordDoc>& TypeDocs() {
 const absl::flat_hash_map<std::string_view, WordDoc>& ConstantDocs() {
   static const auto* table = new absl::flat_hash_map<std::string_view, WordDoc>{
       {"true",
-       {"The true value.", "",
-        "One of the two `bool` literals. Every condition in the language asks "
-        "one question of its value, and this is one of the two that answer it "
-        "directly.",
+       {"Boolean true literal.", "",
+        "Accepted by `bool` ports and conditional expressions.",
         "accept_pushes: bool default true"}},
       {"false",
-       {"The false value.", "",
-        "One of the two `bool` literals. Not the same as empty: 0, an empty "
-        "string and an empty list also count as false where a condition asks, "
-        "but `default()` leaves them alone because they are values somebody "
-        "meant.",
+       {"Boolean false literal.", "",
+        "Other values can also test false, including zero and empty "
+        "collections. `default()` retains false because it is present.",
         "reuse_connection: bool default false"}},
       {"null",
-       {"Nothing.", "",
-        "What a field that is not there reads as, what `match` gives for a "
-        "line "
-        "its pattern does not fit, and what a `zip` source that has ended "
-        "contributes to every tuple after it. Counts as false where a "
-        "condition "
-        "asks.",
+       {"Null literal.", "",
+        "Missing fields, unmatched `match` patterns and exhausted `zip` "
+        "sources yield null. Null tests false and remains distinct from an "
+        "absent option.",
         "if part.title == null { \"untitled\" -> title }"}},
       {"it",
-       {"The value in hand, inside a stage that takes an expression.", "",
-        "Bound by `where`, `map` and `group`, and by nothing else: outside one "
-        "of those there is no value in hand for it to mean. It is a whole "
-        "value, so `it.url` and `it[0]` read into it.",
-        "hits | where it.ok | map it.url"}},
+       {"Current pipeline value.", "",
+        "Available in stage expressions that bind an input value, including "
+        "`where`, `map` and `group`. Fields and indices use normal access "
+        "syntax.",
+        "hits | where it.ok | map it.url\nrows | map it[0] -> first_columns"}},
       {"_",
-       {"The destination that keeps nothing.", "",
-        "Written where a pipe's destination goes, and nowhere else: `_` is not "
-        "a name, so nothing may be bound to it and nothing may be read back "
-        "out of it. The pipeline is still *performed*: every stage does its "
-        "work on every value, and the values are dropped at the end. That is "
-        "what tells it from `skip`, which says the values were never wanted "
-        "and may be taken off the stream where it is produced.",
-        "items | map expensive(it) -> _"}},
+       {"Discard destination.", "",
+        "Consumes the pipeline output after all stages execute. `_` cannot "
+        "be bound or read as a variable. Use `skip` to remove values from a "
+        "shared source before its readers consume them.",
+        "items | log -> _"}},
   };
   return *table;
 }
@@ -1402,11 +1520,9 @@ const absl::flat_hash_map<std::string_view, WordDoc>& ConstantDocs() {
 const absl::flat_hash_map<std::string_view, WordDoc>& OperatorWordDocs() {
   static const auto* table = new absl::flat_hash_map<std::string_view, WordDoc>{
       {"and",
-       {"True when both sides are.", "two conditions",
-        "Each side is asked the question a condition is asked, so a plain "
-        "value "
-        "stands here as well as a comparison: `if code and body` is about "
-        "whether each of them is there at all.",
+       {"Logical conjunction.", "two conditions",
+        "Operands use Flow truth testing. Returns the left operand when it "
+        "tests false; otherwise evaluates and returns the right operand.",
         "if code >= 200 and code < 300 { .. }"}},
       {"or",
        {"Default an option by presence or a value by truthiness.",
@@ -1417,11 +1533,9 @@ const absl::flat_hash_map<std::string_view, WordDoc>& OperatorWordDocs() {
         "Upstream failures propagate.",
         "Settings settings = try take options or Settings{}"}},
       {"not",
-       {"True when what follows is not.", "a condition",
-        "The one that reads a initializer which bound nothing: `if not code` "
-        "asks "
-        "whether that stream was empty, since a name that bound nothing counts "
-        "as false.",
+       {"Logical negation.", "a condition",
+        "Applies Flow truth testing to the operand. An unbound optional value "
+        "tests false.",
         "lines | where not std::startswith(it, \"FINALLY:\")"}},
   };
   return *table;
@@ -1431,33 +1545,39 @@ const absl::flat_hash_map<std::string_view, WordDoc>& OperatorWordDocs() {
 const absl::flat_hash_map<std::string_view, WordDoc>& LogLevelDocs() {
   static const auto* table = new absl::flat_hash_map<std::string_view, WordDoc>{
       {"debug",
-       {"Detail for whoever is working on the flow.", "",
-        "The level to reach for when the line is only interesting while "
-        "something is wrong. A consumer showing a user what a flow is doing "
-        "normally leaves these out.",
+       {"Diagnostic log level.", "",
+        "Use for implementation details that are usually omitted from user "
+        "facing progress output. The levels in increasing severity are "
+        "`debug`, `info`, `warning`, `error`, and `critical`. `logf` formats "
+        "one line per stream value; `log` records the value directly.",
         "log debug it after step"}},
       {"info",
-       {"What the flow is doing, as a person would describe it.", "",
-        "The level a `log` with no level written takes, and the one a "
-        "narration "
-        "meant for a reader belongs at.",
+       {"Informational log level.", "",
+        "Default for `log` without an explicit level. Suitable for progress "
+        "messages and narration. The other levels are `debug` for diagnostics, "
+        "`warning` for recoverable conditions, and `error` or `critical` for "
+        "failures. `log` and `logf` leave the flow outcome unchanged.",
         "log info \"searching\" after plan"}},
       {"warning",
-       {"Something is off, and the flow is carrying on.", "",
-        "A retry, a partial result, an input that had to be corrected: the "
-        "flow "
-        "still produces what it promised.",
+       {"Warning log level.", "",
+        "Records recoverable conditions such as retries, partial results and "
+        "corrected inputs. `debug` and `info` describe routine activity; "
+        "`error` and `critical` describe failed work. `fail` changes the flow "
+        "status; logging alone does not.",
         "log warning \"retrying\" after fetch"}},
       {"error",
-       {"Something failed, whether or not the flow did.", "",
-        "A step that failed inside a `try`, or a value that had to be dropped. "
-        "Logging this does not end the flow: `fail` is what does that.",
+       {"Error log level.", "",
+        "Records failed steps or discarded values. Logging does not change the "
+        "flow outcome; use `fail` to end execution with a status. `critical` "
+        "reports a more severe condition; `warning` records recoverable work. "
+        "`info` and `debug` cover routine progress and diagnostics.",
         "log error status fetch.message after fetch"}},
       {"critical",
-       {"The worst the log has to say.", "",
-        "Kept apart from `error` for consumers that separate the two; A11 "
-        "reports both at its own error severity, so nothing is aborted by "
-        "naming it.",
+       {"Critical log level.", "",
+        "A11 reports `critical` and `error` at error severity. Neither level "
+        "aborts execution. `warning` records recoverable conditions; `info` "
+        "and `debug` cover routine progress and diagnostics. Use `fail` to "
+        "return an unsuccessful status.",
         "log critical \"the index is gone\" after check"}},
   };
   return *table;
@@ -1466,98 +1586,80 @@ const absl::flat_hash_map<std::string_view, WordDoc>& LogLevelDocs() {
 const absl::flat_hash_map<std::string_view, WordDoc>& StatusCodeDocs() {
   static const auto* table = new absl::flat_hash_map<std::string_view, WordDoc>{
       {"ok",
-       {"Nothing went wrong.", "",
-        "The code a status carries when it succeeded. `status x.ok` is the "
-        "shorter way to ask, and the usual one.",
+       {"Operation succeeded.", "",
+        "The only successful status code. `status step.ok` also tests success.",
         "if status fetch.code == \"OK\" { .. }"}},
       {"cancelled",
-       {"The work was asked to stop.", "",
-        "What `cancel` leaves behind, and what a caller that dropped the call "
-        "produces. Not a failure of the work so much as a decision about it.",
+       {"Operation was cancelled.", "",
+        "A caller cancellation or `cancel` request can produce this code.",
         "fail cancelled \"the caller went away\""}},
       {"unknown",
-       {"Something went wrong that does not fit another code.", "",
-        "The one to reach for last: a code that says nothing is a code nothing "
-        "can act on.",
-        "fail unknown \"the provider said no more than that\""}},
+       {"Failure with no more specific code.", "",
+        "Use a specific canonical code when the condition can be classified.",
+        "fail unknown \"provider returned no cause\""}},
       {"invalid_argument",
-       {"What was sent is not something this can work with.", "",
-        "The language's own, as well as an action's: a port that did not say "
-        "`stream` receiving a second value fails this way, as does a value "
-        "that "
-        "is not of the shape its port names. `failed_precondition` is the "
-        "neighbour to tell it from, where what was sent is fine and the world "
-        "is not ready for it.",
+       {"Request has invalid input.", "",
+        "Includes wrong port types and excess values on a unary port. The "
+        "request must change before retrying.",
         "fail invalid_argument \"the topic is empty\""}},
       {"deadline_exceeded",
-       {"The time allowed ran out.", "",
-        "What a `timeout` modifier leaves behind, and what the "
-        "`x-a11-deadline` "
-        "header produces when it passes. Says nothing about whether the work "
-        "would have succeeded given longer.",
-        "fail deadline_exceeded \"the model did not answer in time\""}},
+       {"Execution deadline expired.", "",
+        "Produced by `timeout` and the `x-a11-deadline` header. The operation "
+        "may have partially executed.",
+        "fail deadline_exceeded \"model response timed out\""}},
       {"not_found",
-       {"What was asked for is not there.", "",
-        "About one named thing. `out_of_range` is the one for a position past "
-        "the end of something that is there.",
-        "fail not_found \"no page at that url\""}},
+       {"Requested resource does not exist.", "",
+        "Use `out_of_range` for a position beyond an existing sequence.",
+        "fail not_found \"page is absent\""}},
       {"already_exists",
-       {"What was to be created is there already.", "",
-        "The mirror of `not_found`, for the direction that creates.",
-        "fail already_exists \"that conversation has been recorded\""}},
+       {"Resource already exists.", "",
+        "Applies to a creation request whose target is present.",
+        "fail already_exists \"conversation exists\""}},
       {"permission_denied",
-       {"The caller is known, and is not allowed this.", "",
-        "`unauthenticated` is the pair to tell it from: not allowed, against "
-        "not identified. Retrying changes nothing without a change of "
-        "authority.",
-        "fail permission_denied \"that path is outside the project\""}},
+       {"Identified caller lacks permission.", "",
+        "Use `unauthenticated` when the caller has not been identified.",
+        "fail permission_denied \"path is outside the project\""}},
       {"resource_exhausted",
-       {"Something ran out: a quota, a rate limit, room to work in.", "",
-        "A later retry may succeed; `failed_precondition` instead requires a "
-        "state change.",
-        "fail resource_exhausted \"the provider is rate limiting\""}},
+       {"Quota or capacity is exhausted.", "",
+        "Includes rate limits. A later retry may succeed when capacity "
+        "returns.",
+        "fail resource_exhausted \"provider rate limit\""}},
       {"failed_precondition",
-       {"The system is not in a state where this can be done.", "",
-        "Distinct from `invalid_argument`: what was sent is fine, and the "
-        "world "
-        "is not ready for it. Retrying helps only once something else has "
-        "changed.",
-        "fail failed_precondition \"no gateway is attached\""}},
+       {"Required system state is absent.", "",
+        "The request may be valid, but another state change must occur before "
+        "it can run.",
+        "fail failed_precondition \"gateway is not attached\""}},
       {"aborted",
-       {"The work was given up on part-way.", "",
-        "Usually a conflict rather than a fault, so retrying the whole thing "
-        "may well work.",
-        "fail aborted \"another writer took the node\""}},
+       {"Operation aborted after a conflict.", "",
+        "A retry of the whole operation may succeed after a concurrent "
+        "conflict.",
+        "fail aborted \"another writer owns the node\""}},
       {"out_of_range",
-       {"What was asked for is past the end.", "",
-        "About a position in something that exists. `not_found` is the one for "
-        "a thing that does not.",
-        "fail out_of_range \"that line is past the end of the file\""}},
+       {"Requested position exceeds a valid range.", "",
+        "Use `not_found` when the resource itself is absent.",
+        "fail out_of_range \"line is past the end\""}},
       {"unimplemented",
-       {"This is not something the receiver does at all.", "",
-        "Not a failure of the request but of the pairing: a `call` of an "
-        "action "
-        "the peer does not have. No amount of retrying changes it.",
-        "fail unimplemented \"this peer has no audio capture\""}},
+       {"Receiver does not implement the operation.", "",
+        "A retry against the same receiver cannot supply a missing action.",
+        "fail unimplemented \"audio capture is unavailable\""}},
       {"internal",
-       {"Something broke that should not have.", "",
-        "An invariant, rather than anything about the request. A flow raising "
-        "this is saying the fault is on this side.",
-        "fail internal \"the plan came back with no briefs\""}},
+       {"Internal invariant failed.", "",
+        "Indicates a fault in the receiving implementation.",
+        "fail internal \"plan has no briefs\""}},
       {"unavailable",
-       {"The receiver cannot be reached, or cannot take work right now.", "",
-        "The retryable one: the request was fine and the moment was not.",
-        "fail unavailable \"the gateway is not answering\""}},
+       {"Receiver is temporarily unavailable.", "",
+        "Covers transport failures and a receiver unable to accept work. A "
+        "retry may succeed.",
+        "fail unavailable \"gateway is not answering\""}},
       {"data_loss",
-       {"Something was lost or corrupted beyond recovery.", "",
-        "The gravest of them, and the one that says the work should not simply "
-        "be retried as though nothing happened.",
-        "fail data_loss \"the recording is truncated\""}},
+       {"Data was lost or corrupted.", "",
+        "The operation cannot safely recover the missing data.",
+        "fail data_loss \"recording is truncated\""}},
       {"unauthenticated",
-       {"The caller is not identified.", "",
-        "`permission_denied` is the pair to tell it from: not identified, "
-        "against identified and not allowed.",
-        "fail unauthenticated \"no api key was sent\""}},
+       {"Caller identity is absent or invalid.", "",
+        "Use `permission_denied` when the caller is identified but lacks "
+        "permission.",
+        "fail unauthenticated \"api key is missing\""}},
   };
   return *table;
 }
@@ -1565,30 +1667,26 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StatusCodeDocs() {
 const absl::flat_hash_map<std::string_view, WordDoc>& StatusFieldDocs() {
   static const auto* table = new absl::flat_hash_map<std::string_view, WordDoc>{
       {"ok",
-       {"Whether it succeeded.", "",
-        "A bool, and the field most readers of a status want. Reading it waits "
-        "for the subject to finish, as reading any part of a status does.",
+       {"Report whether a subject succeeded.", "",
+        "Boolean field. Reading any status field waits for subject completion.",
         "if not status fetch.ok { \"\" -> body }"}},
       {"code",
-       {"The canonical code, as a name.", "",
-        "One of Abseil's, in upper case: `\"NOT_FOUND\"`. This is the part a "
-        "gate should match on, because a code is stable and the wording of a "
-        "message is not.",
+       {"Return the canonical status code name.", "",
+        "Uses uppercase Abseil names such as `NOT_FOUND`. Branch on `code` "
+        "or `ok`; message wording is not a stable contract.",
         "if status fetch.code == \"DEADLINE_EXCEEDED\" { .. }"}},
       {"number",
-       {"The canonical code, as its number.", "",
-        "The same code as `code`, for a reader that would rather compare "
-        "numbers than names.",
+       {"Return the numeric canonical status code.", "",
+        "Equivalent to `code`, represented as an integer.",
         "if status fetch.number == 5 { .. }"}},
       {"details",
        {"Structured status details.", "",
         "A list preserved through native status values and status chunks.",
         "(status work).details -> report"}},
       {"message",
-       {"What went wrong, in words.", "",
-        "Written for a person. A gate should read `ok` or `code` instead: a "
-        "message's wording is not a contract and is not promised to stay as it "
-        "is.",
+       {"Return the human-readable status message.", "",
+        "Message wording is not a stable contract. Use `ok` or `code` for "
+        "branch conditions.",
         "std::strformat(\"fetch failed: %s\", status fetch.message) -> "
         "user_log"}},
   };
@@ -1597,10 +1695,9 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StatusFieldDocs() {
 
 // Every duration unit shares the same documentation.
 constexpr std::string_view kDurationDetail =
-    "A duration is a value like any other: it may be compared, added to an "
-    "instant or to another duration, and read as a number with `seconds()`. "
-    "Units compound, as in `1m30s500ms`, and a negative duration means "
-    "infinite rather than a length below zero.";
+    "Durations support comparison and addition to another duration or an "
+    "instant. `seconds()` converts one to a number. Units may be combined, "
+    "as in `1m30s500ms`. A negative duration represents an infinite bound.";
 
 const absl::flat_hash_map<std::string_view, WordDoc>& DurationUnitDocs() {
   static const auto* table = new absl::flat_hash_map<std::string_view, WordDoc>{
@@ -1632,159 +1729,124 @@ constexpr std::array kSymbolOrder = {
 const absl::flat_hash_map<std::string_view, WordDoc>& SymbolDocs() {
   static const auto* table = new absl::flat_hash_map<std::string_view, WordDoc>{
       {"|",
-       {"Puts a stream through a stage.",
+       {"Pass a stream through a stage.",
         "a stream on the left, a stage on the right",
-        "The stages chain, and each one reads what the one before it produced: "
-        "`hits | where it.ok | first 3` is three stages and one pass. A stage "
-        "that shrinks a stream does so before the next step ever sees the "
-        "values, which is what makes `| truncate` cheap. `then` and `where` "
-        "may "
-        "drop the `|` where they have an operand; every other stage keeps it.",
+        "Stages compose left to right. `then` and `where` also accept an "
+        "infix form without `|`.",
         "page.text | truncate 2000 -> brief.pages"}},
       {"->",
-       {"Writes to a destination and returns a continuation sink. Arrows "
-        "associate right: a -> b -> out forwards b, then a. Independent "
-        "attachments interleave after their prefix; completion includes all "
-        "attached writers.",
+       {"Write a pipeline to one or more destinations.",
         "a pipeline on the left, ports or nodes on the right",
-        "Several destinations are written the same values. Two statements "
-        "writing to one destination interleave by arrival, which is what "
-        "`| then` is for when one lot has to come before another. The left "
-        "side "
-        "is a whole pipeline, so the stages happen before anything is written.",
+        "Returns a continuation sink. Arrows associate right: `a -> b -> "
+        "out` forwards `b`, then `a`. Independent attachments interleave "
+        "after their shared prefix; completion includes all attached writers. "
+        "`then` orders separate streams.",
         "brief.summary -> answer"}},
       {"<-",
-       {"Carries a value into the next pass of a `repeat`.",
+       {"Set the state for the next `repeat` pass.",
         "a `repeat`'s name on the left, a stream on the right",
-        "What the loop starts the next pass from, which is how a `repeat` "
-        "carries state without a node. Only inside a `repeat` body: nowhere "
-        "else is there a next pass for it to mean.",
+        "Valid only inside a `repeat` body. The next pass receives the "
+        "assigned value.",
         "asked <- llm.text_output"}},
       {"=",
        {"Binds a name to a step, a node, or a value.",
-        "a name on the left, what it is on the right",
-        "The name is then what reads the thing: `x.port` for a step's outputs, "
-        "`status x` for its outcome, the name itself for a node or a "
-        "initializer "
-        "value. `done = source | stage -> target` names the completion of a "
-        "one-pipeline block, including every destination and owned child. "
-        "Use `after done`, `wait done`, or `status done` to observe it. "
-        "One `=` is a binding; `==` is the comparison, and a statement "
-        "word before a single `=` is read as a name rather than a keyword, so "
-        "`run = run x()` means what it says.",
+        "a name and a step, node, or value",
+        "`x.port` accesses a step output; `status x` reads its outcome. A "
+        "bound transfer names its completion, including attached writers. "
+        "Use `after`, `wait`, or `status` to observe that completion. `==` "
+        "compares values.",
         "search = run web-search(query: question)"}},
       {"==",
-       {"Whether two values are equal.", "two values",
-        "Compares what the values are rather than how they were written, so a "
-        "number is a number whichever way it arrived. `=` performs binding; "
-        "`==` compares values.",
+       {"Compare two values for equality.", "two values",
+        "Comparison uses decoded values, independent of their source "
+        "encoding. `=` binds a name.",
         "std::lower(header.value) == \"application/json\""}},
       {"!=",
-       {"Whether two values differ.", "two values",
-        "The negation of `==`, over the same comparison.",
+       {"Compare two values for inequality.", "two values",
+        "Logical negation of `==` over the same decoded values.",
         "if part.mime != \"text/html\" { .. }"}},
       {"<",
-       {"Whether the left value is less than the right.", "two values",
-        "Numbers, durations and instants compare as you would expect; strings "
-        "compare by their bytes.",
+       {"Compare whether the left value is smaller.", "two values",
+        "Supports numbers, durations and instants. Strings compare by bytes.",
         "if std::len(report) < 12 { fail invalid_argument \"too short\" }"}},
       {"<=",
-       {"Whether the left value is less than or equal to the right.",
-        "two values", "As `<`, including the equal case.",
-        "if elapsed <= budget { .. }"}},
+       {"Compare whether the left value is at most the right.", "two values",
+        "Uses the same ordering as `<`.", "if elapsed <= budget { .. }"}},
       {">",
-       {"Whether the left value is greater than the right.", "two values",
-        "Numbers, durations and instants compare as you would expect; strings "
-        "compare by their bytes.",
+       {"Compare whether the left value is larger.", "two values",
+        "Supports numbers, durations and instants. Strings compare by bytes.",
         "if number(header.retries) > 3 { cancel fetch }"}},
       {">=",
-       {"Whether the left value is greater than or equal to the right.",
-        "two values", "As `>`, including the equal case.",
+       {"Compare whether the left value is at least the right.", "two values",
+        "Uses the same ordering as `>`.",
         "if code >= 200 and code < 300 { .. }"}},
       {"+",
        {"Adds two values.", "two numbers, or an instant and a duration",
-        "Numbers, durations, and an instant plus a duration, which gives an "
-        "instant. A bare number on either side of a duration counts as "
-        "seconds. There is no arithmetic beyond `+` and `-`: real computation "
-        "is what an action is for.",
+        "Supports numbers, durations, and an instant plus a duration. A "
+        "number combined with a duration is interpreted as seconds.",
         "std::time deadline = std::now() + 30s"}},
       {"-",
        {"Subtracts one value from another.",
         "two numbers, two instants, or an instant and a duration",
-        "An instant minus an instant is a duration, which is how a flow times "
-        "itself. It needs its spaces: `text-upper` is one name, so `a - b` and "
-        "`a-b` are different things.",
+        "Subtracting two instants produces a duration. Spaces distinguish "
+        "subtraction (`a - b`) from a hyphenated name (`a-b`).",
         "std::seconds(std::now() - started) -> elapsed"}},
       {".",
-       {"Reads a part of something.",
+       {"Access a member of a value, step, or node.",
         "a value, a step or a node on the left, a name on the right",
-        "A step's output port, a record's field, a status's field, or a node's "
-        "`id`. Whatever follows it is a member however it is spelled, so a "
-        "field called `text` is that field rather than the stage of the same "
-        "name.",
+        "Accesses an output port, record field, status field, or node `id`. "
+        "The token after `.` is resolved as a member name.",
         "page.text | truncate 2000 -> brief.pages"}},
       {"..",
-       {"The range between two bounds.",
-        "a low bound, a high bound, or one of them",
-        "What a `struct` field is bounded by: a number, a duration or an "
-        "instant, and the *length* of a string, a byte string or a list. "
-        "Either "
-        "end may be left off, as `1..` or `..200`.",
+       {"Constrain a struct field to a range.",
+        "an optional lower bound and optional upper bound",
+        "Bounds numbers, durations and instants directly; bounds the length "
+        "of strings, bytes and lists. Either bound may be omitted.",
         "limit: int 1..100"}},
       {"...",
-       {"Everything the value after it holds, spread in here.",
+       {"Expand list elements or record fields in place.",
         "a list inside a list, or a record inside a record",
-        "`[...xs, y]` and `{...it, \"tags\": [..]}`, where a later key wins. "
-        "`...` is the same thing. This is how a record is extended without "
-        "writing out the fields already in it.",
+        "Supports `[...xs, y]` and `{...record, key: value}`. Later record "
+        "entries overwrite earlier keys.",
         R"({...it, "role": "user"} as a11::sdk::Interaction)"}},
       {":",
-       {"Separates a name from what it is.",
+       {"Separate a name from its type or value.",
         "a name on the left, a type or a value on the right",
-        "A port's type, a field's type, an argument's value, a record key's "
-        "value, a `with` header's value. Past a port's `:` the whole of the "
-        "rest is the type, dots and brackets included, which is what lets a "
-        "type be written as a registry tag.",
+        "Used in port and field declarations, action arguments, record "
+        "entries, and `with` headers. Type names may include qualified "
+        "registry tags and container parameters.",
         "in frames: std::list[a11::NodeFragment] stream"}},
       {",",
-       {"Separates one thing from the next.", "",
-        "Arguments, destinations, list items, record pairs, the names a "
-        "initializer "
-        "or a `for` takes a value apart with, and the subjects of an `after`.",
+       {"Separate adjacent elements in a sequence.", "",
+        "Used between arguments, destinations, list items, record entries, "
+        "destructured names, and `after` subjects.",
         "search = run web-search(query: question, limit: 3)"}},
       {"{",
        {"Opens a block, a record, or a value of a named type.", "",
-        "Which one it is is decided by where it stands: after a `flow`, an "
-        "`if`, a `for` or a `nodes` it opens a block of statements, and in an "
-        "expression it opens a record. `Type{field: ..}` makes a value of that "
-        "type, and is not written where a `{` would open a block: in an `if` "
-        "or "
-        "`for` header it goes in brackets.",
+        "After `flow`, `if`, `for`, or `nodes`, opens a statement block. In "
+        "an expression, opens a record. `Type{field: value}` constructs a "
+        "typed value.",
         "a11::sdk::Interaction{role: \"user\", content: [..]}"}},
       {"}",
        {"Closes a block, a record, or a value of a named type.", "",
-        "The mate of `{`.", "if code >= 200 { page.text -> body }"}},
+        "Matches the preceding `{`.", "if code >= 200 { page.text -> body }"}},
       {"(",
-       {"Opens a call's arguments, or groups an expression.", "",
-        "An action's or a function's arguments, a `node()`, or a parenthesised "
-        "expression. A whole pipeline may stand in parentheses where a value "
-        "belongs, which is how `(hits | count) > 0` asks about a stream.",
+       {"Open call arguments or group an expression.", "",
+        "Parentheses also allow a pipeline where an expression value is "
+        "required, as in `(hits | count) > 0`.",
         "if (hits | count) > 0 { .. }"}},
       {")",
-       {"Closes a call's arguments, or a grouped expression.", "",
-        "The mate of `(`. A call's modifiers follow it: `via`, `timeout`, "
-        "`after` and the rest.",
+       {"Close call arguments or a grouped expression.", "",
+        "Call modifiers such as `via`, `timeout`, and `after` follow the "
+        "closing parenthesis.",
         "page = run web-fetch(url: hit.url) timeout 20s"}},
       {"[",
-       {"Opens a list, an index, or a type's parameters.", "",
-        "A list literal, an index into a value, or what a container type "
-        "holds. "
-        "A negative index counts from the end.",
+       {"Open a list, index expression, or type parameter list.", "",
+        "Negative value indices count from the end.",
         "for x, y in std::zip(a, b) { std::text(it[0]) -> shown }"}},
       {"]",
-       {"Closes a list, an index, or a type's parameters.", "",
-        "The mate of `[`. `T[]` after a type name is the same thing as "
-        "`list[T]`.",
+       {"Close a list, index expression, or type parameter list.", "",
+        "`T[]` is equivalent to `list[T]`.",
         "in frames: std::list[a11::NodeFragment] stream"}},
   };
   return *table;

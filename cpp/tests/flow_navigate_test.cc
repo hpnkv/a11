@@ -25,7 +25,9 @@
 #include "a11/flow/complete.h"
 #include "a11/flow/module.h"
 #include "a11/flow/navigate.h"
+#include "a11/flow/parser.h"
 #include "a11/flow/resolve.h"
+#include "a11/flow/vocabulary.h"
 
 namespace a11::flow {
 namespace {
@@ -99,8 +101,56 @@ TEST(FlowNavigate, PredicateStagesAndAfterBlocksDescribeTheirSyntax) {
   }
   const auto after = Describe(source, source.find("after"));
   EXPECT_TRUE(after.found);
-  EXPECT_NE(after.markdown.find("concurrent block"), std::string::npos)
+  EXPECT_NE(after.markdown.find("entire block"), std::string::npos)
       << after.markdown;
+}
+
+TEST(FlowNavigate, StageHoverIncludesCompleteFlowExample) {
+  const std::string source =
+      "flow f { out values: int stream\n [2, 1] | flatten | sort -> values\n}";
+  const auto about = Describe(source, source.find("sort"));
+  ASSERT_TRUE(about.found);
+  EXPECT_NE(about.markdown.find("Sort scores, retain the two leaders"),
+            std::string::npos)
+      << about.markdown;
+  EXPECT_NE(about.markdown.find("```a11flow\nflow top-scores"),
+            std::string::npos)
+      << about.markdown;
+  EXPECT_NE(about.markdown.find("| sort by it.points desc | first 2"),
+            std::string::npos)
+      << about.markdown;
+}
+
+TEST(FlowNavigate, ContextualVocabularyExamplesCompile) {
+  size_t checked = 0;
+  for (const auto role : vocabulary::WordRoles()) {
+    for (const std::string_view word : vocabulary::WordsOf(role)) {
+      const auto* doc = vocabulary::Documentation(role, word);
+      if (doc == nullptr) {
+        continue;
+      }
+      std::string_view remaining = doc->example;
+      while (!remaining.empty()) {
+        const size_t end = remaining.find("\n\n");
+        const std::string_view example = remaining.substr(0, end);
+        const size_t flow_start = example.find("\nflow ");
+        if (flow_start != std::string_view::npos) {
+          SCOPED_TRACE(std::string(word));
+          const std::string_view program = example.substr(flow_start + 1);
+          const ParseResult parsed = Parse(program);
+          ASSERT_FALSE(parsed.HasErrors()) << program;
+          const ResolveResult resolved = Resolve(program, parsed);
+          EXPECT_FALSE(resolved.HasErrors()) << program;
+          ++checked;
+        }
+        if (end == std::string_view::npos) {
+          break;
+        }
+        remaining.remove_prefix(end + 2);
+      }
+    }
+  }
+  EXPECT_GE(checked, 30u);
 }
 
 TEST(FlowNavigate, EverySymbolsSelectionIsInsideItsRange) {
@@ -199,6 +249,17 @@ TEST(FlowNavigate, NamedCallInputsHoverAsPorts) {
   EXPECT_NE(input.markdown.find("**Takes:** str"), std::string::npos);
 }
 
+TEST(FlowNavigate, FlowHoverListsPortsInDeclarationOrder) {
+  const Description about = Describe(kSource, At("research"), Known());
+  ASSERT_TRUE(about.found);
+  EXPECT_NE(about.markdown.find("- in `question`: string required"),
+            std::string::npos)
+      << about.markdown;
+  EXPECT_NE(about.markdown.find("- out `found`: Source stream"),
+            std::string::npos)
+      << about.markdown;
+}
+
 TEST(FlowNavigate, RecordKeysHoverAsProperties) {
   constexpr std::string_view source = R"(flow f {
   out result: object
@@ -279,6 +340,18 @@ TEST(FlowNavigate, AnActionHoversAsItsDescriptionAndItsPorts) {
       std::string::npos)
       << about.markdown;
   EXPECT_NE(about.markdown.find("`results`: dict stream"), std::string::npos);
+  const auto mime = catalogue::Catalogue::FromJson(nlohmann::json::parse(R"({
+    "actions": [{"name": "web-search", "inputs": [
+      {"name": "query", "type": "application/json;type=a11.sdk.Query",
+       "required": true}], "outputs": [
+      {"name": "results", "type": "text/plain", "unary": false}]}]
+  })"));
+  const Description with_mime = Describe(kSource, At("web-search"), mime);
+  EXPECT_NE(with_mime.markdown.find(
+                "`query`: *application/json;type=a11.sdk.Query* *(required)*"),
+            std::string::npos);
+  EXPECT_NE(with_mime.markdown.find("`results`: *text/plain* stream"),
+            std::string::npos);
   // An action is not in this document, so there is nowhere in it to go.
   EXPECT_FALSE(about.has_definition);
 }
@@ -292,24 +365,20 @@ TEST(FlowNavigate, EveryFormOfTheLanguageHoversAsWhatItDoes) {
   };
 
   const Case kCases[] = {
-      {"| join", "flow operator", "Puts a stream through a stage."},
-      {"-> found", "flow operator", "continuation sink"},
+      {"| join", "flow operator", "Pass a stream through a stage."},
+      {"-> found", "flow operator", "Write a pipeline"},
       {"= node()", "operator", "Binds a name to a step, a node, or a value."},
-      {"in  question", "a declaration",
-       "Declares an input port: what a caller sends."},
-      {"out answer", "a declaration",
-       "Declares an output port: what a caller reads back."},
+      {"in  question", "a declaration", "Declares an input port."},
+      {"out answer", "a declaration", "Declares an output port."},
       {"struct Source", "a declaration",
-       "Declares a shape: a record with named, typed, constrained fields."},
-      {"stream", "a port modifier",
-       "Says the port carries many values rather than one."},
+       "Declares a record type with named fields."},
+      {"stream", "a port modifier", "Marks a port as multi-valued."},
       {"required \"Stable id.\"", "a port modifier",
-       "Says the port or field has to be there."},
-      {"run web-search", "a statement",
-       "Dispatches an action where this flow is running."},
-      {"node()", "a declaration", "Makes a stream of the flow's own."},
+       "Requires a port value or struct field."},
+      {"run web-search", "a statement", "Starts a locally registered action."},
+      {"node()", "a declaration", "Create a flow-owned node."},
       {"map Source", "a pipeline stage",
-       "Replaces each value with what the expression makes of it."},
+       "Transform each value with an expression."},
   };
   for (const Case& one : kCases) {
     const size_t offset = kSource.find(one.at);
@@ -479,6 +548,14 @@ TEST(FlowNavigate, AStageHoversAsReference) {
   // A stage that takes nothing prints no "Takes" line at all.
   const std::string collected = StageMarkdown("collect");
   EXPECT_EQ(collected.find("**Takes:**"), std::string::npos) << collected;
+  const std::string first = StageMarkdown("first");
+  const size_t example = first.find("**Example:**");
+  ASSERT_NE(example, std::string::npos);
+  EXPECT_NE(first.find("Sort scores, retain the two leaders", example + 1),
+            std::string::npos)
+      << first;
+  EXPECT_NE(first.find("```a11flow\nflow top-scores"), std::string::npos)
+      << first;
   // Either case, as the language allows, shown as it was written.
   EXPECT_NE(StageMarkdown("TRUNCATE").find("`TRUNCATE`"), std::string::npos);
 }

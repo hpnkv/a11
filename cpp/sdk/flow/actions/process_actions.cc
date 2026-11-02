@@ -964,16 +964,12 @@ ActionSchema SpawnProcessSchema() {
   ActionSchema schema;
   schema.name = std::string(kSpawnProcessAction);
   schema.description =
-      "Run a program, with its standard output and standard error on separate "
-      "ports -- as bytes and as lines, whichever is wanted -- and its pid "
-      "written before any of them, so a composition can order something behind "
-      "the process having started. A non-zero exit is reported on `exit_code` "
-      "rather than failing the action: the program ran, and this is what it "
-      "said. Cancelling the action sends SIGTERM, waits options.grace, and "
-      "then "
-      "sends SIGKILL. In Flow, pipe `stdin` from an upstream byte stream and "
-      "filter or bound `stdout_lines` and `stderr_lines`; leave unneeded "
-      "outputs unrouted so they do not reach the caller.";
+      "Run a program with separate standard output and error streams, each "
+      "available as bytes or lines. Emits `pid` when the process starts. A "
+      "nonzero exit appears on `exit_code` without failing the action. "
+      "Cancellation sends SIGTERM, waits `options.grace`, then sends SIGKILL. "
+      "Connect `stdin` directly to a byte stream and bound output lines "
+      "before forwarding them.";
   schema.inputs.emplace("program",
                         Port("program", kTextPlain, "The program to run.",
                              /*required=*/true, /*unary=*/true));

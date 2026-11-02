@@ -100,6 +100,14 @@ DocumentSymbol PortSymbol(const LineIndex& lines, const PortPlan& port) {
   return symbol;
 }
 
+void AppendType(std::string* out, std::string_view type) {
+  if (type.find('/') != std::string_view::npos) {
+    absl::StrAppend(out, "*", type, "*");
+  } else {
+    absl::StrAppend(out, type);
+  }
+}
+
 /// The ports of an action, as one block of Markdown.
 ///
 /// What a hover over a call's name is *for*: `run make_http_request(` is eight
@@ -118,8 +126,9 @@ std::string PortTable(const catalogue::ActionInfo& action) {
     }
     absl::StrAppend(&out, "\n**", heading, "**\n\n");
     for (const catalogue::PortInfo& port : *ports) {
-      absl::StrAppend(&out, "- `", port.name, "`: ", port.type,
-                      port.unary ? "" : " stream",
+      absl::StrAppend(&out, "- `", port.name, "`: ");
+      AppendType(&out, port.type);
+      absl::StrAppend(&out, port.unary ? "" : " stream",
                       port.required ? " *(required)*" : "");
       if (!port.description.empty()) {
         absl::StrAppend(&out, " — ", port.description);
@@ -137,9 +146,11 @@ std::string FieldTable(const DtoPlan& shape) {
   }
   std::string out = "\n**Fields**\n\n";
   for (const FieldPlan& field : shape.fields) {
-    absl::StrAppend(&out, "- `", field.name,
-                    "`: ", field.declared.empty() ? field.type : field.declared,
-                    field.required ? " *(required)*" : "");
+    const std::string_view type =
+        field.declared.empty() ? field.type : field.declared;
+    absl::StrAppend(&out, "- `", field.name, "`: ");
+    AppendType(&out, type);
+    absl::StrAppend(&out, field.required ? " *(required)*" : "");
     if (!field.description.empty()) {
       absl::StrAppend(&out, " — ", field.description);
     }
@@ -404,7 +415,35 @@ std::string DocMarkdown(std::string_view name, std::string_view kind,
     absl::StrAppend(&out, "\n", doc.detail, "\n");
   }
   if (!doc.example.empty()) {
-    absl::StrAppend(&out, "\n**Example:** `", doc.example, "`\n");
+    std::string_view examples = doc.example;
+    const std::string_view separator =
+        examples.find("\n\n") == std::string_view::npos ? "\n" : "\n\n";
+    while (!examples.empty()) {
+      const size_t end = examples.find(separator);
+      const std::string_view example = examples.substr(0, end);
+      if (!example.empty()) {
+        const size_t line_break = example.find('\n');
+        const bool has_intro = line_break != std::string_view::npos &&
+                               example.substr(line_break + 1, 5) == "flow ";
+        const std::string_view code =
+            has_intro ? example.substr(line_break + 1) : example;
+        if (has_intro) {
+          absl::StrAppend(&out, "\n", example.substr(0, line_break), "\n");
+        }
+        if (code.find('\n') == std::string_view::npos) {
+          absl::StrAppend(&out, "\n**Example:** `", example, "`\n");
+        } else {
+          if (!has_intro) {
+            absl::StrAppend(&out, "\n**Example:**\n");
+          }
+          absl::StrAppend(&out, "\n```a11flow\n", code, "\n```\n");
+        }
+      }
+      if (end == std::string_view::npos) {
+        break;
+      }
+      examples.remove_prefix(end + separator.size());
+    }
   }
   return out;
 }
@@ -614,9 +653,10 @@ std::string FlowMarkdown(const FlowPlan& flow) {
   std::string ports;
   for (const PortPlan& port : flow.ports) {
     absl::StrAppend(
-        &ports, "- `", port.name,
-        "`: ", port.declared.empty() ? port.type : port.declared,
-        port.direction == syntax::PortDirection::kInput ? " (in)" : " (out)");
+        &ports,
+        port.direction == syntax::PortDirection::kInput ? "- in `" : "- out `",
+        port.name, "`: ", port.declared.empty() ? port.type : port.declared,
+        port.unary ? "" : " stream", port.required ? " required" : "");
     if (!port.description.empty()) {
       absl::StrAppend(&ports, " — ", port.description);
     }

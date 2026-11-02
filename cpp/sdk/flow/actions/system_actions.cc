@@ -528,11 +528,8 @@ ActionSchema ReadStdinSchema() {
   ActionSchema schema;
   schema.name = std::string(kReadStdinAction);
   schema.description =
-      "Read this process's standard input, as bytes and as lines. What makes a "
-      "composition a filter something else can pipe into: the reads are paced "
-      "by whoever is reading the output, so a slow consumer is felt upstream "
-      "rather than buffered. `is_tty` is written first, before any waiting, so "
-      "a composition can tell an interactive run from a piped one.";
+      "Read standard input as streamed bytes and lines. Output readers "
+      "control upstream pacing. `is_tty` is emitted before input reads begin.";
   schema.inputs.emplace(
       "options",
       Port("options", JsonType(),
@@ -562,15 +559,12 @@ ActionSchema ReadStdinSchema() {
 
 namespace {
 
-ActionSchema WriteStreamSchema(std::string_view name, std::string_view which,
-                               std::string_view why) {
+ActionSchema WriteStreamSchema(std::string_view name, std::string_view which) {
   ActionSchema schema;
   schema.name = std::string(name);
-  schema.description = absl::StrCat(
-      "Write a stream to this process's ", which, ". ", why,
-      " The write is the backpressure point, so whoever is producing the "
-      "content is held behind the terminal or the pipe rather than buffered "
-      "ahead of it.");
+  schema.description =
+      absl::StrCat("Write streamed content to this process's ", which,
+                   ". Writes apply backpressure to the input stream.");
   schema.inputs.emplace(
       "content", Port("content", kOctetStream, "What to write, in order.",
                       /*required=*/false, /*unary=*/false));
@@ -585,26 +579,19 @@ ActionSchema WriteStreamSchema(std::string_view name, std::string_view which,
 }  // namespace
 
 ActionSchema WriteStdoutSchema() {
-  return WriteStreamSchema(
-      kWriteStdoutAction, "standard output",
-      "The other half of what makes a composition a filter.");
+  return WriteStreamSchema(kWriteStdoutAction, "standard output");
 }
 
 ActionSchema WriteStderrSchema() {
-  return WriteStreamSchema(
-      kWriteStderrAction, "standard error",
-      "Kept separate from standard output for the reason the operating system "
-      "keeps them separate: what a composition says about its work should not "
-      "land in the middle of the work's own output.");
+  return WriteStreamSchema(kWriteStderrAction, "standard error");
 }
 
 ActionSchema EnvGetSchema() {
   ActionSchema schema;
   schema.name = std::string(kEnvGetAction);
   schema.description =
-      "Read named environment variables, and only the ones this host allows. "
-      "The action requires explicit names so access can be audited and cannot "
-      "include unrelated credentials.";
+      "Read explicitly named environment variables permitted by the host. "
+      "Absent names appear on missing; an empty value remains present.";
   schema.inputs.emplace(
       "names",
       Port("names", JsonType(),
@@ -632,12 +619,9 @@ ActionSchema RandomBytesSchema() {
   ActionSchema schema;
   schema.name = std::string(kRandomBytesAction);
   schema.description =
-      "Draw bytes from the system's random source. Flow has no random number "
-      "generator and should not have one -- a composition whose output depends "
-      "only on its input is one whose failures reproduce -- so nondeterminism "
-      "lives here, where it is visible in the source and refusable by not "
-      "registering it. These bytes are fit for a token or a nonce, which the "
-      "ones new_uuid uses are not.";
+      "Generate cryptographically secure random bytes. Use the bytes output "
+      "for tokens and nonces; text supplies the selected encoding. The host "
+      "may omit this action from its registry.";
   schema.inputs.emplace(
       "options",
       Port("options", JsonType(),
@@ -660,8 +644,8 @@ ActionSchema NewUuidSchema() {
   ActionSchema schema;
   schema.name = std::string(kNewUuidAction);
   schema.description =
-      "Make identifiers -- A11's ordinary kind, which are unique but not "
-      "unguessable. Use random_bytes where the value has to be a secret.";
+      "Generate unique identifiers. They are identifiers, not secrets; use "
+      "random_bytes for tokens and nonces.";
   schema.inputs.emplace("options",
                         Port("options", JsonType(), "Optional: count (1).",
                              /*required=*/false, /*unary=*/true));

@@ -173,7 +173,7 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
       ]
     },
     {
-      "description": "Copy a file or, with options.recursive, a tree. For a copy whose progress a composition wants to watch, read_file into write_file gives the same result one chunk at a time.",
+      "description": "Copy a file or, with `options.recursive`, a directory tree. Use `read_file` and `write_file` when a Flow needs streamed progress.",
       "headers": [
         {
           "description": "Absolute execution deadline: a base-10 count of milliseconds since the Unix epoch, or nanoseconds with an 'ns' suffix. The call fails once it is reached.",
@@ -210,7 +210,7 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
       ]
     },
     {
-      "description": "Read named environment variables, and only the ones this host allows. The action requires explicit names so access can be audited and cannot include unrelated credentials.",
+      "description": "Read explicitly named environment variables permitted by the host. Absent names appear on missing; an empty value remains present.",
       "headers": [
         {
           "description": "Absolute execution deadline: a base-10 count of milliseconds since the Unix epoch, or nanoseconds with an 'ns' suffix. The call fails once it is reached.",
@@ -320,6 +320,7 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
       ]
     },
     {
+      "description": "Route a conversation to the selected LLM provider. Streams response text, reasoning, events, and updated interactions. Optional tools dispatch nested A11 actions; headers select the provider, model, and usage tracking policy.",
       "headers": [
         {
           "description": "The allowed downstream LLM action (tool) name patterns, comma-separated.",
@@ -461,7 +462,7 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
       ]
     },
     {
-      "description": "List a directory, one entry at a time as the walk finds them. A tree with a million files in it costs a composition one entry of memory, and its first entry arrives before the walk has finished. `truncated` says whether a limit cut the listing short, because a partial listing that looks complete is worse than no listing. In Flow, apply `where`, `first`, or `map` to `entries` before routing the bounded result out.",
+      "description": "Stream directory entries as they are discovered. `truncated` reports whether a configured limit stopped the listing. Apply `where`, `first`, or `map` to `entries` before forwarding a large result.",
       "headers": [
         {
           "description": "Absolute execution deadline: a base-10 count of milliseconds since the Unix epoch, or nanoseconds with an 'ns' suffix. The listing fails once it is reached.",
@@ -503,7 +504,7 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
       ]
     },
     {
-      "description": "Create a directory, and by default its parents. Finding it already there is a success with `created` false, because a composition that wants a directory to exist has got what it wanted.",
+      "description": "Create a directory and, by default, its parents. An existing directory succeeds with `created: false`.",
       "headers": [
         {
           "description": "Absolute execution deadline: a base-10 count of milliseconds since the Unix epoch, or nanoseconds with an 'ns' suffix. The call fails once it is reached.",
@@ -539,7 +540,7 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
       ]
     },
     {
-      "description": "Make one HTTP request, with every part of the response on a port of its own: the status and headers as soon as they arrive, the body as it streams, the trailer section after it, the redirects that were followed, and any responses the server pushed. A 4xx or 5xx is a response and is delivered like any other -- the action fails only when there is no response at all. Action headers that do not begin with x-a11- are sent as HTTP request headers.",
+      "description": "Perform one HTTP request. Status and headers arrive before the body; body chunks stream as received. Trailers, redirect history, connection details and supported server pushes have separate ports. HTTP error responses still produce a status_code and body. Action headers without the x-a11- prefix become HTTP request headers.",
       "headers": [
         {
           "description": "Absolute execution deadline: a base-10 count of milliseconds since the Unix epoch, or nanoseconds with an 'ns' suffix. Whichever of it and options.timeout is tighter bounds the request.",
@@ -620,7 +621,7 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
       ]
     },
     {
-      "description": "Make a scratch path nothing else is using, and hand back its name. What keeps a composition from inventing names in /tmp and colliding with another run of itself. Where the host restricted the filesystem to a set of roots, the scratch space is inside the first of them rather than in the system temporary directory.",
+      "description": "Create a unique temporary file or directory and return its path. When the host restricts filesystem roots, the path is created inside the first permitted root.",
       "headers": [
         {
           "description": "Absolute execution deadline: a base-10 count of milliseconds since the Unix epoch, or nanoseconds with an 'ns' suffix. The call fails once it is reached.",
@@ -645,7 +646,7 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
       ]
     },
     {
-      "description": "Rename a path. Atomic within one filesystem and refused across two, where a move requires copying and deleting. Use copy_path followed by remove_path for that operation.",
+      "description": "Rename a path atomically within one filesystem. Cross-filesystem moves fail; use `copy_path` followed by `remove_path` for that case.",
       "headers": [
         {
           "description": "Absolute execution deadline: a base-10 count of milliseconds since the Unix epoch, or nanoseconds with an 'ns' suffix. The call fails once it is reached.",
@@ -682,7 +683,7 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
       ]
     },
     {
-      "description": "Make identifiers -- A11's ordinary kind, which are unique but not unguessable. Use random_bytes where the value has to be a secret.",
+      "description": "Generate unique identifiers. They are identifiers, not secrets; use random_bytes for tokens and nonces.",
       "headers": [
         {
           "description": "Absolute execution deadline: a base-10 count of milliseconds since the Unix epoch, or nanoseconds with an 'ns' suffix. The call fails once it is reached.",
@@ -708,7 +709,7 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
       ]
     },
     {
-      "description": "Draw bytes from the system's random source. Flow has no random number generator and should not have one -- a composition whose output depends only on its input is one whose failures reproduce -- so nondeterminism lives here, where it is visible in the source and refusable by not registering it. These bytes are fit for a token or a nonce, which the ones new_uuid uses are not.",
+      "description": "Generate cryptographically secure random bytes. Use the bytes output for tokens and nonces; text supplies the selected encoding. The host may omit this action from its registry.",
       "headers": [
         {
           "description": "Absolute execution deadline: a base-10 count of milliseconds since the Unix epoch, or nanoseconds with an 'ns' suffix. The call fails once it is reached.",
@@ -739,7 +740,7 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
       ]
     },
     {
-      "description": "Read a file, with each way of wanting it on a port of its own: the bytes as they arrive, the whole thing as std::text, one value per line, and the metadata -- which is written before any content, so a composition can act on the size while the reading is still going on. Reading streams, so a file larger than memory costs a chunk at a time. In Flow, pipe `bytes` straight into a streaming consumer, or filter and bound `lines` before routing only the useful selection to a flow output.",
+      "description": "Read a file as streamed bytes, complete text, or lines. Metadata is emitted before content. Route `bytes` to a streaming consumer for large files; filter or bound `lines` before forwarding them.",
       "headers": [
         {
           "description": "Absolute execution deadline: a base-10 count of milliseconds since the Unix epoch, or nanoseconds with an 'ns' suffix. The read fails with deadline_exceeded once it is reached, because a partial file is not a shorter file.",
@@ -787,7 +788,7 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
       ]
     },
     {
-      "description": "Read this process's standard input, as bytes and as lines. What makes a composition a filter something else can pipe into: the reads are paced by whoever is reading the output, so a slow consumer is felt upstream rather than buffered. `is_tty` is written first, before any waiting, so a composition can tell an interactive run from a piped one.",
+      "description": "Read standard input as streamed bytes and lines. Output readers control upstream pacing. `is_tty` is emitted before input reads begin.",
       "headers": [
         {
           "description": "Absolute execution deadline: a base-10 count of milliseconds since the Unix epoch, or nanoseconds with an 'ns' suffix. Reading ends gracefully once it is reached.",
@@ -830,7 +831,7 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
       ]
     },
     {
-      "description": "Remove a path. A directory is refused unless options.recursive says otherwise -- a recursive delete nobody asked for is the most expensive way for this library to be convenient. A path that is not there is a success by default, since the composition wanted it gone.",
+      "description": "Remove a path. Directory removal requires `options.recursive`. An absent path succeeds by default.",
       "headers": [
         {
           "description": "Absolute execution deadline: a base-10 count of milliseconds since the Unix epoch, or nanoseconds with an 'ns' suffix. The call fails once it is reached.",
@@ -957,7 +958,7 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
       ]
     },
     {
-      "description": "Wait, then report having waited. What `after` needs to order one statement behind a delay: a retry's backoff, a settling period before a check, a beat between two calls. A stop command or a cancellation cuts the wait short and says so on `woke`.",
+      "description": "Wait for a duration and report when the wait ends. A stop command or cancellation interrupts the wait; woke.interrupted records this. Use `after` to order later Flow statements after the result.",
       "headers": [
         {
           "description": "Absolute execution deadline: a base-10 count of milliseconds since the Unix epoch, or nanoseconds with an 'ns' suffix. The wait ends gracefully once it is reached.",
@@ -989,7 +990,7 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
       ]
     },
     {
-      "description": "Run a program, with its standard output and standard error on separate ports -- as bytes and as lines, whichever is wanted -- and its pid written before any of them, so a composition can order something behind the process having started. A non-zero exit is reported on `exit_code` rather than failing the action: the program ran, and this is what it said. Cancelling the action sends SIGTERM, waits options.grace, and then sends SIGKILL. In Flow, pipe `stdin` from an upstream byte stream and filter or bound `stdout_lines` and `stderr_lines`; leave unneeded outputs unrouted so they do not reach the caller.",
+      "description": "Run a program with separate standard output and error streams, each available as bytes or lines. Emits `pid` when the process starts. A nonzero exit appears on `exit_code` without failing the action. Cancellation sends SIGTERM, waits `options.grace`, then sends SIGKILL. Connect `stdin` directly to a byte stream and bound output lines before forwarding them.",
       "headers": [
         {
           "description": "Absolute execution deadline: a base-10 count of milliseconds since the Unix epoch, or nanoseconds with an 'ns' suffix. The process is sent SIGTERM once it is reached, then SIGKILL after options.grace, and the action fails with deadline_exceeded.",
@@ -1086,7 +1087,7 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
       ]
     },
     {
-      "description": "Read one path's metadata. A path that is not there is an answer -- `exists` is false -- rather than a failure, so a composition can ask without wrapping the question in a `try`.",
+      "description": "Read metadata for one path. An absent path returns `exists: false` without failing the action.",
       "headers": [
         {
           "description": "Absolute execution deadline: a base-10 count of milliseconds since the Unix epoch, or nanoseconds with an 'ns' suffix. The lookup fails once it is reached.",
@@ -1122,7 +1123,7 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
       ]
     },
     {
-      "description": "Produce a value every interval, so that a composition can act because time passed rather than because something arrived. Bounded by count, by a total duration, by the deadline header, or by a stop command; unbounded otherwise, and the stream simply ends when it is asked to. Ticks are scheduled from the start rather than from the last one, so a slow reader does not make the interval drift -- it makes ticks skip, counted on `skipped`.",
+      "description": "Emit timed ticks. count, for, the deadline header and stop commands can bound the stream; otherwise it continues until cancellation. Scheduling uses the start time as its origin. Missed intervals appear in the skipped count unless catch_up is enabled.",
       "headers": [
         {
           "description": "Absolute execution deadline: a base-10 count of milliseconds since the Unix epoch, or nanoseconds with an 'ns' suffix. The stream ends gracefully once it is reached.",
@@ -1203,7 +1204,7 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
       ]
     },
     {
-      "description": "Fetch a URL and hand back the body the way it is wanted: as text, as parsed JSON, as bytes, or decoded into a stream of items. A 4xx or 5xx is reported on `ok` rather than failing, so an error document can still be read. Action headers that do not begin with x-a11- are sent as HTTP request headers. Use make_http_request for the protocol itself.",
+      "description": "Fetch a URL and decode its body as text, JSON, bytes or streamed items. HTTP 4xx and 5xx responses set ok to false and retain the response body. Action headers without the x-a11- prefix become request headers. Use make_http_request to inspect trailers, redirects and connection data.",
       "headers": [
         {
           "description": "Absolute execution deadline: a base-10 count of milliseconds since the Unix epoch, or nanoseconds with an 'ns' suffix. Whichever of it and options.timeout is tighter bounds the request.",
@@ -1277,7 +1278,7 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
       ]
     },
     {
-      "description": "Render an HTTP(S) page with the platform WebKit engine and return the post-script HTML and rendered page text. Set options.include_image for a bounded PNG snapshot. In Flow, omit large representations that are not needed and filter or truncate `text` before routing it to a flow output. Use web-fetch when raw HTTP content is sufficient.",
+      "description": "Render an HTTP(S) page with the platform WebKit engine and return the post-script HTML and rendered text. `options.include_image` adds a bounded PNG snapshot. Filter or truncate `text` before forwarding large results. Use `web-fetch` for raw HTTP content.",
       "headers": [
         {
           "description": "Absolute execution deadline: a base-10 count of milliseconds since the Unix epoch, or nanoseconds with an 'ns' suffix. Whichever of it and options.timeout is tighter bounds the request.",
@@ -1338,7 +1339,7 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
       ]
     },
     {
-      "description": "Write a file from a stream, so that what is written need never be held in one piece. Atomic by default: the content goes to a temporary beside the destination and is renamed into place at the end, so a reader sees either the old contents or the new ones and a cancelled write leaves neither a partial file nor a temporary. In Flow, connect a producer directly, for example `file.bytes -> write.content`, to avoid exposing or buffering intermediate bytes. Appending cannot be atomic and says so.",
+      "description": "Write a file from streamed content. Atomic mode writes to a temporary sibling and renames it on completion. A cancelled atomic write leaves the destination unchanged. Append mode is not atomic. Connect an upstream byte stream directly to `content` to avoid buffering.",
       "headers": [
         {
           "description": "Absolute execution deadline: a base-10 count of milliseconds since the Unix epoch, or nanoseconds with an 'ns' suffix. The write fails once it is reached, and leaves the destination as it was.",
@@ -1385,7 +1386,7 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
       ]
     },
     {
-      "description": "Write a stream to this process's standard error. Kept separate from standard output for the reason the operating system keeps them separate: what a composition says about its work should not land in the middle of the work's own output. The write is the backpressure point, so whoever is producing the content is held behind the terminal or the pipe rather than buffered ahead of it.",
+      "description": "Write streamed content to this process's standard error. Writes apply backpressure to the input stream.",
       "headers": [
         {
           "description": "Absolute execution deadline: a base-10 count of milliseconds since the Unix epoch, or nanoseconds with an 'ns' suffix. The write fails once it is reached.",
@@ -1411,7 +1412,7 @@ inline constexpr std::string_view kCatalogueSnapshot = R"catalogue(
       ]
     },
     {
-      "description": "Write a stream to this process's standard output. The other half of what makes a composition a filter. The write is the backpressure point, so whoever is producing the content is held behind the terminal or the pipe rather than buffered ahead of it.",
+      "description": "Write streamed content to this process's standard output. Writes apply backpressure to the input stream.",
       "headers": [
         {
           "description": "Absolute execution deadline: a base-10 count of milliseconds since the Unix epoch, or nanoseconds with an 'ns' suffix. The write fails once it is reached.",

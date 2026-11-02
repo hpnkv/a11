@@ -12,30 +12,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Deep research: plan a topic, investigate the parts of it at the same time,
-# and write one report out of what came back.
+# Plan a topic, investigate briefs concurrently, and synthesise a report.
 #
-# Every model call is `ask_model` -- `interact_with_llm` without the recording,
-# because a step of a composition is not a chat turn. Which provider answers is
-# the caller's header rather than anything in this file. Served by
-# `a11.demos.web_demos_server`; the guide is doc/docs/guides/deep-research.md.
+# Model calls use `ask_model`. The caller's headers select the provider.
+# Served by `a11.demos.web_demos_server`; see
+# doc/docs/guides/deep-research.md.
 
 from std import join, startswith, strformat, to_chunk
 
 flow plan-research {
   describe """
-    Turn a topic into a handful of briefs that can be investigated separately.
-
-    The last brief is the one about writing the report, and comes back on
-    `synthesis` rather than with the others.
+    Produce independent investigation briefs and a synthesis instruction.
+    The final plan line supplies `synthesis`; preceding lines supply `briefs`.
     """
 
-  in  topic: string required "What to research."
+  in  topic: string required "Research topic."
 
-  out briefs:    string stream "One instruction per investigation."
-  out synthesis: string        "How to write the final report."
+  out briefs:    string stream "Independent investigation instructions."
+  out synthesis: string        "Final report instruction."
   out narration: string stream
-    "Lines for the caller's log; see `deep-research`."
+    "Planning progress messages."
 
   strformat("[plan] planning research on: %s", topic) -> narration
 
@@ -64,9 +60,7 @@ flow plan-research {
     config: {}
   )
 
-  # The plan arrives as text, and the briefs are its lines. `join ""` puts the
-  # streamed pieces back together, and `split_lines` makes them a stream again
-  # -- one value per line, which is what the fan-out downstream reads.
+  # Reassemble streamed text before splitting it into plan lines.
   lines = run split_lines(text: llm.text_output | join "")
 
   lines.lines | where not startswith(it, "FINALLY:") -> briefs
@@ -78,14 +72,14 @@ flow plan-research {
 }
 
 flow investigate {
-  describe "Carry out one brief, in the context of the whole topic."
+  describe "Investigate one brief within the research topic."
 
-  in  topic: string required "What the whole research is about."
-  in  brief: string required "This investigation's instruction."
+  in  topic: string required "Research topic."
+  in  brief: string required "Investigation instruction."
 
-  out report:    string "What it found."
+  out report:    string "Investigation findings and sources."
   out narration: string stream
-    "Lines for the caller's log; see `deep-research`."
+    "Investigation progress messages."
 
   strformat("[investigate] %s", brief) -> narration
 
@@ -113,27 +107,25 @@ flow investigate {
 
   llm.text_output | join "" -> report
 
-  # `wait` is what makes this the last line about this investigation rather
-  # than a line racing it.
+  # Emit completion progress after the model action finishes.
   done = wait llm
   strformat("[investigate] finished: %s", brief) -> narration after done
 }
 
 flow synthesise-findings {
-  describe "Write one report out of what the investigations found."
+  describe "Synthesise investigation findings into a report."
 
-  in  topic:    string required        "What the research is about."
-  in  brief:    string required        "How the report should be written."
-  in  findings: string stream required "One report per investigation."
+  in  topic:    string required        "Research topic."
+  in  brief:    string required        "Report instruction."
+  in  findings: string stream required "Investigation reports."
 
-  out report:    string stream "The report, as it is written."
+  out report:    string stream "Report text chunks."
   out narration: string stream
-    "Lines for the caller's log; see `deep-research`."
+    "Synthesis progress messages."
 
   strformat("[synthesise] writing the report on: %s", topic) -> narration
 
-  # One prompt out of every finding. `collect` waits for the investigations to
-  # finish, which is the only barrier in the whole composition.
+  # Collect referenced findings before constructing the synthesis prompt.
   asked = node()
   findings
     | read_with {
@@ -167,17 +159,17 @@ flow synthesise-findings {
     config: {}
   )
 
-  # Not joined: the caller gets the report as the model writes it.
+  # Forward report text as it arrives.
   llm.text_output -> report
 }
 
 flow deep-research {
-  describe "Plan a topic, investigate its parts concurrently, and write a report."
+  describe "Plan a topic, investigate briefs concurrently, and synthesise a report."
 
-  in  topic: string required "What to research."
+  in  topic: string required "Research topic."
 
-  out report: string stream "The final report, as it is written."
-  out plan:   string stream "The briefs the planner came up with."
+  out report: string stream "Report text chunks."
+  out plan:   string stream "Investigation briefs."
 
   planned = run plan-research(topic: topic)
   for line in planned.narration {

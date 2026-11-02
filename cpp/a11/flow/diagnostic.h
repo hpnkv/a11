@@ -26,49 +26,38 @@
 
 namespace a11::flow {
 
-/// How much a diagnostic matters.
-///
-/// The distinction that earns its keep is between "this cannot work" and "this
-/// does nothing": the first stops a flow from compiling, the second is the
-/// greyed-out unused symbol every editor already knows how to show.
+/// Severity of a Flow diagnostic.
 enum class Severity {
-  /// The compiler refuses the flow. `a11 flow check` exits non-zero.
+  /// Compilation fails. `a11 flow check` exits nonzero.
   kError,
-  /// The flow compiles and does something other than what it says.
+  /// Compilation succeeds, but behavior may differ from the source's intent.
   kWarning,
-  /// The flow works, and part of it is doing nothing.
+  /// Compilation succeeds, but a source element has no effect.
   kWeakWarning,
   /// Non-blocking information.
   kInformation,
 };
 
-/// The kind of problem, which is the grouping a reader thinks in.
-///
-/// An editor turns each of these into one switchable inspection, and a CI job
-/// can gate on some and not others -- which is why the family is part of the
-/// output contract rather than something a frontend infers from the code.
+/// Diagnostic category used by editors and build gates.
 enum class Family {
-  /// The text is not a flow: something is missing or in the wrong place.
+  /// Missing or misplaced Flow syntax.
   kSyntax,
-  /// A form the language does not have, or does not have there.
+  /// Invalid language form or form in an invalid position.
   kForm,
-  /// A name that cannot be resolved, or is used as the wrong thing.
+  /// Unresolved name or invalid use of a resolved name.
   kName,
-  /// A sequence of operations that cannot do what it appears to.
+  /// Stage or access sequence with invalid or ineffective behavior.
   kSequence,
-  /// A barrier, loop tail or ordering that cannot hold.
+  /// Invalid barrier, loop termination, or execution order.
   kBarrier,
-  /// A status, wait or declaration nothing uses.
+  /// Unread status, unused binding, or unused declaration.
   kUnused,
 };
 
-/// One place in the source: the byte offset, and the line and column at it.
+/// Source position with a byte offset and 1-based line and column.
 ///
-/// All three are carried because each consumer wants a different one. Byte
-/// offsets are what an editor edits with, line and column are what a person and
-/// a build log read, and computing one from the other needs the source text --
-/// which a diagnostic that has travelled as JSON no longer has. Lines and
-/// columns are 1-based, as `a11.flow.lexer` has always reported them.
+/// Byte offsets support edits. Line and column support display after the
+/// diagnostic is serialized without its source text.
 struct Position {
   size_t offset = 0;
   int line = 1;
@@ -88,12 +77,9 @@ struct Edit {
   std::string text;
 };
 
-/// An edit, or set of edits, that would fix a diagnostic.
+/// Source edits supplied with a diagnostic.
 ///
-/// Offered only where a single edit is obviously the right one. A frontend
-/// applies these blind -- it never re-derives what the fix should be -- so a
-/// fix
-/// that guesses would be a fix that corrupts somebody's file.
+/// Frontends apply these edits without deriving another repair.
 struct Fix {
   std::string label;
   std::vector<Edit> edits;
@@ -107,12 +93,9 @@ struct RelatedDiagnostic {
   std::string message;
 };
 
-/// One problem found in a flow.
+/// Flow problem rendered by the CLI, JSON and SARIF writers, and editors.
 ///
-/// This is the unit every frontend renders: the CLI prints it, the JSON and
-/// SARIF writers serialise it, an editor turns it into a squiggle and an
-/// Alt+Enter. Nothing downstream composes messages of its own, which is what
-/// keeps the wording of a language problem in one place.
+/// Native analysis owns the message and any source edits.
 struct Diagnostic {
   std::string source;
   /// A stable dotted identifier, e.g. `flow.stage.unknown`. Part of the
@@ -124,7 +107,7 @@ struct Diagnostic {
   Range range;
   /// One sentence, in the language's own terms, ending in a full stop.
   std::string message;
-  /// The flow the problem is in, where the text got far enough to say.
+  /// Enclosing flow name when parsing or resolution identifies one.
   std::string flow;
   std::vector<Fix> fixes;
   std::vector<RelatedDiagnostic> related;
@@ -142,17 +125,15 @@ Severity SeverityFromName(std::string_view name);
 /// `Family` for a name from the output formats, or `kSyntax` if unknown.
 Family FamilyFromName(std::string_view name);
 
-/// What a diagnostic code means, for documentation and for `a11 flow codes`.
+/// Published diagnostic code metadata for documentation and `a11 flow codes`.
 ///
-/// The table of these *is* the published list of things the language checks; a
-/// new check adds an entry, and the test in `cpp/tests/flow_diagnostic_test.cc`
-/// holds it to being complete, sorted and free of duplicates.
+/// `cpp/tests/flow_diagnostic_test.cc` checks completeness, order, and unique
+/// codes.
 struct CodeInfo {
   std::string_view code;
   Family family;
   Severity severity;
-  /// One line, in the imperative-free "what is wrong" voice: this is what a
-  /// `--help`-style listing shows next to the code.
+  /// One-line summary shown beside the code in catalogue listings.
   std::string_view summary;
 };
 

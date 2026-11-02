@@ -28,10 +28,12 @@ loader cache.
 """
 
 import pathlib
+import re
 import sys
 
 #: The generated lexer, which lives with the other editor definitions.
 LEXER_DIR = pathlib.Path(__file__).resolve().parents[2] / "editors" / "pygments"
+FLOW_FENCE = re.compile(r"(?m)^([ \t]*)(`{3,}|~{3,})a11flow[ \t]*$")
 
 
 def on_config(config):
@@ -52,3 +54,8 @@ def on_config(config):
     )
     _lexer_cache[A11FlowLexer.name] = A11FlowLexer
     return config
+
+
+def on_page_markdown(markdown, **_kwargs):
+    """Mark Flow fences for browser hover support without changing their lexer."""
+    return FLOW_FENCE.sub(r"\1\2a11flow {.a11-flow}", markdown)

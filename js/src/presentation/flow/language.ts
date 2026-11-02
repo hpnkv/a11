@@ -103,6 +103,14 @@ export interface FlowHover {
   summary?: string;
   detail?: string;
   markdown?: string;
+  display?: {
+    label: string;
+    role: string;
+    type?: string;
+    inferred_type: boolean;
+    trailing_type: boolean;
+    body?: string;
+  };
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -147,101 +155,4 @@ export function applyFlowEdits(
         changed.slice(0, edit.start) + edit.text + changed.slice(edit.end),
       source,
     );
-}
-
-/** Add nearby action/JSON Schema documentation when native hover is generic. */
-export function withContextualHoverDescription(
-  reply: FlowServiceReply,
-  request: FlowLanguageRequest,
-  context?: Record<string, unknown>,
-): FlowServiceReply {
-  const hover = hoverOf(reply);
-  if (!hover?.found || !context || request.offset === undefined) return reply;
-  const identifier = hover.text || identifierAt(request.source, request.offset);
-  if (!identifier) return reply;
-  const actions = Array.isArray(context.actions)
-    ? context.actions.filter(isRecord)
-    : [];
-  const precedingRuns = [
-    ...request.source
-      .slice(0, request.offset)
-      .matchAll(/\brun\s+([A-Za-z_][\w-]*)\s*\(/g),
-  ];
-  const nearbyAction = precedingRuns.at(-1)?.[1];
-  actions.sort(
-    (left, right) =>
-      Number(right.name === nearbyAction) - Number(left.name === nearbyAction),
-  );
-  const descriptions = new Set<string>();
-  for (const action of actions) {
-    if (action.name === identifier)
-      addDescription(descriptions, action.description);
-    for (const direction of ["inputs", "outputs"] as const) {
-      const ports = Array.isArray(action[direction]) ? action[direction] : [];
-      for (const candidate of ports) {
-        if (!isRecord(candidate)) continue;
-        if (candidate.name === identifier)
-          addDescription(descriptions, candidate.description);
-        findPropertyDescriptions(
-          candidate.json_schema,
-          identifier,
-          descriptions,
-        );
-      }
-    }
-  }
-  const description = descriptions.values().next().value;
-  if (!description) return reply;
-  const existing = [hover.markdown, hover.summary, hover.detail]
-    .filter((part): part is string => typeof part === "string")
-    .join("\n");
-  if (existing.includes(description)) return reply;
-  const escaped = description.replace(/([\\`*_[\]<>])/g, "\\$1");
-  const heading = hover.markdown || hover.summary || `\`${identifier}\``;
-  return {
-    ...reply,
-    result: {
-      ...hover,
-      detail: hover.detail || description,
-      markdown: `${heading}\n\n${escaped}`,
-    },
-  };
-}
-
-function identifierAt(source: string, offset: number): string {
-  let start = Math.min(offset, source.length);
-  let end = start;
-  while (start > 0 && /[\w-]/.test(source[start - 1] ?? "")) start -= 1;
-  while (end < source.length && /[\w-]/.test(source[end] ?? "")) end += 1;
-  return source.slice(start, end);
-}
-
-function addDescription(found: Set<string>, value: unknown): void {
-  if (typeof value === "string" && value.trim()) found.add(value.trim());
-}
-
-function findPropertyDescriptions(
-  schema: unknown,
-  identifier: string,
-  found: Set<string>,
-  seen = new Set<object>(),
-): void {
-  if (!isRecord(schema) || seen.has(schema)) return;
-  seen.add(schema);
-  if (isRecord(schema.properties)) {
-    const property = schema.properties[identifier];
-    if (isRecord(property)) {
-      addDescription(found, property.description);
-      if (typeof property.title === "string" && !property.description)
-        addDescription(found, property.title);
-    }
-  }
-  for (const value of Object.values(schema)) {
-    if (Array.isArray(value)) {
-      for (const item of value)
-        findPropertyDescriptions(item, identifier, found, seen);
-    } else {
-      findPropertyDescriptions(value, identifier, found, seen);
-    }
-  }
 }

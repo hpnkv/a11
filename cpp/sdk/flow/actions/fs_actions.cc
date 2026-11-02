@@ -1026,14 +1026,9 @@ ActionSchema ReadFileSchema() {
   ActionSchema schema;
   schema.name = std::string(kReadFileAction);
   schema.description =
-      "Read a file, with each way of wanting it on a port of its own: the "
-      "bytes as they arrive, the whole thing as std::text, one value per line, "
-      "and the metadata -- which is written before any content, so a "
-      "composition can act on the size while the reading is still going on. "
-      "Reading streams, so a file larger than memory costs a chunk at a time. "
-      "In Flow, pipe `bytes` straight into a streaming consumer, or filter and "
-      "bound `lines` before routing only the useful selection to a flow "
-      "output.";
+      "Read a file as streamed bytes, complete text, or lines. Metadata is "
+      "emitted before content. Route `bytes` to a streaming consumer for "
+      "large files; filter or bound `lines` before forwarding them.";
   schema.inputs.emplace("path",
                         Port("path", kTextPlain,
                              "File to read; relative paths use the current "
@@ -1076,14 +1071,10 @@ ActionSchema WriteFileSchema() {
   ActionSchema schema;
   schema.name = std::string(kWriteFileAction);
   schema.description =
-      "Write a file from a stream, so that what is written need never be held "
-      "in one piece. Atomic by default: the content goes to a temporary beside "
-      "the destination and is renamed into place at the end, so a reader sees "
-      "either the old contents or the new ones and a cancelled write leaves "
-      "neither a partial file nor a temporary. In Flow, connect a producer "
-      "directly, for example `file.bytes -> write.content`, to avoid exposing "
-      "or buffering intermediate bytes. Appending cannot be atomic and says "
-      "so.";
+      "Write a file from streamed content. Atomic mode writes to a temporary "
+      "sibling and renames it on completion. A cancelled atomic write leaves "
+      "the destination unchanged. Append mode is not atomic. Connect an "
+      "upstream byte stream directly to `content` to avoid buffering.";
   schema.inputs.emplace("path",
                         Port("path", kTextPlain,
                              "File to write; relative paths use the current "
@@ -1130,12 +1121,9 @@ ActionSchema ListDirectorySchema() {
   ActionSchema schema;
   schema.name = std::string(kListDirectoryAction);
   schema.description =
-      "List a directory, one entry at a time as the walk finds them. A tree "
-      "with a million files in it costs a composition one entry of memory, and "
-      "its first entry arrives before the walk has finished. `truncated` says "
-      "whether a limit cut the listing short, because a partial listing that "
-      "looks complete is worse than no listing. In Flow, apply `where`, "
-      "`first`, or `map` to `entries` before routing the bounded result out.";
+      "Stream directory entries as they are discovered. `truncated` reports "
+      "whether a configured limit stopped the listing. Apply `where`, "
+      "`first`, or `map` to `entries` before forwarding a large result.";
   schema.inputs.emplace("path", Port("path", kTextPlain,
                                      "Directory to list; relative paths use "
                                      "the current directory.",
@@ -1172,9 +1160,8 @@ ActionSchema StatPathSchema() {
   ActionSchema schema;
   schema.name = std::string(kStatPathAction);
   schema.description =
-      "Read one path's metadata. A path that is not there is an answer -- "
-      "`exists` is false -- rather than a failure, so a composition can ask "
-      "without wrapping the question in a `try`.";
+      "Read metadata for one path. An absent path returns `exists: false` "
+      "without failing the action.";
   schema.inputs.emplace("path", Port("path", kTextPlain,
                                      "Path to inspect; relative paths use the "
                                      "current directory.",
@@ -1197,9 +1184,8 @@ ActionSchema MakeDirectorySchema() {
   ActionSchema schema;
   schema.name = std::string(kMakeDirectoryAction);
   schema.description =
-      "Create a directory, and by default its parents. Finding it already "
-      "there is a success with `created` false, because a composition that "
-      "wants a directory to exist has got what it wanted.";
+      "Create a directory and, by default, its parents. An existing "
+      "directory succeeds with `created: false`.";
   schema.inputs.emplace("path", Port("path", kTextPlain,
                                      "Directory to create; relative paths use "
                                      "the current directory.",
@@ -1223,10 +1209,8 @@ ActionSchema RemovePathSchema() {
   ActionSchema schema;
   schema.name = std::string(kRemovePathAction);
   schema.description =
-      "Remove a path. A directory is refused unless options.recursive says "
-      "otherwise -- a recursive delete nobody asked for is the most expensive "
-      "way for this library to be convenient. A path that is not there is a "
-      "success by default, since the composition wanted it gone.";
+      "Remove a path. Directory removal requires `options.recursive`. An "
+      "absent path succeeds by default.";
   schema.inputs.emplace("path", Port("path", kTextPlain,
                                      "Path to remove; relative paths use the "
                                      "current directory.",
@@ -1246,9 +1230,8 @@ ActionSchema MovePathSchema() {
   ActionSchema schema;
   schema.name = std::string(kMovePathAction);
   schema.description =
-      "Rename a path. Atomic within one filesystem and refused across two, "
-      "where a move requires copying and deleting. Use copy_path followed by "
-      "remove_path for that operation.";
+      "Rename a path atomically within one filesystem. Cross-filesystem "
+      "moves fail; use `copy_path` followed by `remove_path` for that case.";
   schema.inputs.emplace("path", Port("path", kTextPlain,
                                      "Path to move; relative paths use the "
                                      "current directory.",
@@ -1271,9 +1254,8 @@ ActionSchema CopyPathSchema() {
   ActionSchema schema;
   schema.name = std::string(kCopyPathAction);
   schema.description =
-      "Copy a file or, with options.recursive, a tree. For a copy whose "
-      "progress a composition wants to watch, read_file into write_file gives "
-      "the same result one chunk at a time.";
+      "Copy a file or, with `options.recursive`, a directory tree. Use "
+      "`read_file` and `write_file` when a Flow needs streamed progress.";
   schema.inputs.emplace("path", Port("path", kTextPlain,
                                      "Path to copy; relative paths use the "
                                      "current directory.",
@@ -1297,11 +1279,9 @@ ActionSchema MakeTempSchema() {
   ActionSchema schema;
   schema.name = std::string(kMakeTempAction);
   schema.description =
-      "Make a scratch path nothing else is using, and hand back its name. What "
-      "keeps a composition from inventing names in /tmp and colliding with "
-      "another run of itself. Where the host restricted the filesystem to a "
-      "set of roots, the scratch space is inside the first of them rather than "
-      "in the system temporary directory.";
+      "Create a unique temporary file or directory and return its path. "
+      "When the host restricts filesystem roots, the path is created inside "
+      "the first permitted root.";
   schema.inputs.emplace(
       "options",
       Port("options", JsonType(),

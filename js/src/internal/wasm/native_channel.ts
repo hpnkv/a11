@@ -43,5 +43,5 @@ export function removeChannelBridge(bridge: ChannelBridge): void {
 }
 
 export function channelBridge(): ChannelBridge | null {
-  return installed[0] ?? null;
+  return installed.at(-1) ?? null;
 }

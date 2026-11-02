@@ -35,6 +35,7 @@ test("Flow starter uses the public model action when both are offered", () => {
   assert.equal(isOk(source), true);
   assert.match(source, /said = call interact_with_llm\(/);
   assert.doesNotMatch(source, /said = call ask_model\(/);
+  assert.match(source, /Call a language model and stream its response/);
 });
 
 test("Flow language replies retain the native versioned contract", () => {

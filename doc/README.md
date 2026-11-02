@@ -32,11 +32,19 @@ site is still built (the C++ pages are simply omitted). The
 `doxygen-awesome-css` theme is fetched automatically into
 `cpp/doxygen-awesome-css` on first build.
 
+The Flow reference loads the unthreaded WASM language service on first hover.
+Build and package it as described in `cpp/a11/wasm/README.md`, then copy
+`cpp/a11/wasm/build/dist/` into `js/dist/wasm/`. MkDocs copies those
+content-hashed assets into the site for both builds and live preview. CI uses
+the tested WASM artifact from its WASM workflow.
+
 ## Live preview (Python site only)
 
 ```sh
 uv run --group docs mkdocs serve -f doc/mkdocs.yml
 ```
+
+The preview requires `js/dist/wasm/asset-manifest.json` from the WASM package.
 
 ## Social preview images
 

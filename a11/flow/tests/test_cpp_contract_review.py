@@ -14,6 +14,9 @@ from a11.status import StatusException
 
 
 SOURCE = Path(__file__).parents[3] / ".a11/flows/cpp_contract_review.flow"
+pytestmark = pytest.mark.skipif(
+    not SOURCE.is_file(), reason="Local cpp_contract_review.flow is not installed"
+)
 READ_SCHEMA = a11.ActionSchema.model_validate({
     "name": "read_file",
     "inputs": {

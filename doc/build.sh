@@ -43,14 +43,6 @@ npm --prefix "$HERE/../js" run build:demos
 echo "==> Building Python documentation (mkdocs)"
 mkdocs build $STRICT
 
-WASM_ASSETS="$HERE/../js/dist/wasm"
-if [[ ! -f "$WASM_ASSETS/asset-manifest.json" ]]; then
-  echo "Missing packaged A11 WASM assets: $WASM_ASSETS" >&2
-  exit 1
-fi
-mkdir -p "$HERE/site/assets/wasm"
-cp -a "$WASM_ASSETS/." "$HERE/site/assets/wasm/"
-
 # 3. TypeScript API. It must run after MkDocs, which clears doc/site.
 echo "==> Building TypeScript documentation (TypeDoc)"
 npm --prefix "$HERE/../js" run build:docs

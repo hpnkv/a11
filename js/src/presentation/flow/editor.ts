@@ -37,9 +37,9 @@ import {
 
 export const FLOW_DIAGNOSTIC_DEBOUNCE_MS = 600;
 export const FLOW_COMPLETION_DEBOUNCE_MS = 100;
-export const FLOW_HOVER_DEBOUNCE_MS = 250;
+export const FLOW_HOVER_DEBOUNCE_MS = 90;
 export const FLOW_HOVER_PROGRESS_MS = 150;
-export const FLOW_HOVER_HANDOFF_MS = 500;
+export const FLOW_HOVER_HANDOFF_MS = 320;
 export const FLOW_HOVER_CACHE_LIMIT = 128;
 
 export interface DecoratedFlowToken extends FlowToken {

@@ -666,14 +666,14 @@ export function flowTemplate(
 
 function modelTemplate(name: string, verb: "call" | "run"): string {
   return `flow ask {
-  describe "Ask the model something, and watch it think and answer."
+  describe "Call a language model and stream its response."
 
-  out reply:    string stream  "The answer, as it is written."
-  out thinking: string stream  "The model's reasoning, as it arrives."
+  out reply:    string stream  "Response text chunks."
+  out thinking: string stream  "Reasoning text chunks, when provided."
 
-  # Everything worth playing with is here.
-  question = "What is RPC and how to make them distributed?"
-  system = "Answer in one or two sentences. Be concrete."
+  # Change the request text and model headers to configure the call.
+  question = "How can an RPC service be distributed?"
+  system = "Answer in one or two sentences. Name the main components."
 
   asked = std::now()
 
@@ -696,13 +696,11 @@ function modelTemplate(name: string, verb: "call" | "run"): string {
 
   said.text_output -> reply
 
-  # Streamed as it arrives, so a long think shows progress rather than a blank
-  # panel -- and logged once, whole, since a token per line is not a thought.
-  # \`-> _\` performs the pipeline and keeps nothing.
+  # Forward response and reasoning streams as they arrive.
   said.thoughts | join "" | logf debug "thought: %s" it -> _
   said.thoughts -> thinking
 
-  # \`after done\` is what makes this the last line rather than the first.
+  # Log elapsed time after the action finishes.
   done = wait said
   logf info "asked at %s, answered %s later" asked, (std::now() - asked) after done
 }

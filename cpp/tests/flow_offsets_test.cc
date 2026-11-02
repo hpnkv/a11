@@ -129,6 +129,47 @@ TEST(FlowOffsets, ACaretConvertsTheOtherWayRound) {
   EXPECT_EQ(answer.at("result").at("prefix"), "q");
 }
 
+TEST(FlowOffsets, SnippetHoverResolvesARegisteredProperty) {
+  const std::string source =
+      "# 🙂\n"
+      "a11::sdk::Interaction{\n"
+      "  role: \"user\"\n"
+      "}";
+  const size_t role = source.find("role:");
+  nlohmann::json request{{"method", "describe"},
+                         {"source", source},
+                         {"offsets", "utf16"},
+                         {"offset", TextIndex(source).Utf16Of(role + 2)},
+                         {"snippet", true}};
+  const nlohmann::json answer = Handle(request);
+  ASSERT_TRUE(answer.at("ok").get<bool>()) << answer.dump();
+  const nlohmann::json& found = answer.at("result");
+  ASSERT_TRUE(found.at("found").get<bool>()) << answer.dump();
+  EXPECT_NE(found.at("markdown").get<std::string>().find("property: json"),
+            std::string::npos);
+  EXPECT_EQ(found.at("range").at("start").at("offset"),
+            TextIndex(source).Utf16Of(role));
+  EXPECT_EQ(found.at("range").at("start").at("line"), 3);
+  EXPECT_EQ(found.at("display").at("role"), "property");
+  EXPECT_EQ(found.at("display").at("type"), "json");
+  request.erase("snippet");
+  const nlohmann::json ordinary = Handle(request);
+  EXPECT_EQ(ordinary.at("result").at("markdown"), "`role` — identifier");
+}
+
+TEST(FlowOffsets, SnippetCallTitleNamesItsAction) {
+  const std::string source = "search = run web-search(query: question)";
+  const nlohmann::json answer = Handle({{"method", "describe"},
+                                        {"source", source},
+                                        {"offset", 2},
+                                        {"snippet", true}});
+  ASSERT_TRUE(answer.at("ok").get<bool>()) << answer.dump();
+  const nlohmann::json& display = answer.at("result").at("display");
+  EXPECT_EQ(display.at("label"), "search");
+  EXPECT_EQ(display.at("role"), "call of `web-search`");
+  EXPECT_FALSE(display.contains("body"));
+}
+
 TEST(FlowOffsets, ABasisTheServiceDoesNotSpeakIsSaidSoRatherThanGuessed) {
   const nlohmann::json answer = Ask("tokens", "utf8");
   ASSERT_FALSE(answer.at("ok").get<bool>());

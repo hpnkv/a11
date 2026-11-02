@@ -54,7 +54,6 @@ import {
     StreamMode,
     WebSocketWireStream,
     getToolDefinitions,
-    getBuiltinAction,
     isOk,
     isStatusChunk,
     logRecordFromChunk,
@@ -503,11 +502,7 @@ export class A11ChatSession {
     async listGatewayActions(): Promise<SchemaDocument> {
         await this.ensureConnected();
         return this.gatewayOperation(async () => {
-            const builtin = getBuiltinAction(LIST_ACTIONS_NAME);
-            if (!builtin) throw new Error('The A11 action-discovery builtin is unavailable.');
-            const call = need(Action.create(builtin.schema, {
-                session: this.session!, stream: this.stream!, nodeMap: this.session!.getNodeMap(),
-            }));
+            const call = need(await this.session!.createAction(LIST_ACTIONS_NAME));
             need(await call.call());
             const request = need(await call.getInput('request'));
             need(await request.finalize({ports: 'all', runnable_only: true}));

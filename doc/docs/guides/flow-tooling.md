@@ -110,8 +110,8 @@ text. Set the offset unit once per request:
 ```
 
 Use `"bytes"` (the default) or `"utf16"`. The selected unit applies to every
-returned offset and to the inbound `offset` for `complete`. The service performs
-the conversion.
+returned offset and to the inbound `offset` for `complete`, `describe`, and
+`definition`. The service performs the conversion.
 
 Two fields use their own coordinate systems: a diagnostic's `line` and `column`
 are 1-based code-point counts, and a completion proposal's `caret` is an offset
@@ -389,6 +389,9 @@ What the `describe` method gives: what is at one offset, and where it came from.
   "summary": "`make_http_request` — an action",
   "detail": "Make one HTTP request, with every part of the response ...",
   "markdown": "...\n\n**Inputs**\n\n- `url`: str *(required)* ...",
+  "display": {"label": "make_http_request", "role": "action",
+              "inferred_type": false, "trailing_type": false,
+              "body": "Make one HTTP request ..."},
   "range": {"start": {...}, "end": {...}},
   "definition": {"start": {...}, "end": {...}}
 }
@@ -398,12 +401,23 @@ What the `describe` method gives: what is at one offset, and where it came from.
 status bar. `definition` is present only for declarations in the current
 document.
 
+`display` supplies the hover title and body as separate fields. `role` names
+the symbol's kind or the action a call runs. `type` is present when the title
+has a type; `trailing_type` places it after the role, and `inferred_type` marks
+a deduced value or property type. UI clients render these fields directly.
+
 `origin` identifies declarations found by `scan` in another file. A `definition`
 is a range in the current document; an `origin` contains a path the host must
 open.
 
 The language service performs name resolution before returning hover results, so
 editors do not reproduce this logic.
+
+For a code fragment outside a `flow` declaration, set `"snippet": true` on a
+`describe` request. The service first resolves the text as written. If it finds
+only an unclassified identifier, it resolves the fragment as a Flow body and
+returns ranges in the original fragment's offsets. Documentation code blocks
+use this mode for expressions such as `a11::sdk::Interaction{role: "user"}`.
 
 Hover and completion use an adjacent block of full-line `#` comments when a
 struct, flow, field, or input/output port has no description. Explicit
@@ -587,20 +601,18 @@ word and a port modifier — has one entry, reachable under either.
 
 ### SARIF
 
-`--format sarif` writes a SARIF 2.1.0 log, which is what GitHub code scanning,
-Azure DevOps and most annotators already read. Every rule the log can reference is
-described in it, because the rule list *is* the published code table. SARIF has
-three levels, so both shades of "this does nothing" (`weak-warning`,
-`information`) become `note`; the `severity` in the JSON envelope keeps the
-distinction when required.
+`--format sarif` writes a SARIF 2.1.0 log for code scanning and CI annotations.
+The log includes rule descriptions from the published diagnostic catalogue.
+SARIF maps `weak-warning` and `information` to `note`; the JSON envelope
+preserves the original severity.
 
 ## Severities and families
 
 | Severity | Description |
 | --- | --- |
 | `error` | The flow does not compile. |
-| `warning` | It compiles and does something other than what it says. |
-| `weak-warning` | The flow compiles, but part of it has no effect. |
+| `warning` | The flow compiles, but behavior may differ from the source's intent. |
+| `weak-warning` | The flow compiles, but a source element has no effect. |
 | `information` | Non-blocking information. |
 
 Editors can expose each diagnostic **family** as one switchable inspection:

@@ -792,7 +792,7 @@ test('native receiving session exposes typed inbound messages',
     assert.equal(isOk(received), true);
     assert.ok(received.message instanceof WireMessage);
     assert.equal(received.message.nodeFragments[0].id, 'sdk-received-node');
-    assert.ok(received.streamId.endsWith(pair[0].getId()));
+    assert.ok(received.streamId.startsWith(`${pair[0].getId()}-`));
     assert.equal(isOk(await session.dispatchWireMessage(received.message,
       received.streamId)), true);
     const dispatched = await session.getNodeMap().node('sdk-received-node');

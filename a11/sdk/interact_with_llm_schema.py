@@ -43,6 +43,12 @@ PROVIDER_CONFIG_SCHEMA = TypeAdapter(
 
 INTERACT_WITH_LLM_SCHEMA = a11.ActionSchema(
     name="interact_with_llm",
+    description=(
+        "Route a conversation to the selected LLM provider. Streams response "
+        "text, reasoning, events, and updated interactions. Optional tools "
+        "dispatch nested A11 actions; headers select the provider, model, "
+        "and usage tracking policy."
+    ),
     inputs={
         "interactions": a11.ActionPortSchema(
             "interactions",

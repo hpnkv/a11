@@ -20,6 +20,7 @@
 #include <utility>
 #include <vector>
 
+#include <absl/strings/ascii.h>
 #include <absl/strings/str_cat.h>
 #include <absl/strings/str_join.h>
 #include <nlohmann/json.hpp>
@@ -175,6 +176,143 @@ std::string_view MethodSummary(std::string_view method) {
   return "";
 }
 
+namespace {
+
+void ShiftSnippetRange(nlohmann::json& range, size_t prefix_size) {
+  if (!range.is_object()) {
+    return;
+  }
+  for (std::string_view edge : {"start", "end"}) {
+    auto point = range.find(std::string(edge));
+    if (point == range.end() || !point->is_object()) {
+      continue;
+    }
+    auto offset = point->find("offset");
+    auto line = point->find("line");
+    if (offset != point->end() && offset->is_number_unsigned() &&
+        offset->get<size_t>() >= prefix_size) {
+      *offset = offset->get<size_t>() - prefix_size;
+    }
+    if (line != point->end() && line->is_number_integer() &&
+        line->get<int>() > 1) {
+      *line = line->get<int>() - 1;
+    }
+  }
+}
+
+bool HasSpecificHover(const nlohmann::json& answer) {
+  if (!answer.is_object() || answer.value("ok", false) != true) {
+    return false;
+  }
+  auto result = answer.find("result");
+  if (result == answer.end() || !result->is_object() ||
+      !result->value("found", false)) {
+    return false;
+  }
+  const std::string name = result->value("text", std::string());
+  return result->value("summary", std::string()) !=
+         absl::StrCat("`", name, "` — identifier");
+}
+
+nlohmann::json HoverDisplay(const Description& about) {
+  const std::string_view summary = about.summary;
+  const size_t separator = summary.find(" — ");
+  std::string_view role = separator == std::string_view::npos
+                              ? std::string_view()
+                              : summary.substr(separator + 5);
+  std::string_view body;
+  if (const size_t line = about.markdown.find('\n');
+      line != std::string::npos) {
+    body = absl::StripAsciiWhitespace(
+        std::string_view(about.markdown).substr(line + 1));
+  }
+  std::string_view type;
+  std::string role_storage;
+  bool inferred_type = false;
+  bool trailing_type = false;
+
+  if (role.starts_with("call of `")) {
+    constexpr std::string_view kRunning = ", running `";
+    if (const size_t at = role.find(kRunning); at != std::string_view::npos) {
+      const std::string_view called = role.substr(at + kRunning.size());
+      role =
+          called.ends_with('`') ? called.substr(0, called.size() - 1) : called;
+      role_storage = absl::StrCat("call of `", role, "`");
+      role = role_storage;
+    }
+  } else if (const size_t of = role.find(" of `");
+             of != std::string_view::npos) {
+    const std::string_view category = role.substr(0, of);
+    if (category == "value" || category == "input-port" ||
+        category == "output-port" || category == "header" ||
+        category == "node" || category == "node-map" ||
+        category == "continuation-sink" || category == "barrier" ||
+        category == "loop-variable" || category == "carry") {
+      if (const size_t colon = role.find(": ", of);
+          colon != std::string_view::npos) {
+        type = role.substr(colon + 2);
+      }
+      role = category;
+      inferred_type = category == "value";
+      trailing_type = category == "value" || category == "input-port" ||
+                      category == "output-port";
+    } else if (category == "port") {
+      if (const size_t colon = role.find(": ", of);
+          colon != std::string_view::npos) {
+        type = role.substr(colon + 2);
+        role = role.substr(0, colon);
+        trailing_type = true;
+      }
+    }
+  } else if (role.starts_with("property: ") || role.starts_with("field: ")) {
+    const size_t colon = role.find(": ");
+    type = role.substr(colon + 2);
+    role = role.substr(0, colon);
+    inferred_type = role == "property";
+    trailing_type = inferred_type;
+  }
+  if (type.empty()) {
+    if (const size_t colon = role.find(": "); colon != std::string_view::npos) {
+      if (body.empty()) {
+        body = role.substr(colon + 2);
+      }
+      role = role.substr(0, colon);
+    }
+  }
+  if (role.starts_with("a ")) {
+    role.remove_prefix(2);
+  }
+  if (role.starts_with("an ")) {
+    role.remove_prefix(3);
+  }
+  if (role.ends_with(" of this file")) {
+    role.remove_suffix(13);
+  }
+  std::string shown_role(role);
+  bool code = false;
+  for (char& letter : shown_role) {
+    if (letter == '`') {
+      code = !code;
+    }
+    if (letter == '-' && !code) {
+      letter = ' ';
+    }
+  }
+  nlohmann::json display{{"label", about.text},
+                         {"role", std::move(shown_role)},
+                         {"inferred_type", inferred_type},
+                         {"trailing_type", trailing_type}};
+  if (!type.empty()) {
+    display["type"] = type;
+  }
+  if (!body.empty()) {
+    display["body"] = body;
+  }
+  return display;
+}
+
+}  // namespace
+
 nlohmann::json Handle(const nlohmann::json& request, ModuleResolver resolver,
                       CompilationLimits limits) {
   CompilationBudget budget(limits);
@@ -189,6 +327,40 @@ nlohmann::json Handle(const nlohmann::json& request, ModuleResolver resolver,
   }
   const std::string source = request.value("source", std::string());
   const std::string path = request.value("path", std::string("-"));
+
+  const auto snippet = request.find("snippet");
+  if (method == "describe" && snippet != request.end() &&
+      snippet->is_boolean() && snippet->get<bool>()) {
+    nlohmann::json ordinary = request;
+    ordinary.erase("snippet");
+    nlohmann::json original = Handle(ordinary, resolver, limits);
+    if (HasSpecificHover(original)) {
+      return original;
+    }
+    const auto offset = ordinary.find("offset");
+    if (offset == ordinary.end() || !offset->is_number_integer() ||
+        offset->get<long long>() < 0) {
+      return original;
+    }
+    const size_t original_offset = offset->get<size_t>();
+    constexpr std::string_view kPrefix = "flow documentation-example {\n";
+    ordinary["source"] = absl::StrCat(kPrefix, source, "\n}");
+    ordinary["offset"] = original_offset + kPrefix.size();
+    nlohmann::json wrapped = Handle(ordinary, std::move(resolver), limits);
+    if (!HasSpecificHover(wrapped)) {
+      return original;
+    }
+    nlohmann::json& result = wrapped["result"];
+    if (auto range = result.find("range"); range != result.end()) {
+      ShiftSnippetRange(*range, kPrefix.size());
+    }
+    if (auto definition = result.find("definition");
+        definition != result.end()) {
+      ShiftSnippetRange(*definition, kPrefix.size());
+    }
+    result["source"] = path;
+    return wrapped;
+  }
 
   // Which arithmetic this client counts in.
   OffsetBasis basis = OffsetBasis::kBytes;
@@ -377,6 +549,7 @@ nlohmann::json Handle(const nlohmann::json& request, ModuleResolver resolver,
       result["summary"] = about.summary;
       result["detail"] = about.detail;
       result["markdown"] = about.markdown;
+      result["display"] = HoverDisplay(about);
       result["range"] = RangeToJson(about.range);
       if (about.has_definition) {
         result["definition"] = RangeToJson(about.definition);

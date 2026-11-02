@@ -12,18 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Flow diagnostics, and the formats external tools read them in.
+"""Read and render Flow diagnostics in Python.
 
-One problem found in a flow is a [Diagnostic][a11.flow.diagnostics.Diagnostic]:
-a stable code, a severity, a family, a range that carries both byte offsets and
-line/column, a message, and an optional single-edit fix. The CLI, editors, and
-CI integrations render this shared shape.
+A [Diagnostic][a11.flow.diagnostics.Diagnostic] carries a stable code,
+severity, family, source range, message, and optional source edits. Ranges
+contain byte offsets for edits and line and column positions for display.
 
-The formats are versioned and additive: a reader checks ``format`` and ignores
-fields it does not know, and a new field is not a version change. They are
-produced by `cpp/a11/flow/emit_json.{h,cc}`, which provides one writer per
-envelope. This module supplies Python dataclasses plus text and SARIF renderers.
-`testdata/flow/codes.json` is generated from the C++ table.
+Native Flow analysis produces versioned, additive envelopes. Readers check
+the ``format`` field and ignore unknown fields. This module supplies Python
+value types and text and SARIF renderers. The code catalogue is generated from
+the native table into `testdata/flow/codes.json`.
 """
 
 from __future__ import annotations
@@ -34,7 +32,7 @@ import enum
 import functools
 from typing import Any, Iterable, Sequence
 
-#: The envelope versions. Bumped only when a field changes meaning or goes away.
+#: Envelope versions change when a field changes meaning or is removed.
 DIAGNOSTICS_FORMAT = "flow.diagnostics/v1"
 CODES_FORMAT = "flow.codes/v1"
 TOKENS_FORMAT = "flow.tokens/v1"
@@ -43,14 +41,11 @@ SYNTAX_FORMAT = "flow.syntax/v1"
 
 
 class FlowSyntaxError(Exception):
-    """A Flow source file that could not be read.
+    """Report the first compilation error from a strict Flow entry point.
 
-    What [a11.flow.loads][] raises: the strict door onto an engine that
-    otherwise recovers and reports everything. It carries the position, so an
-    author -- or a model writing a flow -- is told exactly where the problem is,
-    and it is built from the first ``error``
-    [Diagnostic][a11.flow.diagnostics.Diagnostic] rather than from a second
-    opinion about what is wrong.
+    [a11.flow.loads][] raises this exception with the first native error
+    diagnostic's message, line, and column. Editor entry points continue after
+    recoverable errors and return the full diagnostic list.
     """
 
     def __init__(
@@ -64,18 +59,18 @@ class FlowSyntaxError(Exception):
         super().__init__(f"{location}{line}:{column}: {message}")
 
     def to_status(self):
-        """The A11 status a caller sees when a flow will not compile."""
+        """Return an ``INVALID_ARGUMENT`` status with the source location."""
         from a11.status import Status, StatusCode
 
         return Status(code=StatusCode.INVALID_ARGUMENT, message=str(self))
 
 
 class Severity(enum.StrEnum):
-    """How much a diagnostic matters.
+    """Classify whether a diagnostic blocks compilation or reports a finding.
 
-    The distinction that earns its keep is between "this cannot work" and "this
-    does nothing": the first stops a flow from compiling, the second is the
-    greyed-out unused symbol every editor already knows how to show.
+    ``ERROR`` blocks compilation. ``WARNING`` reports a possible behavior
+    mismatch. ``WEAK_WARNING`` marks an ineffective source element.
+    ``INFORMATION`` supplies a non-blocking finding.
     """
 
     ERROR = "error"
@@ -85,10 +80,10 @@ class Severity(enum.StrEnum):
 
 
 class Family(enum.StrEnum):
-    """The kind of problem, which is the grouping a reader thinks in.
+    """Group diagnostics by syntax, form, name, sequence, barrier, or use.
 
-    Editors may expose each family as a switchable inspection, and CI can gate
-    on selected families. The family is explicit in the output.
+    Editors can expose families as separate inspections. Build gates can select
+    families without parsing diagnostic codes.
     """
 
     SYNTAX = "syntax"
@@ -101,12 +96,10 @@ class Family(enum.StrEnum):
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Position:
-    """One place in the source: the byte offset, and the line and column at it.
+    """Locate source by byte offset and 1-based line and column.
 
-    All three travel because each consumer wants a different one -- offsets to
-    edit with, line and column to display. Converting between them requires the
-    source text, which may not accompany a JSON diagnostic.
-    Lines and columns are 1-based, as the lexer has always reported them.
+    Byte offsets support edits. Line and column remain available after
+    serialization removes access to the original source text.
     """
 
     offset: int = 0
@@ -142,10 +135,10 @@ class Edit:
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Fix:
-    """Edits that would fix a diagnostic, where one obvious edit exists.
+    """Carry source edits supplied by native analysis for a diagnostic.
 
-    A frontend applies these blind -- it never re-derives what the fix should be
-    -- so a fix that guessed would be a fix that corrupted somebody's file.
+    Editors apply ``edits`` in source byte coordinates. ``automatic`` marks a
+    repair that can be applied without further user input.
     """
 
     label: str
@@ -180,14 +173,14 @@ class RelatedDiagnostic:
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Diagnostic:
-    """One problem found in a flow."""
+    """Represent one Flow error or non-blocking finding."""
 
     code: str
     message: str
     range: Range
     severity: Severity = Severity.ERROR
     family: Family = Family.SYNTAX
-    #: The flow it is in, where the text got far enough to say.
+    #: Enclosing flow name, when parsing or resolution identifies one.
     flow: str = ""
     fixes: tuple[Fix, ...] = ()
     source: str = ""
@@ -213,7 +206,7 @@ class Diagnostic:
         return value
 
     def as_text(self, source: str = "") -> str:
-        """The line editors and compilers have printed for decades."""
+        """Render the location, severity, message, and code on one line."""
         source = self.source or source
         if source == "-":
             source = ""
@@ -225,12 +218,10 @@ class Diagnostic:
 
     @classmethod
     def from_payload(cls, value: dict[str, Any]) -> "Diagnostic":
-        """A diagnostic read back from the wire shape `as_json` writes.
+        """Read a diagnostic from the JSON shape written by ``as_json``.
 
-        What the native engine hands over, and what a frontend reading the JSON
-        envelope -- a CI script, the IDE plugin -- turns back into an object.
-        Unknown fields are ignored and missing fields use their defaults for
-        compatibility with newer producers.
+        Unknown fields are ignored. Missing fields use defaults so older
+        readers can accept additive native output.
         """
 
         def position(payload: Any) -> Position:
@@ -281,7 +272,7 @@ class Diagnostic:
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class CodeInfo:
-    """What a diagnostic code means, from the generated table."""
+    """Describe a stable native diagnostic code."""
 
     code: str
     family: Family
@@ -291,10 +282,9 @@ class CodeInfo:
 
 @functools.cache
 def known_codes() -> tuple[CodeInfo, ...]:
-    """Every diagnostic code the language publishes, sorted by code.
+    """Return the native diagnostic catalogue sorted by code.
 
-    Read from the native language's table, which also generates
-    `testdata/flow/codes.json`.
+    The same table generates `testdata/flow/codes.json`.
     """
     from a11._native import flow as native
 
@@ -310,20 +300,17 @@ def known_codes() -> tuple[CodeInfo, ...]:
 
 
 def find_code(code: str) -> CodeInfo | None:
-    """The entry for ``code``, or ``None`` if nothing publishes it."""
+    """Return the entry for ``code``, or ``None`` for an unknown code."""
     return next((entry for entry in known_codes() if entry.code == code), None)
 
 
 class LineIndex:
-    """Line and column lookup over one source text.
+    """Convert UTF-8 byte offsets to source lines and columns.
 
-    Built once per file and shared by everything that reports a position, so a
-    diagnostic never costs a scan of the source to locate.
-
-    **Over source bytes, not characters.** The lexer, diagnostics, and edits use
-    byte offsets, while Python strings use code-point indexes. For example, `§`
-    occupies one code point and two UTF-8 bytes. Use `characters_of` when a
-    character count is required.
+    Construct once per source document and reuse for diagnostic locations.
+    Offsets use UTF-8 bytes; columns count Unicode code points. For example,
+    `§` occupies two bytes and one column. ``characters_of`` supplies the
+    character count required by SARIF.
     """
 
     __slots__ = ("_data", "_length", "_line_starts")
@@ -387,10 +374,9 @@ class LineIndex:
         return max(0, min(at, self._length))
 
     def characters_of(self, offset: int) -> int:
-        """How many characters of the source precede a byte offset.
+        """Count Unicode code points before a byte offset.
 
-        For the one consumer that is specified in characters rather than bytes:
-        SARIF's `charOffset`.
+        SARIF uses this count for ``charOffset``.
         """
         return self._characters(0, max(0, min(offset, self._length)))
 
@@ -403,7 +389,7 @@ class LineIndex:
 
 
 def sort_diagnostics(diagnostics: Iterable[Diagnostic]) -> list[Diagnostic]:
-    """The order every frontend presents them in: by position, then by code."""
+    """Sort by byte position, code, and message."""
     return sorted(
         diagnostics,
         key=lambda found: (found.range.start.offset, found.code, found.message),
@@ -413,9 +399,9 @@ def sort_diagnostics(diagnostics: Iterable[Diagnostic]) -> list[Diagnostic]:
 def diagnostics_envelope(
     source: str, diagnostics: Sequence[Diagnostic]
 ) -> dict[str, Any]:
-    """The ``flow.diagnostics/v1`` envelope.
+    """Build a ``flow.diagnostics/v1`` envelope with severity counts.
 
-    ``counts`` is there so a gate can be written without walking the list.
+    ``counts`` supports build gates without scanning the diagnostic list.
     """
     counts = {severity.value: 0 for severity in Severity}
     for diagnostic in diagnostics:
@@ -429,7 +415,7 @@ def diagnostics_envelope(
 
 
 def codes_envelope() -> dict[str, Any]:
-    """The published code table, as ``flow.codes/v1``."""
+    """Build a ``flow.codes/v1`` envelope from the native catalogue."""
     return {
         "format": CODES_FORMAT,
         "codes": [
@@ -449,15 +435,14 @@ def sarif_log(
     diagnostics: Sequence[Diagnostic],
     index: LineIndex | None = None,
 ) -> dict[str, Any]:
-    """A SARIF 2.1.0 log for one file's diagnostics.
+    """Build a SARIF 2.1.0 log for one source file.
 
     Code-scanning services and CI annotators consume SARIF directly. Every rule
     in the log is documented from the published code table.
 
-    ``index`` contains the source text used by the diagnostics.
-    SARIF specifies ``charOffset`` in *characters* while a diagnostic carries
-    bytes, and the two differ after a non-ASCII character. Without an index,
-    character-offset fields are omitted while line and column remain available.
+    ``index`` maps diagnostic byte offsets to SARIF character offsets. When it
+    is absent, the log retains line and column locations and omits character
+    offsets. Non-ASCII characters require this conversion.
     """
 
     def region(diagnostic: Diagnostic) -> dict[str, Any]:
@@ -523,8 +508,7 @@ def sarif_log(
 
 
 def _sarif_level(severity: Severity) -> str:
-    """SARIF has three levels and no weak warning, so both shades of "this does
-    nothing" land on ``note``."""
+    """Map weak warnings and information to SARIF's ``note`` level."""
     if severity is Severity.ERROR:
         return "error"
     if severity is Severity.WARNING:

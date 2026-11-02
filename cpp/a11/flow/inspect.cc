@@ -161,9 +161,8 @@ class Inspector {
         continue;
       }
       Report("flow.unused.struct",
-             absl::StrCat("Nothing names the shape ",
-                          Quoted(declaration->name.text),
-                          ": no port carries it and no value is made one."),
+             absl::StrCat("Struct ", Quoted(declaration->name.text),
+                          " has no references from ports, casts, or values."),
              declaration->name.location, Severity::kWeakWarning,
              Family::kUnused);
     }
@@ -225,53 +224,49 @@ class Inspector {
         case SymbolKind::kHeader:
           if (symbol.reads == 0) {
             Report("flow.unused.header",
-                   absl::StrCat("Nothing uses the header alias ",
-                                Quoted(symbol.name),
-                                ". A step is sent every 'x-a11-' header "
-                                "anyway; declare one to *read* its value."),
+                   absl::StrCat("Header alias ", Quoted(symbol.name),
+                                " has no reads. 'x-a11-' headers propagate "
+                                "without a declaration."),
                    symbol.location, Severity::kWeakWarning, Family::kUnused);
           }
           break;
         case SymbolKind::kOutputPort:
           if (symbol.writes == 0) {
             Report("flow.unused.output-port",
-                   absl::StrCat("Nothing in this flow writes ",
-                                Quoted(symbol.name),
-                                ", so a caller reading it gets nothing."),
+                   absl::StrCat("Output port ", Quoted(symbol.name),
+                                " has no writes and produces no values."),
                    symbol.location, Severity::kWarning, Family::kUnused);
           }
           break;
         case SymbolKind::kNodeMap:
           if (symbol.reads == 0) {
             Report("flow.unused.node-map",
-                   absl::StrCat("Nothing is placed in the node map ",
-                                Quoted(symbol.name),
-                                ". Give it a block, or name it with 'via'."),
+                   absl::StrCat("Node map ", Quoted(symbol.name),
+                                " has no placements. Use a block or 'via'."),
                    symbol.location, Severity::kWeakWarning, Family::kUnused);
           }
           break;
         case SymbolKind::kValue:
           if (symbol.reads == 0) {
             Report("flow.unused.value",
-                   absl::StrCat("Nothing reads ", Quoted(symbol.name),
-                                "; its initializer still executes once."),
+                   absl::StrCat("Value ", Quoted(symbol.name),
+                                " has no reads; its initializer executes."),
                    symbol.location, Severity::kWarning, Family::kUnused);
           }
           break;
         case SymbolKind::kLoopVariable:
           if (symbol.reads == 0) {
             Report("flow.unused.loop-variable",
-                   absl::StrCat("No pass of this loop reads ",
-                                Quoted(symbol.name), "."),
+                   absl::StrCat("Loop variable ", Quoted(symbol.name),
+                                " has no reads."),
                    symbol.location, Severity::kWeakWarning, Family::kUnused);
           }
           break;
         case SymbolKind::kBarrier:
           if (symbol.reads == 0) {
             Report("flow.unused.barrier-name",
-                   absl::StrCat("Nothing reads ", Quoted(symbol.name),
-                                ". The flow still waits here, so the name is "
-                                "the part doing nothing."),
+                   absl::StrCat("Barrier name ", Quoted(symbol.name),
+                                " has no reads; the barrier still executes."),
                    symbol.location, Severity::kWeakWarning, Family::kUnused);
           }
           break;
@@ -279,11 +274,9 @@ class Inspector {
           if (symbol.tolerant && symbol.status_reads == 0) {
             Report(
                 "flow.unused.try-status",
-                absl::StrCat("'try' lets ", symbol.action,
-                             " fail without ending the flow, and nothing "
-                             "here reads its status: a failure leaves the "
-                             "ports it feeds silently empty. Read it with "
-                             "'wait ",
+                absl::StrCat("Status of 'try' call ", Quoted(symbol.name),
+                             " is unread. A failure leaves its output ports "
+                             "empty. Read it with 'wait ",
                              symbol.name, "' or 'status ", symbol.name, "'."),
                 symbol.location, Severity::kWeakWarning, Family::kUnused);
           }
@@ -376,12 +369,9 @@ class Inspector {
       return;
     }
     Report("flow.barrier.unordered-clock",
-           absl::StrCat(
-               "This reads the clock against ", Quoted(read->name),
-               " at the top of a body with no 'after', so it runs at once with "
-               "everything else here and measures the flow starting rather "
-               "than what it was written under. Give it an 'after', or put it "
-               "in an 'if' or a loop body."),
+           absl::StrCat("Clock read against ", Quoted(read->name),
+                        " has no ordering dependency. Add 'after', or place "
+                        "the measurement in an 'if' or loop body."),
            clock->location, Severity::kWarning, Family::kBarrier);
   }
 
@@ -439,13 +429,10 @@ class Inspector {
         continue;
       }
       Report("flow.barrier.value-read-twice",
-             absl::StrCat("This statement reads ", Quoted(name),
-                          " twice where a value belongs, and two reads of one "
-                          "stream take turns on one view of it: they see two "
-                          "different values, and the second sees nothing at "
-                          "all when the node carries one. Read it once into a "
-                          "value: 'one = take ",
-                          name, "'; use that value twice."),
+             absl::StrCat("Two scalar reads of ", Quoted(name),
+                          " consume separate stream values. Bind one read "
+                          "with 'one = take ",
+                          name, "' and reuse the value."),
              second->location, Severity::kWarning, Family::kBarrier);
     }
   }
@@ -505,15 +492,13 @@ class Inspector {
       if (symbol == nullptr || symbol->kind != SymbolKind::kNode) {
         continue;
       }
-      Report("flow.barrier.wait-lends-node",
-             absl::StrCat("Nothing in this flow writes ", Quoted(subject),
-                          ", so this does not wait for it -- it *ends* it, and "
-                          "at once: whoever was lent '",
-                          subject,
-                          ".id' finds its writer closed. Say which step fills "
-                          "it: 'close ",
-                          subject, " after <that step>'."),
-             step.location, Severity::kWarning, Family::kBarrier);
+      Report(
+          "flow.barrier.wait-lends-node",
+          absl::StrCat("Node ", Quoted(subject),
+                       " has no local writer. This barrier closes it "
+                       "immediately; use 'close ",
+                       subject, " after <producer>' to wait for the producer."),
+          step.location, Severity::kWarning, Family::kBarrier);
     }
   }
 

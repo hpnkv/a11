@@ -365,7 +365,7 @@ def test_structured_action_inputs_have_json_schemas(tmp_path):
     assert "filter or bound `stdout_lines`" in (
         registry.get_schema("spawn_process").description
     )
-    assert "filter or truncate `text`" in (
+    assert "Filter or truncate `text`" in (
         registry.get_schema("web-render").description
     )
     assert "A11 Flow — a composition" not in agent.prompt

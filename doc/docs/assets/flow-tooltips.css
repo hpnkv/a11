@@ -1,0 +1,110 @@
+/* Copyright 2026 The A11 Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+.a11-flow-tooltip {
+  position: fixed;
+  z-index: 1000;
+  width: min(34rem, calc(100vw - 1rem));
+  max-height: min(34rem, 70vh);
+  overflow: auto;
+  padding: .8rem 1rem;
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: .35rem;
+  box-shadow: var(--md-shadow-z3);
+  background: var(--md-default-bg-color);
+  color: var(--md-default-fg-color);
+  font-size: .72rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.a11-flow-tooltip-title {
+  display: flex;
+  align-items: center;
+  gap: .45rem;
+  padding-bottom: .45rem;
+  border-bottom: 1px solid var(--md-default-fg-color--lightest);
+}
+
+.a11-flow-tooltip-content.heading-only .a11-flow-tooltip-title {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.a11-flow-tooltip-title code {
+  color: var(--md-default-fg-color);
+  background: transparent;
+  font-size: 1em;
+}
+
+.a11-flow-tooltip-title > code { font-weight: 600; }
+.a11-flow-tooltip-role { color: var(--md-default-fg-color--light); }
+.a11-flow-tooltip-role code { font-weight: 400; }
+.a11-flow-tooltip-type {
+  display: inline-flex;
+  align-items: center;
+  gap: .25rem;
+  color: var(--md-default-fg-color--light);
+  white-space: nowrap;
+}
+.a11-flow-tooltip-type.trailing { margin-left: auto; }
+.a11-flow-tooltip-type code { font-weight: 400; }
+.a11-flow-tooltip-type svg {
+  width: .8rem;
+  height: .8rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.a11-flow-tooltip p { margin: .6rem 0 0; }
+.a11-flow-tooltip ul { margin: .45rem 0 0; padding-left: 1.2rem; }
+.a11-flow-tooltip li { margin: .1rem 0; }
+.a11-flow-tooltip pre {
+  margin: .5rem 0 0;
+  padding: .6rem .7rem;
+  overflow: auto;
+  border-radius: .25rem;
+  background: var(--md-code-bg-color);
+  color: var(--md-code-fg-color);
+  font-size: .8em;
+  line-height: 1.5;
+  overflow-wrap: normal;
+}
+.a11-flow-tooltip pre code { background: transparent; color: inherit; }
+.a11-flow-tooltip [class*="a11-flow-token-"] { color: var(--md-code-fg-color); }
+.a11-flow-tooltip .a11-flow-token-declaration-keyword,
+.a11-flow-tooltip .a11-flow-token-statement-keyword,
+.a11-flow-tooltip .a11-flow-token-modifier-keyword,
+.a11-flow-tooltip .a11-flow-token-type,
+.a11-flow-tooltip .a11-flow-token-builtin-type,
+.a11-flow-tooltip .a11-flow-token-flow-operator { color: var(--md-code-hl-keyword-color); }
+.a11-flow-tooltip .a11-flow-token-string { color: var(--md-code-hl-string-color); }
+.a11-flow-tooltip .a11-flow-token-number,
+.a11-flow-tooltip .a11-flow-token-duration { color: var(--md-code-hl-number-color); }
+.a11-flow-tooltip .a11-flow-token-builtin,
+.a11-flow-tooltip .a11-flow-token-stage,
+.a11-flow-tooltip .a11-flow-token-status-code,
+.a11-flow-tooltip .a11-flow-token-log-level,
+.a11-flow-tooltip .a11-flow-token-constant { color: var(--md-code-hl-constant-color); }
+.a11-flow-tooltip .a11-flow-token-flow-name,
+.a11-flow-tooltip .a11-flow-token-action-name { color: var(--md-code-hl-function-color); }
+.a11-flow-tooltip .a11-flow-token-comment { color: var(--md-code-hl-comment-color); }
+
+@media (max-width: 59.99em), (hover: none), (pointer: coarse) {
+  .a11-flow-tooltip { display: none; }
+}

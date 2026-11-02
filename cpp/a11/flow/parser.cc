@@ -1035,12 +1035,12 @@ class ParserImpl {
     }
     if (range.Empty()) {
       Report("flow.form.empty-range",
-             "A range bounds something: write '1..', '..200' or '1..200'.",
+             "A range needs at least one bound: '1..', '..200', or '1..200'.",
              start, Severity::kError, Family::kForm);
       return true;
     }
     if (!field.range.Empty()) {
-      Report("flow.form.repeated-modifier", "A field has one range.", start,
+      Report("flow.form.repeated-modifier", "A field accepts one range.", start,
              Severity::kError, Family::kForm);
       return true;
     }
@@ -1082,7 +1082,7 @@ class ParserImpl {
     field.has_enumeration = true;
     if (field.enumeration.empty()) {
       Report("flow.form.one-of-empty",
-             "'one of []' allows nothing, so nothing would validate.", at,
+             "'one of' requires at least one allowed value.", at,
              Severity::kError, Family::kForm);
     }
   }
@@ -1933,8 +1933,8 @@ class ParserImpl {
         tail.has_format = true;
       } else {
         Report("flow.form.log-format",
-               absl::StrCat("A 'logf' takes a format to fill, found ", Found(),
-                            "; write 'log' to log a value as it is."),
+               absl::StrCat("'logf' requires a format string; found ", Found(),
+                            ". Use 'log' for an unformatted value."),
                Current(), Severity::kError, Family::kForm);
       }
       while (OptionalArgument() && !AtStageEnd()) {
@@ -1961,12 +1961,10 @@ class ParserImpl {
     } else if (!in_stage) {
       Report("flow.form.log-value",
              tail.level.Empty()
-                 ? "A 'log' takes something to log."
-                 : absl::StrCat("A 'log' takes something to log after the "
-                                "level. (If ",
+                 ? "'log' requires a value."
+                 : absl::StrCat("'log' requires a value after the level. If ",
                                 Quoted(tail.level.text),
-                                " is the value, a level of the same name is "
-                                "read first; write the level too.)"),
+                                " is a value name, specify a level first."),
              Current(), Severity::kError, Family::kForm);
     }
     return tail;

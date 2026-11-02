@@ -32,7 +32,9 @@ export function statusFromBridgeFailure(error: unknown,
       if (isStatus(status) && status.code !== StatusCode.OK) return status;
     }
   }
-  return statusFromUnknown(error, context);
+  const reason = error instanceof Error && error.message.trim()
+    ? `${context} ${error.message}` : context;
+  return statusFromUnknown(error, reason);
 }
 
 /** Validate a native status returned as a successful bridge value. */

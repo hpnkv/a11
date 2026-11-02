@@ -406,7 +406,7 @@ TEST(FlowVocabulary, EveryWordOfTheLanguageIsDocumented) {
   const vocabulary::WordDoc* pipe =
       vocabulary::Documentation(vocabulary::WordRole::kSymbol, "|");
   ASSERT_NE(pipe, nullptr);
-  EXPECT_EQ(pipe->summary, "Puts a stream through a stage.");
+  EXPECT_EQ(pipe->summary, "Pass a stream through a stage.");
   EXPECT_FALSE(pipe->takes.empty());
 
   // A role answers for its own words and not for another's: `|` is not a

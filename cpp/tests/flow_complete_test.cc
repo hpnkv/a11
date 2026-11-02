@@ -436,7 +436,7 @@ TEST(FlowComplete, AProposalCarriesWhatAPopupWouldShow) {
   ASSERT_NE(stage, nullptr);
   EXPECT_NE(stage->documentation.find("a pipeline stage"), std::string::npos)
       << stage->documentation;
-  EXPECT_NE(stage->documentation.find("exactly one value"), std::string::npos)
+  EXPECT_NE(stage->documentation.find("exactly one list"), std::string::npos)
       << stage->documentation;
 
   // And so does a function, told apart from the stage of the same name.

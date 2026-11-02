@@ -90,28 +90,51 @@ class FlowCodeInsightTest : BasePlatformTestCase() {
     fun `test hovering a struct this file declares describes the struct`() {
         val html = docAt(source.indexOf("struct Source") + "struct ".length)
         assertNotNull(html)
-        assertTrue(html!!, html.contains("a struct of"))
+        assertTrue(html!!, html.contains("struct of"))
         assertTrue(html, html.contains("Where it came from."))
     }
 
     fun `test hovering a flow this file declares describes the flow`() {
         val html = docAt(source.indexOf("call research(") + "call ".length)
         assertNotNull(html)
-        assertTrue(html!!, html.contains("a flow of this file"))
+        assertTrue(html!!, html.contains("research</b></code> flow"))
     }
 
     fun `test hovering a stage shows the language's reference for it`() {
         val html = docAt(source.indexOf("| truncate") + 2)
         assertNotNull(html)
-        assertTrue(html!!, html.contains("a pipeline stage"))
+        assertTrue(html!!, html.contains("truncate</b></code> pipeline stage"))
         assertTrue(html, html.contains("Takes:"))
         assertTrue(html, html.contains("Example:"))
+        assertTrue(html, html.contains("<pre><code>"))
+        assertTrue(html, html.replace(Regex("<[^>]+>"), "")
+            .contains("flow bounded-previews"))
+        assertTrue(html, html.contains("<span style='color:"))
         // The popup renders `code` and **bold**, and nothing is left as a
         // literal backtick or asterisk.
         assertFalse(html, html.contains("**"))
         assertFalse(html, html.contains("`"))
         // No `--` reaches a reader.
         assertFalse(html, html.contains("--"))
+    }
+
+    fun `test hover titles place port and inferred types on the right`() {
+        val port = markdownToHtml(
+            "`thinking` — output-port of `ask`: string\n\nReasoning text.",
+            mapOf("label" to "thinking", "role" to "output port",
+                "type" to "string", "inferred_type" to false,
+                "trailing_type" to true, "body" to "Reasoning text."),
+        )
+        assertTrue(port, port.contains("thinking</b></code> output port"))
+        assertTrue(port, port.contains("<td align='right'><code>string</code>"))
+        assertFalse(port, port.contains("&#x1F4A1;"))
+
+        val value = markdownToHtml("`question` — value of `ask`: string",
+            mapOf("label" to "question", "role" to "value",
+                "type" to "string", "inferred_type" to true,
+                "trailing_type" to true))
+        assertTrue(value, value.contains("question</b></code> value"))
+        assertTrue(value, value.contains("<td align='right'>&#x1F4A1; <code>string</code>"))
     }
 
     fun `test completing a stage offers it with the same reference`() {
@@ -162,6 +185,6 @@ class FlowCodeInsightTest : BasePlatformTestCase() {
         val target = psiDocumentationTargets(element!!, null).single()
         assertEquals("interact_with_llm", target.computePresentation().presentableText)
         val html = provider.generateDoc(element, null)
-        assertTrue(html.orEmpty(), html.orEmpty().contains("Route an LLM interaction"))
+        assertTrue(html.orEmpty(), html.orEmpty().contains("Route a conversation"))
     }
 }

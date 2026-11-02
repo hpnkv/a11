@@ -22,6 +22,7 @@ import com.intellij.psi.PsiManager
 import com.intellij.psi.impl.FakePsiElement
 import com.intellij.navigation.ItemPresentation
 import com.intellij.openapi.editor.Editor
+import com.intellij.openapi.editor.colors.EditorColorsManager
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 import com.intellij.psi.util.PsiTreeUtil
@@ -43,12 +44,29 @@ import javax.swing.Icon
  * offset, consistent with annotations and completion.
  */
 
-/** Markdown as the small subset of HTML the documentation popup renders. */
-internal fun markdownToHtml(markdown: String): String {
+/** Native hover Markdown as HTML for the documentation popup. */
+internal fun markdownToHtml(markdown: String, display: Map<*, *>? = null): String {
     val out = StringBuilder("<html><body>")
+    if (display != null) out.append(hoverHeadingHtml(display))
+    val body = if (display != null) display["body"] as? String ?: "" else markdown
+    if (body.isBlank()) return out.append("</body></html>").toString()
     var inList = false
-    for (raw in markdown.lines()) {
+    var code: StringBuilder? = null
+    for (raw in body.lines()) {
         val line = raw.trim()
+        if (line.startsWith("```")) {
+            if (code == null) {
+                code = StringBuilder()
+            } else {
+                out.append(flowCodeHtml(code.toString().trimEnd('\n')))
+                code = null
+            }
+            continue
+        }
+        if (code != null) {
+            code.append(raw).append('\n')
+            continue
+        }
         if (line.startsWith("- ")) {
             if (!inList) {
                 out.append("<ul>")
@@ -62,24 +80,97 @@ internal fun markdownToHtml(markdown: String): String {
             inList = false
         }
         if (line.isEmpty()) {
-            out.append("<p>")
+            out.append("<br/>")
             continue
         }
-        out.append(inline(line)).append("<br/>")
+        out.append(inline(line, line.startsWith("**Example:**")))
+            .append("<br/>")
     }
     if (inList) out.append("</ul>")
+    if (code != null) out.append(flowCodeHtml(code.toString().trimEnd('\n')))
     return out.append("</body></html>").toString()
 }
 
 /** `` `code` `` and `**bold**`, which is all the language's own prose uses. */
-private fun inline(text: String): String {
-    val escaped = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    return CODE.replace(BOLD.replace(escaped) { "<b>${it.groupValues[1]}</b>" }) {
+private fun inline(text: String, flowExample: Boolean = false): String {
+    if (flowExample) {
+        val out = StringBuilder()
+        var offset = 0
+        for (match in CODE.findAll(text)) {
+            out.append(inline(text.substring(offset, match.range.first)))
+            out.append("<code>").append(flowCodeSpans(match.groupValues[1]))
+                .append("</code>")
+            offset = match.range.last + 1
+        }
+        return out.append(inline(text.substring(offset))).toString()
+    }
+    val escaped = escapeHtml(text)
+    val emphasized = EMPHASIS.replace(BOLD.replace(escaped) {
+        "<b>${it.groupValues[1]}</b>"
+    }) { "<i>${it.groupValues[1]}</i>" }
+    return CODE.replace(emphasized) {
         "<code>${it.groupValues[1]}</code>"
     }
 }
 
+private fun escapeHtml(text: String): String =
+    text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+private fun hoverHeadingHtml(display: Map<*, *>): String {
+    val name = escapeHtml(display["label"] as? String ?: "")
+    val role = display["role"] as? String ?: ""
+    val type = display["type"] as? String
+    val inferred = display["inferred_type"] == true
+    val trailing = display["trailing_type"] == true
+    return buildString {
+        append("<table width='100%'><tr><td><code><b>")
+        append(name)
+        append("</b></code> ")
+        append(inline(role))
+        append("</td>")
+        if (!type.isNullOrEmpty() && !trailing) {
+            append(" <code>").append(escapeHtml(type)).append("</code>")
+        }
+        if (!type.isNullOrEmpty() && trailing) {
+            append("<td align='right'>")
+            if (inferred) append("&#x1F4A1; ")
+            append("<code>").append(escapeHtml(type)).append("</code></td>")
+        }
+        append("</tr></table>")
+        if (!(display["body"] as? String).isNullOrBlank()) append("<hr/>")
+    }
+}
+
+private fun flowCodeHtml(source: String): String {
+    return "<pre><code>${flowCodeSpans(source)}</code></pre>"
+}
+
+private fun flowCodeSpans(source: String): String {
+    val lexer = FlowLexer()
+    lexer.start(source, 0, source.length, 0)
+    val highlighter = FlowSyntaxHighlighter()
+    val colors = EditorColorsManager.getInstance().globalScheme
+    return buildString {
+        while (lexer.tokenType != null) {
+            val token = lexer.tokenType!!
+            val text = escapeHtml(source.substring(lexer.tokenStart, lexer.tokenEnd))
+            val key = highlighter.getTokenHighlights(token).firstOrNull()
+            val color = key?.let { colors.getAttributes(it)?.foregroundColor }
+            if (color != null) {
+                val hex = "#" + listOf(color.red, color.green, color.blue)
+                    .joinToString("") { it.toString(16).padStart(2, '0') }
+                append("<span style='color:").append(hex).append("'>")
+                    .append(text).append("</span>")
+            } else {
+                append(text)
+            }
+            lexer.advance()
+        }
+    }
+}
+
 private val BOLD = Regex("""\*\*(.+?)\*\*""")
+private val EMPHASIS = Regex("""\*(.+?)\*""")
 private val CODE = Regex("""`([^`]+)`""")
 
 /**
@@ -109,7 +200,7 @@ class FlowDocumentationProvider : AbstractDocumentationProvider() {
         if (element is FlowLookupDocumentation) return markdownToHtml(element.markdown)
         val about = describe(element, original) ?: return null
         val markdown = about["markdown"] as? String ?: return null
-        return markdownToHtml(markdown)
+        return markdownToHtml(markdown, about["display"] as? Map<*, *>)
     }
 
     override fun getQuickNavigateInfo(element: PsiElement, original: PsiElement?): String? {

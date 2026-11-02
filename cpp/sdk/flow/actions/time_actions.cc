@@ -220,13 +220,10 @@ ActionSchema TickerSchema() {
   ActionSchema schema;
   schema.name = std::string(kTickerAction);
   schema.description =
-      "Produce a value every interval, so that a composition can act because "
-      "time passed rather than because something arrived. Bounded by count, by "
-      "a total duration, by the deadline header, or by a stop command; "
-      "unbounded otherwise, and the stream simply ends when it is asked to. "
-      "Ticks are scheduled from the start rather than from the last one, so a "
-      "slow reader does not make the interval drift -- it makes ticks skip, "
-      "counted on `skipped`.";
+      "Emit timed ticks. count, for, the deadline header and stop commands "
+      "can bound the stream; otherwise it continues until cancellation. "
+      "Scheduling uses the start time as its origin. Missed intervals appear "
+      "in the skipped count unless catch_up is enabled.";
   schema.inputs.emplace(
       "options",
       Port("options", JsonType(),
@@ -265,10 +262,9 @@ ActionSchema SleepSchema() {
   ActionSchema schema;
   schema.name = std::string(kSleepAction);
   schema.description =
-      "Wait, then report having waited. What `after` needs to order one "
-      "statement behind a delay: a retry's backoff, a settling period before a "
-      "check, a beat between two calls. A stop command or a cancellation cuts "
-      "the wait short and says so on `woke`.";
+      "Wait for a duration and report when the wait ends. A stop command or "
+      "cancellation interrupts the wait; woke.interrupted records this. "
+      "Use `after` to order later Flow statements after the result.";
   schema.inputs.emplace(
       "duration",
       Port("duration", kTextPlain,

@@ -53,6 +53,9 @@ namespace a11::flow {
 /// `id` is echoed if it is there and omitted if it is not, so a client that
 /// does
 /// not correlate need not invent one.
+/// A `describe` request may set `snippet: true` for a code fragment. The
+/// service first describes the fragment as written, then resolves it as a Flow
+/// body if the first result is only an unclassified identifier.
 nlohmann::json Handle(const nlohmann::json& request,
                       ModuleResolver resolver = {},
                       CompilationLimits limits = {});

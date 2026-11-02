@@ -122,8 +122,8 @@ struct WordDoc {
   std::string_view takes;
   /// How it behaves, and the caveat if it has one. Markdown, a short paragraph.
   std::string_view detail;
-  /// One line of Flow showing it in use. Reference without an example is a
-  /// definition, and a definition is what the reader is trying to get past.
+  /// Single-line examples use newlines; multiline examples use blank lines.
+  /// A sentence before a multiline flow introduces its use case.
   std::string_view example;
 };
 

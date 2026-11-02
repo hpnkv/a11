@@ -100,12 +100,16 @@ markdown_extensions:
 hooks:
   - hooks/flow_highlighting.py
   - hooks/snippet_paths.py
+  - hooks/wasm_assets.py
 
 extra_javascript:
   - assets/analytics.js
+  - path: assets/flow-tooltips.js
+    type: module
 
 extra_css:
   - assets/typography.css
+  - assets/flow-tooltips.css
 
 extra:
   analytics_endpoint: !ENV [A11_ANALYTICS_ENDPOINT, ""]

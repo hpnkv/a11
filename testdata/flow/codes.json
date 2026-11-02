@@ -4,25 +4,25 @@
       "code": "flow.barrier.after-order",
       "family": "barrier",
       "severity": "warning",
-      "summary": "An 'after' names a step written further down the flow, or names the statement it is on."
+      "summary": "'after' references a later step or the current statement."
     },
     {
       "code": "flow.barrier.after-reads-subject",
       "family": "barrier",
       "severity": "error",
-      "summary": "An argument reads an output of the call its own statement waits for, so neither the argument nor the call can go first."
+      "summary": "A call argument reads an output of that call, creating a dependency cycle."
     },
     {
       "code": "flow.barrier.cancel-after-wait",
       "family": "barrier",
       "severity": "warning",
-      "summary": "A call is cancelled after this body already waited for it, so there is nothing left to stop."
+      "summary": "A call is cancelled after its completion has been awaited."
     },
     {
       "code": "flow.barrier.carry-outside-repeat",
       "family": "barrier",
       "severity": "error",
-      "summary": "A '<-' carries a value where there is no 'repeat' to carry it into."
+      "summary": "'<-' requires an enclosing 'repeat'."
     },
     {
       "code": "flow.barrier.continuation-cycle",
@@ -34,7 +34,7 @@
       "code": "flow.barrier.duplicate",
       "family": "barrier",
       "severity": "weak-warning",
-      "summary": "A second 'wait' or 'close' on something this body already holds for."
+      "summary": "A second 'wait' or 'close' repeats an existing barrier."
     },
     {
       "code": "flow.barrier.duplicate-carry",
@@ -46,7 +46,7 @@
       "code": "flow.barrier.duplicate-until",
       "family": "barrier",
       "severity": "error",
-      "summary": "A loop is given a second stop condition."
+      "summary": "A loop has multiple stop conditions."
     },
     {
       "code": "flow.barrier.expression-cycle",
@@ -64,49 +64,49 @@
       "code": "flow.barrier.unordered-clock",
       "family": "barrier",
       "severity": "warning",
-      "summary": "A statement reads the clock against something the flow produced, with no 'after' to say when it runs."
+      "summary": "A clock read and a flow-produced value have no defined order; add an 'after' dependency."
     },
     {
       "code": "flow.barrier.until-outside-repeat",
       "family": "barrier",
       "severity": "error",
-      "summary": "An 'until' or 'while' ends a 'repeat' or a 'for', and there is neither here."
+      "summary": "'until' or 'while' requires an enclosing loop."
     },
     {
       "code": "flow.barrier.until-parallel",
       "family": "barrier",
       "severity": "error",
-      "summary": "An 'until' is written on a loop whose passes run in parallel, where there is no one pass for it to ask about."
+      "summary": "'until' cannot determine a stop condition for parallel passes."
     },
     {
       "code": "flow.barrier.value-read-twice",
       "family": "barrier",
       "severity": "warning",
-      "summary": "One statement reads one stream twice where a value belongs, so the two reads take turns on it rather than seeing one value."
+      "summary": "Two scalar reads in one statement consume separate stream values."
     },
     {
       "code": "flow.barrier.wait-lends-node",
       "family": "barrier",
       "severity": "warning",
-      "summary": "A 'wait' or 'close' on a node nothing in the flow writes: it ends the node at once rather than waiting for it."
+      "summary": "'wait' or 'close' targets a node with no writers."
     },
     {
       "code": "flow.barrier.wrong-carry",
       "family": "barrier",
       "severity": "error",
-      "summary": "A carry names something other than what its repeat carries."
+      "summary": "A carry references a value outside its repeat state."
     },
     {
       "code": "flow.form.bad-number",
       "family": "form",
       "severity": "error",
-      "summary": "A number the language cannot read."
+      "summary": "Invalid numeric literal."
     },
     {
       "code": "flow.form.bad-pattern",
       "family": "form",
       "severity": "error",
-      "summary": "A 'match' pattern the language cannot read: an unclosed hole, an unknown kind, or two holes with one name."
+      "summary": "Invalid 'match' pattern: unclosed hole, unknown kind, or duplicate hole name."
     },
     {
       "code": "flow.form.continuation-grouping",
@@ -118,37 +118,37 @@
       "code": "flow.form.count-not-positive",
       "family": "form",
       "severity": "warning",
-      "summary": "A count that is not a number of anything: 'parallel 0', 'skip -1'."
+      "summary": "A count must be positive, as in 'parallel 1' or 'skip 1'."
     },
     {
       "code": "flow.form.declaration-attribute",
       "family": "form",
       "severity": "error",
-      "summary": "Declaration attribute."
+      "summary": "A declaration attribute is invalid or out of place."
     },
     {
       "code": "flow.form.declaration-body",
       "family": "form",
       "severity": "error",
-      "summary": "Declaration body."
+      "summary": "A declaration body violates its module or flow form."
     },
     {
       "code": "flow.form.declaration-conflict",
       "family": "form",
       "severity": "error",
-      "summary": "Declaration conflict."
+      "summary": "Callable declarations have incompatible contracts."
     },
     {
       "code": "flow.form.declaration-schema-mismatch",
       "family": "form",
       "severity": "error",
-      "summary": "Declaration schema mismatch."
+      "summary": "A callable implementation does not satisfy its declaration."
     },
     {
       "code": "flow.form.default-on-required",
       "family": "form",
       "severity": "warning",
-      "summary": "A field is required and also given a default, so the default could never be used."
+      "summary": "A required field has an unreachable default."
     },
     {
       "code": "flow.form.duplicate-field",
@@ -184,31 +184,31 @@
       "code": "flow.form.duration-unit",
       "family": "form",
       "severity": "error",
-      "summary": "A number carrying a suffix that is not one of the duration units."
+      "summary": "Invalid duration unit suffix."
     },
     {
       "code": "flow.form.empty-range",
       "family": "form",
       "severity": "error",
-      "summary": "A range that bounds nothing, or whose bounds are the wrong way round."
+      "summary": "An empty range or reversed range bounds."
     },
     {
       "code": "flow.form.field-constraint",
       "family": "form",
       "severity": "error",
-      "summary": "A field constraint that cannot apply to what the field holds: 'unique' on one value, 'matching' on a number."
+      "summary": "A field constraint is incompatible with its type, such as 'unique' on a scalar or 'matching' on a number."
     },
     {
       "code": "flow.form.field-modifier-order",
       "family": "form",
       "severity": "warning",
-      "summary": "A field's modifiers are written out of the order they read in."
+      "summary": "Field modifiers are out of canonical order."
     },
     {
       "code": "flow.form.field-type-mismatch",
       "family": "form",
       "severity": "error",
-      "summary": "A field's default or 'one of' value is not a value of the type the field holds."
+      "summary": "A field default or 'one of' value does not match its type."
     },
     {
       "code": "flow.form.forward-headers",
@@ -220,79 +220,79 @@
       "code": "flow.form.handle-escape",
       "family": "form",
       "severity": "error",
-      "summary": "Handle escape."
+      "summary": "A call handle cannot be embedded as data."
     },
     {
       "code": "flow.form.import-context",
       "family": "form",
       "severity": "error",
-      "summary": "Import context."
+      "summary": "An import has invalid context or module identity."
     },
     {
       "code": "flow.form.import-scope",
       "family": "form",
       "severity": "error",
-      "summary": "Import scope."
+      "summary": "An import appears outside an allowed scope."
     },
     {
       "code": "flow.form.invalid-action-target",
       "family": "form",
       "severity": "error",
-      "summary": "Invalid action target."
+      "summary": "An action target has an invalid form."
     },
     {
       "code": "flow.form.log-format",
       "family": "form",
       "severity": "error",
-      "summary": "A 'logf' written without a format to fill."
+      "summary": "'logf' requires a format string."
     },
     {
       "code": "flow.form.log-value",
       "family": "form",
       "severity": "error",
-      "summary": "A 'log' written without anything to log."
+      "summary": "'log' requires a value."
     },
     {
       "code": "flow.form.missing-field",
       "family": "form",
       "severity": "error",
-      "summary": "A value of a declared shape leaves out a field the shape requires and gives no default for."
+      "summary": "A value omits a required field with no default."
     },
     {
       "code": "flow.form.multiple-implementations",
       "family": "form",
       "severity": "warning",
-      "summary": "Multiple implementations."
+      "summary": "A callable has multiple executable implementations."
     },
     {
       "code": "flow.form.node-parentheses",
       "family": "form",
       "severity": "error",
-      "summary": "Making a node takes parentheses: 'node()' or 'node(id)'."
+      "summary": "Node construction requires 'node()' or 'node(id)'."
     },
     {
       "code": "flow.form.not-json-representable",
       "family": "form",
       "severity": "error",
-      "summary": "A value holding bytes is asked for as JSON, which has nothing to carry them in; 'packb' is the one that does."
+      "summary": "JSON cannot represent raw bytes; use 'packb' for binary data."
     },
     {
       "code": "flow.form.not-waitable",
       "family": "form",
       "severity": "error",
-      "summary": "Not waitable."
+      "summary": "'wait' requires a waitable call, node, or stream."
     },
     {
       "code": "flow.form.one-of-empty",
       "family": "form",
       "severity": "error",
-      "summary": "'one of []' allows nothing, so nothing would validate."
+      "summary": "'one of' requires at least one allowed value."
     },
     {
       "code": "flow.form.one-of-not-a-list",
       "family": "form",
       "severity": "error",
-      "summary": "'one of' is given something other than a list of constants."
+      "summary": "'one of' requires a list of constants."
     },
     {
       "code": "flow.form.optional-binding",
@@ -310,19 +310,19 @@
       "code": "flow.form.port-modifier-order",
       "family": "form",
       "severity": "error",
-      "summary": "'stream' or 'required' is written in front of the port's type instead of after it."
+      "summary": "'stream' and 'required' follow the port type."
     },
     {
       "code": "flow.form.private-type-exposed",
       "family": "form",
       "severity": "error",
-      "summary": "Private type exposed."
+      "summary": "A public interface exposes a private type."
     },
     {
       "code": "flow.form.repeated-modifier",
       "family": "form",
       "severity": "error",
-      "summary": "A modifier that says one thing is written twice."
+      "summary": "A modifier appears more than once."
     },
     {
       "code": "flow.form.resource-limit",
@@ -346,13 +346,13 @@
       "code": "flow.form.stage-argument",
       "family": "form",
       "severity": "error",
-      "summary": "A stage is missing the argument it takes, or was given one of the wrong kind."
+      "summary": "A stage argument is missing or has the wrong form."
     },
     {
       "code": "flow.form.statement-as-value",
       "family": "form",
       "severity": "error",
-      "summary": "Statement as value."
+      "summary": "A statement is used where an expression is required."
     },
     {
       "code": "flow.form.struct-shadows-builtin",
@@ -364,7 +364,7 @@
       "code": "flow.form.unbounded-repeat",
       "family": "form",
       "severity": "error",
-      "summary": "A 'repeat' with no 'until', no 'while' and no 'max': nothing ends it."
+      "summary": "'repeat' requires 'until', 'while', or 'max'."
     },
     {
       "code": "flow.form.unconditional-abort",
@@ -400,31 +400,31 @@
       "code": "flow.form.unknown-builtin",
       "family": "form",
       "severity": "error",
-      "summary": "A function call naming something that is not one of the language's fixed functions."
+      "summary": "A function name does not match a Flow built-in."
     },
     {
       "code": "flow.form.unknown-field",
       "family": "form",
       "severity": "error",
-      "summary": "A value of a declared shape names a field the shape does not have."
+      "summary": "A value names a field absent from its declared shape."
     },
     {
       "code": "flow.form.unknown-log-level",
       "family": "form",
       "severity": "error",
-      "summary": "A level a 'log' named that is not one of the five."
+      "summary": "Unknown 'log' level."
     },
     {
       "code": "flow.form.unknown-stage",
       "family": "form",
       "severity": "error",
-      "summary": "A pipeline stage the language does not have."
+      "summary": "Unknown pipeline stage."
     },
     {
       "code": "flow.form.unknown-status-code",
       "family": "form",
       "severity": "error",
-      "summary": "'fail' names something that is not a canonical status code, a number, or a value the flow read."
+      "summary": "'fail' requires a canonical status code, number, or bound value."
     },
     {
       "code": "flow.form.unknown-type",
@@ -436,85 +436,85 @@
       "code": "flow.form.zip-empty",
       "family": "form",
       "severity": "error",
-      "summary": "'zip' reads streams in step, so it takes at least one."
+      "summary": "'zip' requires at least one input stream."
     },
     {
       "code": "flow.name.ambiguous-implementation",
       "family": "name",
       "severity": "error",
-      "summary": "Ambiguous implementation."
+      "summary": "A callable name resolves to multiple implementations."
     },
     {
       "code": "flow.name.call-as-stream",
       "family": "name",
       "severity": "error",
-      "summary": "A call used where one of its ports was meant."
+      "summary": "A call is used as a stream; select an output port."
     },
     {
       "code": "flow.name.discard-bound",
       "family": "name",
       "severity": "error",
-      "summary": "'_' used as a name: bound to a statement, declared as a port, or given to a loop. It is the discard, not a name."
+      "summary": "'_' is a discard target and cannot bind a name."
     },
     {
       "code": "flow.name.discard-read",
       "family": "name",
       "severity": "error",
-      "summary": "'_' read: as a pipeline source, as something to wait on, close or abort, or inside an expression. It keeps nothing, so there is nothing there to read."
+      "summary": "'_' discards its value and cannot be read."
     },
     {
       "code": "flow.name.import-alias-conflict",
       "family": "name",
       "severity": "error",
-      "summary": "Import alias conflict."
+      "summary": "An import alias conflicts with another binding."
     },
     {
       "code": "flow.name.import-shadowing",
       "family": "name",
       "severity": "warning",
-      "summary": "Import shadowing."
+      "summary": "An import shadows an existing binding."
     },
     {
       "code": "flow.name.it-outside-stage",
       "family": "name",
       "severity": "error",
-      "summary": "'it' outside the 'where', 'map' or 'group' stage whose value it names."
+      "summary": "'it' requires a stage that binds the current value."
     },
     {
       "code": "flow.name.module-not-found",
       "family": "name",
       "severity": "error",
-      "summary": "Module not found."
+      "summary": "An imported module cannot be resolved."
     },
     {
       "code": "flow.name.no-status",
       "family": "name",
       "severity": "error",
-      "summary": "A status asked of something that has none."
+      "summary": "A status is requested from a value without status."
     },
     {
       "code": "flow.name.not-a-call",
       "family": "name",
       "severity": "error",
-      "summary": "Something that is not a call is asked to stop."
+      "summary": "'cancel' requires a call handle."
     },
     {
       "code": "flow.name.not-a-stream",
       "family": "name",
       "severity": "error",
-      "summary": "Something that cannot be read is used as a pipeline source."
+      "summary": "A pipeline source must be readable."
     },
     {
       "code": "flow.name.not-writable",
       "family": "name",
       "severity": "error",
-      "summary": "A stream is written somewhere that cannot be written: an 'in' port, a call's output, a barrier."
+      "summary": "A destination is not writable, such as an 'in' port, call output, or barrier."
     },
     {
       "code": "flow.name.private-member",
       "family": "name",
       "severity": "error",
-      "summary": "Private member."
+      "summary": "A member is private to its module."
     },
     {
       "code": "flow.name.taken",
@@ -526,7 +526,7 @@
       "code": "flow.name.unknown",
       "family": "name",
       "severity": "error",
-      "summary": "A name nothing has bound, including one bound further down: a flow reads in order."
+      "summary": "A name has no preceding binding in this scope."
     },
     {
       "code": "flow.name.unknown-call",
@@ -538,19 +538,19 @@
       "code": "flow.name.unknown-node-map",
       "family": "name",
       "severity": "error",
-      "summary": "A node map used before 'nodes' declares it."
+      "summary": "A node map is referenced before its 'nodes' declaration."
     },
     {
       "code": "flow.name.unknown-port",
       "family": "name",
       "severity": "error",
-      "summary": "A port the action being called does not declare."
+      "summary": "A called action does not declare this port."
     },
     {
       "code": "flow.name.unresolved-declaration",
       "family": "name",
       "severity": "error",
-      "summary": "Unresolved declaration."
+      "summary": "A declared callable has no matching implementation."
     },
     {
       "code": "flow.schema.not-a-record",
@@ -574,7 +574,7 @@
       "code": "flow.sequence.impossible",
       "family": "sequence",
       "severity": "warning",
-      "summary": "A sequence of stages that cannot produce what it appears to: dropping from one value, counting a reduced stream, 'first 0'."
+      "summary": "A stage sequence cannot produce the requested result, such as 'first 0' or dropping from a single value."
     },
     {
       "code": "flow.sequence.lossy-conversion",
@@ -610,7 +610,7 @@
       "code": "flow.sequence.redundant-stage",
       "family": "sequence",
       "severity": "weak-warning",
-      "summary": "A stage with nothing to do: choosing between the single value a reducing stage left, or the same reshaping twice."
+      "summary": "A stage has no effect after a reduction or repeated reshape."
     },
     {
       "code": "flow.sequence.rename-graph-boundary",
@@ -622,109 +622,109 @@
       "code": "flow.sequence.scalar-rvalue-read",
       "family": "sequence",
       "severity": "information",
-      "summary": "Scalar rvalue read."
+      "summary": "A scalar read consumes one value from a stream."
     },
     {
       "code": "flow.sequence.schema-refined",
       "family": "sequence",
       "severity": "information",
-      "summary": "Schema refined."
+      "summary": "A declaration refines the callable schema."
     },
     {
       "code": "flow.sequence.schema-refinement-unproven",
       "family": "sequence",
       "severity": "information",
-      "summary": "Schema refinement unproven."
+      "summary": "Schema refinement cannot be established statically."
     },
     {
       "code": "flow.sequence.skip-count-target",
       "family": "sequence",
       "severity": "error",
-      "summary": "A counted 'skip' applied to something that is not a port or a node; '| drop n' is the one that drops from a pipeline."
+      "summary": "Counted 'skip' requires a port or node; use '| drop n' for a pipeline."
     },
     {
       "code": "flow.syntax.constant-required",
       "family": "syntax",
       "severity": "error",
-      "summary": "An expression where the grammar requires a constant."
+      "summary": "A constant is required in this position."
     },
     {
       "code": "flow.syntax.nesting-too-deep",
       "family": "syntax",
       "severity": "error",
-      "summary": "Brackets, blocks or bodies nested deeper than the parser will descend."
+      "summary": "Expression or block nesting exceeds the parser limit."
     },
     {
       "code": "flow.syntax.statement-end",
       "family": "syntax",
       "severity": "error",
-      "summary": "More text after a complete statement; one statement per line."
+      "summary": "Unexpected text after a complete statement."
     },
     {
       "code": "flow.syntax.unclosed",
       "family": "syntax",
       "severity": "error",
-      "summary": "A flow, block, call, list or object that is never closed."
+      "summary": "Unclosed flow, block, call, list, or object."
     },
     {
       "code": "flow.syntax.unexpected",
       "family": "syntax",
       "severity": "error",
-      "summary": "Text where the grammar expects something else."
+      "summary": "Unexpected token in this grammatical position."
     },
     {
       "code": "flow.syntax.unexpected-character",
       "family": "syntax",
       "severity": "error",
-      "summary": "A character the language has no meaning for anywhere."
+      "summary": "Invalid character in Flow source."
     },
     {
       "code": "flow.syntax.unterminated-string",
       "family": "syntax",
       "severity": "error",
-      "summary": "A string that is not closed before its line ends."
+      "summary": "Unterminated string literal."
     },
     {
       "code": "flow.unused.barrier-name",
       "family": "unused",
       "severity": "weak-warning",
-      "summary": "A barrier bound to a name nothing reads; the flow still waits there, so the name is the dead part."
+      "summary": "An unread barrier name; the barrier still executes."
     },
     {
       "code": "flow.unused.header",
       "family": "unused",
       "severity": "weak-warning",
-      "summary": "A header declared under an alias nothing uses."
+      "summary": "A header alias has no reads."
     },
     {
       "code": "flow.unused.import",
       "family": "unused",
       "severity": "weak-warning",
-      "summary": "Import."
+      "summary": "An import has no references."
     },
     {
       "code": "flow.unused.loop-variable",
       "family": "unused",
       "severity": "weak-warning",
-      "summary": "A 'for' variable no pass of the loop reads."
+      "summary": "A 'for' variable has no reads."
     },
     {
       "code": "flow.unused.node-map",
       "family": "unused",
       "severity": "weak-warning",
-      "summary": "A node map nothing is placed in."
+      "summary": "A node map has no placements."
     },
     {
       "code": "flow.unused.output-port",
       "family": "unused",
       "severity": "warning",
-      "summary": "An 'out' port nothing in the flow writes, so a caller reading it gets nothing."
+      "summary": "An 'out' port has no writes and produces no values."
     },
     {
       "code": "flow.unused.struct",
       "family": "unused",
       "severity": "weak-warning",
-      "summary": "A struct no port, cast or other struct in the file names."
+      "summary": "A struct has no references from ports, casts, or other structs."
     },
     {
       "code": "flow.unused.try-pipe",
@@ -742,7 +742,7 @@
       "code": "flow.unused.value",
       "family": "unused",
       "severity": "warning",
-      "summary": "An initialized value that no expression reads."
+      "summary": "An initialized value has no reads."
     }
   ],
   "format": "flow.codes/v1"

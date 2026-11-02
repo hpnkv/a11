@@ -14,6 +14,9 @@ from a11.status import StatusException
 
 
 SOURCE = Path(__file__).parents[3] / ".a11/flows/clang_tidy.flow"
+pytestmark = pytest.mark.skipif(
+    not SOURCE.is_file(), reason="Local clang_tidy.flow is not installed"
+)
 SCHEMA = a11.ActionSchema.model_validate({
     "name": "run_command",
     "inputs": {

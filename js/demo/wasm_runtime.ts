@@ -5,15 +5,39 @@ const activeRuntimes = new Set<A11Runtime>();
 let isolationPromise: Promise<boolean> | null = null;
 
 async function isolateGuidePageOnce(): Promise<boolean> {
-  if (typeof window === 'undefined' || window.crossOriginIsolated ||
-      !('serviceWorker' in navigator)) return true;
-  const marker = 'a11-wasm-isolation-reloaded';
-  if (sessionStorage.getItem(marker) === '1') return true;
+  if (typeof window === 'undefined') return true;
+  if (!('serviceWorker' in navigator)) {
+    if (!window.crossOriginIsolated) {
+      throw new Error('The browser cannot enable cross-origin isolation.');
+    }
+    return true;
+  }
+  const legacyScope = new URL('./', location.href).href;
+  const registrations = await navigator.serviceWorker.getRegistrations();
+  const legacy = registrations.filter(registration =>
+    registration.scope === legacyScope &&
+    registration.active?.scriptURL.endsWith('/wasm-isolation-sw.js'));
   const script = new URL('../wasm-isolation-sw.js', location.href);
-  await navigator.serviceWorker.register(script, {
+  const controller = navigator.serviceWorker.controller?.scriptURL;
+  if (window.crossOriginIsolated && legacy.length === 0 &&
+      (!controller || controller === script.href)) return true;
+  const marker = 'a11-wasm-isolation-root-reloaded';
+  if (sessionStorage.getItem(marker) === '1') {
+    throw new Error('The guide page could not enable cross-origin isolation.');
+  }
+  await Promise.all(legacy.map(registration => registration.unregister()));
+  const registration = await navigator.serviceWorker.register(script, {
     scope: new URL('../', location.href).pathname,
   });
-  await navigator.serviceWorker.ready;
+  const worker = registration.installing ?? registration.waiting ??
+    registration.active;
+  if (worker && worker.state !== 'activated') {
+    await new Promise<void>(resolve => {
+      worker.addEventListener('statechange', () => {
+        if (worker.state === 'activated') resolve();
+      });
+    });
+  }
   sessionStorage.setItem(marker, '1');
   location.reload();
   return false;

@@ -46,6 +46,12 @@ async function waitForText(url, expected) {
       const value = await response.json();
       const page = value.find(item => item.type === 'page');
       if (page?.webSocketDebuggerUrl) return page.webSocketDebuggerUrl;
+      const created = await fetch(url.replace('/json/list', '/json/new?about:blank'),
+        {method: 'PUT'});
+      if (created.ok) {
+        const target = await created.json();
+        if (target.webSocketDebuggerUrl) return target.webSocketDebuggerUrl;
+      }
     } catch {}
     await delay(50);
   }
@@ -121,12 +127,21 @@ const server = spawn(process.execPath,
   [new URL('./serve.mjs', import.meta.url).pathname, String(webPort)],
   {stdio: 'ignore'});
 const browser = spawn(chrome, ['--headless=new', '--no-sandbox',
-  '--disable-gpu', `--user-data-dir=${profile}`,
+  '--disable-gpu', '--disable-dev-shm-usage', `--user-data-dir=${profile}`,
   `--remote-debugging-port=${debugPort}`, 'about:blank'],
-{stdio: 'ignore'});
+{stdio: ['ignore', 'ignore', 'pipe']});
+let browserError = '';
+browser.stderr.setEncoding('utf8');
+browser.stderr.on('data', chunk => { browserError += chunk; });
 try {
-  const socketUrl = await waitForText(
-    `http://127.0.0.1:${debugPort}/json/list`, 'a page');
+  let socketUrl;
+  try {
+    socketUrl = await waitForText(
+      `http://127.0.0.1:${debugPort}/json/list`, 'a page');
+  } catch (error) {
+    throw new Error(`${error.message}; Chrome exit: ${browser.exitCode}; ` +
+      `stderr: ${browserError.slice(-3000)}`);
+  }
   for (const page of ['test-http-browser.html', 'test-thread-browser.html',
     'test-native-browser.html', 'test-sdk-browser.html',
     'guides/isolation-test/']) {

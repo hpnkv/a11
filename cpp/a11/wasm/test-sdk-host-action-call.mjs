@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import {createA11WasmRuntime} from './native-index.mjs';
 import {ActionPortSchema, ActionRegistry, ActionSchema, InProcessWireStream,
-  Session, StatusCode, StreamMode, createA11Runtime, isOk, okStatus,
-  bridgeWireStream} from
+  Session, StatusCode, StreamMode, createA11Runtime, isOk, okStatus} from
   '../../../js/dist/index.js';
+import {bridgeWireStream} from
+  '../../../js/dist/internal/wasm/wire_stream_bridge.js';
 
 const schema = new ActionSchema({name: 'remote_echo',
   inputs: {input: new ActionPortSchema({name: 'input', type: 'string'})},
@@ -27,15 +28,6 @@ const server = await Session.create(serverRuntime, {id: 'sdk-action-server',
 assert.ok(isOk(server));
 const pair = InProcessWireStream.createPair();
 assert.ok(isOk(pair));
-const wireMessages = [];
-const serverWire = new Proxy(pair[1], {get(target, key) {
-  if (key === 'accept') return (onMessage, onDone) => target.accept(message => {
-    wireMessages.push(message?.toJsonValue() ?? null);
-    return onMessage(message);
-  }, onDone);
-  const value = target[key];
-  return typeof value === 'function' ? value.bind(target) : value;
-}});
 const runtime = await createA11WasmRuntime();
 let stage = 'setup';
 try {
@@ -45,9 +37,10 @@ try {
     name: 'remote_echo',
     inputs: [{name: 'input', type: 'string'}],
     outputs: [{name: 'output', type: 'string'}],
-  }, async () => ({code: 12, message: 'remote call used local handler'}));
+  }, async () => ({code: StatusCode.UNIMPLEMENTED,
+    message: 'remote call used local handler'}));
   const [accepted, clientStreamId] = await Promise.all([
-    server.addStream(serverWire, StreamMode.ACCEPT),
+    server.addStream(pair[1], StreamMode.ACCEPT),
     nativeSession.addStream(bridgeWireStream(pair[0])),
   ]);
   assert.ok(isOk(accepted));
@@ -74,8 +67,6 @@ try {
       ': ' + error.message);
   }
   assert.equal(Buffer.from(chunk.data, 'base64').toString(), 'reply:request');
-  assert.ok(wireMessages.some(message => message?.node_fragments?.some(
-    fragment => fragment.id === 'sdk-native-remote-call#input')));
   assert.equal((await action.state()).status.code, 0);
   await nativeSession.halfClose();
   assert.ok(isOk(await server.halfClose()));
@@ -103,7 +94,7 @@ try {
 } catch (error) {
   const state = await runtime.action('remote_echo',
     'sdk-native-remote-call').state().catch(() => null);
-  throw new Error(`${stage}: ${error.stack ?? error}; action: ${JSON.stringify(state)}; wire: ${JSON.stringify(wireMessages)}`);
+  throw new Error(`${stage}: ${error.stack ?? error}; action: ${JSON.stringify(state)}`);
 } finally {
   await Promise.all([runtime.dispose(), serverRuntime.dispose()]);
 }

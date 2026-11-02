@@ -2,9 +2,12 @@ import assert from 'node:assert/strict';
 import {createA11WasmRuntime} from './native-index.mjs';
 import {InProcessWireStream} from '../../../js/dist/in_process_wire_stream.js';
 import {WireMessage} from '../../../js/dist/data.js';
-import {bridgeWireStream} from '../../../js/dist/wire_stream_bridge.js';
+import {bridgeWireStream} from '../../../js/dist/internal/wasm/wire_stream_bridge.js';
 import {isOk} from '../../../js/dist/status.js';
+import {createA11Runtime} from '../../../js/dist/runtime_backend.js';
 
+const sdkRuntime = await createA11Runtime();
+assert.ok(isOk(sdkRuntime));
 const pair = InProcessWireStream.createPair();
 assert.ok(isOk(pair));
 const [client, server] = pair;
@@ -41,4 +44,5 @@ try {
   await runtime.detachWireStream(client.getId());
 } finally {
   runtime.dispose();
+  await sdkRuntime.dispose();
 }

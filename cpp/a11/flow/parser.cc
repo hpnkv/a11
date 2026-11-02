@@ -3469,7 +3469,9 @@ class ParserImpl {
         Advance();
       }
     }
-    Expect(TokenKind::kRightBrace);
+    if (Expect(TokenKind::kRightBrace)) {
+      object->extent.end = tokens_[position_ - 1].end;
+    }
     return object;
   }
 

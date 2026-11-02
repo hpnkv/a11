@@ -1012,6 +1012,123 @@ Description Describe(std::string_view source, size_t offset,
     return about;
   }
 
+  for (const auto& flow : parsed.flows) {
+    syntax::VisitSubtree(*flow, [&](const syntax::Node& node) {
+      const auto* call = syntax::As<syntax::CallExpression>(&node);
+      if (call == nullptr || about.kind == SymbolClass::kPort) {
+        return;
+      }
+      for (const auto& argument : call->args) {
+        if (argument.port.location.start > here->start ||
+            here->end > argument.port.location.end) {
+          continue;
+        }
+        about.kind = SymbolClass::kPort;
+        std::string type;
+        bool required = false;
+        bool unary = true;
+        if (const auto* action = editor_known.Action(call->action);
+            action != nullptr) {
+          for (const auto& port : action->inputs) {
+            if (port.name == argument.port.text) {
+              type = port.type;
+              about.detail = port.description;
+              required = port.required;
+              unary = port.unary;
+              break;
+            }
+          }
+          about.origin = action->origin;
+        } else if (const auto* target = resolved.program.Flow(call->action);
+                   target != nullptr) {
+          for (const auto& port : target->ports) {
+            if (port.name == argument.port.text &&
+                port.direction == syntax::PortDirection::kInput) {
+              type = port.declared.empty() ? port.type : port.declared;
+              about.detail = documentation.Get(port.description, port.location);
+              required = port.required;
+              unary = port.unary;
+              about.has_definition = true;
+              about.definition = RangeOf(lines, port.location);
+              break;
+            }
+          }
+        }
+        about.summary =
+            absl::StrCat("`", argument.port.text, "` — input-port of `",
+                         call->action, "`", type.empty() ? "" : ": ", type);
+        about.markdown = PortMarkdown(argument.port.text, type, required, unary,
+                                      about.detail);
+        return;
+      }
+    });
+    if (about.kind == SymbolClass::kPort) {
+      return about;
+    }
+  }
+
+  size_t after_name = here->end;
+  while (after_name < source.size() &&
+         (source[after_name] == ' ' || source[after_name] == '\t' ||
+          source[after_name] == '\r' || source[after_name] == '\n')) {
+    ++after_name;
+  }
+  if (after_name < source.size() && source[after_name] == ':') {
+    const syntax::ObjectLiteral* object_here = nullptr;
+    for (const auto& flow : parsed.flows) {
+      syntax::VisitSubtree(*flow, [&](const syntax::Node& node) {
+        const auto* object = syntax::As<syntax::ObjectLiteral>(&node);
+        if (object == nullptr || object->location.start > here->start ||
+            here->end > object->extent.end) {
+          return;
+        }
+        if (object_here == nullptr ||
+            object->extent.end - object->location.start <
+                object_here->extent.end - object_here->location.start) {
+          object_here = object;
+        }
+      });
+    }
+    if (object_here != nullptr) {
+      about.kind = SymbolClass::kField;
+      std::string name = about.text;
+      if (name.size() >= 2 && name.front() == '"' && name.back() == '"') {
+        name = name.substr(1, name.size() - 2);
+      }
+      about.text = name;
+      const DtoPlan* shape = nullptr;
+      for (const auto& flow : parsed.flows) {
+        syntax::VisitSubtree(*flow, [&](const syntax::Node& node) {
+          const auto* typed = syntax::As<syntax::TypedValue>(&node);
+          if (typed == nullptr || typed->value.get() != object_here) {
+            return;
+          }
+          shape = resolved.program.Dto(typed->type.name);
+          if (shape == nullptr) {
+            if (const auto* type = editor_known.Type(typed->type.name);
+                type != nullptr) {
+              shape = &type->shape;
+              about.origin = type->origin;
+            }
+          }
+        });
+      }
+      std::string type;
+      if (shape != nullptr) {
+        if (const auto* field = shape->Field(name); field != nullptr) {
+          type = field->declared.empty() ? field->type : field->declared;
+          about.detail = documentation.Get(field->description, field->location);
+        }
+      }
+      about.summary = absl::StrCat("`", name, "` — property",
+                                   type.empty() ? "" : ": ", type);
+      about.markdown = about.detail.empty()
+                           ? about.summary
+                           : absl::StrCat(about.summary, "\n\n", about.detail);
+      return about;
+    }
+  }
+
   std::string pipeline_note;
   for (const auto& flow : parsed.flows) {
     syntax::VisitSubtree(*flow, [&](const syntax::Node& node) {

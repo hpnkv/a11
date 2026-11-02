@@ -190,6 +190,30 @@ TEST(FlowNavigate, SaysWhatIsUnderTheCaretAndWhereItCameFrom) {
   EXPECT_FALSE(Describe(kSource, kSource.find("\n\n")).found);
 }
 
+TEST(FlowNavigate, NamedCallInputsHoverAsPorts) {
+  const Description input = Describe(kSource, At("query: question"), Known());
+  ASSERT_TRUE(input.found);
+  EXPECT_EQ(input.kind, SymbolClass::kPort);
+  EXPECT_EQ(input.summary, "`query` — input-port of `web-search`: str");
+  EXPECT_EQ(input.detail, "What to look for.");
+  EXPECT_NE(input.markdown.find("**Takes:** str"), std::string::npos);
+}
+
+TEST(FlowNavigate, RecordKeysHoverAsProperties) {
+  constexpr std::string_view source = R"(flow f {
+  out result: object
+  value = a11::sdk::AudioBuffer{rate: 48000, samples: ""}
+  value -> result
+})";
+  const Description rate = Describe(source, source.find("rate:"), Known());
+  ASSERT_TRUE(rate.found);
+  EXPECT_EQ(rate.kind, SymbolClass::kField);
+  EXPECT_EQ(rate.summary, "`rate` — property: integer");
+  const Description samples =
+      Describe(source, source.find("samples:"), Known());
+  EXPECT_EQ(samples.summary, "`samples` — property: bytes");
+}
+
 TEST(FlowNavigate, AShapeHoversAsItsFields) {
   const Description about = Describe(kSource, At("Source{"));
   ASSERT_TRUE(about.found);

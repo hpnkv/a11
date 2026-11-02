@@ -27,6 +27,9 @@ are retained. The selected prefix ends at a complete tool-call/result group.
 A registered callback or caller-supplied checkpoint provides summary text;
 there is no default summarization model. A failed budget check raises an A11
 status and produces no replacement history.
+The provider proxy rejects history compaction; it has no API to install the
+proposal in the conversation owner. Use a host installer or native coordinator
+so later requests reuse the installed prefix.
 
 ::: a11.sdk.llm_context.content
     options:

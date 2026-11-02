@@ -47,17 +47,17 @@ const need = <T>(value: T | Status): T => {
 class ObservedStream implements WireStream {
   constructor(private readonly inner: WireStream, private readonly observe: (event: WireEvent) => void) {}
   getId(): string { return this.inner.getId(); }
-  send(message: WireMessage): Status { this.record('sent', message); return this.inner.send(message); }
+  send(message: WireMessage): ReturnType<WireStream['send']> { this.record('sent', message); return this.inner.send(message); }
   start(onMessage?: Parameters<WireStream['start']>[0], onDone?: Parameters<WireStream['start']>[1]): Promise<Status> {
     return this.inner.start(async (message) => { if (message) this.record('received', message); return onMessage?.(message); }, onDone);
   }
   accept(onMessage?: Parameters<WireStream['accept']>[0], onDone?: Parameters<WireStream['accept']>[1]): Promise<Status> { return this.inner.accept(onMessage, onDone); }
-  halfClose(headers?: Parameters<WireStream['halfClose']>[0]): Status { return this.inner.halfClose(headers); }
+  halfClose(headers?: Parameters<WireStream['halfClose']>[0]): ReturnType<WireStream['halfClose']> { return this.inner.halfClose(headers); }
   drainOutgoingMessages(): Promise<Status> { return this.inner.drainOutgoingMessages(); }
-  abort(status: Parameters<WireStream['abort']>[0]): Status { return this.inner.abort(status); }
-  setDeadline(deadline?: Parameters<WireStream['setDeadline']>[0]): Status { return this.inner.setDeadline(deadline); }
-  getDeadline(): number | null { return this.inner.getDeadline(); }
-  getStatus(): Status { return this.inner.getStatus(); }
+  abort(status: Parameters<WireStream['abort']>[0]): ReturnType<WireStream['abort']> { return this.inner.abort(status); }
+  setDeadline(deadline?: Parameters<WireStream['setDeadline']>[0]): ReturnType<WireStream['setDeadline']> { return this.inner.setDeadline(deadline); }
+  getDeadline(): ReturnType<WireStream['getDeadline']> { return this.inner.getDeadline(); }
+  getStatus(): ReturnType<WireStream['getStatus']> { return this.inner.getStatus(); }
   getTrailers(): ReturnType<WireStream['getTrailers']> { return this.inner.getTrailers(); }
   getImpl(): unknown | null { return this.inner.getImpl(); }
   wait(): Promise<Status> { return this.inner.wait(); }

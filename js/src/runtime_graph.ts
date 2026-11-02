@@ -822,7 +822,10 @@ export class GraphSession {
       const channel = 'nativeHandle' in stream &&
         typeof stream.nativeHandle === 'function'
         ? await stream.nativeHandle() : bridgeWireStream(stream);
-      if ('__a11NativeChannelStream' in channel) channel.host = stream;
+      if ('__a11NativeChannelStream' in channel) {
+        channel.host = stream;
+        channel.fallback = bridgeWireStream(stream);
+      }
       this.defaultStreamId = await this.binding.addStream(channel, mode);
       return okStatus();
     }

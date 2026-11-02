@@ -24,7 +24,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { test, describe, after } from 'node:test';
+import { test, describe, before, after } from 'node:test';
 
 import {
   ActionMessage,
@@ -50,8 +50,9 @@ import { iceExpiryMs, refreshDelayMs } from '../signalling_client.js';
 import { shouldBecomeHost } from '../election.js';
 import { ChatHost } from '../host.js';
 import { ChatPeer, PEER_DESIRED_CHANNELS } from '../peer_client.js';
-import {disposeDemoRuntimes} from '../../wasm_runtime.js';
+import {createDemoRuntime, disposeDemoRuntimes} from '../../wasm_runtime.js';
 
+before(createDemoRuntime);
 after(disposeDemoRuntimes);
 import {
   ConnectionType,
@@ -431,10 +432,11 @@ async function attachPeer(host: ChatHost, myId: string): Promise<ChatPeer> {
   });
   assert.ok(isOk(session));
 
-  await Promise.all([
+  const [, attached] = await Promise.all([
     (host as any).onPeerConnected(myId, serverStream, null),
     session.addStream(clientStream, StreamMode.START),
   ]);
+  assert.ok(isOk(attached), JSON.stringify(attached));
   (peer as any).session = session;
   (peer as any).stream = clientStream;
 
@@ -831,10 +833,10 @@ describe('liveness', () => {
     host.appendEvent({ type: 'join', peerId: 'host-aaa', timestamp: 1 });
 
     // A short idle window stands in for PEER_TIMEOUT_MS; no pings run.
-    await attachFramedPeer(host, 'peer-bbb', { hostIdleMs: 300, ping: false });
+    await attachFramedPeer(host, 'peer-bbb', { hostIdleMs: 1_200, ping: false });
     assert.ok(deriveState(host.getEventLog()).participants.has('peer-bbb'));
 
-    await delay(700);
+    await delay(1_800);
     assert.ok(!deriveState(host.getEventLog()).participants.has('peer-bbb'));
 
     host.shutdown();

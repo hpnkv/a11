@@ -797,15 +797,17 @@ export class ChatPeer {
       try { this.signalling.close(); } catch { /* already closed */ }
       this.signalling = null;
     }
-    if (this.session) {
-      try {
-        this.session.abort(cancelledError('The peer left the room.'));
-      } catch { /* ignore */ }
-    }
+    const session = this.session;
     this.cleanup();
-    if (this.initialized !== null) {
-      void this.initialized.then(() => this.runtime.dispose()).catch(() => {});
-    }
+    void (async () => {
+      if (session !== null) {
+        await session.abort(cancelledError('The peer left the room.'));
+      }
+      if (this.initialized !== null) {
+        await this.initialized;
+        await this.runtime.dispose();
+      }
+    })().catch(() => {});
   }
 
   /** Return the underlying RTCPeerConnection for connection monitoring. */

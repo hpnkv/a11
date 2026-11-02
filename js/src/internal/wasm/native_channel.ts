@@ -7,6 +7,7 @@ export interface ChannelHandle {
   readonly __a11NativeChannelStream: true;
   readonly id: string;
   host?: import('../../wire_stream.js').WireStream;
+  fallback?: import('./wire_stream_bridge.js').WireStreamBridge;
   send(message: Record<string, unknown>): Promise<unknown>;
   halfClose(message: Record<string, unknown>): Promise<unknown>;
   abort(status: Status): Promise<unknown>;
@@ -30,12 +31,17 @@ export interface ChannelBridge {
     framing: ChannelFramingOptions): Promise<ChannelHandle>;
 }
 
-let installed: ChannelBridge | null = null;
+const installed: ChannelBridge[] = [];
 
 export function installChannelBridge(bridge: ChannelBridge): void {
-  installed = bridge;
+  installed.push(bridge);
+}
+
+export function removeChannelBridge(bridge: ChannelBridge): void {
+  const index = installed.lastIndexOf(bridge);
+  if (index !== -1) installed.splice(index, 1);
 }
 
 export function channelBridge(): ChannelBridge | null {
-  return installed;
+  return installed[0] ?? null;
 }

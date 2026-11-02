@@ -534,19 +534,14 @@ export class ChatHost {
       this.server.close();
       this.server = null;
     }
-    for (const peer of this.peers.values()) {
+    const closing = [...this.peers.values()].map(peer => {
       peer.endReplication();
-      try {
-        // An abort carries its status to the peer, which starts electing a
-        // new host as soon as the marker arrives.
-        peer.session.abort(cancelledError('The host left the room.'));
-      } catch {
-        // Best effort cleanup.
-      }
-    }
+      return peer.session.abort(cancelledError('The host left the room.'));
+    });
     this.peers.clear();
     if (this.initialized !== null) {
-      void this.initialized.then(() => this.runtime.dispose()).catch(() => {});
+      void Promise.allSettled(closing).then(() => this.initialized)
+        .then(() => this.runtime.dispose()).catch(() => {});
     }
   }
 

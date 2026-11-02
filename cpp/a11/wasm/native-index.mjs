@@ -530,21 +530,10 @@ export async function createA11WasmRuntime(options = {}) {
         return stream.wireId;
       }
       if (stream?.__a11NativeChannelStream === true) {
-        const remote = stream;
-        const status = pending => Promise.resolve(pending).then(() => ({
-          code: StatusCode.OK, message: '', details: [],
-        }));
-        stream = {
-          id: remote.id,
-          start: (onMessage, onDone) => status(remote.start(onMessage,
-            async () => onDone(), 'start')),
-          accept: (onMessage, onDone) => status(remote.start(onMessage,
-            async () => onDone(), 'accept')),
-          send: message => status(remote.send(message)),
-          halfClose: message => status(remote.halfClose(message)),
-          abort: cause => status(remote.abort(cause)),
-          getStatus: async () => (await remote.status()).status,
-        };
+        if (!stream.fallback) {
+          throw new TypeError('Remote native channel has no host adapter');
+        }
+        stream = stream.fallback;
       }
       if (!stream || typeof stream !== 'object') {
         throw new TypeError('Wire stream is required');

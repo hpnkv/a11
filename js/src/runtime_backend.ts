@@ -20,7 +20,8 @@ import { WorkerChunkStore, type WorkerStoreHandle } from './worker_chunk_store.j
 import {installFramingBridge, type FramingBridge} from './internal/wasm/native_framing.js';
 import {installDataCodecBridge, type DataCodecBridge} from './internal/wasm/native_data_codec.js';
 import {installSchemaBridge} from './internal/wasm/native_schema.js';
-import {installChannelBridge, type ChannelBridge} from './internal/wasm/native_channel.js';
+import {installChannelBridge, removeChannelBridge,
+  type ChannelBridge} from './internal/wasm/native_channel.js';
 import {installStreamReferenceBridge,
   type StreamReferenceBridge} from './internal/wasm/native_stream_reference.js';
 import {installAuthorizationBridge,
@@ -409,6 +410,7 @@ export class A11Runtime {
     if (this.disposed) return okStatus();
     this.disposed = true;
     const persisted = await this.flushPersistence();
+    if (this.nativeFlow) removeChannelBridge(this.nativeFlow);
     await this.nativeFlow?.dispose();
     return persisted;
   }

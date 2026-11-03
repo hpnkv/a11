@@ -34,6 +34,7 @@ import {
   INTERACT_WITH_CLAUDE_CONFIG_TAG,
   INTERACT_WITH_GEMINI_CONFIG_TAG,
   INTERACT_WITH_OLLAMA_CONFIG_TAG,
+  INTERACT_WITH_OPENROUTER_CONFIG_TAG,
   INTERACT_WITH_VLLM_CONFIG_TAG,
 } from '../serial_tags.js';
 import { isOk, type StatusOr } from '../status.js';
@@ -210,6 +211,35 @@ export const vllmCreateChatCompletionConfigSchema = z.object({
 /** Validated vLLM chat-completion request options. */
 export type VllmCreateChatCompletionConfig = z.infer<
   typeof vllmCreateChatCompletionConfigSchema
+>;
+
+/** Parameters for one OpenRouter chat completion. */
+export const openrouterCreateChatCompletionConfigSchema = z.object({
+  max_completion_tokens: z.number().int().positive().nullish(),
+  temperature: z.number().nullish(),
+  top_p: z.number().nullish(),
+  top_k: z.number().int().nullish(),
+  min_p: z.number().nullish(),
+  presence_penalty: z.number().nullish(),
+  frequency_penalty: z.number().nullish(),
+  seed: z.number().int().nullish(),
+  stop: z.array(z.string()).default([]),
+  reasoning: z.record(z.string(), z.unknown()).nullish(),
+  provider: z.record(z.string(), z.unknown()).nullish(),
+  models: z.array(z.string()).default([]),
+  modalities: z.array(z.string()).default([]),
+  session_id: z.string().nullish(),
+  user: z.string().nullish(),
+  metadata: z.record(z.string(), z.string()).default({}),
+  tool_choice: z.union([z.string(), z.record(z.string(), z.unknown())]).default('auto'),
+  parallel_tool_calls: z.boolean().nullish(),
+  json_output: z.boolean().default(false),
+  json_schema: z.record(z.string(), z.unknown()).nullish(),
+  extra_body: z.record(z.string(), z.unknown()).default({}),
+});
+/** Validated OpenRouter chat request options. */
+export type OpenRouterCreateChatCompletionConfig = z.infer<
+  typeof openrouterCreateChatCompletionConfigSchema
 >;
 
 /** Parameters for creating a Claude message (`messages.create`). */
@@ -417,6 +447,13 @@ export const makeVllmCreateChatCompletionConfig = registerConfigCodec(
   INTERACT_WITH_VLLM_CONFIG_TAG,
   vllmCreateChatCompletionConfigSchema,
   'VllmCreateChatCompletionConfig',
+);
+
+/** Validate and tag an OpenRouter request config for the `config` port. */
+export const makeOpenRouterCreateChatCompletionConfig = registerConfigCodec(
+  INTERACT_WITH_OPENROUTER_CONFIG_TAG,
+  openrouterCreateChatCompletionConfigSchema,
+  'OpenRouterCreateChatCompletionConfig',
 );
 
 /** Validate and tag a Claude request config for the `config` port. */

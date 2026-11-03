@@ -72,6 +72,7 @@ object SerialTags {
     const val INTERACT_WITH_GPT_CONFIG = "a11.sdk.InteractWithGptConfig"
     const val INTERACT_WITH_CODEX_CONFIG = "a11.sdk.InteractWithCodexConfig"
     const val INTERACT_WITH_OLLAMA_CONFIG = "a11.sdk.InteractWithOllamaConfig"
+    const val INTERACT_WITH_OPENROUTER_CONFIG = "a11.sdk.InteractWithOpenRouterConfig"
     const val INTERACT_WITH_VLLM_CONFIG = "a11.sdk.InteractWithVllmConfig"
     const val INTERACT_WITH_GEMMA_CONFIG = "a11.sdk.InteractWithGemmaConfig"
 

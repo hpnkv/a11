@@ -97,6 +97,7 @@ class SerialTagsTest {
             SerialTags.INTERACT_WITH_CLAUDE_CODE_CONFIG,
             SerialTags.INTERACT_WITH_GEMINI_CONFIG,
             SerialTags.INTERACT_WITH_OLLAMA_CONFIG,
+            SerialTags.INTERACT_WITH_OPENROUTER_CONFIG,
             SerialTags.INTERACT_WITH_GPT_CONFIG,
             SerialTags.INTERACT_WITH_CODEX_CONFIG,
             SerialTags.INTERACT_WITH_VLLM_CONFIG,

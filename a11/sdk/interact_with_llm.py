@@ -100,6 +100,11 @@ _PROVIDERS: dict[str, _Provider] = {
         handler="interact_with_ollama",
         extra="ollama",
     ),
+    "openrouter": _Provider(
+        module="a11.sdk.openrouter.interact_with_openrouter",
+        handler="interact_with_openrouter",
+        extra="openrouter",
+    ),
     "vllm": _Provider(
         module="a11.sdk.vllm.interact_with_vllm",
         handler="interact_with_vllm",
@@ -111,6 +116,7 @@ _PROVIDERS: dict[str, _Provider] = {
 # Common open-weight model families use Ollama. An explicit provider header
 # overrides this mapping.
 _MODEL_PREFIXES: tuple[tuple[str, str], ...] = (
+    ("openrouter/", "openrouter"),
     ("claude", "claude"),
     ("gemini", "gemini"),
     ("gpt", "gpt"),

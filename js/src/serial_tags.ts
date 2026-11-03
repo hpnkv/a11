@@ -96,6 +96,8 @@ export const INTERACT_WITH_GPT_CONFIG_TAG = 'a11.sdk.InteractWithGptConfig';
 export const INTERACT_WITH_CODEX_CONFIG_TAG = 'a11.sdk.InteractWithCodexConfig';
 /** Wire tag for an Ollama chat configuration. */
 export const INTERACT_WITH_OLLAMA_CONFIG_TAG = 'a11.sdk.InteractWithOllamaConfig';
+/** Wire tag for an OpenRouter chat configuration. */
+export const INTERACT_WITH_OPENROUTER_CONFIG_TAG = 'a11.sdk.InteractWithOpenRouterConfig';
 /** Wire tag for a vLLM chat configuration. */
 export const INTERACT_WITH_VLLM_CONFIG_TAG = 'a11.sdk.InteractWithVllmConfig';
 /** Wire tag for an in-browser Gemma configuration. */

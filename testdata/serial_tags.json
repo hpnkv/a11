@@ -50,6 +50,7 @@
     "interact_with_gpt_config": "a11.sdk.InteractWithGptConfig",
     "interact_with_codex_config": "a11.sdk.InteractWithCodexConfig",
     "interact_with_ollama_config": "a11.sdk.InteractWithOllamaConfig",
+    "interact_with_openrouter_config": "a11.sdk.InteractWithOpenRouterConfig",
     "interact_with_vllm_config": "a11.sdk.InteractWithVllmConfig",
     "interact_with_gemma_config": "a11.sdk.InteractWithGemmaConfig"
   },

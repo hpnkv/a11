@@ -88,11 +88,17 @@ history.extend([question, *new_interactions])
 
 The backend-specific actions (`interact_with_claude`,
 `interact_with_claude_code`, `interact_with_codex`, `interact_with_gemini`,
-`interact_with_gpt`, `interact_with_ollama`, and `interact_with_vllm`) expose
-the same `tools` port and registry pattern when direct provider control is
-preferable. The routing action provides one application boundary: switching
-providers requires only a header change and leaves the conversation flow
-unchanged.
+`interact_with_gpt`, `interact_with_ollama`, `interact_with_openrouter`, and
+`interact_with_vllm`) expose the same `tools` port and registry pattern when
+direct provider control is preferable. The routing action provides one
+application boundary: switching providers requires only a header change and
+leaves the conversation flow unchanged.
+
+For OpenRouter, set `x-a11-llm-provider` to `openrouter`, name a model with
+`x-a11-llm-model`, and supply `OPENROUTER_API_KEY` or the API-key header.
+The adapter stores OpenRouter reasoning details for the next turn and reports
+each request's token usage through A11's usage stream. Tool actions remain
+separate nested usage producers.
 
 `interact_with_claude_code` reaches the same allow-list and registry through a
 different mechanism: Claude Code runs the agent loop, and the handler publishes

@@ -73,6 +73,7 @@ openai = ["openai>=2.0.0"]
 s2 = ["s2-sdk>=0.10.0,<1"]
 codex = ["mcp>=2.1.1"]
 ollama = ["ollama>=0.6.0"]
+openrouter = ["openai>=2.0.0"]
 vllm = ["openai>=2.0.0"]
 # What `a11.demos.text_to_image` needs: a diffusion pipeline and the text
 # encoder it loads through transformers. `dtype=` on `from_pretrained`
@@ -128,6 +129,8 @@ sdist.exclude = [
     "**/__pycache__/**",
     "**/*.pyc",
     "**/*.pyo",
+    "cpp/**/build/**",
+    "cpp/cmake-build-*/**",
     "a11/_allocator/**",
     "a11/libexec/**",
     "a11/_native*.so",
@@ -240,6 +243,9 @@ codex = [
 ]
 ollama = [
     "ollama>=0.6.0",
+]
+openrouter = [
+    "openai>=2.0.0",
 ]
 vllm = [
     "openai>=2.0.0",

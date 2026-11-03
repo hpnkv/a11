@@ -62,11 +62,18 @@ from a11.sdk.openai.interact_with_gpt_schema import (
     INTERACT_WITH_GPT_SCHEMA,
     GptInteractionAdapter,
 )
+from a11.sdk.openrouter import interact_with_openrouter as openrouter
+from a11.sdk.openrouter.interact_with_openrouter_schema import (
+    INTERACT_WITH_OPENROUTER_SCHEMA,
+    OpenRouterInteractionAdapter,
+)
 from a11.sdk.vllm import interact_with_vllm as chat
 from a11.sdk.vllm.interact_with_vllm_schema import (
     INTERACT_WITH_VLLM_SCHEMA,
     VllmInteractionAdapter,
 )
+
+del openrouter  # Register its native interaction normalizer.
 
 
 @dataclass(frozen=True)
@@ -146,6 +153,12 @@ CASES = (
         llm.Backend.VLLM,
         INTERACT_WITH_VLLM_SCHEMA,
         VllmInteractionAdapter,
+        _chat,
+    ),
+    ProviderCase(
+        llm.Backend.OPENROUTER,
+        INTERACT_WITH_OPENROUTER_SCHEMA,
+        OpenRouterInteractionAdapter,
         _chat,
     ),
     ProviderCase(

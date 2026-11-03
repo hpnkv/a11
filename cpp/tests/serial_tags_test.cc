@@ -110,6 +110,7 @@ std::vector<std::string> CppTags() {
       std::string(kInteractWithGptConfigTag),
       std::string(kInteractWithCodexConfigTag),
       std::string(kInteractWithOllamaConfigTag),
+      std::string(kInteractWithOpenRouterConfigTag),
       std::string(kInteractWithVllmConfigTag),
       std::string(kInteractWithGemmaConfigTag),
       std::string(kAudioBufferTag),

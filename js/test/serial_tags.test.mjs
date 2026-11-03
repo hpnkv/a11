@@ -125,6 +125,7 @@ test('the runtime and SDK types are registered under their canonical tags', () =
     tags.ACTION_CONFIG_TAG,
     tags.USAGE_METADATA_TAG,
     tags.INTERACT_WITH_OLLAMA_CONFIG_TAG,
+    tags.INTERACT_WITH_OPENROUTER_CONFIG_TAG,
   ]) {
     assert.ok(registered.has(tag), `no wire value codec for ${tag}`);
   }

@@ -593,6 +593,7 @@ class Backend(enum.StrEnum):
     GEMINI = "gemini"
     GPT = "gpt"
     OLLAMA = "ollama"
+    OPENROUTER = "openrouter"
     VLLM = "vllm"
 
 

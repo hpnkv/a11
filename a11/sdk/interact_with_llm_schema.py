@@ -25,6 +25,9 @@ from a11.sdk.gemini.interact_with_gemini_schema import CreateInteractionConfig
 from a11.sdk.llm import Interaction, LlmHeaders
 from a11.sdk.llm_context.config import LLM_CONTEXT_HEADERS
 from a11.sdk.ollama.interact_with_ollama_schema import CreateChatConfig
+from a11.sdk.openrouter.interact_with_openrouter_schema import (
+    CreateChatCompletionConfig as OpenRouterChatConfig,
+)
 from a11.sdk.openai.interact_with_codex_schema import CreateCodexSessionConfig
 from a11.sdk.openai.interact_with_gpt_schema import CreateChatCompletionConfig
 from a11.sdk.vllm.interact_with_vllm_schema import (
@@ -39,6 +42,7 @@ PROVIDER_CONFIG_SCHEMA = TypeAdapter(
     | CreateInteractionConfig
     | CreateChatConfig
     | VllmChatConfig
+    | OpenRouterChatConfig
 ).json_schema()
 
 INTERACT_WITH_LLM_SCHEMA = a11.ActionSchema(

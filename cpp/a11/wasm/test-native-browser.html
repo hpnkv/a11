@@ -40,7 +40,7 @@ try {
   }
   const ids = output.ids.map(chunk => atob(chunk.data));
   if (new Set(ids).size !== ids.length) {
-    throw new Error('UUIDs repeated across an entropy refill');
+    throw new Error('UUIDs repeated');
   }
   const values = JSON.parse(atob(output.values[0].data));
   if (values.A11_BROWSER_TEST !== 'yes') {

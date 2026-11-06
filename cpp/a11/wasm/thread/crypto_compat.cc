@@ -35,28 +35,26 @@ EM_ASYNC_JS(int, HostSha256,
 EM_JS(int, HostRandom, (unsigned char* data, int count), {
   try {
     if (!globalThis.crypto?.getRandomValues) return 0;
-    if (count <= 4096) {
-      // Keep small draws in one pool per module; UUIDs consume 16 bytes each.
-      if (!Module.__a11RandomPool) {
-        Module.__a11RandomPool = new Uint8Array(4096);
-        Module.__a11RandomAt = 4096;
+    if (count === 16) {
+      const scratch = Module.__a11UuidScratch ||
+        (Module.__a11UuidScratch = new Uint8Array(16));
+      try {
+        globalThis.crypto.getRandomValues(scratch);
+        HEAPU8.set(scratch, data);
+      } finally {
+        scratch.fill(0);
       }
-      const pool = Module.__a11RandomPool;
-      let at = Module.__a11RandomAt;
-      if (at + count > pool.length) {
-        globalThis.crypto.getRandomValues(pool);
-        at = 0;
-      }
-      for (let index = 0; index < count; ++index) {
-        HEAPU8[data + index] = pool[at + index];
-      }
-      Module.__a11RandomAt = at + count;
       return 1;
     }
     for (let offset = 0; offset < count; offset += 65536) {
       const size = Math.min(65536, count - offset);
-      globalThis.crypto.getRandomValues(
-        HEAPU8.subarray(data + offset, data + offset + size));
+      const scratch = new Uint8Array(size);
+      try {
+        globalThis.crypto.getRandomValues(scratch);
+        HEAPU8.set(scratch, data + offset);
+      } finally {
+        scratch.fill(0);
+      }
     }
     return 1;
   } catch { return 0; }

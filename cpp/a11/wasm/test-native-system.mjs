@@ -6,11 +6,11 @@ const source = `flow system {
   out ids: string stream
   out values: object
   out bytes: bytes stream
-  generated = run new_uuid(options: {count: 2})
+  generated = run new_uuid(options: {count: 260})
   generated.ids -> ids
   read = run env_get(names: ["A11_WASM_TEST"])
   read.values -> values
-  random = run random_bytes(options: {count: 16})
+  random = run random_bytes(options: {count: 5000})
   random.bytes -> bytes
 }`;
 
@@ -20,9 +20,16 @@ const runtime = await createA11WasmRuntime({
 });
 try {
   const output = await runtime.runFlow({source, flow: 'system'});
-  assert.equal(output.ids.length, 2);
+  assert.equal(output.ids.length, 260);
+  const ids = output.ids.map(chunk => Buffer.from(chunk.data, 'base64')
+    .toString().replace(/^"|"$/g, ''));
+  assert.equal(new Set(ids).size, ids.length);
+  for (const id of ids) {
+    assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  }
   assert.equal(output.values.length, 1);
   assert.equal(output.bytes.length, 1);
+  assert.equal(Buffer.from(output.bytes[0].data, 'base64').length, 5000);
   assert.equal(JSON.parse(Buffer.from(output.values[0].data, 'base64').toString())
     .A11_WASM_TEST, 'present');
   const direct = runtime.action('env_get', 'direct-env-get');

@@ -28,15 +28,19 @@ try {
     source: `flow browser {
       out ids: string stream
       out values: object
-      new = run new_uuid(options: {count: 2})
+      new = run new_uuid(options: {count: 260})
       new.ids -> ids
       env = run env_get(names: ["A11_BROWSER_TEST"])
       env.values -> values
     }`,
     flow: 'browser',
   });
-  if (output.ids.length !== 2 || output.values.length !== 1) {
+  if (output.ids.length !== 260 || output.values.length !== 1) {
     throw new Error('native Flow outputs are incomplete');
+  }
+  const ids = output.ids.map(chunk => atob(chunk.data));
+  if (new Set(ids).size !== ids.length) {
+    throw new Error('UUIDs repeated across an entropy refill');
   }
   const values = JSON.parse(atob(output.values[0].data));
   if (values.A11_BROWSER_TEST !== 'yes') {

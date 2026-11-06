@@ -50,6 +50,8 @@ enum class TokenKind {
   kWord,
 
   kDot,
+  kQuestionDot,
+  kQuestionBracket,
   /// `..` -- the range between two bounds, either of which may be left out.
   kRange,
   /// `...` or `...` -- everything the thing after it holds, spread in here.

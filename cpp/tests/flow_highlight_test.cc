@@ -50,6 +50,16 @@ std::vector<std::string> Coloured(std::string_view source,
   return out;
 }
 
+TEST(FlowHighlight, OptionalProjectionAndPresentStage) {
+  EXPECT_EQ(Coloured("item?.title | present"),
+            (std::vector<std::string>{"identifier:item", "punctuation:?.",
+                                      "member:title", "flow-operator:|",
+                                      "stage:present"}));
+  EXPECT_EQ(Coloured("item?[key]"),
+            (std::vector<std::string>{"identifier:item", "bracket:?[",
+                                      "identifier:key", "bracket:]"}));
+}
+
 TEST(FlowHighlight, PredicateStagesColourBothWords) {
   const auto tokens = Coloured(
       "flow f { in words: string stream\n words | try take until it == "
@@ -264,15 +274,21 @@ TEST(FlowHighlight, ACastNamesAType) {
                                       "punctuation:::", "type:AudioBuffer"}));
 }
 
-TEST(FlowHighlight, IntoAfterACastNamesAnErrorDestination) {
+TEST(FlowHighlight, FailuresIntoAfterACastNamesAnErrorDestination) {
   const auto tokens =
-      Coloured("docs | try map it as Order into rejected -> orders");
+      Coloured("docs | try map it as Order failures into failures -> orders");
   EXPECT_NE(std::find(tokens.begin(), tokens.end(), "type:Order"),
             tokens.end());
+  EXPECT_NE(
+      std::find(tokens.begin(), tokens.end(), "statement-keyword:failures"),
+      tokens.end());
   EXPECT_NE(std::find(tokens.begin(), tokens.end(), "statement-keyword:into"),
             tokens.end());
-  EXPECT_NE(std::find(tokens.begin(), tokens.end(), "identifier:rejected"),
+  EXPECT_NE(std::find(tokens.begin(), tokens.end(), "identifier:failures"),
             tokens.end());
+  const auto argument = Coloured("items | sum failures");
+  EXPECT_NE(std::find(argument.begin(), argument.end(), "identifier:failures"),
+            argument.end());
 }
 
 TEST(FlowHighlight, StringEscapesAreSeparateNonoverlappingSpans) {

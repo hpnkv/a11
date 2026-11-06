@@ -386,11 +386,6 @@ absl::Status Bus::CompletePump(absl::Status status) {
   return status;
 }
 
-absl::Status Bus::WaitFinished() {
-  thread::MutexLock lock(&monitor_->mu());
-  return monitor_->Wait(moved_, [this] { return finished_; });
-}
-
 bool Bus::Skip() {
   bool unused;
   {

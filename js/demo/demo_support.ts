@@ -336,6 +336,7 @@ export async function drainPort(action: Action, port: string): Promise<void> {
 export interface TurnCallbacks {
     onToken?: (text: string) => void;
     onThought?: (text: string) => void;
+    onEvent?: (event: unknown) => void;
 }
 
 /**
@@ -345,6 +346,7 @@ export interface TurnRequest extends TurnCallbacks {
     connection: Connection;
     backend: Backend;
     prompt: string;
+    config?: Record<string, unknown>;
     /** Every interaction of the conversation so far, oldest first. */
     history: readonly Interaction[];
     /**
@@ -391,7 +393,8 @@ export async function runTurn(request: TurnRequest): Promise<Interaction[]> {
 
     // Closed empty, so the backend applies its own default request config.
     const config = need(await call.getInput('config'));
-    need(await config.finalize());
+    need(await (request.config === undefined
+        ? config.finalize() : config.finalize(request.config)));
 
     const definitions = need(await getToolDefinitions(registry, toolNames, request.portSchemas ?? {}));
     const tools = need(await call.getInput('tools'));
@@ -424,7 +427,9 @@ export async function runTurn(request: TurnRequest): Promise<Interaction[]> {
     const interactionsOut = readPort(call, 'new_interactions', (value) => {
         produced.push(value as Interaction);
     }).catch(() => {});
-    const events = drainPort(call, 'event_stream');
+    const events = request.onEvent
+        ? readPort(call, 'event_stream', (value) => request.onEvent?.(value))
+        : drainPort(call, 'event_stream');
 
     await Promise.race([
         readPort(call, 'text_output', (value) => request.onToken?.(String(value))),

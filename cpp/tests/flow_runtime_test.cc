@@ -2328,7 +2328,7 @@ flow main {
   out errors: std::status stream
 
   ["bWF0Y2g=", "!", "bWF0Y2g="] | flatten
-    | try context std::utf8decode(std::b64decode(it)) == "match" before 1 after 2 into errors -> groups
+    | try context std::utf8decode(std::b64decode(it)) == "match" before 1 after 2 failures into errors -> groups
 }
 )",
                            "main");
@@ -2504,17 +2504,47 @@ flow routed {
   in  docs: std::json stream
   out good: std::json stream
   out bad:  bool stream
+  out positions: int stream
+  out originals: bool stream
+  out narrowed: bool stream
+  out narrowed_code: string
   failures = node()
-  docs | try map it as Order into failures -> good
+  docs | try map it as Order failures into failures -> good
   failures | map it.ok -> bad
+  failures | map it.seq -> positions
+  failures | map it.it == {} -> originals
+  failures | map (it as std::status).it == null -> narrowed
+  std::status status_only = take failures
+  status_only.code -> narrowed_code
 }
 )"),
               "routed", {{"docs", {R"({"id": "a"})", "{}"}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("good").size(), 1u);
-  // The failure arrives as a status record, which is a stream like any other.
+  // The failure record remains a stream value with status fields.
   ASSERT_EQ(outcome.outputs.at("bad").size(), 1u);
   EXPECT_EQ(outcome.outputs.at("bad"), Values({"false"}));
+  EXPECT_EQ(outcome.outputs.at("positions"), Values({"1"}));
+  EXPECT_EQ(outcome.outputs.at("originals"), Values({"true"}));
+  EXPECT_EQ(outcome.outputs.at("narrowed"), Values({"true"}));
+  EXPECT_EQ(outcome.outputs.at("narrowed_code"),
+            Values({R"("INVALID_ARGUMENT")"}));
+}
+
+TEST(FlowRuntimeTest, ParallelFailurePositionsFollowStageInputOrder) {
+  const Outcome outcome =
+      RunFlow(absl::StrCat(kOrderShape, R"(
+flow routed {
+  in  docs: std::json stream
+  out positions: int stream
+  failures = node()
+  docs | try map it as Order parallel 3 failures into failures -> _
+  failures | map it.seq -> positions
+}
+)"),
+              "routed", {{"docs", {"{}", R"({"id":"a"})", "{}"}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("positions"), (Values{"0", "2"}));
 }
 
 TEST(FlowRuntimeTest, WithoutTryAValueTheStageCannotDoEndsTheFlow) {
@@ -3544,6 +3574,119 @@ flow main {
   EXPECT_EQ(outcome.outputs.at("results"),
             Values({"{\"has_value\": true, \"value\": null}",
                     "{\"has_value\": false}"}));
+}
+
+TEST(FlowRuntimeTest, PresentStageUnwrapsOptionsAndRetainsPresentNull) {
+  const auto result = RunFlow(R"(
+flow main {
+  out values: std::any stream
+  [{field: null}, {}, {field: 0}, {field: false}]
+    | flatten | map it?.field | present -> values
+}
+)", "main");
+  ASSERT_TRUE(result.status.ok()) << result.status;
+  EXPECT_EQ(result.outputs.at("values"),
+            (Values{"null", "0", "false"}));
+}
+
+TEST(FlowRuntimeTest, PresentStageReadsOptionsFromTypedInput) {
+  const auto result = RunFlow(R"(
+flow main {
+  in candidates: std::option[std::any] stream
+  out values: std::any stream
+  candidates | present -> values
+}
+)", "main", {{"candidates", {"{\"has_value\":true,\"value\":null}",
+                            "{\"has_value\":false}",
+                            "{\"has_value\":true,\"value\":0}"}}});
+  ASSERT_TRUE(result.status.ok()) << result.status;
+  EXPECT_EQ(result.outputs.at("values"), (Values{"null", "0"}));
+}
+
+TEST(FlowRuntimeTest, ObjectFieldsOmitAbsentTypedOptions) {
+  const auto result = RunFlow(R"(
+flow main {
+  in candidates: std::option[int] stream
+  out records: object stream
+  candidates | map {value: it, fixed: 1} -> records
+}
+)", "main", {{"candidates", {"{\"has_value\":false}",
+                            "{\"has_value\":true,\"value\":0}"}}});
+  ASSERT_TRUE(result.status.ok()) << result.status;
+  EXPECT_EQ(result.outputs.at("records"),
+            (Values{"{\"fixed\": 1}", "{\"fixed\": 1, \"value\": 0}"}));
+}
+
+TEST(FlowRuntimeTest, SafeProjectionUnwrapsOptionsFromTypedStream) {
+  const auto result = RunFlow(R"(
+flow main {
+  in candidates: std::option[object] stream
+  out values: std::any stream
+  candidates?.field | present -> values
+}
+)", "main", {{"candidates", {"{\"has_value\":true,\"value\":{\"field\":null}}",
+                             "{\"has_value\":false}",
+                             "{\"has_value\":true,\"value\":{\"field\":7}}"}}});
+  ASSERT_TRUE(result.status.ok()) << result.status;
+  EXPECT_EQ(result.outputs.at("values"), (Values{"null", "7"}));
+}
+
+TEST(FlowRuntimeTest, SafeProjectionChainsAcrossStreamStages) {
+  const auto result = RunFlow(R"(
+flow main {
+  in rows: object stream
+  out values: std::any stream
+  rows?.nested?.field | present -> values
+}
+)", "main", {{"rows", {"{\"nested\":{\"field\":null}}", "{}",
+                       "{\"nested\":{\"field\":5}}"}}});
+  ASSERT_TRUE(result.status.ok()) << result.status;
+  EXPECT_EQ(result.outputs.at("values"), (Values{"null", "5"}));
+}
+
+TEST(FlowRuntimeTest, TypedOptionKeepsPresenceAfterPortRead) {
+  const auto result = RunFlow(R"(
+flow main {
+  in candidate: std::option[object]
+  out result: std::any
+  selected = (take candidate)?.field or "fallback"
+  selected -> result
+}
+)", "main", {{"candidate", {"{\"has_value\":true,\"value\":{\"field\":null}}"}}});
+  ASSERT_TRUE(result.status.ok()) << result.status;
+  EXPECT_EQ(result.outputs.at("result"), (Values{"null"}));
+}
+
+TEST(FlowRuntimeTest, OptionalStreamIndexAcceptsComputedKey) {
+  const auto result = RunFlow(R"(
+flow main {
+  in rows: object stream
+  out values: std::any stream
+  key = "field"
+  rows?[key] | present -> values
+}
+)", "main", {{"rows", {"{\"field\":0}", "{}", "{\"field\":null}"}}});
+  ASSERT_TRUE(result.status.ok()) << result.status;
+  EXPECT_EQ(result.outputs.at("values"), (Values{"0", "null"}));
+}
+
+TEST(FlowRuntimeTest, OptionalProjectionCanLeaveActionInputEmpty) {
+  const auto result = RunFlow(R"(
+flow receiver {
+  in value: int
+  out received: int
+  if item = try take value { item -> received }
+}
+flow main {
+  out received: int stream
+  first = run receiver(value: {value: 4}?.value | present)
+  second = run receiver(value: {}?.value | present)
+  first.received -> received
+  second.received -> received
+}
+)", "main");
+  ASSERT_TRUE(result.status.ok()) << result.status;
+  EXPECT_EQ(result.outputs.at("received"), (Values{"4"}));
 }
 
 TEST(FlowRuntimeTest, OptionalDefaultPreservesFalseLikeItemsAndReadsOnce) {
@@ -4625,6 +4768,90 @@ flow main {
   EXPECT_EQ(logs.texts(), Values({"clean activated"}));
 }
 
+TEST(FlowRuntimeTest, CallsCanStartPipelinesWithAllInputsSupplied) {
+  const auto result = RunFlow(R"(
+flow echo {
+ in input: string stream
+ out output: string stream
+ input -> output
+}
+flow main {
+ out plain: string stream
+ out upper: string stream
+ run echo(input: ["a", "b"] | flatten) -> plain
+ run echo(input: ["c", "d"] | flatten) | map std::upper(it) -> upper
+}
+)",
+                              "main");
+  ASSERT_TRUE(result.status.ok()) << result.status;
+  EXPECT_EQ(result.outputs.at("plain"), Values({"\"a\"", "\"b\""}));
+  EXPECT_EQ(result.outputs.at("upper"), Values({"\"C\"", "\"D\""}));
+}
+
+TEST(FlowRuntimeTest, PipelineStartersAcceptShorthandInputs) {
+  const auto result = RunFlow(R"(
+flow echo {
+ in input: string stream
+ out output: string stream
+ input -> output
+}
+flow main {
+ in input: string stream
+ out plain: string stream
+ out upper: string stream
+ run echo(input) -> plain
+ run echo(input) | map std::upper(it) -> upper
+}
+)",
+                              "main", {{"input", {"\"a\"", "\"b\""}}});
+  ASSERT_TRUE(result.status.ok()) << result.status;
+  EXPECT_EQ(result.outputs.at("plain"), Values({"\"a\"", "\"b\""}));
+  EXPECT_EQ(result.outputs.at("upper"), Values({"\"A\"", "\"B\""}));
+}
+
+TEST(FlowRuntimeTest, PipelineStarterReadersShareOneInvocation) {
+  LogCapture logs;
+  const auto result = RunFlow(R"(
+flow source {
+ out output: string stream
+ written = "value" -> output
+ log "started" after written
+}
+flow main {
+ out first: string stream
+ out second: string stream
+ shared = run source() | map it
+ shared -> first
+ shared -> second
+}
+)",
+                              "main");
+  ASSERT_TRUE(result.status.ok()) << result.status;
+  EXPECT_EQ(result.outputs.at("first"), Values({"\"value\""}));
+  EXPECT_EQ(result.outputs.at("second"), Values({"\"value\""}));
+  EXPECT_EQ(logs.texts(), Values({"started"}));
+}
+
+TEST(FlowRuntimeTest, UnreadPipelineStartersStayInactive) {
+  LogCapture logs;
+  const auto result = RunFlow(R"(
+flow source {
+ out output: string
+ written = "value" -> output
+ log "started" after written
+}
+flow main {
+ out result: string
+ unused = run source() | map it
+ "done" -> result
+}
+)",
+                              "main");
+  ASSERT_TRUE(result.status.ok()) << result.status;
+  EXPECT_EQ(result.outputs.at("result"), Values({"\"done\""}));
+  EXPECT_TRUE(logs.texts().empty());
+}
+
 TEST(FlowRuntimeTest, PipelineCallsConfigureInputsAndRetainLoopState) {
   const auto result = RunFlow(R"(
 flow number_rows {
@@ -4835,6 +5062,85 @@ flow main {
                               "main");
   ASSERT_TRUE(result.status.ok()) << result.status;
   EXPECT_EQ(logs.texts(), Values({"child complete", "after a"}));
+}
+
+TEST(FlowRuntimeTest, ScopeBarrierAllowsFirstReadAfterCallCompletes) {
+  const auto result = RunFlow(R"(
+flow emit { out output: string stream
+ ["a", "b", "c"] | flatten -> output
+}
+flow main { out result: string stream
+ work = run emit()
+ wait all
+ work.output -> result
+}
+)",
+                              "main");
+  ASSERT_TRUE(result.status.ok()) << result.status;
+  EXPECT_EQ(result.outputs.at("result"),
+            Values({"\"a\"", "\"b\"", "\"c\""}));
+}
+
+TEST(FlowRuntimeTest, ScopeBarrierKeepsOneValueCursorAcrossPhases) {
+  std::string source = R"(
+flow emit { out output: int stream
+ [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11] | flatten -> output
+}
+flow main { out result: int stream
+ work = run emit()
+ first = take work.output
+ first -> result
+ wait all
+)";
+  for (int value = 1; value < 12; ++value) {
+    absl::StrAppend(&source, " value", value, " = take work.output\n",
+                    " value", value, " -> result\n");
+  }
+  absl::StrAppend(&source, "}\n");
+  const auto result = RunFlow(source, "main");
+  ASSERT_TRUE(result.status.ok()) << result.status;
+  Values expected;
+  for (int value = 0; value < 12; ++value) {
+    expected.push_back(absl::StrCat(value));
+  }
+  Values actual = result.outputs.at("result");
+  std::sort(actual.begin(), actual.end());
+  std::sort(expected.begin(), expected.end());
+  EXPECT_EQ(actual, expected);
+}
+
+TEST(FlowRuntimeTest, ScopeBarrierSeparatesReadsOfDifferentCallOutputs) {
+  const auto result = RunFlow(R"(
+flow emit { out first: string stream
+ out second: string stream
+ "early" -> first
+ "late" -> second
+}
+flow main { out result: string stream
+ work = run emit()
+ work.first -> result
+ wait all
+ work.second -> result
+}
+)",
+                              "main");
+  ASSERT_TRUE(result.status.ok()) << result.status;
+  EXPECT_EQ(result.outputs.at("result"),
+            Values({"\"early\"", "\"late\""}));
+}
+
+TEST(FlowRuntimeTest, ScopeBarrierAllowsFirstReadOfClosedNode) {
+  const auto result = RunFlow(R"(
+flow main { out result: string stream
+ n = node()
+ "value" -> n
+ wait all
+ n -> result
+}
+)",
+                              "main");
+  ASSERT_TRUE(result.status.ok()) << result.status;
+  EXPECT_EQ(result.outputs.at("result"), Values({"\"value\""}));
 }
 
 TEST(FlowRuntimeTest, ScopeBarriersAreLocalToBlocksBranchesAndLoopPasses) {

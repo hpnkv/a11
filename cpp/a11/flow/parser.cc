@@ -327,9 +327,12 @@ class ParserImpl {
           const auto following = Peek(next_at).kind;
           const auto tail = Keyword(next_at);
           const auto after_tail = Peek(NewlinesAhead(next_at + 1)).kind;
+          const bool stage_clause =
+              tail == "failures" ? Keyword(NewlinesAhead(next_at + 1)) == "into"
+                                 : vocabulary::ClauseWords().find(tail) !=
+                                       vocabulary::ClauseWords().end();
           const bool clause = word != "after" &&
-                              (vocabulary::ClauseWords().find(tail) !=
-                                   vocabulary::ClauseWords().end() ||
+                              (stage_clause ||
                                vocabulary::ModifierWords().find(tail) !=
                                    vocabulary::ModifierWords().end() ||
                                vocabulary::BareStages().find(tail) !=
@@ -385,6 +388,9 @@ class ParserImpl {
       const auto& token = Peek(at);
       switch (token.kind) {
         case TokenKind::kWord:
+          if (Keyword(at) == "failures") {
+            return Keyword(NewlinesAhead(at + 1)) != "into";
+          }
           return vocabulary::ClauseWords().find(Keyword(at)) ==
                      vocabulary::ClauseWords().end() &&
                  Keyword(at) != "after";
@@ -1557,8 +1563,17 @@ class ParserImpl {
             Advance();
             return ParsePipeStatement(keyword, /*tolerant=*/true);
           }
+          auto call = ParseCall();
+          if (ContinueToken(TokenKind::kPipe) ||
+              ContinueToken(TokenKind::kArrow)) {
+            auto pipeline = Make<syntax::Pipeline>(keyword);
+            pipeline->source = std::move(call);
+            ParsePipelineTail(*pipeline);
+            pipeline->extent.end = tokens_[position_ - 1].end;
+            return ParsePipeStatement(keyword, false, std::move(pipeline));
+          }
           auto statement = Make<syntax::CallStatement>(keyword);
-          statement->call = ParseCall();
+          statement->call = std::move(call);
           return statement;
         }
         if (word == "skip") {
@@ -2281,8 +2296,29 @@ class ParserImpl {
         const size_t before = position_;
         syntax::CallExpression::Argument argument;
         argument.port = ExpectName("a port name");
-        Expect(TokenKind::kColon);
-        argument.pipeline = ParsePipeline();
+        if (!argument.port.Empty() && (ContinueToken(TokenKind::kComma) ||
+                                       ContinueToken(TokenKind::kRightParen))) {
+          const Token token = TokenAt(argument.port.location);
+          argument.pipeline = Make<syntax::Pipeline>(token);
+          const std::string word = vocabulary::Canonical(argument.port.text);
+          if (word == "it") {
+            argument.pipeline->source = Make<syntax::It>(token);
+          } else {
+            auto source = Make<syntax::Name>(token);
+            source->name = argument.port.text;
+            argument.pipeline->source = std::move(source);
+          }
+          if (word == "true" || word == "false" || word == "null" ||
+              word == "_") {
+            Report("flow.syntax.unexpected",
+                   "A shorthand argument needs a source name; write the port "
+                   "and value explicitly.",
+                   token);
+          }
+        } else {
+          Expect(TokenKind::kColon);
+          argument.pipeline = ParsePipeline();
+        }
         call->args.push_back(std::move(argument));
         SkipNewlines();
         if (!AcceptToken(TokenKind::kComma)) {
@@ -2706,11 +2742,12 @@ class ParserImpl {
     stage.argument = ParseExpression();
   }
 
-  /// `[parallel n [unordered]] [into ref]`, in either order, after a stage.
+  /// `[parallel n [unordered]] [failures into ref]`, after a stage.
   void ParseStageTail(syntax::Stage& stage, const Token& keyword) {
     while (Continue([&](size_t at) {
       const auto word = Keyword(at);
-      return word == "parallel" || word == "unordered" || word == "into";
+      return word == "parallel" || word == "unordered" ||
+             (word == "failures" && Keyword(NewlinesAhead(at + 1)) == "into");
     })) {
       const std::string word = Keyword();
       Advance();
@@ -2719,6 +2756,7 @@ class ParserImpl {
       } else if (word == "unordered") {
         stage.ordered = false;
       } else {
+        ExpectWord("into");
         stage.failures = ParseReference();
       }
     }
@@ -2760,10 +2798,11 @@ class ParserImpl {
     }
     if (stage.failures != nullptr && !stage.tolerant) {
       Report("flow.form.into-without-try",
-             absl::StrCat("'into' says where a *tolerated* failure goes, so "
+             absl::StrCat("'failures into' says where a tolerated failure "
+                          "goes, so "
                           "the stage has to be a 'try': "
                           "`try ",
-                          stage.name, " ... into failures`."),
+                          stage.name, " ... failures into errors`."),
              keyword, Severity::kError, Family::kForm);
     }
   }
@@ -3051,14 +3090,19 @@ class ParserImpl {
       if (auto* call = syntax::As<syntax::CallExpression>(node.get());
           call != nullptr && call->groups.empty() &&
           (ContinueToken(TokenKind::kDot) ||
-           ContinueToken(TokenKind::kLeftBracket))) {
+           ContinueToken(TokenKind::kQuestionDot) ||
+           ContinueToken(TokenKind::kLeftBracket) ||
+           ContinueToken(TokenKind::kQuestionBracket))) {
         const Token selector = Current();
         const size_t operation_end = call->extent.end;
         while (ContinueToken(TokenKind::kDot) ||
-               ContinueToken(TokenKind::kLeftBracket)) {
+               ContinueToken(TokenKind::kQuestionDot) ||
+               ContinueToken(TokenKind::kLeftBracket) ||
+               ContinueToken(TokenKind::kQuestionBracket)) {
           syntax::CallExpression::TargetSuffix suffix;
           suffix.location = syntax::LocationOf(Current());
-          if (AcceptToken(TokenKind::kDot)) {
+          if (AcceptToken(TokenKind::kDot) ||
+              AcceptToken(TokenKind::kQuestionDot)) {
             suffix.member = ExpectName("a member name").text;
           } else {
             Advance();
@@ -3080,9 +3124,11 @@ class ParserImpl {
         call->extent.end = tokens_[position_ - 1].end;
         return node;
       }
-      if (ContinueToken(TokenKind::kDot)) {
+      if (ContinueToken(TokenKind::kDot) ||
+          ContinueToken(TokenKind::kQuestionDot)) {
         const Token& dot = Advance();
         auto attr = Make<syntax::Attr>(dot);
+        attr->optional = dot.kind == TokenKind::kQuestionDot;
         attr->name = ExpectName("a name after '.'").text;
         attr->extent = node->extent;
         if (!node->groups.empty()) {
@@ -3093,9 +3139,11 @@ class ParserImpl {
         node = Bounded(std::move(attr));
         continue;
       }
-      if (ContinueToken(TokenKind::kLeftBracket)) {
+      if (ContinueToken(TokenKind::kLeftBracket) ||
+          ContinueToken(TokenKind::kQuestionBracket)) {
         const Token& bracket = Advance();
         auto index = Make<syntax::Index>(bracket);
+        index->optional = bracket.kind == TokenKind::kQuestionBracket;
         {
           const Bracketed brackets(this);
           index->index = ParseExpression();

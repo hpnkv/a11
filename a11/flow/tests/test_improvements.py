@@ -699,7 +699,7 @@ def test_scope_barrier_tooling_envelopes_and_incomplete_input():
     hover = flow.request(
         {"method": "describe", "source": source, "offset": source.index("wait")}
     )["result"]
-    assert "all preceding work in this scope" in hover["markdown"]
+    assert "directly induced work in the current scope" in hover["markdown"]
     for suffix in ("wait", "wait all", "wait all of", "wait all timeout"):
         checked = flow.request(
             {"method": "check", "source": "flow main { " + suffix}

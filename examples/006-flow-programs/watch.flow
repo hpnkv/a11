@@ -13,7 +13,7 @@
 # limitations under the License.
 
 # a11-flow-run watch.flow -- some.log
-from std import default, strformat
+from std import strformat
 
 flow {
   describe "Report a file's size once a second for ten seconds."
@@ -26,7 +26,7 @@ flow {
     file = run stat_path(path: path)
     info = take file.info
     strformat("%d  %s  %d bytes\n",
-      tick.number, info.modified, default(info.size, 0)) -> report
+      tick.number, info.modified, info.size or 0) -> report
   }
 
   run write_stdout(content: report)

@@ -76,6 +76,11 @@ class HostObject {
   [[nodiscard]] virtual Value Field(std::string_view name) const = 0;
   /// `value[key]`.
   [[nodiscard]] virtual Value Element(const Value& key) const = 0;
+  /// A field or element with its presence retained, including a null value.
+  [[nodiscard]] virtual std::optional<Value> FindField(
+      std::string_view name) const;
+  [[nodiscard]] virtual std::optional<Value> FindElement(
+      const Value& key) const;
   /// Whether this is the same value as `other`, by the host's own equality.
   [[nodiscard]] virtual bool Equals(const HostObject& other) const = 0;
 };
@@ -94,6 +99,8 @@ class NodeReferenceObject final : public HostObject {
   [[nodiscard]] std::optional<size_t> Size() const override;
   [[nodiscard]] Value Field(std::string_view name) const override;
   [[nodiscard]] Value Element(const Value& key) const override;
+  [[nodiscard]] std::optional<Value> FindField(
+      std::string_view name) const override;
   [[nodiscard]] bool Equals(const HostObject& other) const override;
 
  private:
@@ -114,6 +121,8 @@ class NodeFragmentObject final : public HostObject {
   [[nodiscard]] std::optional<size_t> Size() const override;
   [[nodiscard]] Value Field(std::string_view name) const override;
   [[nodiscard]] Value Element(const Value& key) const override;
+  [[nodiscard]] std::optional<Value> FindField(
+      std::string_view name) const override;
   [[nodiscard]] bool Equals(const HostObject& other) const override;
 
  private:
@@ -353,6 +362,7 @@ std::unique_ptr<HostBridge> NativeHostBridge();
 /// did not send should be able to say `if not thing.field` rather than fall
 /// over.
 Value Lookup(const Value& value, const Value& key);
+std::optional<Value> LookupOptional(const Value& value, const Value& key);
 absl::StatusOr<Value> LookupChecked(const Value& value, const Value& key);
 
 /// Whether `value` counts as true, as an `if` and a `where` decide it.
@@ -501,6 +511,7 @@ struct EvalContext {
   std::function<absl::StatusOr<std::optional<Value>>(const syntax::Node&)>
       lookup;
   std::function<absl::StatusOr<Value>(const syntax::Builtin&)> reference;
+  std::function<bool(const syntax::Node&)> is_option;
   const absl::flat_hash_map<const syntax::Node*, Value>* absl_nullable bound =
       nullptr;
   /// The value a `where`/`map`/`group` stage is looking at.
@@ -566,6 +577,9 @@ absl::StatusOr<Value> CallBuiltin(
 /// flow can branch on it, put it on an output, or raise it again, without any
 /// of the language knowing what a status is.
 Value StatusRecord(const absl::Status& status);
+
+/// A tolerated stage failure, with the original item and zero-based position.
+Value FailureRecord(const absl::Status& status, Value item, std::int64_t seq);
 
 /// The status a record like the one above describes.
 absl::Status StatusOfRecord(const Value& record);

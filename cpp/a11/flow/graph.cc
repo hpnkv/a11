@@ -242,8 +242,8 @@ std::vector<RefId> FlowGraph::Destinations(StepId step) const {
 std::vector<RefId> FlowGraph::StageDestinations(StepId step) const {
   std::vector<RefId> found;
   // Every ref the step reads, and everything those read, since a stage may be
-  // several deep: `items | try map f into bad | where it.ok`. The chain is
-  // finite and built bottom-up, so walking it needs no cycle guard.
+  // several deep: `items | try map f(it) failures into bad | where it.ok`.
+  // Built bottom-up, the chain is finite and needs no cycle guard.
   std::vector<RefId> pending = Sources(step);
   for (const RefId ref : ValueSources(step)) {
     pending.push_back(ref);
@@ -536,7 +536,7 @@ Analysis Analyse(const FlowGraph& flow, BodyId body) {
       }
       count_writer(ref);
     }
-    // A `try ... into failures` writes from inside a stream this step reads, so
+    // A `try ... failures into bad` writes inside a stream this step reads, so
     // the stream's failures hold that node open exactly as the step's own
     // destination does.
     for (const RefId ref : flow.StageDestinations(step)) {

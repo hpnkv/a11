@@ -14,25 +14,23 @@
 
 flow {
   describe "Ask a model the question given on the command line."
-
   out exit_code: int "0 when the model answered, 1 when it did not."
 
   string question = take (argv | drop 1)
   secret = run env_get(names: "ANTHROPIC_API_KEY")
   credentials = take secret.values
-  string api_key = std::default(credentials.ANTHROPIC_API_KEY, "")
-
+  string api_key = credentials.ANTHROPIC_API_KEY or ""
   llm = run interact_with_llm(
     interactions: a11::sdk::Interaction{
       role: "user",
-      content: [std::to_chunk({role: "user", content: [{type: "text", text:
-        question}]})]
+      content: [
+        std::to_chunk({role: "user", content: [{type: "text", text: question}]})
+      ]
     },
     config: {}
   )
       with "x-a11-llm-provider": "claude", "x-a11-llm-model":
     "claude-sonnet-4-5", "x-a11-llm-api-key": api_key
-
   run write_stdout(content: llm.text_output)
   int pieces = take (llm.text_output | count)
   if pieces > 0 {

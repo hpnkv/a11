@@ -13,7 +13,7 @@
 # limitations under the License.
 
 # a11-flow-run --root /var/log poll.flow -- /var/log/system.log
-from std import default, strformat
+from std import strformat
 
 flow {
   describe "Report file sizes until two readings agree, with at most 20 readings."
@@ -31,7 +31,7 @@ flow {
   readings = for tick in clock.ticks {
     file = run stat_path(path: path)
     info = take file.info
-    int size = default(info.size, 0)
+    int size = info.size or 0
     strformat("%d: %d bytes\n", tick.number, size) -> report
     settled = size == previous_size
     previous_size = size

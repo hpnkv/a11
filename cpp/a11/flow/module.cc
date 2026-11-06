@@ -1078,7 +1078,11 @@ LinkedModule LinkModules(std::string source, std::string identity,
           const auto binding = Lookup(units, index, env, function->name);
           if (!binding.has_value() || binding->unit != kBuiltin) {
             Problem(unit, "flow.form.unknown-builtin",
-                    "Qualify this standard function with 'std::' or import it.",
+                    function->name.starts_with("std::")
+                        ? absl::StrCat("Unknown standard function '",
+                                       function->name, "'.")
+                        : "Qualify this standard function with 'std::' or "
+                          "import it.",
                     function->location);
           } else {
             function->name = binding->member.substr(5);

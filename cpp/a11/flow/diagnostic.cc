@@ -53,7 +53,7 @@ constexpr std::array kCodes = {
     CodeInfo{"flow.barrier.expression-cycle", Family::kBarrier,
              Severity::kError, "Expression cycle."},
     CodeInfo{"flow.barrier.scope-cycle", Family::kBarrier, Severity::kError,
-             "A preceding producer needs a consumer after a scope barrier."},
+             "A stream dependency can block a scope barrier."},
     CodeInfo{"flow.barrier.unordered-clock", Family::kBarrier,
              Severity::kWarning,
              "A clock read and a flow-produced value have no defined order; "
@@ -310,6 +310,9 @@ constexpr std::array kCodes = {
              "A node map has no placements."},
     CodeInfo{"flow.unused.output-port", Family::kUnused, Severity::kWarning,
              "An 'out' port has no writes and produces no values."},
+    CodeInfo{"flow.unused.pipeline-call", Family::kUnused,
+             Severity::kWarning,
+             "An unread pipeline does not start its run/call invocations."},
     CodeInfo{"flow.unused.struct", Family::kUnused, Severity::kWeakWarning,
              "A struct has no references from ports, casts, or other structs."},
     CodeInfo{"flow.unused.try-pipe", Family::kUnused, Severity::kWeakWarning,

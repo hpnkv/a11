@@ -162,7 +162,9 @@ class Classifier {
     switch (At(index_ + 1).kind) {
       case TokenKind::kScope:
       case TokenKind::kDot:
+      case TokenKind::kQuestionDot:
       case TokenKind::kLeftBracket:
+      case TokenKind::kQuestionBracket:
       case TokenKind::kLeftParen:
         return true;
       default:
@@ -261,10 +263,12 @@ class Classifier {
       case TokenKind::kRightParen:
         return SemanticKind::kParenthesis;
       case TokenKind::kLeftBracket:
+      case TokenKind::kQuestionBracket:
       case TokenKind::kRightBracket:
         return SemanticKind::kBracket;
       case TokenKind::kScope:
       case TokenKind::kDot:
+      case TokenKind::kQuestionDot:
       case TokenKind::kColon:
       case TokenKind::kComma:
         return SemanticKind::kPunctuation;
@@ -332,9 +336,8 @@ class Classifier {
         // whatever else it might mean elsewhere.
         return SemanticKind::kIdentifier;
       case State::kAfterCast:
-        if (word == "into" && index_ > 0 &&
-            vocabulary::Canonical(At(index_ - 1).text) != "as" &&
-            At(index_ - 1).kind != TokenKind::kScope) {
+        if (word == "failures" && Next().IsWord() &&
+            vocabulary::Canonical(Next().text) == "into") {
           return SemanticKind::kStatementKeyword;
         }
         return TypeKind(word);
@@ -366,6 +369,18 @@ class Classifier {
     }
 
     if (AssignmentFollows()) {
+      return SemanticKind::kIdentifier;
+    }
+    if (word == "failures" && Next().IsWord() &&
+        vocabulary::Canonical(Next().text) == "into") {
+      return SemanticKind::kStatementKeyword;
+    }
+    if (word == "into" && index_ > 0 &&
+        vocabulary::Canonical(At(index_ - 1).text) == "failures") {
+      return SemanticKind::kStatementKeyword;
+    }
+    if (index_ >= 2 && vocabulary::Canonical(At(index_ - 1).text) == "into" &&
+        vocabulary::Canonical(At(index_ - 2).text) == "failures") {
       return SemanticKind::kIdentifier;
     }
     if (At(index_ + 1).kind == TokenKind::kScope) {
@@ -426,6 +441,9 @@ class Classifier {
     if (vocabulary::OperatorWords().contains(word)) {
       return SemanticKind::kWordOperator;
     }
+    if (word == "failures" || word == "into") {
+      return SemanticKind::kIdentifier;
+    }
     if (vocabulary::DeclarationWords().contains(word)) {
       return SemanticKind::kDeclarationKeyword;
     }
@@ -463,7 +481,8 @@ class Classifier {
 
   void Advance(const Token& token, SemanticKind produced) {
     const bool was_after_dot = after_dot_;
-    after_dot_ = token.kind == TokenKind::kDot;
+    after_dot_ = token.kind == TokenKind::kDot ||
+                 token.kind == TokenKind::kQuestionDot;
     if (token.kind == TokenKind::kComment) {
       // A comment interrupts nothing.
       after_dot_ = was_after_dot;
@@ -567,7 +586,7 @@ class Classifier {
       return;
     }
     if (state_ == State::kAfterCast) {
-      if (word == "into" && produced == SemanticKind::kStatementKeyword) {
+      if (word == "failures" && produced == SemanticKind::kStatementKeyword) {
         state_ = State::kDefault;
       }
       return;

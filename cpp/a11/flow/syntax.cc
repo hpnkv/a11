@@ -740,6 +740,9 @@ void VisitSubtree(const Node& node,
 std::optional<std::string> DottedName(const Node* node) {
   std::vector<std::string> parts;
   while (const Attr* attr = As<Attr>(node)) {
+    if (attr->optional) {
+      return std::nullopt;
+    }
     parts.push_back(attr->name);
     node = attr->base.get();
   }

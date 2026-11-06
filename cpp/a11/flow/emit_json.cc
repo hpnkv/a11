@@ -214,12 +214,18 @@ nlohmann::json NodeJson(const syntax::Node* node) {
       const auto* attr = syntax::As<syntax::Attr>(node);
       value["base"] = NodeJson(attr->base.get());
       value["name"] = attr->name;
+      if (attr->optional) {
+        value["optional"] = true;
+      }
       break;
     }
     case syntax::NodeKind::kIndex: {
       const auto* index = syntax::As<syntax::Index>(node);
       value["base"] = NodeJson(index->base.get());
       value["index"] = NodeJson(index->index.get());
+      if (index->optional) {
+        value["optional"] = true;
+      }
       break;
     }
     case syntax::NodeKind::kBuiltin: {

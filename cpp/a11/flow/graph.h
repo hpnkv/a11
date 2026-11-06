@@ -150,10 +150,9 @@ struct Stage {
   syntax::Constant start;
   std::string carried;
   RefId carry = kNone;
-  /// `try`: a value this stage cannot do is dropped rather than ending the
-  /// pipeline.
+  /// `try`: tolerate an item's evaluation failure; context may retain it.
   bool tolerant = false;
-  /// `try ... into ref`: where a tolerated failure goes, as a status record.
+  /// `try ... failures into ref`: where a tolerated failure goes.
   RefId failures = kNone;
   /// `parallel n`: how many values this stage may work on at once.
   int parallel = 1;
@@ -208,6 +207,8 @@ struct Ref {
   std::string name;
   /// `kFlowPort`, `kCallPort`: which side it is on.
   syntax::PortDirection direction = syntax::PortDirection::kInput;
+  /// `kFlowPort`, `kCallPort`: write canonical status chunks here.
+  bool status_port = false;
   /// `kCallPort`: the call it belongs to.
   StepId call = kNone;
   /// `kNode`: the id expression it attaches to, and the map it lands in.
@@ -476,7 +477,7 @@ struct FlowGraph {
   [[nodiscard]] std::vector<RefId> ValueSources(StepId step) const;
   /// The refs a step writes, one entry per independent writer.
   [[nodiscard]] std::vector<RefId> Destinations(StepId step) const;
-  /// The refs the *stages* a step reads write to: a `try ... into failures`.
+  /// The refs the *stages* a step reads write to: `try ... failures into bad`.
   ///
   /// A stage is part of a stream rather than of a statement, so its destination
   /// is reached through the refs the step reads rather than off the step

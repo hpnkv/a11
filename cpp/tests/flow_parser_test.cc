@@ -38,6 +38,29 @@ namespace {
 using syntax::As;
 using syntax::NodeKind;
 
+TEST(FlowParser, OptionalProjectionKeepsItsOperatorAndStage) {
+  const ParseResult parsed = Parse(R"(
+flow f {
+  out output: std::any stream
+  item = ({title: 1})?.title
+  item?["value"] | present -> output
+}
+)");
+  ASSERT_TRUE(parsed.diagnostics.empty());
+  const auto* bind = As<syntax::Bind>(parsed.flows.front()->body[0].get());
+  ASSERT_NE(bind, nullptr);
+  const auto* attr = As<syntax::Attr>(bind->value.get());
+  ASSERT_NE(attr, nullptr);
+  EXPECT_TRUE(attr->optional);
+  const auto* pipe = As<syntax::Pipe>(parsed.flows.front()->body[1].get());
+  ASSERT_NE(pipe, nullptr);
+  const auto* index = As<syntax::Index>(pipe->pipeline->source.get());
+  ASSERT_NE(index, nullptr);
+  EXPECT_TRUE(index->optional);
+  ASSERT_EQ(pipe->pipeline->stages.size(), 1u);
+  EXPECT_EQ(pipe->pipeline->stages[0]->name, "present");
+}
+
 std::vector<std::string> Codes(const ParseResult& result) {
   std::vector<std::string> codes;
   codes.reserve(result.diagnostics.size());
@@ -378,6 +401,36 @@ TEST(FlowParser, ANoteAboutTheOnlyPlaceAWordMeansTwoThings) {
   EXPECT_EQ(keyword.flows[0]->body[0]->kind, NodeKind::kPipe);
 }
 
+TEST(FlowParser, FailuresIntoAcceptsANameAlsoUsedAsAnArgument) {
+  const ParseResult result = Parse(R"(
+flow f {
+  in input: int stream
+  out good: int stream
+  out total: int
+  failures = node()
+  input | try map it failures
+    into failures -> good
+  input | sum failures -> total
+}
+)");
+  ASSERT_TRUE(result.diagnostics.empty())
+      << absl::StrJoin(Messages(result), "; ");
+  const auto* routed = As<syntax::Pipe>(result.flows[0]->body[1].get());
+  ASSERT_NE(routed, nullptr);
+  ASSERT_EQ(routed->pipeline->stages.size(), 1u);
+  const auto* target =
+      As<syntax::Name>(routed->pipeline->stages[0]->failures.get());
+  ASSERT_NE(target, nullptr);
+  EXPECT_EQ(target->name, "failures");
+  const auto* summed = As<syntax::Pipe>(result.flows[0]->body[2].get());
+  ASSERT_NE(summed, nullptr);
+  ASSERT_EQ(summed->pipeline->stages.size(), 1u);
+  const auto* argument =
+      As<syntax::Name>(summed->pipeline->stages[0]->argument.get());
+  ASSERT_NE(argument, nullptr);
+  EXPECT_EQ(argument->name, "failures");
+}
+
 TEST(FlowParser, ADescriptionMayStandOnTheLineBelowWhatItDescribes) {
   // Prose that says anything runs past the width of the declaration it belongs
   // to, so it may go underneath it -- at any indentation, or none.
@@ -434,6 +487,28 @@ TEST(FlowParser, TryFrontsThreeDifferentThingsToldApartByWhatFollows) {
     EXPECT_EQ(result.flows.front()->body.front()->kind, one.kind)
         << one.body << " read as "
         << syntax::NodeKindName(result.flows.front()->body.front()->kind);
+  }
+}
+
+TEST(FlowParser, ACallStartsAPipelineOnlyWhenFollowedByPipeOrArrow) {
+  const ParseResult parsed = Parse(R"(
+flow main {
+  out output: string stream
+  run echo()
+  run echo() -> output
+  run echo() | map it -> output
+}
+)");
+  ASSERT_TRUE(parsed.diagnostics.empty()) << absl::StrJoin(Messages(parsed), "; ");
+  ASSERT_EQ(parsed.flows.size(), 1u);
+  const auto& body = parsed.flows.front()->body;
+  ASSERT_EQ(body.size(), 3u);
+  EXPECT_NE(syntax::As<syntax::CallStatement>(body[0].get()), nullptr);
+  for (size_t i : {1u, 2u}) {
+    const auto* pipe = syntax::As<syntax::Pipe>(body[i].get());
+    ASSERT_NE(pipe, nullptr);
+    EXPECT_NE(syntax::As<syntax::CallExpression>(
+                  pipe->pipeline->source.get()), nullptr);
   }
 }
 
@@ -630,7 +705,7 @@ TEST(FlowParser, SaysWhatIsMissingInTheWordsThePythonCompilerUses) {
        " w | map it unordered -> o }",
        "flow.form.unordered-without-parallel", "needs 'parallel n'"},
       {"flow f { in w: string stream\n out o: string stream\n out b: std::json "
-       "stream\n w | map it into b -> o }",
+       "stream\n w | map it failures into b -> o }",
        "flow.form.into-without-try", "has to be a 'try'"},
       {"flow f { in w: number stream\n out o: number\n"
        " w | fold it as total, total + it -> o }",
@@ -727,6 +802,43 @@ TEST(FlowParser, TheFirstErrorIsWhatAStrictCallerRefusesWith) {
   EXPECT_EQ(first->range.start.line, 2);
   EXPECT_EQ(first->range.start.column, 6);
   EXPECT_EQ(first->flow, "f");
+}
+
+TEST(FlowParser, CallArgumentsMayUseSameNamedSources) {
+  const ParseResult parsed = Parse(
+      "flow f { in i1: int\n in i2: int\n"
+      "  result = run target(i2, i1: i1)\n }");
+  ASSERT_FALSE(parsed.HasErrors()) << absl::StrJoin(Messages(parsed), "\n");
+  const auto* bind = As<syntax::Bind>(parsed.flows[0]->body[0].get());
+  ASSERT_NE(bind, nullptr);
+  const auto* call = As<syntax::CallExpression>(bind->value.get());
+  ASSERT_NE(call, nullptr);
+  ASSERT_EQ(call->args.size(), 2u);
+  EXPECT_EQ(call->args[0].port.text, "i2");
+  const auto* source = As<syntax::Name>(call->args[0].pipeline->source.get());
+  ASSERT_NE(source, nullptr);
+  EXPECT_EQ(source->name, "i2");
+  EXPECT_EQ(source->location.start, call->args[0].port.location.start);
+  EXPECT_EQ(call->args[1].port.text, "i1");
+}
+
+TEST(FlowParser, CallShorthandRequiresASourceName) {
+  for (const std::string_view word : {"true", "false", "null", "_"}) {
+    const ParseResult parsed =
+        Parse(absl::StrCat("flow f { run target(", word, ") }"));
+    EXPECT_TRUE(parsed.HasErrors()) << word;
+    EXPECT_EQ(Codes(parsed),
+              (std::vector<std::string>{"flow.syntax.unexpected"}))
+        << word;
+  }
+  const ParseResult implicit = Parse("flow f { x = run target(it) }");
+  ASSERT_FALSE(implicit.HasErrors());
+  const auto* bind = As<syntax::Bind>(implicit.flows[0]->body[0].get());
+  ASSERT_NE(bind, nullptr);
+  const auto* call = As<syntax::CallExpression>(bind->value.get());
+  ASSERT_NE(call, nullptr);
+  ASSERT_EQ(call->args.size(), 1u);
+  EXPECT_NE(As<syntax::It>(call->args[0].pipeline->source.get()), nullptr);
 }
 
 TEST(FlowParser, ALexProblemIsReportedAndParsingCarriesOn) {

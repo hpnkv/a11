@@ -54,7 +54,8 @@ namespace {
 
 absl::Status HostInvokeCallback(const std::string& callback_id,
                                 const std::string& payload,
-                                bool session_callback) {
+                                bool session_callback,
+                                const std::string& flow_id = "") {
   constexpr int kPending = 0;
   constexpr int kCompleted = 1;
   constexpr size_t kMessageCapacity = 16 * 1024;
@@ -96,11 +97,11 @@ absl::Status HostInvokeCallback(const std::string& callback_id,
     Promise.resolve().then(() => ($9
       ? globalThis.__a11WasmInvokeSession
       : globalThis.__a11WasmInvokeAction)(
-      UTF8ToString($0), UTF8ToString($1))).then(complete,
+      UTF8ToString($0), UTF8ToString($1), UTF8ToString($10))).then(complete,
       error => complete({code: $6, message: String(error?.message ?? error)}));
   }, callback_id.c_str(), payload.c_str(), &done, &code,
      message.data(), message.size(), kInternalCode, kCompleted,
-     kResourceExhaustedCode, session_callback);
+     kResourceExhaustedCode, session_callback, flow_id.c_str());
   while (done.load(std::memory_order_acquire) == kPending) {
     thread::SleepFor(kCompletionPollInterval);
   }
@@ -119,8 +120,9 @@ absl::Status HostInvokeCallback(const std::string& callback_id,
 }
 
 absl::Status HostInvokeAction(const std::string& action_id,
-                              const std::string& action_name) {
-  return HostInvokeCallback(action_id, action_name, false);
+                              const std::string& action_name,
+                              const std::string& flow_id) {
+  return HostInvokeCallback(action_id, action_name, false, flow_id);
 }
 
 class FlowMapGuard {
@@ -160,14 +162,15 @@ class FlowMapGuard {
 absl::Status RegisterHostActionImpl(
     a11::actions::ActionRegistry& registry,
     a11::actions::ActionSchema schema,
-    const std::shared_ptr<a11::wasm::NativeGraph>& graph) {
+    const std::shared_ptr<a11::wasm::NativeGraph>& graph,
+    std::string flow_id = "") {
   const std::string name = schema.name;
   const auto inputs = schema.inputs;
   const auto outputs = schema.outputs;
-  auto handler = [graph, name, inputs,
-                  outputs](std::shared_ptr<a11::actions::Action> called) {
+  auto handler = [graph, name, inputs, outputs, flow_id](
+                     std::shared_ptr<a11::actions::Action> called) {
     return a11::SubmitTask(
-        [graph, name, inputs, outputs,
+        [graph, name, inputs, outputs, flow_id,
          called = std::move(called)]() -> absl::Status {
           for (const auto& [port, unused] : inputs) {
             ABSL_RETURN_IF_ERROR(called->GetInput(port, false).status());
@@ -193,7 +196,7 @@ absl::Status RegisterHostActionImpl(
                 }, id.c_str());
                 return absl::OkStatus();
               }));
-          const absl::Status status = HostInvokeAction(id, name);
+          const absl::Status status = HostInvokeAction(id, name, flow_id);
           if (inserted) {
             thread::MutexLock lock(&graph->mu);
             graph->actions.erase(id);
@@ -240,8 +243,15 @@ absl::StatusOr<nlohmann::json> Run(
                         Limit(request, "maxOutputBytes", 32 * 1024 * 1024));
   bool stream_outputs = false;
   std::string stream_id;
+  std::string host_flow_id;
   bool retain_nodes = false;
   std::string run_id;
+  if (const auto id = request.find("hostFlowId"); id != request.end()) {
+    if (!id->is_string()) {
+      return absl::InvalidArgumentError("hostFlowId must be a string");
+    }
+    host_flow_id = id->get<std::string>();
+  }
   if (auto enabled = request.find("streamOutputs");
       enabled != request.end()) {
     if (!enabled->is_boolean()) {
@@ -307,7 +317,7 @@ absl::StatusOr<nlohmann::json> Run(
       ABSL_ASSIGN_OR_RETURN(auto http_schema,
                             a11::wasm::SchemaFromCatalogue(name));
       ABSL_RETURN_IF_ERROR(RegisterHostActionImpl(
-          *registry, std::move(http_schema), state->graph));
+          *registry, std::move(http_schema), state->graph, host_flow_id));
     }
   }
   if (auto host_actions = request.find("hostActions");
@@ -319,7 +329,7 @@ absl::StatusOr<nlohmann::json> Run(
       ABSL_ASSIGN_OR_RETURN(auto host_schema,
                             a11::actions::SchemaFromJson(description));
       ABSL_RETURN_IF_ERROR(RegisterHostActionImpl(
-          *registry, std::move(host_schema), state->graph));
+          *registry, std::move(host_schema), state->graph, host_flow_id));
     }
   }
   ABSL_ASSIGN_OR_RETURN(auto action,

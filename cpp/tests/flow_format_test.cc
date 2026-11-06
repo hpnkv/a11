@@ -138,6 +138,21 @@ std::string ReadFile(const std::filesystem::path& path) {
   return buffer.str();
 }
 
+TEST(FlowFormat, OptionalProjectionPunctuationStaysAttached) {
+  const std::string formatted = Formatted(R"(
+flow f {
+  out output: std::any stream
+  item?.title | present -> output
+  item?["title"] | present -> output
+}
+)");
+  EXPECT_NE(formatted.find("item?.title | present -> output"),
+            std::string::npos);
+  EXPECT_NE(formatted.find("item?[\"title\"] | present -> output"),
+            std::string::npos);
+  EXPECT_EQ(Formatted(formatted), formatted);
+}
+
 TEST(FlowFormat, DynamicParallelCountsPreserveSyntaxAndAreIdempotent) {
   const std::string source = R"(
 flow main {
@@ -360,6 +375,26 @@ TEST(FlowFormat, ABracketedGroupIndentsFromTheLineThatOpenedIt) {
       "a "
       "| map a11::sdk::Interaction{\n      role: \"user\", content: "
       "[std::to_chunk(it)]\n    },\n    config: {}\n  )\n}\n");
+}
+
+TEST(FlowFormat, PipelineStartersPreserveTheirParseTree) {
+  const std::string source = R"(
+flow main {
+ out result: string stream
+ run echo(input) | map it -> result
+ run echo(input) -> result
+}
+)";
+  const std::string formatted = Formatted(source);
+  EXPECT_EQ(Tree(formatted), Tree(source));
+  EXPECT_EQ(Formatted(formatted), formatted);
+}
+
+TEST(FlowFormat, KeepsCallArgumentShorthand) {
+  const std::string formatted = Formatted(
+      "flow f {\n in i1: int\n in i2: int\n"
+      " x = run inner(i2, i1: i1)\n}\n");
+  EXPECT_NE(formatted.find("inner(i2, i1: i1)"), std::string::npos);
 }
 
 TEST(FlowFormat, CompactsShortFoldArguments) {

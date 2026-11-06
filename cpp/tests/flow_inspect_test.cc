@@ -62,6 +62,51 @@ flow main { in candidates: std::list[std::option[Row]]
   }
 }
 
+TEST(FlowInspect, UnreadPipelineCallsFollowAliases) {
+  const std::string source = R"(
+flow echo { in input: string stream
+ out output: string stream
+ input -> output
+}
+flow main {
+ in input: string stream
+ out result: string stream
+ starter = run echo(input: input) | map it
+ starter_alias = starter
+ stage = input | run echo()
+ stage_alias = stage | map it
+ input | run echo() -> result
+}
+)";
+  const auto findings = Findings(source);
+  size_t unread = 0;
+  for (const auto& finding : findings) {
+    if (finding.code == "flow.unused.pipeline-call") {
+      ++unread;
+      EXPECT_NE(finding.message.find("will not start"), std::string::npos);
+    }
+  }
+  EXPECT_EQ(unread, 2u) << Messages(source);
+}
+
+TEST(FlowInspect, ReadPipelineCallsHaveNoUnreadWarning) {
+  const auto findings = Findings(R"(
+flow echo { in input: string stream
+ out output: string stream
+ input -> output
+}
+flow main { in input: string stream
+ out result: string stream
+ first = run echo(input: input) | map it
+ second = first
+ second -> result
+}
+)");
+  for (const auto& finding : findings) {
+    EXPECT_NE(finding.code, "flow.unused.pipeline-call") << finding.message;
+  }
+}
+
 TEST(FlowInspect, SaysWhenNothingUsesSomethingTheFlowDeclared) {
   struct Case {
     std::string_view source;

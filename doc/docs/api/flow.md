@@ -316,7 +316,7 @@ accepted, and signed 64-bit index overflow fails the stage:
 items | context it.failed before 2 after 3 numbered base 0 -> excerpts
 ```
 
-The stage supports `try context ... into failures`: predicate errors become
+The stage supports `try context ... failures into errors`: predicate errors become
 nonmatches, while their items remain available as context. Count, base, index,
 and upstream errors still fail. Evaluation is sequential; `parallel` and
 `unordered` are rejected.
@@ -624,23 +624,25 @@ n = take (wait first of primary, backup)
 
 ### A failure one value at a time
 
-A `try` on a stage drops values that the stage cannot process while allowing the
-stream to continue.
+A `try` on a stage tolerates an item's evaluation failure while the stream
+continues. Transform stages drop the failed item; `context` can retain it as
+surrounding context.
 
 ```a11flow
 docs | try map it as Order -> good
 ```
 
-The value is dropped and the failure logged once at warning. Where the failures
-matter, `into` sends them somewhere:
+The value is dropped and the failure logged once at warning. To handle each
+failure, route it with `failures into`:
 
 ```a11flow
-docs | try map it as Order into rejected -> good
+docs | try map it as Order failures into rejected -> good
 ```
 
-Failures sent through `into` use the same status-record shape as `status x`.
-They can be counted, written to a port, or read by the caller. Without `try`, a
-stage failure ends the flow.
+Routed failures have the status fields (`code`, `message`, and `details`), the
+original item in `it`, and its zero-based stage input position in `seq`. A
+status cast or status port retains the status fields. Without `try`, a stage
+failure ends the flow.
 
 ## Loops, branches, and state
 
@@ -687,8 +689,8 @@ status moved | map it.message -> why
 
 Bind a tried pipe to retain its status. An unbound failed pipe closes its
 destination early without exposing the failure to a reader, so the compiler
-reports it. A tried stage can fail once per value and uses `into` for dropped
-values. A tried pipe fails once and stops.
+reports it. A tried stage can route each tolerated failure with
+`failures into`; a tried pipe fails once and stops.
 
 A `[s =] [try] { ... }` block runs its statements as one step. Statements in a
 flow body run concurrently, while a block groups their outcome. Reading a value

@@ -128,7 +128,11 @@ class Scope {
   absl::StatusOr<Value> StageValue(const graph::Stage& stage,
                                    const ItemPtr& item, HostBridge& host);
   absl::Status Tolerated(const graph::Stage& stage, const ItemPtr& item,
-                         const absl::Status& why, HostBridge& host);
+                         const absl::Status& why, std::int64_t seq,
+                         HostBridge& host);
+  ItemPtr FailureItem(const graph::Stage& stage, const ItemPtr& item,
+                      const absl::Status& why, std::int64_t seq,
+                      HostBridge& host);
   /// One pass of a `fold`: the accumulator bound to its name, `it` to the
   /// value.
   absl::StatusOr<Value> EvaluateFold(const graph::Stage& stage,
@@ -237,6 +241,8 @@ class Runner {
   const FlowGraph& graph() const { return flow_->graph; }
 
   const FlowPlan& plan() const { return flow_->plan; }
+
+  const ResolvedFlow& resolved_flow() const { return *flow_; }
 
   const SingleItemAnalysis* absl_nullable SingleItems() const {
     return program_->SingleItems(graph().name);

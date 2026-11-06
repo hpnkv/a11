@@ -231,7 +231,6 @@ class Bus {
 
   absl::Status CompletePump(absl::Status status);
 
-  absl::Status WaitFinished();
 
   bool Skip();
 

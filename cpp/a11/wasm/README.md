@@ -106,8 +106,10 @@ node cpp/a11/wasm/package.mjs
 
 `package.mjs` includes `native.mjs` when the native module exists in
 `build/threaded`. That loader creates one Web Worker for native Flow execution;
-the worker pins A11 Thread scheduling to one OS worker. Browser hosts serve the
-package from the same origin with COOP/COEP. Node uses `worker_threads`.
+the worker runs concurrent Flow tasks on A11 fibers pinned to one OS worker.
+Each run keeps its own cancellation signal and host-action deadline. Browser
+hosts serve the package from the same origin with COOP/COEP. Node uses
+`worker_threads`.
 Native Flow inputs and outputs are chunk JSON values. `runFlow` returns the
 collected outputs, and its `onOutput(port, chunk)` option reports each chunk
 while the Flow runs. Register a host action before running Flow to let native

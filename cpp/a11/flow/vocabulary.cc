@@ -38,6 +38,7 @@ constexpr std::array kStageOrder = {
     std::string_view("drop"),       std::string_view("truncate"),
     std::string_view("batch"),      std::string_view("window"),
     std::string_view("context"),    std::string_view("flatten"),
+    std::string_view("present"),
     std::string_view("group"),      std::string_view("sort"),
     std::string_view("where"),      std::string_view("map"),
     std::string_view("scan"),       std::string_view("match"),
@@ -84,6 +85,7 @@ const absl::flat_hash_map<std::string_view, StageArgument>& StageTable() {
           {"count", StageArgument::kNone},
           {"distinct", StageArgument::kNone},
           {"flatten", StageArgument::kNone},
+          {"present", StageArgument::kNone},
           {"sum", StageArgument::kOptionalExpression},
           {"min", StageArgument::kOptionalExpression},
           {"max", StageArgument::kOptionalExpression},
@@ -278,6 +280,11 @@ flow expensive-orders {
   [{id: "A", price: 25}, {id: "B", price: 5}]
     | flatten | where it.price >= 20 | map it.id -> ids
 })"}},
+      {"present",
+       {"Emit the payload of each present option.", "",
+        "Absent options contribute no item. Present null, false, zero and "
+        "empty values are retained. Each input must be an option.",
+        "records | map it?.title | present -> titles"}},
       {"map",
        {"Transform each value with an expression.",
         "an expression, with `it` bound to the value in hand",
@@ -590,7 +597,7 @@ const absl::flat_hash_map<std::string_view, WordDoc>& BuiltinDocs() {
 flow parsed-header {
   out retries: int
   header = {retries: "3"}
-  std::integer(std::get(header, "retries", "0")) -> retries
+  std::integer(header.retries or "0") -> retries
 })"}},
       {"int",
        {"Convert a value to an integer.", "one value",
@@ -721,20 +728,6 @@ flow names-of-fields {
        {"The values of a record, in the order their keys sort.", "one value",
         "Lists pass through unchanged. Record values follow sorted key order.",
         "std::values(scores) | collect -> all"}},
-      {"get",
-       {"Read a field or indexed item with a fallback.",
-        "the value, the key, and what to use instead",
-        "Record keys are strings; list indices are integers and may count "
-        "backward from the end. Missing or null results use the fallback. "
-        "`default` also substitutes empty strings, lists and records.",
-        R"(std::get(page.meta, "title", "untitled") -> title
-
-Treat an empty title as absent after reading optional metadata.
-flow fallback-title {
-  out title: string
-  metadata = {title: ""}
-  std::default(std::get(metadata, "title", ""), "Untitled") -> title
-})"}},
       {"join",
        {"Join list elements into one string.", "the list, and a separator",
         "Renders each element as text. A non-list value is rendered as one "
@@ -762,7 +755,7 @@ flow csv-first-field {
       {"merge",
        {"Merge records.", "two or more records",
         "Later arguments overwrite duplicate keys. Non-record arguments are "
-        "ignored, including null. Use `get` to read an optional field from "
+        "ignored, including null. Use `?.` to read an optional field from "
         "the resulting record.",
         "std::merge(defaults, page.meta) -> settings\n\n"
         R"(Overlay request options on defaults before reading the endpoint.
@@ -771,7 +764,7 @@ flow sanitized-options {
   defaults = {endpoint: "https://api.example", timeout: "5s"}
   overrides = {timeout: "2s"}
   options = std::merge(defaults, overrides)
-  std::get(options, "endpoint", "") -> endpoint
+  options.endpoint or "" -> endpoint
 })"}},
       {"contains",
        {"Test whether a value contains a member.", "a container and a member",
@@ -821,19 +814,6 @@ flow title-previews {
   out previews: string stream
   ["Distributed systems", "Observability"] | flatten
     | map std::slice(it, 0, 11) -> previews
-})"}},
-      {"default",
-       {"Substitute a value when the first is empty.",
-        "the value, and what to use instead",
-        "Null and empty strings, lists and records use the substitute. Zero "
-        "and false remain unchanged. `get` only substitutes a missing or null "
-        "field; compose them when an empty field also needs a fallback.",
-        "std::default(header.locale, \"en\") -> locale\n\n"
-        R"(Treat an empty title as absent after reading optional metadata.
-flow fallback-title {
-  out title: string
-  metadata = {title: ""}
-  std::default(std::get(metadata, "title", ""), "Untitled") -> title
 })"}},
       {"to_chunk",
        {"Encode a value as a chunk with a media type.",
@@ -1007,14 +987,16 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StatementDocs() {
         "Requires a local handler or a flow declared in the same file. The "
         "step's nodes stay local. A bound step exposes outputs through "
         "`step.port` and its outcome through `status step`. Pipeline form "
-        "requires one unbound input and one output.",
+        "requires one unbound input and one output. A bare argument `x` "
+        "feeds port `x` from source `x`.",
         "search = run web-search(query: question, limit: 3)"}},
       {"call",
        {"Dispatches an action to the connected peer.",
         "an action, its arguments in parentheses, and any modifiers",
         "The peer resolves the action. Its nodes cross the transport unless a "
         "`nodes` block or `via` places them locally. Pipeline form requires a "
-        "known interface with one unbound input and one output.",
+        "known interface with one unbound input and one output. A bare "
+        "argument `x` feeds port `x` from source `x`.",
         "said = call text-upper(text: words)"}},
       {"try",
        {"Contains a step or block failure.", "a `run`, a `call`, or a block",
@@ -1058,16 +1040,18 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StatementDocs() {
         "two or more calls, nodes, or node-backed ports",
         "Only the listed subjects are awaited; unrelated work continues. "
         "There is no winner index or result binding. Use `wait all` to "
-        "separate all work in the current scope into phases.",
+        "separate directly induced work in the current scope into phases.",
         "search = call web-search(query: q)\n"
         "model = call ask-model(question: q)\n"
         "wait all of search, model"}},
       {"wait all",
-       {"Wait for all preceding work in the current scope.", "no arguments",
+       {"Wait for directly induced work in the current scope.",
+        "no arguments",
         "Following statements activate after the preceding phase completes. "
-        "A producer whose stream is read in a later phase can form a cycle; "
-        "keep producers and their consumers in the same phase. This form "
-        "accepts no timeout, deadline, `after`, or result binding.",
+        "A stream may first be read in either phase, but independent readers "
+        "of that stream must stay in one phase. Successive `take` reads "
+        "share a cursor and may cross phases. This form accepts no timeout, "
+        "deadline, `after`, or result binding.",
         "items | count -> total\n"
         "wait all\n"
         "log info \"counted %s items\" total"}},
@@ -1301,11 +1285,13 @@ const absl::flat_hash_map<std::string_view, WordDoc>& ClauseDocs() {
        {"Sort in descending order.", "",
         "Uses the same ordering as `>`. Ascending is the default.",
         "hits | sort by it.score desc -> ranked"}},
-      {"into",
-       {"Send `try` stage failures to a destination.", "a node or output port",
-        "Each failure is emitted as a status record. Without `into`, "
-        "failures are logged at warning level and the input value is dropped.",
-        "docs | try map parse(it) into bad -> good"}},
+      {"failures into",
+       {"Send tolerated stage failures to a destination.",
+        "a node or output port",
+        "Each failure has status fields, the original item in `it`, and its "
+        "zero-based stage input position in `seq`. Without this clause, "
+        "failures are logged at warning level.",
+        "docs | try map parse(it) failures into bad -> good"}},
       {"max",
        {"Limit the number of `repeat` passes.", "a count",
         "A `repeat` requires `max`, `until`, or `while`. If both a count and "
@@ -1539,7 +1525,8 @@ const absl::flat_hash_map<std::string_view, WordDoc>& ConstantDocs() {
       {"false",
        {"Boolean false literal.", "",
         "Other values can also test false, including zero and empty "
-        "collections. `default()` retains false because it is present.",
+        "collections. Use an option value with `or` to distinguish a missing "
+        "field from a present false value.",
         "reuse_connection: bool default false"}},
       {"null",
        {"Null literal.", "",
@@ -1871,7 +1858,8 @@ const absl::flat_hash_map<std::string_view, WordDoc>& SymbolDocs() {
        {"Opens a block, a record, or a value of a named type.", "",
         "After `flow`, `if`, `for`, or `nodes`, opens a statement block. In "
         "an expression, opens a record. `Type{field: value}` constructs a "
-        "typed value.",
+        "typed value. An absent option omits a record field; a present "
+        "option contributes its payload.",
         "a11::sdk::Interaction{role: \"user\", content: [..]}"}},
       {"}",
        {"Closes a block, a record, or a value of a named type.", "",
@@ -1996,7 +1984,6 @@ constexpr std::array kBuiltinOrder = {
     std::string_view("bool"),
     std::string_view("keys"),
     std::string_view("values"),
-    std::string_view("get"),
     std::string_view("join"),
     std::string_view("split"),
     std::string_view("merge"),
@@ -2006,7 +1993,6 @@ constexpr std::array kBuiltinOrder = {
     std::string_view("replace"),
     std::string_view("match"),
     std::string_view("slice"),
-    std::string_view("default"),
     std::string_view("to_chunk"),
     std::string_view("from_chunk"),
     std::string_view("strformat"),
@@ -2054,12 +2040,18 @@ constexpr std::array kStatementOrder = {
 // runs and `unordered` gives up the order a parallel stage otherwise keeps;
 // `of` joins the subjects of `wait first of` and `wait all of`.
 constexpr std::array kClauseOrder = {
-    std::string_view("else"),      std::string_view("parallel"),
-    std::string_view("unordered"), std::string_view("max"),
-    std::string_view("of"),        std::string_view("by"),
-    std::string_view("before"),    std::string_view("desc"),
-    std::string_view("into"),      std::string_view("until"),
-    std::string_view("while"),     std::string_view("numbered"),
+    std::string_view("else"),
+    std::string_view("parallel"),
+    std::string_view("unordered"),
+    std::string_view("max"),
+    std::string_view("of"),
+    std::string_view("by"),
+    std::string_view("before"),
+    std::string_view("desc"),
+    std::string_view("failures into"),
+    std::string_view("until"),
+    std::string_view("while"),
+    std::string_view("numbered"),
     std::string_view("base"),
 };
 

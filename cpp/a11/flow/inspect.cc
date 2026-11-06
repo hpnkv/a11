@@ -87,6 +87,7 @@ class Inspector {
       flow_ = flow.plan.name;
       current_ = &flow;
       Unused(flow);
+      UnreadPipelines(flow);
       Statements(flow.declaration->body);
       Barriers(flow.plan.steps);
       LentNodes(flow);
@@ -283,6 +284,95 @@ class Inspector {
           break;
         default:
           break;
+      }
+    }
+  }
+
+  void UnreadPipelines(const ResolvedFlow& flow) {
+    absl::flat_hash_map<size_t, size_t> bindings;
+    for (size_t i = 0; i < flow.symbols.size(); ++i) {
+      bindings.emplace(flow.symbols[i].location.start, i);
+    }
+    absl::flat_hash_map<size_t, absl::flat_hash_set<size_t>> dependencies;
+    absl::flat_hash_set<const Node*> deferred_names;
+    std::vector<std::pair<size_t, syntax::Location>> candidates;
+    syntax::VisitSubtree(*flow.declaration, [&](const Node& node) {
+      const auto* bind = syntax::As<syntax::Bind>(&node);
+      if (bind == nullptr || bind->value == nullptr) {
+        return;
+      }
+      const auto found = bindings.find(bind->name.location.start);
+      if (found == bindings.end()) {
+        return;
+      }
+      const auto* pipeline =
+          syntax::As<syntax::PipelineValue>(bind->value.get());
+      const bool deferred =
+          syntax::As<syntax::Name>(bind->value.get()) != nullptr ||
+          (pipeline != nullptr && !pipeline->take);
+      if (!deferred) {
+        return;
+      }
+      syntax::VisitSubtree(*bind->value, [&](const Node& child) {
+        if (syntax::As<syntax::Name>(&child) == nullptr) {
+          return;
+        }
+        deferred_names.insert(&child);
+        const auto info = flow.expressions.find(&child);
+        if (info != flow.expressions.end() &&
+            info->second.symbol < flow.symbols.size()) {
+          dependencies[found->second].insert(info->second.symbol);
+        }
+      });
+      if (pipeline == nullptr) {
+        return;
+      }
+      const bool starter = syntax::As<syntax::CallExpression>(
+                               pipeline->pipeline->source.get()) != nullptr;
+      const bool stage = std::any_of(
+          pipeline->pipeline->stages.begin(), pipeline->pipeline->stages.end(),
+          [](const syntax::StagePtr& one) {
+            return one->name == "run" || one->name == "call";
+          });
+      if (starter || stage) {
+        candidates.emplace_back(found->second, bind->name.location);
+      }
+    });
+    absl::flat_hash_set<size_t> used;
+    std::vector<size_t> pending;
+    syntax::VisitSubtree(*flow.declaration, [&](const Node& node) {
+      if (syntax::As<syntax::Name>(&node) == nullptr ||
+          deferred_names.contains(&node)) {
+        return;
+      }
+      const auto info = flow.expressions.find(&node);
+      if (info != flow.expressions.end() &&
+          info->second.symbol < flow.symbols.size() &&
+          used.insert(info->second.symbol).second) {
+        pending.push_back(info->second.symbol);
+      }
+    });
+    while (!pending.empty()) {
+      const size_t one = pending.back();
+      pending.pop_back();
+      const auto found = dependencies.find(one);
+      if (found == dependencies.end()) {
+        continue;
+      }
+      for (const size_t source : found->second) {
+        if (used.insert(source).second) {
+          pending.push_back(source);
+        }
+      }
+    }
+    for (const auto& [symbol, location] : candidates) {
+      if (!used.contains(symbol)) {
+        Report("flow.unused.pipeline-call",
+               absl::StrCat("Pipeline ", Quoted(flow.symbols[symbol].name),
+                            " has no reader, so its run/call invocations will "
+                            "not start. Remove it or add '-> _' to execute "
+                            "and discard its output."),
+               location, Severity::kWarning, Family::kUnused);
       }
     }
   }

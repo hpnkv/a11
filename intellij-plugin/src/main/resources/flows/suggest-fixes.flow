@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from std import contains, default, get, join, replace, slice, split, strformat, to_chunk, trim
+from std import contains, join, replace, slice, split, strformat, to_chunk, trim
 
 flow suggest-fixes {
   describe "Review the file the developer is looking at and suggest fixes for it, on the IDE's ranges and on its own."
@@ -51,7 +51,7 @@ flow suggest-fixes {
     | map strformat(
       "- %s | at {\"start_line\": %d, \"start_column\": %d, \"end_line\": %d, \"end_column\": %d} | message: %s | underlined: %s | tooltip: %s",
       it.severity, it.start_line, it.start_column, it.end_line, it.end_column,
-      it.message, it.text, default(get(it, "tooltip", ""), "(none)")
+      it.message, it.text, it.tooltip or "(none)"
     )
     | join "\n"
     | map a11::sdk::Interaction{
@@ -145,8 +145,8 @@ flow suggest-fixes {
     | join ""
     | map replace(it, "```json", "")
     | map replace(it, "```", "")
-    | map get(split(it, "§"), -1, "")
-    | map get(split(it, "}\n"), -1, "")
+    | map (split(it, "§")?[-1] or "")
+    | map (split(it, "}\n")?[-1] or "")
     | map trim(it)
     -> file_comment
 
@@ -172,17 +172,17 @@ flow suggest-fixes {
     | map {
       path: file_path,
       # A model asked for "s1" sometimes writes 1; %s makes either a string.
-      id: trim(strformat("%s", get(it, "id", ""))),
+      id: trim(strformat("%s", it?.id or "")),
       # "found" and not "reported" when it is missing: a found range drawn as
       # reported gets no underline at all, and an invisible suggestion is the
       # worse of the two mistakes here.
-      origin: default(get(it, "origin", ""), "found"),
-      comment: trim(get(it, "comment", "")),
-      patch: trim(get(it, "patch", "")),
-      start_line: number(get(it, "start_line", 0)),
-      end_line: number(get(it, "end_line", 0)),
-      start_column: number(get(it, "start_column", 0)),
-      end_column: number(get(it, "end_column", 0))
+      origin: it.origin or "found",
+      comment: trim(it?.comment or ""),
+      patch: trim(it?.patch or ""),
+      start_line: number(it?.start_line or 0),
+      end_line: number(it?.end_line or 0),
+      start_column: number(it?.start_column or 0),
+      end_column: number(it?.end_column or 0)
     }
     -> suggestions
 

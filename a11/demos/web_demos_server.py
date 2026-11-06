@@ -233,7 +233,7 @@ _LLM_TIMEOUT = a11.Duration.seconds(120)
 
 #: Long enough for a short answer with visible reasoning, while keeping the
 #: public demo's provider spend bounded.
-DEMO_MAX_OUTPUT_TOKENS = 1024
+DEMO_MAX_OUTPUT_TOKENS = 2048
 
 #: The public input is deliberately a prompt, not an unbounded chat surface.
 DEMO_MAX_INPUT_CHARACTERS = 180

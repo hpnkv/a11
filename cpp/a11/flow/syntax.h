@@ -313,12 +313,14 @@ struct Name : NodeOf<NodeKind::kName> {
 struct Attr : NodeOf<NodeKind::kAttr> {
   NodePtr base;
   std::string name;
+  bool optional = false;
 };
 
 /// `base[i]` -- an element of a list, or a key of an object.
 struct Index : NodeOf<NodeKind::kIndex> {
   NodePtr base;
   NodePtr index;
+  bool optional = false;
 };
 
 /// `name(arg, ...)` -- one of the language's fixed functions.
@@ -414,11 +416,10 @@ struct Stage : NodeOf<NodeKind::kStage> {
   /// `fold 0 as total` would otherwise read as a cast of `0` to a type.
   Constant start;
   Word carried;
-  /// `try map ...`: a value this stage cannot do is dropped rather than ending
-  /// the pipeline. Written before the stage name, as `try run` is before a
-  /// call.
+  /// `try map ...`: tolerate an item's evaluation failure; context may retain
+  /// the item. Written before the stage name, as `try run` is before a call.
   bool tolerant = false;
-  /// `into ref`: where a tolerated failure goes, as a status record. Null when
+  /// `failures into ref`: where a tolerated failure goes. Null when
   /// the failures are only logged.
   NodePtr failures;
   /// `parallel n`: how many values this stage may be working on at once. One

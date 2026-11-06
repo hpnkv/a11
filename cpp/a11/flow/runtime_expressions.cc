@@ -259,6 +259,15 @@ absl::StatusOr<Value> Scope::EvaluateWith(ExprId expr, const Value& it,
   absl::flat_hash_map<RefId, Value> taken;
   EvalContext context;
   context.prepared = &runner_->prepared();
+  context.is_option = [&](const syntax::Node& node) {
+    const auto found = runner_->resolved_flow().expressions.find(&node);
+    if (found == runner_->resolved_flow().expressions.end()) {
+      return false;
+    }
+    const std::string& type = found->second.type;
+    return type == "option" || type == "std::option" ||
+           type.starts_with("option[") || type.starts_with("std::option[");
+  };
   context.lookup =
       [&](const syntax::Node& node) -> absl::StatusOr<std::optional<Value>> {
     for (const auto& [bound, ref] : one.bound) {

@@ -64,8 +64,6 @@ export async function createA11WasmRuntime(options = {}) {
   let disposed = false;
   let terminalError = null;
   let serial = 0;
-  let tail = Promise.resolve();
-  let activeFlowId = null;
   const pending = new Map();
   const hostActions = new Map();
   const sessionCallbacks = new Map();
@@ -99,7 +97,6 @@ export async function createA11WasmRuntime(options = {}) {
     }
     worker = null;
     terminalError = error instanceof Error ? error : new Error(String(error));
-    activeFlowId = null;
     const terminal = {code: disposed ? StatusCode.CANCELLED :
       StatusCode.UNAVAILABLE, message: String(error?.message ?? error),
       details: []};
@@ -228,7 +225,6 @@ export async function createA11WasmRuntime(options = {}) {
             try { item.onOutput(output.port, output.chunk); }
             catch (error) {
               pending.delete(id);
-              if (activeFlowId === id) activeFlowId = null;
               item.signal?.removeEventListener('abort', item.abort);
               current.postMessage({id, cancel: true});
               item.reject(error);
@@ -239,7 +235,7 @@ export async function createA11WasmRuntime(options = {}) {
         if (data.invokeAction) {
           const invocation = data.invokeAction;
           const registered = hostActions.get(invocation.name);
-          const flow = pending.get(activeFlowId);
+          const flow = pending.get(Number(invocation.flowId));
           const signal = flow?.signal;
           const callbackController = new AbortController();
           activeCallbacks.set(invocation.actionId, callbackController);
@@ -331,7 +327,6 @@ export async function createA11WasmRuntime(options = {}) {
         const item = pending.get(data.id);
         if (!item) return;
         pending.delete(data.id);
-        if (activeFlowId === data.id) activeFlowId = null;
         item.signal?.removeEventListener("abort", item.abort);
         if (item.abortTimer) clearTimeout(item.abortTimer);
         if (item.signal?.aborted) {
@@ -642,35 +637,32 @@ export async function createA11WasmRuntime(options = {}) {
         return result;
       }});
     },
-    runFlow(request, { signal, onOutput } = {}) {
-      const task = tail.then(async () => {
-        if (disposed) throw new Error("native WASM runtime is disposed");
-        if (terminalError) throw terminalError;
-        if (signal?.aborted) throw new A11WasmError(StatusCode.CANCELLED, "Flow run cancelled");
-        await ready;
-        return new Promise((resolve, reject) => {
-          const id = ++serial;
-          const abort = () => {
+    async runFlow(request, { signal, onOutput } = {}) {
+      if (disposed) throw new Error("native WASM runtime is disposed");
+      if (terminalError) throw terminalError;
+      if (signal?.aborted) throw new A11WasmError(StatusCode.CANCELLED, "Flow run cancelled");
+      await ready;
+      if (signal?.aborted) throw new A11WasmError(StatusCode.CANCELLED, "Flow run cancelled");
+      return new Promise((resolve, reject) => {
+        const id = ++serial;
+        const abort = () => {
+          if (!pending.has(id)) return;
+          worker.postMessage({ id, cancel: true });
+          const item = pending.get(id);
+          item.abortTimer = setTimeout(() => {
             if (!pending.has(id)) return;
-            worker.postMessage({ id, cancel: true });
-            const item = pending.get(id);
-            item.abortTimer = setTimeout(() => {
-              if (!pending.has(id)) return;
-              stop(new A11WasmError(StatusCode.CANCELLED, "Flow run cancelled"));
-            }, 1000);
-          };
-          pending.set(id, { resolve, reject, signal, abort, onOutput,
-            deadlineAt: Date.now() + (request.timeoutMs ?? 30_000) });
-          activeFlowId = id;
-          signal?.addEventListener("abort", abort, { once: true });
-          worker.postMessage({ id, request: {...request,
-            ...(onOutput ? {streamOutputs: true, streamId: String(id)} : {}),
-            hostActions: [...hostActions.values()].flatMap(value =>
-              value.schema ? [value.schema] : [])} });
-        });
+            stop(new A11WasmError(StatusCode.CANCELLED, "Flow run cancelled"));
+          }, 1000);
+        };
+        pending.set(id, { resolve, reject, signal, abort, onOutput,
+          deadlineAt: Date.now() + (request.timeoutMs ?? 30_000) });
+        signal?.addEventListener("abort", abort, { once: true });
+        worker.postMessage({ id, request: {...request,
+          hostFlowId: String(id),
+          ...(onOutput ? {streamOutputs: true, streamId: String(id)} : {}),
+          hostActions: [...hostActions.values()].flatMap(value =>
+            value.schema ? [value.schema] : [])} });
       });
-      tail = task.catch(() => {});
-      return task;
     },
     async runFlowWithNodes(request, options = {}) {
       const runId = globalThis.crypto?.randomUUID?.() ??

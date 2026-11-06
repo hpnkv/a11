@@ -140,6 +140,9 @@ flow NAME [exported] {
   job.output | map std::upper(it) -> output
 }
 call invokes a peer; run invokes a local handler. All outputs are read.
+An argument can omit `: source` when its port and source share a name:
+run local_action(input) means run local_action(input: input). Arguments may
+appear in any order or mix shorthand with explicit port: expression values.
 
 x = expression or T x = expression initializes once per scope, eagerly.
 Reassignment follows source order, including child-scope updates. Parallel
@@ -154,6 +157,11 @@ Explicit option.has_value and option.value access remains available.
 T settings = try take options or T{} unwraps the option or lazily evaluates T{}.
 Stored std::option[T] values support the same or default. Presence, including
 null, false, zero and empty payloads, skips the fallback. Errors propagate.
+value?.field and value?[key] return an option. Missing fields or indices are
+absent; a present null remains present. Safe projections chain through options.
+An object field whose value is an absent option is omitted; a present option
+contributes its payload, including null, false, zero and empty values.
+Use | present to remove absent options from a stream and emit present payloads.
 With ordinary values, or keeps its truthiness-based short-circuit behavior.
 Read the RHS of destructuring only once.
 
@@ -185,13 +193,18 @@ ends it with an error. wait SUBJECT observes completion; status SUBJECT is its
 status. cancel ACTION cancels an action. fail [CODE [MESSAGE]] fails the scope.
 try run/call or try { body } exposes a failure through the operation's status.
 wait first of a, b chooses a completion; wait all of a, b waits for every one.
-Bare wait all is a scope-local execution barrier: all preceding work must
-complete successfully before any following statement activates. This
-includes initializers, arguments, eager deadlines, owned calls, feeds,
-draining, and child scopes. Work within a phase remains concurrent. Barriers
-inside branches, blocks, and loop passes affect only that scope or pass.
-Stream aliases do not read or exhaust streams; cross-phase producer/consumer
-cycles are errors.
+Bare wait all is a scope-local execution barrier: work directly induced by
+preceding statements must complete successfully before any following statement
+activates. This includes initializers, arguments, eager deadlines, owned calls,
+feeds, reads activated before the barrier, automatic drains of unused call
+outputs, and child scopes. A partial
+read such as ``take`` does not exhaust its stream. Work within a phase remains
+concurrent. Barriers inside branches, blocks, and loop passes affect only that
+scope or pass. A stream may first be read on either side of a barrier, and
+different outputs of one call may be read in different phases. Independent
+readers of the same stream must stay in one phase; successive value reads
+through one shared cursor may cross a barrier. Stream aliases do not read or
+exhaust streams.
 Bare wait all accepts no modifiers or value binding. wait all of a, b remains
 an explicit-subject wait and does not gate following statements.
 after a, b { body } gates a scope. Bound blocks and loops expose completion.
@@ -207,8 +220,13 @@ forward headers "name". Local nodes stay off the wire.
 
 source | stage -> destination [, destination]; -> _ discards results.
 source | run flow_name(config: value) | call module::flow_name() composes
-whole-stream invocations. After explicit arguments, exactly one input must
+whole-stream invocations. After supplied arguments, exactly one input must
 remain (optional inputs count too), and exactly one output must be declared.
+run flow_name(input: source) | stage -> destination starts a pipeline when
+every input is supplied (including optional inputs) and one output is declared.
+run flow_name(input: source) -> destination forwards that output directly.
+An unread pipeline does not start its invocations; use -> _ to execute and
+discard the output. Bare run/call statements still execute when unused.
 Unary inputs validate zero/one or exactly one item according to required.
 Declare/import external interfaces before using them as stages. Calls retain
 ordinary dispatch, modifiers, draining, failure, and cleanup semantics.
@@ -216,9 +234,12 @@ try run/call tolerates the invocation, not failures reading its output;
 use a try block for the whole pipeline, or combine a try invocation with a
 try pipe to tolerate transfer errors too. No item is dropped.
 
-Stages include map EXPR, where EXPR, first N, drop N, collect, flatten,
+Stages include map EXPR, where EXPR, first N, drop N, collect, flatten, present,
 scan INITIAL as state, EXPR, fold INITIAL as state, EXPR, sum, count,
 take while EXPR, take until EXPR, as TYPE, json, packb, timeout DURATION.
+`try STAGE failures into DEST` routes a tolerated failure as a record with
+status fields, its original value in `it`, and a zero-based `seq` at that
+stage. Casting or binding it to `std::status` keeps only status fields.
 Use ``node | read_with {max_ref_depth: 2, max_ref_breadth: 3}`` to open an
 independent reader with explicit options. ``view: "fragments"`` exposes raw
 fragments; the default value view follows node references. The stage must come
@@ -272,6 +293,7 @@ from library import member [as alias], other; from library import *.
 export library::member [as alias] publishes an accessible existing symbol.
 Modules cannot be created inside flows or structs. std is reserved.
 :: qualifies static modules/types; . projects runtime fields/ports.
+?. and ?[] project optional fields and indexed items.
 Host type source a11::sdk::Interaction retains wire tag a11.sdk.Interaction.
 
 Primitive prelude: int/integer, bool, number, string, bytes, object, null;

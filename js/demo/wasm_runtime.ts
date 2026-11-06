@@ -6,6 +6,7 @@ let isolationPromise: Promise<boolean> | null = null;
 
 async function isolateGuidePageOnce(): Promise<boolean> {
   if (typeof window === 'undefined') return true;
+  if (new URLSearchParams(location.search).has('blog-scene')) return true;
   if (!('serviceWorker' in navigator)) {
     if (!window.crossOriginIsolated) {
       throw new Error('The browser cannot enable cross-origin isolation.');
@@ -57,7 +58,9 @@ export async function createDemoRuntime(): Promise<A11Runtime> {
   }
   const assetsBaseUrl = typeof window === 'undefined'
     ? new URL('../../../dist/wasm/', import.meta.url)
-    : new URL('./wasm/', import.meta.url);
+    : new URLSearchParams(location.search).has('blog-scene')
+      ? new URL('/a11-wasm-flow-14/', location.href)
+      : new URL('./wasm/', import.meta.url);
   const runtime = await createA11Runtime({wasm: {assetsBaseUrl}});
   if (!isOk(runtime)) throw new Error(`A11 runtime: ${runtime.message}`);
   activeRuntimes.add(runtime);

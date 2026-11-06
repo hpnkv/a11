@@ -26,7 +26,6 @@
 # want from an API that explains itself in its 422 body.
 flow read-a-page {
   describe "Fetch a URL and hand back its text and its status."
-
   in  url: string required "What to fetch."
 
   out text: string "The body, as text."
@@ -47,18 +46,16 @@ flow read-a-page {
 # look at the status, you have already paid for the body.
 flow only-if-json {
   describe "Read the body only when the server says it is JSON."
-
   in  url: string required
 
   out decoded:  std::json "The body, when it was JSON."
   out declined: string    "What the server sent instead, when it was not."
 
-  http = run make_http_request(url: url)
-      with "accept": "application/json"
+  http = run make_http_request(url) with "accept": "application/json"
 
   # Headers arrive before the body and are captured once for both branches.
   headers = take http.headers
-  string content_type = std::get(headers, "content-type", "")
+  string content_type = headers?["content-type"] or ""
   if content_type == "application/json" {
     http.body | collect | map std::join(it, "") | json -> decoded
     "" -> declined
@@ -73,7 +70,6 @@ flow only-if-json {
 # does not bind; `options.omit` tells the action not to produce them.
 flow inspect-a-url {
   describe "Everything the protocol said, on the port that carries it."
-
   in  url: string required
 
   out code:    number           "The final status."
@@ -84,7 +80,6 @@ flow inspect-a-url {
   out size:    number           "How many bytes of body arrived."
 
   http = run make_http_request(url: url, options: {"accept_pushes": true})
-
   http.status_code -> code
   http.fields -> fields
   http.redirects -> hops
@@ -107,7 +102,6 @@ flow inspect-a-url {
 # That is the case the input port being a *stream* exists for.
 flow send-a-stream {
   describe "POST a body assembled as it goes."
-
   in  url:   string required
   in  parts: string stream required "The body, piece by piece."
 
@@ -118,7 +112,7 @@ flow send-a-stream {
     method: "POST",
     request_body: parts,
     options: {"request_body": "stream"}
-  ) with "content-type": "text/plain"
-
+  )
+      with "content-type": "text/plain"
   http.body | collect | map std::join(it, "") -> answer
 }

@@ -1236,6 +1236,30 @@ async def test_a_value_can_be_made_into_a_registered_type(registry):
 
 
 @pytest.mark.asyncio
+async def test_optional_projection_preserves_host_model_null_and_missing(registry):
+    from a11.sdk.llm import Interaction  # noqa: F401
+
+    result = await run_flow(
+        """
+        flow main {
+          out role: string
+          out has_timestamp: bool
+          out has_unknown: bool
+          item = {role: "model"} as a11::sdk::Interaction
+          if selected = item?.role { std::text(selected) -> role }
+          item?.created_at_millis.has_value -> has_timestamp
+          key = "unknown_field"
+          item?[key].has_value -> has_unknown
+        }
+        """,
+        registry,
+    )
+    assert result["role"] == "model"
+    assert result["has_timestamp"] is True
+    assert result["has_unknown"] is False
+
+
+@pytest.mark.asyncio
 async def test_a_cast_to_a_built_in_type_coerces_the_way_the_builtin_does(
     registry,
 ):
@@ -2926,17 +2950,36 @@ async def test_a_try_stage_routes_the_values_it_could_not_do(registry):
           in  docs: std::json stream required
           out good: std::json stream
           out bad:  std::json stream
-          docs | try map it as Order into bad -> good
+          docs | try map it as Order failures into bad -> good
         }
         """,
         registry,
         docs=[{"id": "a"}, {}, {"id": "b"}],
     )
     assert len(outputs["good"]) == 2
-    # A failure arrives as a status record, so a failure stream is an ordinary
-    # stream a caller reads like any other.
+    # Routed failures retain the original item and its stage input position.
     assert len(outputs["bad"]) == 1
-    assert outputs["bad"][0].code != StatusCode.OK
+    assert outputs["bad"][0]["code"] == "INVALID_ARGUMENT"
+    assert outputs["bad"][0]["it"] == {}
+    assert outputs["bad"][0]["seq"] == 1
+
+
+@pytest.mark.asyncio
+async def test_a_status_port_keeps_the_canonical_routed_status(registry):
+    outputs = await run_flow(
+        """
+        struct Order { id: string required }
+
+        flow routed {
+          in  docs: std::json stream required
+          out bad:  std::status stream
+          docs | try map it as Order failures into bad -> _
+        }
+        """,
+        registry,
+        docs=[{}],
+    )
+    assert outputs["bad"][0].code == StatusCode.INVALID_ARGUMENT
 
 
 @pytest.mark.asyncio

@@ -106,6 +106,24 @@ TEST(FlowNavigate, PredicateStagesAndAfterBlocksDescribeTheirSyntax) {
       << after.markdown;
 }
 
+TEST(FlowNavigate, PipelineStarterHoverNamesItsOutput) {
+  const std::string source = R"(
+flow echo { in input: string
+ out output: string
+ input -> output
+}
+flow main { out result: string
+ run echo(input: "hello") -> result
+}
+)";
+  const auto hover = Describe(source, source.rfind("echo("));
+  EXPECT_TRUE(hover.found);
+  EXPECT_NE(hover.markdown.find("Pipeline starter"), std::string::npos)
+      << hover.markdown;
+  EXPECT_NE(hover.markdown.find("output `output`"), std::string::npos)
+      << hover.markdown;
+}
+
 TEST(FlowNavigate, CompositeWaitsHaveDistinctDocumentation) {
   const std::string source =
       "flow f {\n a = run work()\n b = run work()\n"
@@ -363,6 +381,17 @@ TEST(FlowNavigate, NamedCallInputsHoverAsPorts) {
   EXPECT_EQ(input.summary, "`query` — input-port of `web-search`: str");
   EXPECT_EQ(input.detail, "What to look for.");
   EXPECT_NE(input.markdown.find("**Takes:** *str*"), std::string::npos);
+}
+
+TEST(FlowNavigate, ShorthandCallInputShowsPortAndSource) {
+  constexpr std::string_view source =
+      "flow inner { in query: string\n out result: string }\n"
+      "flow outer { in query: string\n x = run inner(query) }";
+  const Description input = Describe(source, source.find("inner(query)") + 6);
+  ASSERT_TRUE(input.found);
+  EXPECT_EQ(input.kind, SymbolClass::kPort);
+  EXPECT_NE(input.markdown.find("Reads the same-named source `query`"),
+            std::string::npos);
 }
 
 TEST(FlowNavigate, FlowHoverListsPortsInDeclarationOrder) {

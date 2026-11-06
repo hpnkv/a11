@@ -591,18 +591,14 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
   /// A body that fails publishes what it had produced first, so a reader that
   /// had seen three of five values sees three values and then the failure --
   /// the same order the one-at-a-time path gave it.
-  /// What a `try` does with a value the stage could not do.
-  ///
-  /// The failure is a value like any other: written to the stream `into` named,
-  /// as the same status record `status x` yields, or -- with nowhere to send it
-  /// -- logged once at warning, which is the least a language whose failures
-  /// are values should do with one it was told to tolerate.
-  const auto tolerate = [&](const ItemPtr& item,
-                            const absl::Status& why) -> absl::Status {
+  /// Route a tolerated failure with its original item and stage position.
+  const auto tolerate = [&](const ItemPtr& item, const absl::Status& why,
+                            std::int64_t seq) -> absl::Status {
     if (stage.failures != kNone) {
       ABSL_ASSIGN_OR_RETURN(Destination * destination,
                             DestinationOf(stage.failures));
-      return destination->Write(Item::Of(StatusRecord(why)), &host);
+      return destination->Write(FailureItem(stage, item, why, seq, host),
+                                &host);
     }
     actions::LogOptions options;
     options.level = "warning";
@@ -622,6 +618,7 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
     std::vector<ItemPtr> out;
     in.reserve(kQueueDepth);
     out.reserve(kQueueDepth);
+    std::int64_t seq = 0;
     while (true) {
       in.clear();
       ABSL_RETURN_IF_ERROR(source->NextMany(in, kQueueDepth));
@@ -632,6 +629,7 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
         PrimeBatch(in, &host);
       }
       for (const ItemPtr& item : in) {
+        const std::int64_t current = seq++;
         absl::Status ran = body(item, out);
         if (!ran.ok()) {
           if (!stage.tolerant) {
@@ -641,7 +639,7 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
           // Emit completed values, account for this failure, and continue the
           // stream according to the stage's `try` semantics.
           ABSL_RETURN_IF_ERROR(sink.Many(out));
-          ABSL_RETURN_IF_ERROR(tolerate(item, ran));
+          ABSL_RETURN_IF_ERROR(tolerate(item, ran, current));
         }
       }
       ABSL_RETURN_IF_ERROR(sink.Many(out));
@@ -649,31 +647,69 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
   };
 
   if (name == "at") {
-    const Value key =
+    const Value fixed_key =
         stage.indexed ? Value::Integer(stage.index) : Value::String(stage.text);
     return per_value(
         [&](const ItemPtr& item, std::vector<ItemPtr>& out) -> absl::Status {
-          ABSL_ASSIGN_OR_RETURN(const Value value, item->Read(&host));
+          ABSL_ASSIGN_OR_RETURN(Value value, item->Read(&host));
+          if (stage.optional && stage.type.has_value() &&
+              !value.is_option()) {
+            ABSL_ASSIGN_OR_RETURN(
+                value, Coerce(value, *stage.type,
+                              CoerceContext{.bridge = &host,
+                                            .shapes = &shapes()}));
+          }
+          Value key = fixed_key;
+          if (stage.expr != kNone) {
+            ABSL_ASSIGN_OR_RETURN(key, EvaluateWith(stage.expr, value));
+          }
+          if (stage.optional) {
+            out.push_back(Item::Of(Value::Option(LookupOptional(value, key))));
+            return absl::OkStatus();
+          }
           ABSL_ASSIGN_OR_RETURN(Value selected, LookupChecked(value, key));
           out.push_back(Item::Of(std::move(selected)));
+          return absl::OkStatus();
+        });
+  }
+  if (name == "present") {
+    return per_value(
+        [&](const ItemPtr& item, std::vector<ItemPtr>& out) -> absl::Status {
+          ABSL_ASSIGN_OR_RETURN(Value value, item->Read(&host));
+          if (!value.is_option()) {
+            syntax::TypeExpression type;
+            type.name = "option";
+            ABSL_ASSIGN_OR_RETURN(value, Coerce(value, type, {}));
+          }
+          if (value.Get("has_value")->boolean()) {
+            out.push_back(Item::Of(*value.Get("value")));
+          }
           return absl::OkStatus();
         });
   }
   if (name == "map") {
     return per_value(
         [&](const ItemPtr& item, std::vector<ItemPtr>& out) -> absl::Status {
-          ABSL_ASSIGN_OR_RETURN(const Value value, item->Read(&host));
+          ABSL_ASSIGN_OR_RETURN(Value value, item->Read(&host));
+          if (stage.type.has_value() && !value.is_option()) {
+            ABSL_ASSIGN_OR_RETURN(
+                value, Coerce(value, *stage.type,
+                              CoerceContext{.bridge = &host,
+                                            .shapes = &shapes()}));
+          }
           ABSL_ASSIGN_OR_RETURN(Value mapped, EvaluateWith(stage.expr, value));
           out.push_back(Item::Of(std::move(mapped)));
           return absl::OkStatus();
         });
   }
   if (name == "take while" || name == "take until") {
+    std::int64_t seq = 0;
     while (true) {
       ABSL_ASSIGN_OR_RETURN(ItemPtr item, source->Next());
       if (item == nullptr) {
         return absl::OkStatus();
       }
+      const std::int64_t current = seq++;
       const auto condition = [&]() -> absl::StatusOr<Value> {
         ABSL_ASSIGN_OR_RETURN(const Value value, item->Read(&host));
         return EvaluateWith(stage.expr, value);
@@ -682,7 +718,7 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
         if (!stage.tolerant) {
           return condition.status();
         }
-        ABSL_RETURN_IF_ERROR(tolerate(item, condition.status()));
+        ABSL_RETURN_IF_ERROR(tolerate(item, condition.status(), current));
         continue;
       }
       if (Truthy(*condition) == (name == "take until")) {
@@ -926,6 +962,7 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
         });
   }
   if (name == "context") {
+    std::int64_t seq = 0;
     const auto count = [&](ExprId expression) -> absl::StatusOr<size_t> {
       ABSL_ASSIGN_OR_RETURN(const Value value, Evaluate(expression));
       if (value.kind() != Value::Kind::kInteger || value.integer() < 0 ||
@@ -955,13 +992,14 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
       return absl::OkStatus();
     };
     ABSL_RETURN_IF_ERROR(each([&](const ItemPtr& item) -> absl::Status {
+      const std::int64_t current = seq++;
       ABSL_ASSIGN_OR_RETURN(Value value, item->Read(&host));
       auto matched = EvaluateWith(stage.expr, value);
       if (!matched.ok() && !stage.tolerant) {
         return matched.status();
       }
       if (!matched.ok()) {
-        ABSL_RETURN_IF_ERROR(tolerate(item, matched.status()));
+        ABSL_RETURN_IF_ERROR(tolerate(item, matched.status(), current));
       }
       const bool matches = matched.ok() && Truthy(*matched);
       if (stage.context_numbered) {
@@ -1377,7 +1415,7 @@ absl::Status Scope::InParallel(
       if (ran.ok()) {
         published = sink.Many(out);
       } else if (tolerant) {
-        published = Tolerated(stage, item, ran, host);
+        published = Tolerated(stage, item, ran, index, host);
       } else {
         published = ran;
       }
@@ -1419,17 +1457,34 @@ absl::Status Scope::InParallel(
 /// What a `try` stage does with a value it could not do: see `tolerate` in
 /// [Scope::ProduceStage], which this is the parallel path's copy of.
 absl::Status Scope::Tolerated(const graph::Stage& stage, const ItemPtr& item,
-                              const absl::Status& why, HostBridge& host) {
+                              const absl::Status& why, std::int64_t seq,
+                              HostBridge& host) {
   if (stage.failures != kNone) {
     ABSL_ASSIGN_OR_RETURN(Destination * destination,
                           DestinationOf(stage.failures));
-    return destination->Write(Item::Of(StatusRecord(why)), &host);
+    return destination->Write(FailureItem(stage, item, why, seq, host), &host);
   }
   actions::LogOptions options;
   options.level = "warning";
   return LogValue(
       Value::String(absl::StrCat("a value was skipped: ", why.message())),
       item.get(), options);
+}
+
+ItemPtr Scope::FailureItem(const graph::Stage& stage, const ItemPtr& item,
+                           const absl::Status& why, std::int64_t seq,
+                           HostBridge& host) {
+  graph::RefId target = stage.failures;
+  while (graph().refs[target].kind == graph::RefKind::kSink &&
+         graph().refs[target].sources.size() == 1) {
+    target = graph().refs[target].sources.front();
+  }
+  if (graph().refs[target].status_port) {
+    return Item::Of(StatusRecord(why));
+  }
+  absl::StatusOr<Value> original = item->Read(&host);
+  return Item::Of(FailureRecord(
+      why, original.ok() ? *std::move(original) : Value::Null(), seq));
 }
 
 absl::StatusOr<Value> Scope::StageValue(const graph::Stage& stage,

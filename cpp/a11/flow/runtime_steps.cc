@@ -201,24 +201,6 @@ absl::Status Scope::Execute(StepId step) {
               ABSL_RETURN_IF_ERROR(StepDone(before));
             }
           }
-          for (auto& [ref, bus] : buses_) {
-            const auto& stream = graph().refs[ref];
-            if (stream.kind != RefKind::kCallPort ||
-                stream.direction != syntax::PortDirection::kOutput ||
-                std::find(one.preceding_steps.begin(),
-                          one.preceding_steps.end(),
-                          stream.call) == one.preceding_steps.end()) {
-              continue;
-            }
-            bool started;
-            {
-              thread::MutexLock lock(&monitor().mu());
-              started = Step(stream.call).started;
-            }
-            if (started) {
-              ABSL_RETURN_IF_ERROR(bus->WaitFinished());
-            }
-          }
         }
         return absl::OkStatus();
       }

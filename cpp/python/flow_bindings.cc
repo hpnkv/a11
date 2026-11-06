@@ -323,14 +323,14 @@ class PythonObject : public flow::HostObject {
     const py::gil_scoped_acquire acquire;
     const std::string key(name);
     try {
-      if (py::hasattr(object_, key.c_str())) {
-        return ValueFromPython(object_.attr(key.c_str()));
-      }
       if (py::isinstance<py::dict>(object_)) {
         const auto mapping = object_.cast<py::dict>();
         if (mapping.contains(key)) {
           return ValueFromPython(mapping[key.c_str()]);
         }
+      }
+      if (py::hasattr(object_, key.c_str())) {
+        return ValueFromPython(object_.attr(key.c_str()));
       }
     } catch (py::error_already_set& error) {
       error.discard_as_unraisable(__func__);
@@ -347,6 +347,37 @@ class PythonObject : public flow::HostObject {
     } catch (py::error_already_set& error) {
       error.discard_as_unraisable(__func__);
       return flow::Value::Null();
+    }
+  }
+
+  [[nodiscard]] std::optional<flow::Value> FindField(
+      std::string_view name) const override {
+    const py::gil_scoped_acquire acquire;
+    const std::string key(name);
+    try {
+      if (py::isinstance<py::dict>(object_)) {
+        const auto mapping = object_.cast<py::dict>();
+        if (mapping.contains(key)) {
+          return ValueFromPython(mapping[key.c_str()]);
+        }
+      }
+      if (py::hasattr(object_, key.c_str())) {
+        return ValueFromPython(object_.attr(key.c_str()));
+      }
+    } catch (py::error_already_set& error) {
+      error.discard_as_unraisable(__func__);
+    }
+    return std::nullopt;
+  }
+
+  [[nodiscard]] std::optional<flow::Value> FindElement(
+      const flow::Value& key) const override {
+    const py::gil_scoped_acquire acquire;
+    try {
+      return ValueFromPython(object_[ValueToPython(key)]);
+    } catch (py::error_already_set& error) {
+      error.discard_as_unraisable(__func__);
+      return std::nullopt;
     }
   }
 

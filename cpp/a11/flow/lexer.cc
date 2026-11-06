@@ -513,6 +513,12 @@ class Lexer {
     if (letter == ':' && next == ':') {
       return Take(TokenKind::kScope, start, 2);
     }
+    if (letter == '?' && next == '.') {
+      return Take(TokenKind::kQuestionDot, start, 2);
+    }
+    if (letter == '?' && next == '[') {
+      return Take(TokenKind::kQuestionBracket, start, 2);
+    }
 
     // Longest first, so `...` wins over `..` wins over `.`, `->` over `-` and
     // `<=` over `<`.
@@ -632,6 +638,10 @@ std::string_view KindName(TokenKind kind) {
       return "word";
     case TokenKind::kDot:
       return ".";
+    case TokenKind::kQuestionDot:
+      return "?.";
+    case TokenKind::kQuestionBracket:
+      return "?[";
     case TokenKind::kRange:
       return "..";
     case TokenKind::kSpread:
@@ -694,6 +704,7 @@ TokenKind KindFromName(std::string_view name) {
       TokenKind::kComment,      TokenKind::kString,
       TokenKind::kNumber,       TokenKind::kDuration,
       TokenKind::kWord,         TokenKind::kDot,
+      TokenKind::kQuestionDot,  TokenKind::kQuestionBracket,
       TokenKind::kRange,        TokenKind::kSpread,
       TokenKind::kArrow,        TokenKind::kCarry,
       TokenKind::kEqual,        TokenKind::kEqualEqual,

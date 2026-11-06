@@ -83,7 +83,7 @@ struct OutputLine {
 
 bool IsOpener(TokenKind kind) {
   return kind == TokenKind::kLeftParen || kind == TokenKind::kLeftBracket ||
-         kind == TokenKind::kLeftBrace;
+         kind == TokenKind::kQuestionBracket || kind == TokenKind::kLeftBrace;
 }
 
 bool IsCloser(TokenKind kind) {
@@ -96,6 +96,7 @@ TokenKind Closes(TokenKind opener) {
     case TokenKind::kLeftParen:
       return TokenKind::kRightParen;
     case TokenKind::kLeftBracket:
+    case TokenKind::kQuestionBracket:
       return TokenKind::kRightBracket;
     default:
       return TokenKind::kRightBrace;
@@ -519,9 +520,12 @@ class Formatter {
       return false;
     }
     const std::string word = vocabulary::Canonical(token.text);
+    const bool failure_clause =
+        word == "failures" && index + 1 < code_.size() &&
+        vocabulary::Canonical(code_[index + 1].text) == "into";
     if (!vocabulary::ModifierWords().contains(word) &&
         !vocabulary::BareStages().contains(word) && word != "before" &&
-        word != "parallel" && word != "unordered" && word != "into" &&
+        word != "parallel" && word != "unordered" && !failure_clause &&
         word != "numbered" && word != "base") {
       return false;
     }
@@ -637,9 +641,11 @@ class Formatter {
                                 const Token& current) const {
     switch (previous.kind) {
       case TokenKind::kDot:
+      case TokenKind::kQuestionDot:
       case TokenKind::kScope:
       case TokenKind::kLeftParen:
       case TokenKind::kLeftBracket:
+      case TokenKind::kQuestionBracket:
         return false;
       // `...it` and `1..200` are each one thing: nothing goes inside them.
       case TokenKind::kSpread:
@@ -659,6 +665,8 @@ class Formatter {
       case TokenKind::kRightParen:
       case TokenKind::kRightBracket:
       case TokenKind::kDot:
+      case TokenKind::kQuestionDot:
+      case TokenKind::kQuestionBracket:
       case TokenKind::kRange:
         return false;
       case TokenKind::kRightBrace:
@@ -1734,7 +1742,7 @@ std::string WrapLines(std::string_view source, const LexResult& lexed,
       const bool modifier =
           modifiers && word != "headers" && token.start > previous->end &&
           (vocabulary::ModifierWords().contains(word) || word == "parallel" ||
-           word == "unordered" || word == "into" || word == "before" ||
+           word == "unordered" || word == "failures" || word == "before" ||
            word == "numbered" || word == "base");
       if (after_operator || modifier || token.kind == TokenKind::kPipe ||
           token.kind == TokenKind::kArrow ||

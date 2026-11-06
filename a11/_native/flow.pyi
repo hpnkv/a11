@@ -130,7 +130,9 @@ class CompilationLimits:
         Compilation bound for depth.
         """
     @max_depth.setter
-    def max_depth(self, arg0: typing.SupportsInt) -> None: ...
+    def max_depth(
+        self, arg0: typing.SupportsInt | typing.SupportsIndex
+    ) -> None: ...
 
     @property
     def max_duration_ms(self) -> int:
@@ -138,7 +140,9 @@ class CompilationLimits:
         Compilation bound for duration ms.
         """
     @max_duration_ms.setter
-    def max_duration_ms(self, arg0: typing.SupportsInt) -> None: ...
+    def max_duration_ms(
+        self, arg0: typing.SupportsInt | typing.SupportsIndex
+    ) -> None: ...
 
     @property
     def max_linked_name_bytes(self) -> int:
@@ -146,7 +150,9 @@ class CompilationLimits:
         Compilation bound for linked name bytes.
         """
     @max_linked_name_bytes.setter
-    def max_linked_name_bytes(self, arg0: typing.SupportsInt) -> None: ...
+    def max_linked_name_bytes(
+        self, arg0: typing.SupportsInt | typing.SupportsIndex
+    ) -> None: ...
 
     @property
     def max_modules(self) -> int:
@@ -154,7 +160,9 @@ class CompilationLimits:
         Compilation bound for modules.
         """
     @max_modules.setter
-    def max_modules(self, arg0: typing.SupportsInt) -> None: ...
+    def max_modules(
+        self, arg0: typing.SupportsInt | typing.SupportsIndex
+    ) -> None: ...
 
     @property
     def max_nesting(self) -> int:
@@ -162,7 +170,9 @@ class CompilationLimits:
         Compilation bound for nesting.
         """
     @max_nesting.setter
-    def max_nesting(self, arg0: typing.SupportsInt) -> None: ...
+    def max_nesting(
+        self, arg0: typing.SupportsInt | typing.SupportsIndex
+    ) -> None: ...
 
     @property
     def max_source_bytes(self) -> int:
@@ -170,7 +180,9 @@ class CompilationLimits:
         Compilation bound for source bytes.
         """
     @max_source_bytes.setter
-    def max_source_bytes(self, arg0: typing.SupportsInt) -> None: ...
+    def max_source_bytes(
+        self, arg0: typing.SupportsInt | typing.SupportsIndex
+    ) -> None: ...
 
     @property
     def max_tokens(self) -> int:
@@ -178,7 +190,9 @@ class CompilationLimits:
         Compilation bound for tokens.
         """
     @max_tokens.setter
-    def max_tokens(self, arg0: typing.SupportsInt) -> None: ...
+    def max_tokens(
+        self, arg0: typing.SupportsInt | typing.SupportsIndex
+    ) -> None: ...
 
     @property
     def max_work(self) -> int:
@@ -186,7 +200,9 @@ class CompilationLimits:
         Compilation bound for work.
         """
     @max_work.setter
-    def max_work(self, arg0: typing.SupportsInt) -> None: ...
+    def max_work(
+        self, arg0: typing.SupportsInt | typing.SupportsIndex
+    ) -> None: ...
 
 class DocumentChange:
     """
@@ -485,8 +501,10 @@ class FlowPlan:
         self,
         dispatch_stream: WireStream | None = None,
         *,
-        frame_cache_bytes: typing.SupportsInt = 262144,
-        frame_budget_bytes: typing.SupportsInt | None = None,
+        frame_cache_bytes: typing.SupportsInt | typing.SupportsIndex = 262144,
+        frame_budget_bytes: (
+            typing.SupportsInt | typing.SupportsIndex | None
+        ) = None,
     ) -> ActionHandler | NativeActionHandler | None:
         """
         The action handler that runs this flow.
@@ -594,7 +612,7 @@ class ModuleDocument:
 
     def apply(
         self,
-        revision: typing.SupportsInt,
+        revision: typing.SupportsInt | typing.SupportsIndex,
         edits: collections.abc.Sequence[SourceEdit],
     ) -> DocumentChange:
         """
@@ -838,7 +856,10 @@ class SourceEdit:
 
     text: str
     def __init__(
-        self, start: typing.SupportsInt, end: typing.SupportsInt, text: str
+        self,
+        start: typing.SupportsInt | typing.SupportsIndex,
+        end: typing.SupportsInt | typing.SupportsIndex,
+        text: str,
     ) -> None:
         """
         Construct a source replacement.
@@ -847,12 +868,14 @@ class SourceEdit:
     @property
     def end(self) -> int: ...
     @end.setter
-    def end(self, arg0: typing.SupportsInt) -> None: ...
+    def end(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None: ...
 
     @property
     def start(self) -> int: ...
     @start.setter
-    def start(self, arg0: typing.SupportsInt) -> None: ...
+    def start(
+        self, arg0: typing.SupportsInt | typing.SupportsIndex
+    ) -> None: ...
 
 class Statement:
     """
@@ -902,7 +925,7 @@ class Statement:
         variable: str,
         source: Expression,
         body: collections.abc.Sequence[Statement],
-        parallel: typing.SupportsInt = 1,
+        parallel: typing.SupportsInt | typing.SupportsIndex = 1,
     ) -> Statement:
         """
         Construct a loop over a stream.
@@ -1062,7 +1085,9 @@ def compile(
     Compile Flow source with explicit source roots and compilation limits.
     """
 
-def complete(source: str, offset: typing.SupportsInt) -> dict[str, typing.Any]:
+def complete(
+    source: str, offset: typing.SupportsInt | typing.SupportsIndex
+) -> dict[str, typing.Any]:
     """
     What may be written at ``offset``.
 
@@ -1127,7 +1152,7 @@ def register_standard_actions(
     allow_run: bool = False,
     require_sandbox: bool = True,
     inherit_environment: bool = False,
-    max_seconds: typing.SupportsInt = 600,
+    max_seconds: typing.SupportsInt | typing.SupportsIndex = 600,
     current_directory: str = ".",
     unrestricted: bool = False,
 ) -> None:
@@ -1171,7 +1196,7 @@ def run_program(
     allow_local_net: bool = False,
     allow_env: collections.abc.Sequence[str] = [],
     unrestricted: bool = False,
-    timeout_seconds: typing.SupportsFloat | None = None,
+    timeout_seconds: typing.SupportsFloat | typing.SupportsIndex | None = None,
     standard_streams: bool = True,
     registry: typing.Any | None = None,
     session: typing.Any | None = None,
@@ -1179,8 +1204,8 @@ def run_program(
     source_roots: collections.abc.Sequence[str] = [],
     limits: CompilationLimits = ...,
     single_item_slots: bool = True,
-    frame_cache_bytes: typing.SupportsInt = 262144,
-    frame_budget_bytes: typing.SupportsInt | None = None,
+    frame_cache_bytes: typing.SupportsInt | typing.SupportsIndex = 262144,
+    frame_budget_bytes: typing.SupportsInt | typing.SupportsIndex | None = None,
 ) -> dict[str, typing.Any]:
     """
     Run a Flow program's entry flow, and return what it did.

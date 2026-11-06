@@ -36,12 +36,16 @@ import {
     ActionPortSchema,
     ActionRegistry,
     ActionSchema,
+    FlowProgram,
+    fromChunk,
     invalidArgumentError,
     isOk,
     isStatus,
     okStatus,
     statusFromUnknown,
+    toChunk,
     type Action,
+    type Chunk,
     type Status,
 } from '../src/index.js';
 import {demoRuntime} from './runtime.js';
@@ -96,9 +100,11 @@ const PALETTE = ['#4f6df5', '#f5a34f', '#4fb0f5', '#a34ff5', '#4ff5a3'];
 // hold 1:1 everywhere and lose the depth cue.
 
 /** The design aspect. The canvas's `aspect-ratio` in CSS must match it. */
-const VIEW_ASPECT = 620 / 300;
-/** The visible height in world units: -1 to +1. */
-const VIEW_HEIGHT = 2;
+const BLOG_SCENE = typeof location !== 'undefined' &&
+    new URLSearchParams(location.search).has('blog-scene');
+const VIEW_ASPECT = BLOG_SCENE ? 2 / 3 : 620 / 300;
+/** The blog's portrait view needs room for five vertically spaced blobs. */
+const VIEW_HEIGHT = BLOG_SCENE ? 4 : 2;
 const FIELD_OF_VIEW = 45;
 
 /**
@@ -118,15 +124,15 @@ const CAMERA_DISTANCE =
  * silhouette instead would mean y = 1 was no longer the top of the picture,
  * which is the one thing these coordinates are for.
  */
-const REACH = {
-    x: (VIEW_HEIGHT / 2) * VIEW_ASPECT,
-    y: VIEW_HEIGHT / 2,
-    z: VIEW_HEIGHT / 2,
-};
-
 /** Blob size and spacing, in the same units. */
 const RADIUS = 0.25;
-const SPACING = 0.7;
+const SPACING = BLOG_SCENE ? 0.55 : 0.7;
+const VIEW_INSET = BLOG_SCENE ? RADIUS * 1.6 : 0;
+const REACH = {
+    x: (VIEW_HEIGHT / 2) * VIEW_ASPECT - VIEW_INSET,
+    y: VIEW_HEIGHT / 2 - VIEW_INSET,
+    z: BLOG_SCENE ? 0.8 : VIEW_HEIGHT / 2,
+};
 
 const NOISE_GLSL = `
 uniform float uTime;
@@ -291,13 +297,14 @@ class Scene {
             const color = PALETTE[index]!;
             const mesh = new THREE.Mesh(geometry, distortMaterial(color));
             const badge = label(index);
-            badge.position.set(0, RADIUS * 1.85, 0);
+            badge.position.set(0, BLOG_SCENE ? 0 : RADIUS * 1.85,
+                BLOG_SCENE ? RADIUS * 1.2 : 0);
             mesh.add(badge);
             this.scene.add(mesh);
             const blob: Blob = {
                 id: index,
-                x: (index - 2) * SPACING,
-                y: 0,
+                x: BLOG_SCENE ? 0 : (index - 2) * SPACING,
+                y: BLOG_SCENE ? (2 - index) * SPACING : 0,
                 z: 0,
                 radius: RADIUS,
                 color,
@@ -324,6 +331,7 @@ class Scene {
 
     /** [contain], against this scene's visible box. */
     contain(x: number, y: number, z: number): { x: number; y: number; z: number } {
+        if (BLOG_SCENE) return {x, y, z};
         return contain(x, y, z, REACH);
     }
 
@@ -468,7 +476,12 @@ export function colorFor(value: unknown, id: number): string | Status {
  * model works to the numbers it is given and then has its calls silently
  * adjusted.
  */
-const EXTENT =
+const EXTENT = BLOG_SCENE
+    ? `+x is right, +y is up, +z is towards the camera. Five blobs start` +
+      ` ${SPACING} units apart in a vertical line, with id 0 at the top.` +
+      ` A blob is ${2 * RADIUS} units across. The page lets the blobs move` +
+      ` beyond the scene's layout column.`
+    :
     `+x is right, +y is up, +z is towards the camera. The visible box is` +
     ` ${VIEW_HEIGHT} units tall (y from ${-REACH.y} to ${REACH.y}),` +
     ` ${(2 * REACH.x).toFixed(2)} wide (x from ${(-REACH.x).toFixed(2)} to` +
@@ -490,7 +503,7 @@ const DESCRIBE_SCENE_SCHEMA = new ActionSchema({
     outputs: {
         blobs: new ActionPortSchema({
             name: 'blobs',
-            type: 'application/json',
+            type: 'object',
             required: true,
             description: 'One `{id, x, y, z, radius, color}` per blob, in world units.',
         }),
@@ -503,13 +516,13 @@ const SET_COLOR_SCHEMA = new ActionSchema({
     inputs: {
         ids: new ActionPortSchema({
             name: 'ids',
-            type: 'application/json',
+            type: 'integer',
             required: true,
             description: 'Which blobs to recolour.',
         }),
         colors: new ActionPortSchema({
             name: 'colors',
-            type: 'text/plain',
+            type: 'string',
             required: true,
             description: 'One `#rrggbb` per id, in the same order.',
         }),
@@ -517,7 +530,7 @@ const SET_COLOR_SCHEMA = new ActionSchema({
     outputs: {
         recoloured: new ActionPortSchema({
             name: 'recoloured',
-            type: 'application/json',
+            type: 'integer',
             unary: true,
             required: true,
             description: 'How many blobs changed colour.',
@@ -531,13 +544,13 @@ const SHIFT_POSITION_SCHEMA = new ActionSchema({
     inputs: {
         ids: new ActionPortSchema({
             name: 'ids',
-            type: 'application/json',
+            type: 'integer',
             required: true,
             description: 'Which blobs to move.',
         }),
         dx: new ActionPortSchema({
             name: 'dx',
-            type: 'application/json',
+            type: 'number',
             unary: true,
             description:
                 'How far to move them along x, right being positive (a number).' +
@@ -545,7 +558,7 @@ const SHIFT_POSITION_SCHEMA = new ActionSchema({
         }),
         dy: new ActionPortSchema({
             name: 'dy',
-            type: 'application/json',
+            type: 'number',
             unary: true,
             description:
                 'How far to move them along y, up being positive (a number).' +
@@ -553,7 +566,7 @@ const SHIFT_POSITION_SCHEMA = new ActionSchema({
         }),
         dz: new ActionPortSchema({
             name: 'dz',
-            type: 'application/json',
+            type: 'number',
             unary: true,
             description:
                 'How far to move them along z, towards the camera being positive' +
@@ -563,7 +576,7 @@ const SHIFT_POSITION_SCHEMA = new ActionSchema({
     outputs: {
         moved: new ActionPortSchema({
             name: 'moved',
-            type: 'application/json',
+            type: 'integer',
             unary: true,
             required: true,
             description: 'How many blobs moved.',
@@ -573,6 +586,157 @@ const SHIFT_POSITION_SCHEMA = new ActionSchema({
 
 const PAGE_TOOLS = [DESCRIBE_SCENE_SCHEMA, SET_COLOR_SCHEMA, SHIFT_POSITION_SCHEMA];
 
+const TRIG_TOOLS = [
+    new ActionSchema({
+        name: 'sin',
+        description: 'Sine of a time or duration interpreted as seconds.',
+        inputs: {value: new ActionPortSchema({
+            name: 'value', type: 'application/json', unary: true, required: true,
+            description: 'A Flow std::time or std::duration value.',
+        })},
+        outputs: {result: new ActionPortSchema({
+            name: 'result', type: 'number', unary: true, required: true,
+            description: 'The sine of the value in seconds.',
+        })},
+    }),
+    new ActionSchema({
+        name: 'cos',
+        description: 'Cosine of a time or duration interpreted as seconds.',
+        inputs: {value: new ActionPortSchema({
+            name: 'value', type: 'application/json', unary: true, required: true,
+            description: 'A Flow std::time or std::duration value.',
+        })},
+        outputs: {result: new ActionPortSchema({
+            name: 'result', type: 'number', unary: true, required: true,
+            description: 'The cosine of the value in seconds.',
+        })},
+    }),
+];
+
+function temporalSeconds(value: unknown): number | Status {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value !== 'string') {
+        return invalidArgumentError('Expected a Flow time or duration.');
+    }
+    const units: Record<string, number> = {
+        ns: 1e-9, us: 1e-6, ms: 1e-3, s: 1, m: 60, h: 3600,
+    };
+    const pattern = /([+-]?\d+(?:\.\d+)?)(ns|us|ms|s|m|h)/gy;
+    let seconds = 0;
+    let end = 0;
+    for (const part of value.matchAll(pattern)) {
+        if (part.index !== end) break;
+        seconds += Number(part[1]) * units[part[2]!]!;
+        end += part[0].length;
+    }
+    if (end === value.length && end > 0 && Number.isFinite(seconds)) {
+        return seconds;
+    }
+    const timestamp = Date.parse(value);
+    if (Number.isFinite(timestamp) && /\d{4}-\d{2}-\d{2}T/.test(value)) {
+        return timestamp / 1000;
+    }
+    return invalidArgumentError('Expected a Flow time or duration.');
+}
+
+type CustomTool = {
+    name: string;
+    schema: ActionSchema;
+    inputs: Record<string, {unary: boolean}>;
+    outputs: Record<string, {unary: boolean}>;
+    valueSchemas: Record<string, z.ZodType>;
+};
+
+function record(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function valueSchema(type: string): z.ZodType {
+    const lower = type.toLowerCase();
+    if (lower === 'integer' || lower === 'int') return z.number().int();
+    if (lower === 'number' || lower === 'float') return z.number();
+    if (lower === 'string' || lower === 'text') return z.string();
+    if (lower === 'boolean' || lower === 'bool') return z.boolean();
+    const list = /^list\[(.+)]$/.exec(lower);
+    return list ? z.array(valueSchema(list[1]!)) : z.record(z.string(), z.unknown());
+}
+
+function customToolsFromPlan(plan: unknown): CustomTool[] {
+    if (!record(plan) || !Array.isArray(plan.flows)) {
+        throw new Error('The Flow compiler returned no tool definitions.');
+    }
+    const tools: CustomTool[] = [];
+    for (const entry of plan.flows) {
+        if (!record(entry) || entry.declaration === true) continue;
+        if (typeof entry.flow !== 'string' || !record(entry.inputs) || !record(entry.outputs)) {
+            throw new Error('The Flow compiler returned an invalid tool definition.');
+        }
+        if ([...PAGE_TOOLS, ...TRIG_TOOLS].some((tool) => tool.name === entry.flow) ||
+            ['flow_check', 'flow_run', 'flow_actions', 'interact_with_llm'].includes(entry.flow)) {
+            throw new Error(`The custom Flow name '${entry.flow}' is reserved.`);
+        }
+        const inputs: Record<string, ActionPortSchema> = {};
+        const outputs: Record<string, ActionPortSchema> = {};
+        const inputKinds: CustomTool['inputs'] = {};
+        const outputKinds: CustomTool['outputs'] = {};
+        const valueSchemas: CustomTool['valueSchemas'] = {};
+        for (const [kind, described, ports, kinds] of [
+            ['input', entry.inputs, inputs, inputKinds],
+            ['output', entry.outputs, outputs, outputKinds],
+        ] as const) {
+            for (const [name, info] of Object.entries(described)) {
+                if (!record(info) || typeof info.type !== 'string') {
+                    throw new Error(`Invalid ${kind} port '${name}' in '${entry.flow}'.`);
+                }
+                const unary = info.unary !== false;
+                const type = info.type.toLowerCase();
+                const mime = ['string', 'text', 'integer', 'int', 'number', 'float',
+                    'boolean', 'bool', 'object', 'json', 'any'].includes(type)
+                    ? type : 'application/json';
+                ports[name] = new ActionPortSchema({
+                    name, type: mime, unary, required: info.required === true,
+                    description: typeof info.description === 'string' ? info.description : '',
+                });
+                kinds[name] = {unary};
+                if (kind === 'input') valueSchemas[name] = valueSchema(info.type);
+            }
+        }
+        tools.push({
+            name: entry.flow,
+            schema: new ActionSchema({name: entry.flow,
+                description: typeof entry.description === 'string' ? entry.description : '',
+                inputs, outputs}),
+            inputs: inputKinds, outputs: outputKinds, valueSchemas,
+        });
+    }
+    if (tools.length > 8) throw new Error('Define at most eight custom tools in this demo.');
+    return tools;
+}
+
+function checkCustomCalls(plan: Record<string, unknown>, tools: CustomTool[]): void {
+    const allowed = new Set([
+        ...PAGE_TOOLS.map((tool) => tool.name),
+        ...TRIG_TOOLS.map((tool) => tool.name),
+        ...tools.map((tool) => tool.name),
+        'ticker',
+    ]);
+    const visit = (steps: unknown): void => {
+        if (!Array.isArray(steps)) return;
+        for (const step of steps) {
+            if (!record(step)) continue;
+            if (typeof step.action === 'string' && !allowed.has(step.action)) {
+                throw new Error(`Custom tools cannot run '${step.action}'.`);
+            }
+            for (const value of Object.values(step)) {
+                if (Array.isArray(value)) visit(value);
+            }
+        }
+    };
+    for (const flow of Array.isArray(plan.flows) ? plan.flows : []) {
+        if (record(flow)) visit(flow.steps);
+    }
+}
+
 /**
  * What each port carries, where its MIME type does not say.
  *
@@ -581,12 +745,15 @@ const PAGE_TOOLS = [DESCRIBE_SCENE_SCHEMA, SET_COLOR_SCHEMA, SHIFT_POSITION_SCHE
  * the shapes the model actually needs to see: numbers, and arrays of them.
  */
 const PORT_SCHEMAS = {
-    set_color: {ids: z.number().int(), colors: z.string()},
+    describe_scene: {blobs: z.object({id: z.number().int(), x: z.number(), y: z.number(),
+        z: z.number(), radius: z.number(), color: z.string()})},
+    set_color: {ids: z.number().int(), colors: z.string(), recoloured: z.number().int()},
     shift_position: {
         ids: z.number().int(),
         dx: z.number(),
         dy: z.number(),
         dz: z.number(),
+        moved: z.number().int(),
     },
 } as const;
 
@@ -631,6 +798,24 @@ async function refuse(
 async function pageRegistry(scene: Scene, onLog: (text: string) => void): Promise<ActionRegistry> {
     const registry = new ActionRegistry(await demoRuntime());
 
+    for (const [schema, calculate] of [
+        [TRIG_TOOLS[0]!, Math.sin], [TRIG_TOOLS[1]!, Math.cos],
+    ] as const) {
+        need(await registry.register(schema.name, schema, async (action): Promise<Status> => {
+            try {
+                const input = need(await action.getInput('value'));
+                const value = need(await input.consume({timeoutMs: READ_TIMEOUT_MS}));
+                const seconds = temporalSeconds(value);
+                if (isStatus(seconds)) return seconds;
+                const output = need(await action.getOutput('result'));
+                need(await output.finalize(calculate(seconds)));
+                return okStatus();
+            } catch (error) {
+                return statusFromUnknown(error, `${schema.name} failed.`);
+            }
+        }));
+    }
+
     need(
         await registry.register(DESCRIBE_SCENE_SCHEMA.name, DESCRIBE_SCENE_SCHEMA, async (action): Promise<Status> => {
             try {
@@ -668,11 +853,7 @@ async function pageRegistry(scene: Scene, onLog: (text: string) => void): Promis
                 blobs.forEach((blob, index) => scene.recolour(blob, wanted[index]!));
                 const result = need(await action.getOutput('recoloured'));
                 need(await result.finalize(blobs.length));
-                await narrate(
-                    action,
-                    `Recoloured ${blobs.length} blob(s): ${blobs.map((blob) => blob.id).join(', ')}.`,
-                    onLog,
-                );
+                onLog(`Recoloured ${blobs.length} blob(s): ${blobs.map((blob) => blob.id).join(', ')}.`);
                 return okStatus();
             } catch (error) {
                 return statusFromUnknown(error, 'set_color failed.');
@@ -758,8 +939,9 @@ async function pageRegistry(scene: Scene, onLog: (text: string) => void): Promis
 const SYSTEM_PROMPT =
     'You are looking after a small 3D scene of coloured blobs in a web page. Use' +
     ' the tools to inspect and change it: call describe_scene when you need to' +
-    ' know what is there, then set_color or shift_position to act. Do not describe' +
-    ' what you would do — do it, then say in one sentence what you did. Pick' +
+    ' know what is there, then set_color, shift_position, or an available custom' +
+    ' tool to act. If illuminate is available, send all requested blob ids and' +
+    ' durations in one call. Do it, then say in one sentence what you did. Pick' +
     ` colours yourself when none are given. Positions are world units: ${EXTENT}`;
 
 class BrowserToolsDemo {
@@ -769,6 +951,29 @@ class BrowserToolsDemo {
     private readonly log = document.querySelector<HTMLDivElement>('#tools-log')!;
     private readonly scene = new Scene();
     private connection: Connection | null = null;
+    private registry: ActionRegistry | null = null;
+    private customTools: CustomTool[] = [];
+    private installedSource = '';
+    private running = false;
+
+    private notify(kind: string, text = '', changed?: number, replied?: boolean,
+        reason?: string): void {
+        if (BLOG_SCENE) {
+            window.parent.postMessage(
+                {source: 'a11-browser-tools', kind, text, changed, replied, reason}, location.origin,
+            );
+        }
+    }
+
+    async checkConnection(): Promise<void> {
+        try {
+            await this.connected();
+            this.notify('ready');
+        } catch (error) {
+            this.connection = null;
+            this.notify('unavailable', error instanceof Error ? error.message : String(error));
+        }
+    }
 
     /**
      * The session, with the page's own registry bound to it *before* the stream
@@ -777,37 +982,163 @@ class BrowserToolsDemo {
      */
     private async connected(): Promise<Connection> {
         if (this.connection !== null) return this.connection;
-        const registry = await pageRegistry(this.scene, (text) => addLine(this.log, text));
+        this.registry ??= await pageRegistry(this.scene, (text) => this.logAction(text));
+        const registry = this.registry;
         const connection = await connect(this.backend.server.value.trim() || DEFAULT_SERVER_URL, registry);
         addLine(this.log, `serving: ${PAGE_TOOLS.map((one) => one.name).join(', ')}`, 'done');
         this.connection = connection;
         return connection;
     }
 
-    async send(prompt: string): Promise<void> {
+    private logAction(text: string): void {
+        addLine(this.log, text);
+        this.notify('log', text);
+    }
+
+    private async checkCustomTools(source: string): Promise<CustomTool[]> {
+        if (!source.trim()) return [];
+        if (source.length > 20_000) throw new Error('Custom tool source is limited to 20,000 characters.');
+        const answer = need((await demoRuntime()).flowTool({method: 'plan', source}));
+        if (answer.ok !== true || !record(answer.result)) {
+            throw new Error('The local Flow compiler could not describe these tools.');
+        }
+        const problems = answer.result.diagnostics;
+        if (Array.isArray(problems) && problems.length > 0) {
+            const first: unknown = problems[0];
+            throw new Error(record(first) && typeof first.message === 'string'
+                ? first.message : 'The custom Flow has a compiler problem.');
+        }
+        const tools = customToolsFromPlan(answer.result);
+        checkCustomCalls(answer.result, tools);
+        return tools;
+    }
+
+    private async prepareCustomTools(connection: Connection, source: string): Promise<void> {
+        if (source === this.installedSource) return;
+        const tools = await this.checkCustomTools(source);
+        for (const tool of this.customTools) need(await connection.registry.unregister(tool.name));
+        this.customTools = [];
+        this.installedSource = '';
+        for (const tool of tools) {
+            need(await connection.registry.register(tool.name, tool.schema,
+                (action) => this.runCustomTool(source, tool, action)));
+            this.customTools.push(tool);
+        }
+        this.installedSource = source;
+        this.notify('tools', tools.map((tool) => tool.name).join(', '));
+    }
+
+    private async runCustomTool(
+        source: string, tool: CustomTool, action: Action,
+    ): Promise<Status> {
+        const header = need(await action.getHeader('x-a11-deadline'));
+        const inherited = header === null ? NaN : Number(new TextDecoder().decode(header));
+        const deadline = Number.isFinite(inherited)
+            ? Math.min(Date.now() + 5_000, inherited) : Date.now() + 5_000;
+        const remaining = () => Math.max(1, deadline - Date.now());
+        const controller = new AbortController();
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        try {
+            const inputs: Record<string, Chunk[]> = {};
+            for (const [port, kind] of Object.entries(tool.inputs)) {
+                const node = need(await action.getInput(port));
+                const values: unknown[] = [];
+                for (; ;) {
+                    const value = need(await node.next({timeoutMs: remaining()}));
+                    if (value === null) break;
+                    values.push(value);
+                }
+                inputs[port] = [];
+                for (const value of kind.unary ? values.slice(0, 1) : values) {
+                    inputs[port]!.push(need(await toChunk(value)));
+                }
+            }
+            timer = setTimeout(() => controller.abort(), remaining());
+            const result = need(await new FlowProgram(await demoRuntime(), source, tool.name)
+                .run({inputs, timeoutMs: remaining(), signal: controller.signal,
+                    maxOutputChunks: 200, maxOutputBytes: 64_000}));
+            for (const [port, kind] of Object.entries(tool.outputs)) {
+                const output = need(await action.getOutput(port));
+                const chunks = result[port] ?? [];
+                const values: unknown[] = [];
+                for (const chunk of chunks) values.push(need(await fromChunk(chunk)));
+                if (kind.unary) {
+                    need(await (values.length === 0
+                        ? output.finalize() : output.finalize(values[0])));
+                } else {
+                    for (const item of values) need(await output.put(item));
+                    need(await output.finalize());
+                }
+            }
+            this.logAction(`Ran custom tool ${tool.name}.`);
+            return okStatus();
+        } catch (error) {
+            const status = statusFromUnknown(error);
+            this.logAction(`Custom tool ${tool.name} failed: ${status.message}`);
+            return status;
+        } finally {
+            if (timer !== null) clearTimeout(timer);
+            controller.abort();
+        }
+    }
+
+    async send(prompt: string, customSource = ''): Promise<void> {
+        if (this.running) return;
+        this.running = true;
+        this.notify('running');
         this.errors.textContent = '';
         addBubble(this.messages, prompt, 'question');
         const answer = addBubble(this.messages, '', 'answer');
+        const before = this.scene.blobs.map(({x, y, z, color}) => ({x, y, z, color}));
+        let finishReason = '';
         try {
             const connection = await this.connected();
+            try {
+                await this.prepareCustomTools(connection, customSource);
+            } catch (error) {
+                answer.remove();
+                this.notify('tool-error', error instanceof Error ? error.message : String(error));
+                return;
+            }
             // No history: each instruction stands on its own here, and the scene --
             // which the model reads with `describe_scene` -- is the state that
             // matters.
+            const appendToken = streamInto(answer, this.messages);
             await runTurn({
                 connection,
                 backend: this.backend.value,
                 prompt,
+                config: {think: false},
                 history: [],
                 systemPrompt: SYSTEM_PROMPT,
-                tools: PAGE_TOOLS,
-                portSchemas: PORT_SCHEMAS,
-                onToken: streamInto(answer, this.messages),
+                tools: [...PAGE_TOOLS, ...this.customTools.map((tool) => tool.schema)],
+                portSchemas: {...PORT_SCHEMAS, ...Object.fromEntries(
+                    this.customTools.map((tool) => [tool.name, tool.valueSchemas]))},
+                onToken: (text) => {
+                    appendToken(text);
+                    this.notify('token', text);
+                },
+                onEvent: (event) => {
+                    if (record(event) && event.done === true &&
+                        typeof event.done_reason === 'string') finishReason = event.done_reason;
+                },
             });
-            reportExampleSuccess('browser-tools');
+            const changed = this.scene.blobs.filter((blob, index) => {
+                const old = before[index]!;
+                return blob.x !== old.x || blob.y !== old.y ||
+                    blob.z !== old.z || blob.color !== old.color;
+            }).length;
+            const replied = Boolean(answer.textContent?.trim());
+            this.notify('done', '', changed, replied, finishReason);
+            if (changed > 0 && replied) reportExampleSuccess('browser-tools');
         } catch (error) {
             answer.remove();
             this.connection = null;
+            this.notify('failure', error instanceof Error ? error.message : String(error));
             showError(this.errors, error);
+            if (BLOG_SCENE) void this.checkConnection();
+        } finally {
+            this.running = false;
         }
     }
 }
@@ -827,5 +1158,25 @@ if (root) {
     // Early connection check so the page tells the user right away.
     const serverInput = document.querySelector<HTMLInputElement>('#tools-server')!;
     const errors = document.querySelector<HTMLDivElement>('#tools-errors')!;
-    void probeConnection(serverInput.value.trim() || DEFAULT_SERVER_URL, errors);
+    if (BLOG_SCENE) {
+        window.addEventListener('message', (event) => {
+            if (event.origin !== location.origin || event.source !== window.parent) return;
+            const data = event.data as {source?: string; kind?: string; text?: string; customSource?: string};
+            if (data.source === 'a11-blog-tools' && data.kind === 'run' &&
+                typeof data.text === 'string') {
+                const prompt = data.text.trim();
+                if (prompt) void demo.send(prompt,
+                    typeof data.customSource === 'string' ? data.customSource : '');
+            }
+            if (data.source === 'a11-blog-tools' && data.kind === 'retry') {
+                void demo.checkConnection();
+            }
+            if (data.source === 'a11-blog-tools' && data.kind === 'theme') {
+                document.documentElement.dataset.theme = data.text === 'dark' ? 'dark' : 'light';
+            }
+        });
+        void demo.checkConnection();
+    } else {
+        void probeConnection(serverInput.value.trim() || DEFAULT_SERVER_URL, errors);
+    }
 }

@@ -827,7 +827,8 @@ class Completer {
       AddStages();
       return;
     }
-    if (PreviousIs(TokenKind::kDot)) {
+    if (PreviousIs(TokenKind::kDot) ||
+        PreviousIs(TokenKind::kQuestionDot)) {
       ProposeMembers();
       return;
     }
@@ -1548,13 +1549,32 @@ class Completer {
     return true;
   }
 
-  /// The input ports of the flow being called, each taking its colon with it.
+  /// The input ports of the flow being called.
   void ProposeArguments(std::string_view action) {
     /// Whether this line has already given the argument.
     const auto given = [&](std::string_view port) {
       for (const size_t index : line_) {
         const Token& token = tokens_[index];
         if (token.IsWord() && token.text == port) {
+          return true;
+        }
+      }
+      return false;
+    };
+    const auto has_source = [&](std::string_view name) {
+      const std::string word = vocabulary::Canonical(name);
+      if (word == "true" || word == "false" || word == "null" ||
+          word == "_") {
+        return false;
+      }
+      if (flow_ == nullptr) {
+        return false;
+      }
+      const size_t statement =
+          line_.empty() ? offset_ : tokens_[line_.front()].start;
+      for (const Symbol& symbol : flow_->symbols) {
+        if (symbol.name == name && symbol.readable &&
+            symbol.location.start < statement && symbol.VisibleAt(offset_)) {
           return true;
         }
       }
@@ -1569,9 +1589,8 @@ class Completer {
       Proposal proposal;
       proposal.name = std::string(name);
       proposal.kind = ProposalKind::kPort;
-      // An argument is a name and a colon; writing the colon is writing what
-      // the grammar requires, not guessing what the author meant.
-      proposal.insert = absl::StrCat(name, ": ");
+      proposal.insert =
+          has_source(name) ? std::string(name) : absl::StrCat(name, ": ");
       // Both, and in that order.
       if (required) {
         absl::StrAppend(&proposal.tail, " (required)");
@@ -1665,7 +1684,7 @@ class Completer {
       Add("first", ProposalKind::kModifier, " of ");
       Add("all", ProposalKind::kModifier);
       proposals_.back().documentation =
-          "Wait for all preceding work in this scope before activating "
+          "Wait for work directly induced in this scope before activating "
           "following statements.";
       proposals_.back().tail = proposals_.back().documentation;
       Add("all of", ProposalKind::kModifier, " subjects");

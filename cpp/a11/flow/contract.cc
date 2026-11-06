@@ -30,31 +30,56 @@
 #include "a11/flow/vocabulary.h"
 
 namespace a11::flow {
-absl::StatusOr<PipelinePorts> SelectPipelinePorts(
-    const FlowPlan& flow, absl::Span<const std::string> supplied) {
+namespace {
+struct PipelineCandidates {
   const PortPlan* input = nullptr;
   const PortPlan* output = nullptr;
   size_t inputs = 0;
   size_t outputs = 0;
+};
+
+PipelineCandidates CountPipelinePorts(
+    const FlowPlan& flow, absl::Span<const std::string> supplied) {
+  PipelineCandidates found;
   for (const auto& port : flow.ports) {
     if (port.direction == syntax::PortDirection::kOutput) {
-      output = &port;
-      ++outputs;
+      found.output = &port;
+      ++found.outputs;
     } else if (std::find(supplied.begin(), supplied.end(), port.name) ==
                supplied.end()) {
-      input = &port;
-      ++inputs;
+      found.input = &port;
+      ++found.inputs;
     }
   }
-  if (inputs != 1 || outputs != 1) {
+  return found;
+}
+}  // namespace
+
+absl::StatusOr<PipelinePorts> SelectPipelinePorts(
+    const FlowPlan& flow, absl::Span<const std::string> supplied) {
+  const auto found = CountPipelinePorts(flow, supplied);
+  if (found.inputs != 1 || found.outputs != 1) {
     return absl::InvalidArgumentError(
         absl::StrCat("A pipeline invocation requires exactly one unsupplied "
                      "input (including optional inputs) and one output; found ",
-                     inputs, " unsupplied inputs and ", outputs,
+                     found.inputs, " unsupplied inputs and ", found.outputs,
                      " outputs. Supply configuration inputs explicitly or use "
                      "an adapter flow."));
   }
-  return PipelinePorts{input, output};
+  return PipelinePorts{found.input, found.output};
+}
+
+absl::StatusOr<const PortPlan*> SelectPipelineStarterOutput(
+    const FlowPlan& flow, absl::Span<const std::string> supplied) {
+  const auto found = CountPipelinePorts(flow, supplied);
+  if (found.inputs != 0 || found.outputs != 1) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "A pipeline starter requires every input supplied (including optional "
+        "inputs) and exactly one output; found ",
+        found.inputs, " unsupplied inputs and ", found.outputs,
+        " outputs. Supply the remaining inputs or select an output explicitly."));
+  }
+  return found.output;
 }
 
 namespace {

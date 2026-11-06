@@ -166,8 +166,9 @@ TEST(FlowOffsets, SnippetCallTitleNamesItsAction) {
   ASSERT_TRUE(answer.at("ok").get<bool>()) << answer.dump();
   const nlohmann::json& display = answer.at("result").at("display");
   EXPECT_EQ(display.at("label"), "search");
-  EXPECT_EQ(display.at("role"), "call of `web-search`");
-  EXPECT_FALSE(display.contains("body"));
+  EXPECT_EQ(display.at("role"), "local run of `web-search`");
+  EXPECT_NE(display.at("body").get<std::string>().find("runs on the host"),
+            std::string::npos);
 }
 
 TEST(FlowOffsets, ABasisTheServiceDoesNotSpeakIsSaidSoRatherThanGuessed) {

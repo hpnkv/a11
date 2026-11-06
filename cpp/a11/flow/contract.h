@@ -35,6 +35,10 @@ struct PipelinePorts {
 absl::StatusOr<PipelinePorts> SelectPipelinePorts(
     const FlowPlan& flow, absl::Span<const std::string> supplied = {});
 
+/// The unique output of a call with every input supplied explicitly.
+absl::StatusOr<const PortPlan*> SelectPipelineStarterOutput(
+    const FlowPlan& flow, absl::Span<const std::string> supplied);
+
 /// Every type named by a field, including nested container parameters.
 std::vector<std::string_view> FieldTypeNames(const FieldPlan& field);
 /// Propagate byte payloads through the shape dependency graph.

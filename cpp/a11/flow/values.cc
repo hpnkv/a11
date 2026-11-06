@@ -459,6 +459,15 @@ Value NodeReferenceObject::Element(const Value& key) const {
   return key.kind() == Value::Kind::kString ? Field(key.text()) : Value::Null();
 }
 
+std::optional<Value> NodeReferenceObject::FindField(
+    std::string_view name) const {
+  if (name == "id" || name == "offset" || name == "length" ||
+      name == "storage") {
+    return Field(name);
+  }
+  return std::nullopt;
+}
+
 bool NodeReferenceObject::Equals(const HostObject& other) const {
   const auto* reference = dynamic_cast<const NodeReferenceObject*>(&other);
   return reference != nullptr && reference_ == reference->reference_;
@@ -503,6 +512,15 @@ Value NodeFragmentObject::Field(std::string_view name) const {
 
 Value NodeFragmentObject::Element(const Value& key) const {
   return key.kind() == Value::Kind::kString ? Field(key.text()) : Value::Null();
+}
+
+std::optional<Value> NodeFragmentObject::FindField(
+    std::string_view name) const {
+  if (name == "id" || name == "seq" || name == "continued" ||
+      name == "data") {
+    return Field(name);
+  }
+  return std::nullopt;
 }
 
 bool NodeFragmentObject::Equals(const HostObject& other) const {
@@ -707,6 +725,55 @@ std::unique_ptr<HostBridge> NativeHostBridge() {
 }
 
 // --- Reading values ----------------------------------------------------------
+
+std::optional<Value> HostObject::FindField(std::string_view name) const {
+  Value found = Field(name);
+  return found.IsNull() ? std::nullopt
+                        : std::optional<Value>(std::move(found));
+}
+
+std::optional<Value> HostObject::FindElement(const Value& key) const {
+  if (key.kind() == Value::Kind::kString) {
+    return FindField(key.text());
+  }
+  Value found = Element(key);
+  return found.IsNull() ? std::nullopt
+                        : std::optional<Value>(std::move(found));
+}
+
+std::optional<Value> LookupOptional(const Value& value, const Value& key) {
+  const Value* base = &value;
+  if (value.is_option()) {
+    base = value.Get("value");
+    if (base == nullptr) {
+      return std::nullopt;
+    }
+  }
+  if (base->kind() == Value::Kind::kObject &&
+      key.kind() == Value::Kind::kString) {
+    const Value* found = base->Get(key.text());
+    return found == nullptr ? std::nullopt : std::optional<Value>(*found);
+  }
+  if (base->kind() == Value::Kind::kList &&
+      (key.kind() == Value::Kind::kInteger ||
+       key.kind() == Value::Kind::kBool)) {
+    std::int64_t at = key.kind() == Value::Kind::kBool
+                          ? static_cast<std::int64_t>(key.boolean())
+                          : key.integer();
+    if (at < 0) {
+      at += static_cast<std::int64_t>(base->items().size());
+    }
+    if (at >= 0 && at < static_cast<std::int64_t>(base->items().size())) {
+      return base->items()[static_cast<size_t>(at)];
+    }
+  }
+  if (base->kind() == Value::Kind::kHost) {
+    return key.kind() == Value::Kind::kString
+               ? base->host().FindField(key.text())
+               : base->host().FindElement(key);
+  }
+  return std::nullopt;
+}
 
 absl::StatusOr<Value> LookupChecked(const Value& value, const Value& key) {
   if (value.is_option() && key.kind() == Value::Kind::kString &&
@@ -1544,10 +1611,6 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
     }
     return Value::List(std::move(found));
   }
-  if (name == "get") {
-    const Value found = Lookup(first, Argument(arguments, 1));
-    return found.IsNull() ? Argument(arguments, 2) : found;
-  }
   if (name == "join") {
     const std::string separator = AsText(Argument(arguments, 1));
     if (first.kind() != Value::Kind::kList) {
@@ -1677,14 +1740,6 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
                                             first.items().begin() + to));
     }
     return first;
-  }
-  if (name == "default") {
-    const bool empty =
-        first.IsNull() ||
-        (first.kind() == Value::Kind::kString && first.text().empty()) ||
-        (first.kind() == Value::Kind::kList && first.items().empty()) ||
-        (first.kind() == Value::Kind::kObject && first.pairs().empty());
-    return empty ? Argument(arguments, 1) : first;
   }
   if (name == "to_chunk") {
     if (bridge == nullptr) {
@@ -2326,6 +2381,19 @@ absl::StatusOr<Value> Evaluate(const syntax::Node& node,
           continue;
         }
         ABSL_ASSIGN_OR_RETURN(Value value, Evaluate(*item, context));
+        if (!value.is_option() && context.is_option &&
+            context.is_option(*item)) {
+          syntax::TypeExpression type;
+          type.name = "option";
+          ABSL_ASSIGN_OR_RETURN(value, Coerce(value, type, context.Coercion()));
+        }
+        if (value.is_option()) {
+          const Value* held = value.Get("value");
+          if (held == nullptr) {
+            continue;
+          }
+          value = *held;
+        }
         put(key, std::move(value));
       }
       return Value::Object(std::move(pairs));
@@ -2339,12 +2407,35 @@ absl::StatusOr<Value> Evaluate(const syntax::Node& node,
     case syntax::NodeKind::kAttr: {
       const auto& attr = static_cast<const syntax::Attr&>(node);
       ABSL_ASSIGN_OR_RETURN(Value base, Evaluate(*attr.base, context));
+      if (attr.optional) {
+        if (!base.is_option() && context.is_option &&
+            context.is_option(*attr.base)) {
+          syntax::TypeExpression type;
+          type.name = "option";
+          ABSL_ASSIGN_OR_RETURN(base, Coerce(base, type, context.Coercion()));
+        }
+        return Value::Option(LookupOptional(base, Value::String(attr.name)));
+      }
       return LookupChecked(base, Value::String(attr.name));
     }
     case syntax::NodeKind::kIndex: {
       const auto& index = static_cast<const syntax::Index&>(node);
       ABSL_ASSIGN_OR_RETURN(Value base, Evaluate(*index.base, context));
+      if (index.optional && !base.is_option() && context.is_option &&
+          context.is_option(*index.base)) {
+        syntax::TypeExpression type;
+        type.name = "option";
+        ABSL_ASSIGN_OR_RETURN(base, Coerce(base, type, context.Coercion()));
+      }
+      if (index.optional &&
+          (base.IsNull() ||
+           (base.is_option() && base.Get("value") == nullptr))) {
+        return Value::Option(std::nullopt);
+      }
       ABSL_ASSIGN_OR_RETURN(Value key, Evaluate(*index.index, context));
+      if (index.optional) {
+        return Value::Option(LookupOptional(base, key));
+      }
       return LookupChecked(base, key);
     }
     case syntax::NodeKind::kBuiltin: {
@@ -2379,6 +2470,12 @@ absl::StatusOr<Value> Evaluate(const syntax::Node& node,
         // The value, not a boolean: `a or b` is `a` when `a` holds, which is
         // what makes `name or "unknown"` read as a default.
         ABSL_ASSIGN_OR_RETURN(Value left, Evaluate(*binary.left, context));
+        if (binary.op == "or" && !left.is_option() && context.is_option &&
+            context.is_option(*binary.left)) {
+          syntax::TypeExpression type;
+          type.name = "option";
+          ABSL_ASSIGN_OR_RETURN(left, Coerce(left, type, context.Coercion()));
+        }
         if (binary.op == "or" && left.is_option()) {
           if (left.Get("has_value")->boolean()) {
             return *left.Get("value");
@@ -2454,6 +2551,13 @@ Value StatusRecord(const absl::Status& status) {
   }
   pairs.emplace_back("details", std::move(details));
   return Value::Status(status, std::move(pairs));
+}
+
+Value FailureRecord(const absl::Status& status, Value item, std::int64_t seq) {
+  Value::Pairs fields = StatusRecord(status).pairs();
+  fields.emplace_back("it", std::move(item));
+  fields.emplace_back("seq", Value::Integer(seq));
+  return Value::Object(std::move(fields));
 }
 
 std::optional<absl::StatusCode> StatusCodeOf(const Value& value) {

@@ -309,7 +309,6 @@ TEST(FlowValues, CallsTheFixedFunctionSet) {
   EXPECT_EQ(TextOf(R"(join(split("a,b", ","), "|"))"), "a|b");
   EXPECT_EQ(TextOf(R"(keys({"b": 1, "a": 2}))"), R"(["a", "b"])");
   EXPECT_EQ(TextOf(R"(values({"b": 1, "a": 2}))"), "[2, 1]");
-  EXPECT_EQ(TextOf(R"(get({"a": 1}, "b", "fallback"))"), "fallback");
   EXPECT_EQ(TextOf(R"(merge({"a": 1}, {"b": 2}))"), R"({"a": 1, "b": 2})");
   EXPECT_EQ(TextOf(R"(contains("hello", "ell"))"), "true");
   EXPECT_EQ(TextOf(R"(startswith("hello", ["x", "he"]))"), "true");
@@ -317,11 +316,48 @@ TEST(FlowValues, CallsTheFixedFunctionSet) {
   EXPECT_EQ(TextOf(R"(replace("a-b-c", "-", "+"))"), "a+b+c");
   EXPECT_EQ(TextOf(R"(slice("abcdef", 1, 3))"), "bc");
   EXPECT_EQ(TextOf(R"(slice("abcdef", -2))"), "ef");
-  EXPECT_EQ(TextOf(R"(default("", "fallback"))"), "fallback");
-  EXPECT_EQ(TextOf(R"(default(0, "fallback"))"), "0");
   EXPECT_EQ(TextOf(R"(seconds(duration("1m30s")))"), "90.0");
   EXPECT_EQ(TextOf(R"(strformat("%s!", "hi"))"), "hi!");
   EXPECT_FALSE(EvaluatedIn(R"(nonesuch("x"))").ok());
+  const std::vector<Value> removed = {Value::Null(), Value::Integer(1)};
+  EXPECT_FALSE(CallBuiltin("default", removed, nullptr).ok());
+}
+
+TEST(FlowValues, OptionalProjectionKeepsNullDistinctFromMissing) {
+  EXPECT_EQ(TextOf(R"({title: null}?.title.has_value)"), "true");
+  EXPECT_EQ(TextOf(R"({title: null}?.other.has_value)"), "false");
+  EXPECT_EQ(TextOf(R"({title: 0}?.title or 9)"), "0");
+  EXPECT_EQ(TextOf(R"({title: null}?.title or 9)"), "");
+  EXPECT_EQ(TextOf(R"({title: 1}?.other or 9)"), "9");
+  EXPECT_EQ(TextOf(R"({a: {b: 3}}?.a?.b or 9)"), "3");
+  EXPECT_EQ(TextOf(R"({a: null}?.a?.b.has_value)"), "false");
+  EXPECT_EQ(TextOf(R"(([null, 5])?[0].has_value)"), "true");
+  EXPECT_EQ(TextOf(R"(([null, 5])?[-3].has_value)"), "false");
+  EXPECT_EQ(TextOf(R"({a: 7}?["a"] or 9)"), "7");
+  EXPECT_EQ(TextOf(R"({a: 7}?["b"] or 9)"), "9");
+  EXPECT_FALSE(EvaluatedIn(R"({a: 7}?.b.value)").ok());
+  EXPECT_FALSE(EvaluatedIn(R"(get({a: 7}, "a"))").ok());
+  EXPECT_FALSE(EvaluatedIn(R"(std::get({a: 7}, "a"))").ok());
+}
+
+TEST(FlowValues, ObjectFieldsOmitAbsentOptionsAndUnwrapPresentOnes) {
+  const auto value = EvaluatedIn(R"({
+    missing: {}?.field,
+    empty: {field: null}?.field,
+    zero: {field: 0}?.field,
+    flag: {field: false}?.field,
+    ordinary: {has_value: false}
+  })");
+  ASSERT_TRUE(value.ok()) << value.status();
+  EXPECT_EQ(value->Get("missing"), nullptr);
+  ASSERT_NE(value->Get("empty"), nullptr);
+  EXPECT_TRUE(value->Get("empty")->IsNull());
+  ASSERT_NE(value->Get("zero"), nullptr);
+  EXPECT_EQ(value->Get("zero")->integer(), 0);
+  ASSERT_NE(value->Get("flag"), nullptr);
+  EXPECT_FALSE(value->Get("flag")->boolean());
+  ASSERT_NE(value->Get("ordinary"), nullptr);
+  EXPECT_FALSE(value->Get("ordinary")->is_option());
 }
 
 TEST(FlowValues, Base64GoesBothWaysInBothAlphabets) {

@@ -262,6 +262,24 @@ TEST(FlowComplete, ACallsPortsAndItsStatusFollowItsDot) {
             (std::vector<std::string>{"reply", "question", "limit", "status"}));
 }
 
+TEST(FlowComplete, CallPortCompletionUsesSameNamedSourceWhenVisible) {
+  const auto* shorthand = Find(
+      "flow inner { in topic: string\n out result: string }\n"
+      "flow outer { in topic: string\n"
+      "  x = run inner(|CARET|)\n}",
+      "topic");
+  ASSERT_NE(shorthand, nullptr);
+  EXPECT_EQ(shorthand->insert, "topic");
+
+  const auto* explicit_port = Find(
+      "flow inner { in topic: string\n out result: string }\n"
+      "flow outer { in question: string\n"
+      "  x = run inner(|CARET|)\n}",
+      "topic");
+  ASSERT_NE(explicit_port, nullptr);
+  EXPECT_EQ(explicit_port->insert, "topic: ");
+}
+
 TEST(FlowComplete, ABarriersDotOffersTheFieldsOfAStatus) {
   EXPECT_EQ(
       Names("flow t {\n  in q: string\n  x = run a(q: q)\n"
@@ -500,6 +518,9 @@ TEST(FlowComplete, OffersTheFieldsTheFileSaidAValueHas) {
   EXPECT_EQ(
       Names(absl::StrCat(kHead, "  std::strformat(\"%s\", src.|CARET|\n}\n")),
       (std::vector<std::string>{"url", "rank"}));
+  EXPECT_EQ(
+      Names(absl::StrCat(kHead, "  std::strformat(\"%s\", src?.|CARET|\n}\n")),
+      (std::vector<std::string>{"url", "rank"}));
 
   // And nothing where nothing is known: no pattern, and a positional one names
   // no fields at all.
@@ -605,7 +626,7 @@ TEST(FlowComplete, ScopeBarrierCompletionExplainsPhaseOrdering) {
   ASSERT_NE(found, result.proposals.end());
   EXPECT_EQ(found->insert, "all");
   EXPECT_EQ(found->documentation,
-            "Wait for all preceding work in this scope before activating "
+            "Wait for work directly induced in this scope before activating "
             "following statements.");
 }
 

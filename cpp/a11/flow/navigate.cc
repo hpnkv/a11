@@ -1476,6 +1476,15 @@ Description Describe(std::string_view source, size_t offset,
                          call->action, "`", type.empty() ? "" : ": ", type);
         about.markdown = PortMarkdown(argument.port.text, type, required, unary,
                                       about.detail);
+        if (argument.pipeline != nullptr &&
+            argument.pipeline->source != nullptr &&
+            argument.pipeline->source->location.start ==
+                argument.port.location.start &&
+            argument.pipeline->source->location.end ==
+                argument.port.location.end) {
+          absl::StrAppend(&about.markdown, "\n\nReads the same-named source `",
+                          argument.port.text, "`.");
+        }
         return;
       }
     });
@@ -1549,6 +1558,31 @@ Description Describe(std::string_view source, size_t offset,
   std::string pipeline_note;
   for (const auto& flow : parsed.flows) {
     syntax::VisitSubtree(*flow, [&](const syntax::Node& node) {
+      if (const auto* pipeline = syntax::As<syntax::Pipeline>(&node);
+          pipeline != nullptr) {
+        const auto* starter =
+            syntax::As<syntax::CallExpression>(pipeline->source.get());
+        if (starter != nullptr &&
+            offset >= starter->action_location.start &&
+            offset < starter->action_location.end) {
+          if (const auto* target = resolved.program.Flow(starter->action);
+              target != nullptr) {
+            std::vector<std::string> supplied;
+            for (const auto& argument : starter->args) {
+              supplied.push_back(argument.port.text);
+            }
+            const auto output =
+                SelectPipelineStarterOutput(*target, supplied);
+            if (output.ok()) {
+              pipeline_note =
+                  absl::StrCat("\n\n**Pipeline starter** (", starter->mode,
+                               "): output `", (*output)->name,
+                               "`. The invocation starts when its output "
+                               "is read.");
+            }
+          }
+        }
+      }
       const auto* stage = syntax::As<syntax::Stage>(&node);
       if (stage == nullptr || (stage->name != "run" && stage->name != "call")) {
         return;

@@ -73,8 +73,9 @@ Strings and `"""` strings decode `\0` (NUL), `\a`, `\b`, `\f`, `\n`, `\r`,
 | `x = e` again | Reassign in source order; child updates join back. Reject conflicting parallel updates. |
 | `s = source \| stage` | Lazy stream alias: unused pipelines do not execute. Readers share production. Nested scopes replay outer streams; explicit `take` uses a shared cursor. A list is one value; `flatten` expands it. |
 | `x = take s`; `x = try take s` | Successive reads: EOF errors / returns `{has_value:false}`. Present items have `value`, including null. Upstream errors propagate. |
-| `j = run action(port: s, ...)`; `j = call action(...)` | Local handler / peer dispatch; executes even if unused. Read `j.output`; write `j.input`. Unused outputs drain; unfed inputs close immediately, fed inputs after their last writer. |
+| `j = run action(port: s, ...)`; `j = call action(s, ...)` | Local handler / peer dispatch. A bare `s` feeds input `s` from source `s`; argument order is free. Calls execute even if unused. Read `j.output`; write `j.input`. Unused outputs drain; unfed inputs close immediately, fed inputs after their last writer. |
 | `s \| run f(config: e)`; `s \| call m::f(...)` | Once per whole stream. Exactly one unsupplied input (optional inputs count) and one declared output. Interface required. |
+| `run f(input: s) \| packb -> out`; `call m::f(input: s) -> out` | Pipeline starter: every input supplied, including optional inputs, and exactly one declared output. A transfer reads and starts it; an unread pipeline alias does not. Bare calls remain eager. |
 | `s \| map (run f(input: it)).output` | Per-item invocation; distinct from whole-stream application. |
 | `a -> b -> out`; `s -> a, b`; `s -> _` | Right-associative: forward all b, then all a. Terminal commas broadcast. Independent attachments to a shared handle interleave after its prefix. Handles are sinks, never payloads or sources. |
 | `if e { ... } else if e { ... } else { ... }` | Boolean conditional scopes. |
@@ -82,13 +83,13 @@ Strings and `"""` strings decode `\0` (NUL), `\a`, `\b`, `\f`, `\n`, `\r`,
 | `for x[, y...] in s [parallel N] { ... } [until e / while e]` | Per-item scopes, optional tuple destructuring; sequential by default. A bare list literal (`for x in [a,b,c]`) expands one level; empty → no passes. Other sources retain stream values; use `\| flatten` for named lists or list-valued pipelines. Parallel iterations may interleave writes. Trailing condition runs after the complete pass; forbidden with parallel passes. |
 | `repeat [state = e] [max N] { ... } [until e / while e]` | Repeat with condition and/or literal bound. `state <- e` supplies next pass's state; ordinary reassignment also works. |
 | `... after a, b`; `after a, b { ... }` | Gate activation, including arguments/initializers, on completion. Bound blocks/loops name completion. |
-| `wait all` | Scope-local phase barrier: all earlier work completes before later work activates. No binding/modifiers. Keep streaming producers with consumers in the same phase. |
+| `wait all` | Scope-local phase barrier: work activated earlier completes before later work activates. A stream may first be read on either side; independent readers of the same stream stay in one phase. Successive `take` reads share one cursor and may cross phases. No binding/modifiers. |
 | `wait j`; `wait all of a, b`; `wait first of a, b` | Wait for subjects; the race yields the zero-based winning index. Explicit-subject waits are not scope-wide barriers. |
 | `status j`; `outcome = wait j` | Completion status: `.ok`, `.code`, `.message`, `.details`. Unhandled failure ends the scope. |
 | `try run/call ...`; `attempt = try { ... }`; `try s -> dest` | Tolerate call / block / transfer failure; inspect its status. No rollback of outputs/effects. Tolerating a call does not suppress aborted-output read errors. |
 | `n = node([id])`; `close n`; `abort n [code [message]]` | Create/attach stream node; close normally / with error. `n.id` passes its identity to a tool. |
 | `nodes m { ... }`; `nodes m`; `... via m` | Scoped/named node map. Local calls keep intermediates off the wire unless `tee`. |
-| `cancel j`; `fail [code [message]]`; `fail status_value` | Cancel an action / fail the scope. Use conditions, data dependencies, or `after` to gate side effects. |
+| `cancel j`; `fail [code [message]]`; `fail status_value` | Cancel an action / fail the scope. Use conditions, data dependencies, or `after` to gate side effects. Valid codes are listed below. |
 | `skip N s` | Drop the first N items for every reader; `drop N` affects one pipeline. |
 | `log [level] e`; `logf [level] "fmt" e, ...` | Log without output ports; default `info`; levels: `debug`, `info`, `warning`, `error`, `critical`. |
 | Call tail: `timeout D`, `deadline t`, `after subjects`, `via m`, `tee`, `id e`, `with "k": e`, `forward headers "pattern"` | Positive relative duration / absolute time; earlier limit wins. Deadline is eager; `after` delays its entire expression. Waits also accept timeout/deadline. |
@@ -96,8 +97,17 @@ Strings and `"""` strings decode `\0` (NUL), `\a`, `\b`, `\f`, `\n`, `\r`,
 | `import "dir/lib.flow" [as m]`; `from lib import f [as g], T`; `from lib import *` | Default namespace `lib`; symbol/wildcard imports also work in module/flow scopes. `from std import f` exposes standard names. Filesystem imports require approved host roots. |
 | `export symbol [as alias]`; `struct T [exported] { fields }` | Explicit reexport; record type. Fields: `name: T`, `required` or `default LITERAL` (exclusive), numeric bounds `1..10`, text RE2 regex `matching "pattern"`, `one of [...]`, list `unique`. |
 | `m::f`, `a11::sdk::Interaction`; `j.output`, `v.field`, `v[index]` | Static qualification / runtime projection. Registered host types need no import; wire tags retain dotted spelling. |
-| `T{field:e}`; `e as T`; `[e, ...]`; `{key:e, ...other}` | Typed record, cast, list, object/spread. Strings: `"..."` or triple quotes. Literals: `true`, `false`, `null`. |
+| `v?.field`, `v?[key]`; `s \| present` | Safe projection returns `std::option[T]`: missing is absent, present null remains present. Safe chaining unwraps an option base. `present` drops absent options and emits present payloads. |
+| `T{field:e}`; `e as T`; `[e, ...]`; `{key:e, ...other}` | Typed record, cast, list, object/spread. Object fields omit absent options and unwrap present ones. Strings: `"..."` or triple quotes. Literals: `true`, `false`, `null`. |
 | `+`, `-`; `== != < <= > >= in`; `not`, `and`, `or` | Numeric/time arithmetic, comparison/membership, short-circuit logic. Space subtraction: `a-b` is a name. No `*` or `/` arithmetic. |
+
+`fail` and `abort` accept these named failure codes: `CANCELLED`, `UNKNOWN`,
+`INVALID_ARGUMENT`, `DEADLINE_EXCEEDED`, `NOT_FOUND`, `ALREADY_EXISTS`,
+`PERMISSION_DENIED`, `RESOURCE_EXHAUSTED`, `FAILED_PRECONDITION`, `ABORTED`,
+`OUT_OF_RANGE`, `UNIMPLEMENTED`, `INTERNAL`, `UNAVAILABLE`, `DATA_LOSS`, and
+`UNAUTHENTICATED`. Use the whole canonical name, for example
+`fail FAILED_PRECONDITION "Validation did not pass"`. Lowercase names also
+work. `OK` is recognized as a status code but does not indicate failure.
 
 `parallel` accepts integer expressions such as `parallel workers` or
 `parallel (workers + 1)`, evaluated once when the loop or stage starts. Dynamic
@@ -208,7 +218,6 @@ Brackets mark optional arguments; `v` is a value, `s` text, `xs` a list.
 | `replace(s,old,new)`, `slice(v,start[,stop])` | Replace all / slice; negative indices supported. |
 | `split(s[,sep])`, `join(xs[,sep])` | Split on whitespace runs, omitting empties, by default / join with empty separator by default. |
 | `keys(v)`, `values(v)` | Lists in sorted-key order. |
-| `get(v,key[,fallback])`, `default(v,fallback)` | Lookup fallback defaults to null; `default` replaces null/empty text/list/object, not 0/false. |
 | `merge(a,b,...)` | Merge records; later keys win. |
 | `match("{name:word}={n:int}",s)` | Flow capture template (not regex): record or null. Holes also support number, bool, line, rest, duration, time, json. |
 | `strformat(fmt,args...)` | printf-style formatting: `%s`, `%d`, `%.2f`, `%2$s`; time `%(%H:%M)s`. |
@@ -236,6 +245,7 @@ expressions, evaluated once per activation outside `it`.
 | `first N`; `last N`; `drop N`; `distinct` | Prefix / suffix / skip / deduplicate. |
 | `truncate N`; `chunk N` | Shorten each value / split text or bytes into ≤N-byte chunks. |
 | `batch N`; `window N`; `group e`; `flatten` | Batches / full-width rolling windows / groups closed by e / expand lists. `batch` and `group` flush partial groups at EOF; `window` does not. |
+| `present` | Drop absent `std::option[T]` items and emit present payloads, including null/false/zero/empty values. |
 | `context e before N after M [numbered [base B]]` | Excerpts with N preceding items; each match within M trailing items resets the tail. EOF flushes. Counts: nonnegative int32, evaluated once outside `it`. `numbered`: `{index, value}`, counting every source item from B (default 1). Active excerpts can grow; bound endless sources upstream. |
 | `sort [by e] [desc]` | Collect and order; ascending by default. |
 | `match "pattern"`; `mime "text/*"` | Extract matching records, dropping nonmatches / filter representations. |
@@ -247,7 +257,7 @@ expressions, evaluated once per activation outside `it`.
 | `then s` | Entire first stream, then s. |
 | `timeout D`; `pace D` | Maximum inactivity gap / minimum inter-item interval. |
 | `log [level] e`; `logf [level] "fmt" e,...` | Observe and pass items through. |
-| `try STAGE [into failures]` | Per-item failure handling for suitable stages: drop failed item; route status or log. |
+| `try STAGE [failures into DEST]` | Tolerate item failures; route status-compatible records with `it` and zero-based `seq`, or log. |
 | `STAGE parallel N [unordered]` | Parallel per-item transforms/filters; not reductions, sorting, or stateful prefix predicates. |
 | `run f(args...)`; `call f(args...)` | Whole-stream action adapter; ordinary call modifiers apply. |
 
@@ -320,7 +330,7 @@ flow rank exported {
   hits = lines
     | run clean()
     | match "{name:word}={score:int}"
-    | try map Hit{name: it.name, score: it.score} parallel 4 into bad
+    | try map Hit{name: it.name, score: it.score} parallel 4 failures into bad
 
   hits | sort by it.score desc | first 3 -> best
   hits | sum it.score -> total

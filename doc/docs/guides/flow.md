@@ -359,12 +359,20 @@ results in input order:
 urls | map fetch_page(it) parallel 8 -> bodies
 ```
 
-**Handle per-value failures.** `try` on a stage drops values the stage cannot
-process, and `into` sends their status records to a destination:
+**Handle per-value failures.** `try` on a stage tolerates an item it cannot
+process. `failures into` sends a status-compatible record to a destination.
+The record has the original item in `it` and its zero-based position at this
+stage in `seq`:
 
 ```a11flow
-docs | try map it as Order into rejected -> orders
+docs | try map it as Order failures into rejected -> orders
 ```
+
+The usual status fields remain available, including `code`, `message`, and
+`details`. If decoding the input itself fails, `it` is null. A cast or binding
+to `std::status`, and writing to a status port, keeps only the status fields.
+Keep the failures in a local node to inspect `it` and `seq` before that
+conversion.
 
 **Merge by arrival.** `interleave` reads several streams concurrently and emits
 each value on arrival. A slow source does not block a fast one:
@@ -394,11 +402,12 @@ model = call ask-model(question: q)
 wait all of search, model
 ```
 
-**Separate execution phases.** Bare `wait all` holds for all preceding work in
-the current scope before later statements activate. A streaming producer and
-the consumer that finishes it belong in the same phase; separating them with
-`wait all` creates a dependency cycle. Bare `wait all` accepts no timeout,
-deadline, `after` modifier, or result binding:
+**Separate execution phases.** Bare `wait all` holds for work directly induced
+by earlier statements and reads activated in the current scope before later
+statements activate. A stream may first be read on either side. Independent
+readers of the same stream stay in one phase; successive `take` reads share a
+cursor and may cross the barrier. Bare `wait all` accepts no timeout, deadline,
+`after` modifier, or result binding:
 
 ```a11flow
 rows | count -> total
@@ -483,6 +492,11 @@ flow shrink {
 expressions. Parenthesize an invocation before selecting one of its outputs:
 `(run fetch(url: url)).metadata`. Keep the handle when several consumers use it.
 
+An action argument can use a source with the same name as its input port:
+`run fetch(url)` means `run fetch(url: url)`. Argument order is free, and
+shorthand can be mixed with explicit `port: expression` arguments. The bare
+name must refer to a readable source in scope.
+
 Name a value explicitly when it is used in several places:
 
 ```a11flow
@@ -521,6 +535,31 @@ With a `std::option` on the left, `or` unwraps a present payload and evaluates
 the fallback only when the option is absent. Present null, false, zero and
 empty values skip the fallback. Stored options support the same expression.
 Upstream errors propagate. With ordinary values, `or` tests truthiness.
+
+Use `?.` for a field and `?[]` for a computed key or list index. Both return
+`std::option[T]`: a missing field or out-of-range index is absent, while a
+present null remains present. A safe projection can follow another option:
+
+```a11flow
+title = page?.metadata?.title or "Untitled"
+selected = page?[field_name]
+if value = selected { value -> picked }
+```
+
+In an object literal, an absent option omits its field. A present option writes
+its payload, including null, false, zero, and empty values. This lets
+`{exit_code: reply?.exit_code}` omit `exit_code` when the reply lacks it.
+Lists and standalone option values retain their explicit presence records.
+
+`| present` turns a stream of options into a stream of their present payloads.
+It retains null, false, zero, and empty values. A scalar option is a one-item
+source, so `title: page?.title | present` feeds zero or one value to an action
+input; `page?.title` alone feeds the option record as one value.
+
+```a11flow
+people | map it?.contact?.email | present -> emails
+job = run publish(title: page?.title | present)
+```
 
 An operation activates when its containing expression is demanded. `and` and
 `or` short-circuit, and skipped branches do not start their operations.
@@ -687,8 +726,9 @@ continues to select runtime fields and action ports.
 
 ## Separate concurrent execution phases
 
-`wait all` waits for all preceding work in its executable scope before
-activating following statements. Work within each phase runs concurrently:
+`wait all` waits for work directly induced by preceding statements in its
+executable scope before activating following statements. Work within each phase
+runs concurrently:
 
 ```a11flow
 flow prepare {
@@ -701,7 +741,10 @@ flow prepare {
 
 Both preparation calls complete before `serve` activates. Its arguments,
 initializers, and eager deadline expression also wait for the barrier. Completion
-includes input feeds, required output draining, owned calls, and child scopes.
+includes input feeds, output reads activated in the first phase, owned calls,
+automatic drains of unused call outputs, and child scopes. A partial read
+completes after the values it asks for; it does not drain the whole stream.
+Outputs first read in a later phase are drained there.
 An ordinary failure prevents the next phase; tolerated failures retain their
 ordinary behavior.
 
@@ -711,20 +754,23 @@ continue independently. The explicit-subject form `wait all of a, b` observes
 only those subjects and does not establish execution phases.
 
 A stream alias alone does no work. A barrier does not exhaust aliases, collect
-streams, add buffering, or cancel producers. Keep a producer and its required
-consumer in the same phase:
+streams, add buffering, or cancel producers. A call may complete before one of
+its outputs is first read. Different outputs of the same call can be read in
+different phases:
 
 ```a11flow
-flow consume {
+flow consume { out rows: string stream
   work = run read_rows()
-  work.rows -> _
   wait all
-  log "Rows consumed"
+  work.rows -> rows
 }
 ```
 
-Moving `work.rows -> _` after the barrier would make completion depend on work
-that cannot activate. Native diagnostics report provable cross-phase cycles.
+A stream with independent readers on both sides can backpressure the first
+reader through the later reader's reserved queue. Keep those readers in one
+phase. Successive `take` reads of one stream share a cursor and can cross the
+barrier. A feed after the barrier to a call that must finish before it remains
+a cycle.
 Bare `wait all` accepts no `timeout`, `deadline`, or `after` modifier and cannot
 be bound as a value. Builders expose it as `Statement.wait_all()` in Python and
 `Statement::WaitAll()` in C++.
@@ -920,7 +966,15 @@ activation per pass; a skipped branch creates none. A custom stage can filter,
 aggregate, keep state, and invoke other actions. Per-item invocation remains
 `lines | map (run process_line(input: it)).output`.
 
-Exactly one input must remain after named arguments, counting optional inputs
+A call can also start a pipeline when every input is supplied and the contract
+declares one output. `run clean_lines(input: lines) | first 10 -> text`
+selects that output; `run clean_lines(input: lines) -> text` forwards it
+without another stage. The same form works with `call`. A transfer reads the
+pipeline and starts the invocation. A bound pipeline with no reader does not
+start it; use `-> _` to execute it while discarding the output. Bare call
+statements still start eagerly.
+
+Exactly one input must remain after supplied arguments, counting optional inputs
 as well. Every other configuration input must be supplied explicitly. Exactly
 one output must be declared. Use an adapter flow when an interface has several
 outputs or does not identify a unique input. `lines | run prefix(label: "> ")`

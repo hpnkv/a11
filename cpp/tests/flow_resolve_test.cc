@@ -86,6 +86,26 @@ std::string ReadFile(const std::filesystem::path& path) {
   return buffer.str();
 }
 
+TEST(FlowResolve, RejectsRemovedDefaultFunctionButKeepsDeclarationDefaults) {
+  const ResolveResult valid = Check(R"(
+flow configured {
+  header "x-locale" as locale default "en"
+  out result: string
+  locale -> result
+}
+)");
+  EXPECT_TRUE(valid.diagnostics.empty()) << Messages(valid);
+
+  const ResolveResult removed = Check(R"(
+flow configured {
+  out result: string
+  std::default("", "fallback") -> result
+}
+)");
+  EXPECT_FALSE(removed.diagnostics.empty());
+  EXPECT_NE(Messages(removed).find("default"), std::string::npos);
+}
+
 TEST(FlowResolve, ChecksLiteralReferenceStageOptionsBeforeExecution) {
   const ResolveResult result = Check(R"(
 flow inspect {
@@ -170,6 +190,48 @@ TEST(FlowResolve, ChecksACallsPortsAgainstTheFlowItNames) {
               std::string::npos)
         << Messages(result);
   }
+}
+
+TEST(FlowResolve, ShorthandFeedsNamedInputsInWrittenOrder) {
+  const ResolveResult result = Check(
+      "declare flow inner { in i1: int\n in i2: int\n out result: int }\n"
+      "flow outer { in i1: int\n in i2: int\n"
+      "  x = run inner(i2, i1)\n  x.result -> _ }");
+  ASSERT_TRUE(result.diagnostics.empty()) << Messages(result);
+  const auto& steps = result.program.flows[1].steps;
+  ASSERT_GE(steps.size(), 3u);
+  EXPECT_EQ(steps[1].source, "i2");
+  EXPECT_EQ(steps[1].destination, "x.i2");
+  EXPECT_EQ(steps[2].source, "i1");
+  EXPECT_EQ(steps[2].destination, "x.i1");
+}
+
+TEST(FlowResolve, ShorthandCountsAsSuppliedPipelineInput) {
+  const ResolveResult result = Check(
+      "declare flow inner { in data: int stream\n in config: int\n"
+      "  out result: int stream }\n"
+      "flow outer { in data: int stream\n in config: int\n"
+      "  data | run inner(config) -> _ }");
+  ASSERT_TRUE(result.diagnostics.empty()) << Messages(result);
+  const auto& steps = result.program.flows[1].steps;
+  const auto found =
+      std::find_if(steps.begin(), steps.end(),
+                   [](const StepPlan& step) { return step.action == "inner"; });
+  ASSERT_NE(found, steps.end());
+  EXPECT_EQ(found->pipeline_input, "data");
+}
+
+TEST(FlowResolve, ShorthandReadsValueBindingsAndReportsMissingSources) {
+  const ResolveResult good = Check(
+      "declare flow inner { in config: int\n out result: int }\n"
+      "flow outer { config = 3\n x = run inner(config)\n"
+      "  x.result -> _ }");
+  EXPECT_TRUE(good.diagnostics.empty()) << Messages(good);
+
+  const ResolveResult missing = Check(
+      "declare flow inner { in config: int\n out result: int }\n"
+      "flow outer { x = run inner(config)\n x.result -> _ }");
+  EXPECT_NE(Messages(missing).find("Unknown name 'config'"), std::string::npos);
 }
 
 TEST(FlowResolve, AFlowIsInItsOwnProgramSoItMayCallItself) {
@@ -1175,6 +1237,35 @@ TEST(FlowResolve, PipelineCallsRequireAnUnambiguousKnownInterface) {
   }
 }
 
+TEST(FlowResolve, PipelineStartersRequireEveryInputAndOneOutput) {
+  const auto good = Check(R"(
+flow source { in config: string
+ in input: string
+ out output: string
+ input -> output
+}
+flow main { out result: string
+ run source(config: "x", input: "y") -> result
+ call source(config: "x", input: "y") -> _
+}
+)");
+  EXPECT_FALSE(good.HasErrors()) << Messages(good);
+  for (const auto* source : {
+           "flow main { run unknown() -> _ }",
+           "declare flow f { in a: int\n out x: int }\n"
+           "flow main { run f() -> _ }",
+           "declare flow f { in a: int\n out x: int\n out y: int }\n"
+           "flow main { run f(a: 1) -> _ }",
+       }) {
+    const auto checked = Check(source);
+    EXPECT_TRUE(checked.HasErrors()) << source;
+    EXPECT_TRUE(std::any_of(
+        checked.diagnostics.begin(), checked.diagnostics.end(),
+        [](const auto& d) { return d.code == "flow.form.pipeline-call"; }))
+        << source;
+  }
+}
+
 TEST(FlowResolve, PipelineCallOrderingAllowsStatusReadsAndRejectsOutputCycles) {
   const auto good = Check(R"(
 flow clean { in input: string stream
@@ -1213,8 +1304,17 @@ TEST(FlowResolve, ScopeBarriersRejectValuesModifiersAndStreamingCycles) {
         << statement;
   }
   for (const auto* body :
-       {"work = run producer()\n wait all\n work.output -> _",
-        "n = node()\n \"x\" -> n\n wait all\n n -> _",
+       {"work = run producer()\n work.output -> _\n wait all\n"
+        " work.output -> _",
+        "work = run producer()\n first = take work.output\n"
+        " wait all\n work.output -> _",
+        "work = run producer()\n work.output -> _\n"
+        " wait all\n first = take work.output",
+        "work = run producer()\n alias = work.output | map it\n"
+        " work.output -> _\n wait all\n alias -> _",
+        "n = node()\n \"x\" -> n\n n -> _\n wait all\n n -> _",
+        "in input: string stream\n if true {\n input -> _\n"
+        " wait all\n input -> _\n }",
         "n = node()\n n -> _\n wait all\n \"x\" -> n",
         "work = run transform()\n wait all\n \"x\" -> work.input",
         "alias = \"x\" | run transform()\n alias -> _\n wait all\n alias -> "
@@ -1230,6 +1330,31 @@ TEST(FlowResolve, ScopeBarriersRejectValuesModifiersAndStreamingCycles) {
         [](const auto& d) { return d.code == "flow.barrier.scope-cycle"; }))
         << Messages(result);
   }
+  for (const auto* body :
+       {"work = run producer()\n wait all\n work.output -> _",
+        "n = node()\n \"x\" -> n\n wait all\n n -> _",
+        "work = run producer()\n work.output -> _\n wait all",
+        "in input: string stream\n input -> _\n wait all",
+        "in input: string stream\n wait all\n input -> _"}) {
+    const auto result = Check(
+        absl::StrCat("flow producer { out output: string stream\n \"x\" "
+                     "-> output }\nflow main {\n", body, "\n}"));
+    EXPECT_FALSE(result.HasErrors()) << body << ": " << Messages(result);
+  }
+  EXPECT_FALSE(Check(R"(
+flow split { out first: string stream
+ out second: string stream
+ "one" -> first
+ "two" -> second
+}
+flow main {
+ work = run split()
+ work.first -> _
+ wait all
+ work.second -> _
+}
+)")
+                   .HasErrors());
   EXPECT_FALSE(Check("flow main { in input: string stream\n alias = input\n "
                      "wait all\n alias -> _ }")
                    .HasErrors());

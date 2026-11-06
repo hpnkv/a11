@@ -116,8 +116,8 @@ STATEMENTS = _keywords(
 
 #: Words that stand inside a statement without opening one.
 CLAUSES = _keywords(
-    "parallel", "unordered", "max", "of", "by", "before", "desc", "into",
-    "until", "while", "numbered", "base"
+    "parallel", "unordered", "max", "of", "by", "before", "desc",
+    "failures into", "until", "while", "numbered", "base"
 )
 
 #: What may follow a call's closing parenthesis.
@@ -129,11 +129,11 @@ MODIFIERS = _keywords(
 #: Every pipeline stage.
 STAGES = _keywords(
     "read_with", "ref", "take while", "take until", "first", "last",
-    "drop", "truncate", "batch", "window", "context", "flatten", "group",
-    "sort", "where", "map", "scan", "match", "distinct", "then", "log",
-    "logf", "mime", "strformat", "chunk", "collect", "consume", "count",
-    "sum", "min", "max", "avg", "fold", "join", "text", "json", "packb",
-    "timeout", "pace"
+    "drop", "truncate", "batch", "window", "context", "flatten",
+    "present", "group", "sort", "where", "map", "scan", "match",
+    "distinct", "then", "log", "logf", "mime", "strformat", "chunk",
+    "collect", "consume", "count", "sum", "min", "max", "avg", "fold",
+    "join", "text", "json", "packb", "timeout", "pace"
 )
 
 #: The stages that may be written without their leading ``|``.
@@ -148,13 +148,13 @@ OPERATOR_WORDS = _keywords("and", "or", "not", "in")
 #: The language's fixed function set. No user code, ever: a flow stays data.
 BUILTINS = _keywords(
     "len", "lower", "upper", "trim", "text", "number", "bool", "keys",
-    "values", "get", "join", "split", "merge", "contains", "startswith",
-    "endswith", "replace", "match", "slice", "default", "to_chunk",
-    "from_chunk", "strformat", "b64encode", "b64decode", "b64urlencode",
-    "b64urldecode", "utf8encode", "utf8decode", "now", "duration", "time",
-    "seconds", "parse_time", "parse_duration", "integer", "int", "string",
-    "bytes", "object", "list", "boolean", "array", "any", "json",
-    "option", "status", "null"
+    "values", "join", "split", "merge", "contains", "startswith",
+    "endswith", "replace", "match", "slice", "to_chunk", "from_chunk",
+    "strformat", "b64encode", "b64decode", "b64urlencode", "b64urldecode",
+    "utf8encode", "utf8decode", "now", "duration", "time", "seconds",
+    "parse_time", "parse_duration", "integer", "int", "string", "bytes",
+    "object", "list", "boolean", "array", "any", "json", "option",
+    "status", "null"
 )
 
 #: The canonical status codes, which is what ``fail`` names.
@@ -398,12 +398,12 @@ class A11FlowLexer(RegexLexer):
             (r"==|!=|<=|>=", Operator),
             (r"\.\.", Operator),
             (r"[<>|=+*/%-]", Operator),
-            (r"[{}()\[\]]", Punctuation),
+            (r"\?\[|\?\.|[{}()\[\]]", Punctuation),
             (r"[:,.]", Punctuation),
         ],
         "name": [
             # `x.port` -- a call's port, a node's id, a field of a value.
-            (NAME + r"(?=\s*\.)", Name.Variable),
+            (NAME + r"(?=\s*\??\.)", Name.Variable),
             (r"(?<=\.)" + NAME, Name.Attribute),
             (NAME, Name),
         ],

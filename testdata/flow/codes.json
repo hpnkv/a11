@@ -58,7 +58,7 @@
       "code": "flow.barrier.scope-cycle",
       "family": "barrier",
       "severity": "error",
-      "summary": "A preceding producer needs a consumer after a scope barrier."
+      "summary": "A stream dependency can block a scope barrier."
     },
     {
       "code": "flow.barrier.unordered-clock",
@@ -719,6 +719,12 @@
       "family": "unused",
       "severity": "warning",
       "summary": "An 'out' port has no writes and produces no values."
+    },
+    {
+      "code": "flow.unused.pipeline-call",
+      "family": "unused",
+      "severity": "warning",
+      "summary": "An unread pipeline does not start its run/call invocations."
     },
     {
       "code": "flow.unused.struct",

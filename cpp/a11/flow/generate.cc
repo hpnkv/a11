@@ -592,13 +592,15 @@ contexts:
       scope: punctuation.section.block.a11flow
     - match: '[()]'
       scope: punctuation.section.group.a11flow
+    - match: '\?\['
+      scope: punctuation.section.brackets.a11flow
     - match: '[\[\]]'
       scope: punctuation.section.brackets.a11flow
     - match: ':'
       scope: punctuation.separator.a11flow
     - match: ','
       scope: punctuation.separator.comma.a11flow
-    - match: '\.'
+    - match: '\?\.|\.'
       scope: punctuation.accessor.a11flow
 
   # --- expressions -----------------------------------------------------------
@@ -683,7 +685,7 @@ contexts:
 
   names:
     # `x.port` -- a call's port, a node's id, a field of a value.
-    - match: '({{name}})\s*(?=\.)'
+    - match: '({{name}})\s*(?=\??\.)'
       captures:
         1: variable.other.step.a11flow
     - match: '(?<=\.)({{name}})'
@@ -1179,12 +1181,12 @@ class A11FlowLexer(RegexLexer):
             (r"==|!=|<=|>=", Operator),
             (r"\.\.", Operator),
             (r"[<>|=+*/%-]", Operator),
-            (r"[{}()\[\]]", Punctuation),
+            (r"\?\[|\?\.|[{}()\[\]]", Punctuation),
             (r"[:,.]", Punctuation),
         ],
         "name": [
             # `x.port` -- a call's port, a node's id, a field of a value.
-            (NAME + r"(?=\s*\.)", Name.Variable),
+            (NAME + r"(?=\s*\??\.)", Name.Variable),
             (r"(?<=\.)" + NAME, Name.Attribute),
             (NAME, Name),
         ],
@@ -1424,8 +1426,8 @@ constexpr std::string_view kVsCodeTemplate = R"JSON({
       "patterns": [
         {"match": "[{}]", "name": "punctuation.section.block.a11flow"},
         {"match": "[()]", "name": "punctuation.section.group.a11flow"},
-        {"match": "[\\[\\]]", "name": "punctuation.section.brackets.a11flow"},
-        {"match": "[:,.]", "name": "punctuation.separator.a11flow"}
+        {"match": "\\?\\[|[\\[\\]]", "name": "punctuation.section.brackets.a11flow"},
+        {"match": "\\?\\.|[:,.]", "name": "punctuation.separator.a11flow"}
       ]
     }
   }

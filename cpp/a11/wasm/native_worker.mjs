@@ -37,11 +37,11 @@ try {
   const wireCalls = new Map();
   const binaryCalls = new Map();
   let hostCallId = 0;
-  globalThis.__a11WasmInvokeAction = (actionId, name) =>
+  globalThis.__a11WasmInvokeAction = (actionId, name, flowId) =>
     new Promise(resolve => {
       const id = ++hostCallId;
       hostCalls.set(id, resolve);
-      send({invokeAction: {id, actionId, name}});
+      send({invokeAction: {id, actionId, name, flowId}});
     });
   globalThis.__a11WasmInvokeSession = (sessionId, eventJson) =>
     new Promise(resolve => {

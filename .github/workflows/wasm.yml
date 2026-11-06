@@ -94,6 +94,8 @@ jobs:
           node cpp/a11/wasm/test-native-host-stream.mjs
           node cpp/a11/wasm/test-native-host-action.mjs
           node cpp/a11/wasm/test-native-flow-stream.mjs
+          node cpp/a11/wasm/test-native-parallel-flow.mjs
+          node cpp/a11/wasm/test-native-parallel-illumination.mjs
           node cpp/a11/wasm/test-native-http-flow.mjs
           node cpp/a11/wasm/test-native-system.mjs
           node cpp/a11/wasm/test-http.mjs

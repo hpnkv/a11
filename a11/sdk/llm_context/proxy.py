@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import logging
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -34,6 +35,8 @@ from a11.sdk.llm_context.config import (
 from a11.sdk.llm_context.observation import ResponseUsageObserver
 from a11.sdk.llm_context.runtime import project_view
 from a11.status import Status, StatusCode, StatusException
+
+logger = logging.getLogger(__name__)
 
 
 def _require_request_projection(config: LlmContextConfig) -> None:
@@ -218,6 +221,14 @@ def create_proxy(
         async with gate:
             started = time.monotonic()
             operation_id = uuid.uuid4().hex
+            phase = "projection"
+            outcome = "complete"
+            logger.info(
+                "Proxy request %s started: %s %s",
+                operation_id,
+                request.method,
+                request.path,
+            )
 
             async def record(report):
                 if services.recorder is not None:
@@ -294,6 +305,7 @@ def create_proxy(
                         max_event_bytes=config.max_bytes,
                         started_at=started,
                     )
+                phase = "upstream relay"
                 await _native.relay_http(
                     upstream.rstrip("/") + "/" + request.path.lstrip("/"),
                     request,
@@ -304,16 +316,52 @@ def create_proxy(
                     max_observed_bytes=config.max_bytes,
                 )
             except (StatusException, UnicodeError, ValueError) as error:
+                outcome = "failed"
+                logger.warning(
+                    "Proxy request %s failed during %s: %s",
+                    operation_id,
+                    phase,
+                    error,
+                )
                 if not response.finished:
                     response.send_response(502, [], str(error).encode())
+            except asyncio.CancelledError:
+                outcome = "cancelled"
+                logger.warning(
+                    "Proxy request %s cancelled during %s",
+                    operation_id,
+                    phase,
+                )
+                raise
+            except Exception:
+                outcome = "failed"
+                logger.exception(
+                    "Proxy request %s failed during %s",
+                    operation_id,
+                    phase,
+                )
+                raise
             finally:
+                elapsed = time.monotonic() - started
+                logger.info(
+                    "Proxy request %s %s after %.3fs during %s; "
+                    "response_finished=%s",
+                    operation_id,
+                    outcome,
+                    elapsed,
+                    phase,
+                    response.finished,
+                )
                 await record(
                     {
                         "schema": "a11.llm-context.report/v1",
                         "operation": "relay",
-                        "elapsed_seconds": time.monotonic() - started,
+                        "elapsed_seconds": elapsed,
                         "run_id": config.measurement.run_id,
                         "arm": config.measurement.arm,
+                        "phase": phase,
+                        "outcome": outcome,
+                        "response_finished": response.finished,
                     }
                 )
 

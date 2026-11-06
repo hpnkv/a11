@@ -335,6 +335,27 @@ void StoresSuite(Recorder& recorder, double scale) {
          .params = {{"backend", "local"}, {"batch", absl::StrCat(batch)}}});
   }
 
+  if (Wanted("writer_admission")) {
+    auto store = *stores::LocalChunkStore::Create("bench-writer-admission");
+    auto writer = stores::ChunkStoreWriter::Create(store);
+    CHECK_OK(writer.status());
+    const auto metrics = Latency(
+        [&](std::int64_t) {
+          data::Chunk chunk{
+              .metadata = data::ChunkMetadata{.mimetype = "text/plain"},
+              .data = "payload"};
+          auto admitted = (*writer)->EnqueueChunk(std::move(chunk));
+          CHECK_OK(admitted.admitted.Await().status());
+        },
+        Scaled(100000, scale, 1000), 1000);
+    CHECK_OK((*writer)->DrainAndClose().Await(Deadline()).status());
+    recorder.Add(
+        {.suite = "stores",
+         .name = "writer_admission",
+         .metrics = metrics,
+         .note = "per-item enqueue and ready admission on a local store"});
+  }
+
   // Reads, and the batched-versus-single question the Python suite found 86x
   // of headroom in.
   const std::int64_t count = Scaled(200000, scale, 1000);
@@ -2656,6 +2677,63 @@ data::Chunk TextChunk(std::string text) {
                      .data = std::move(text)};
 }
 
+actions::ActionHandler DirectPipeHandler(bool typed, bool batched = false) {
+  return actions::MakeAsyncActionHandler(
+      [typed, batched](
+          const std::shared_ptr<actions::Action>& action) -> absl::Status {
+        ABSL_ASSIGN_OR_RETURN(const auto input, action->GetInput("items"));
+        ABSL_ASSIGN_OR_RETURN(const auto output, action->GetOutput("result"));
+        ABSL_ASSIGN_OR_RETURN(const auto writer, output->writer());
+        std::unique_ptr<flow::HostBridge> bridge = flow::NativeHostBridge();
+        const auto send = [&](data::Chunk chunk) -> absl::Status {
+          if (typed) {
+            ABSL_ASSIGN_OR_RETURN(flow::Value value, bridge->FromChunk(chunk));
+            flow::syntax::TypeExpression type;
+            type.name = "string";
+            ABSL_ASSIGN_OR_RETURN(
+                value, flow::Coerce(value, type, {.bridge = bridge.get()}));
+            ABSL_ASSIGN_OR_RETURN(chunk, bridge->ToChunk(value, {}));
+          }
+          ABSL_RETURN_IF_ERROR(
+              writer->EnqueueChunk(std::move(chunk)).admitted.Await().status());
+          return absl::OkStatus();
+        };
+        bool ended = false;
+        while (!ended) {
+          if (batched) {
+            ABSL_ASSIGN_OR_RETURN(
+                auto fragments,
+                input->NextLogicalFragments(flow::kQueueDepth).Await());
+            for (auto& fragment : fragments) {
+              if (!fragment.has_value()) {
+                ended = true;
+                break;
+              }
+              ABSL_ASSIGN_OR_RETURN(data::Chunk * chunk, fragment->GetChunk());
+              if (chunk->IsNull()) {
+                if (!fragment->continued) {
+                  ended = true;
+                  break;
+                }
+                continue;
+              }
+              ABSL_RETURN_IF_ERROR(send(std::move(*chunk)));
+            }
+          } else {
+            ABSL_ASSIGN_OR_RETURN(const std::optional<data::Chunk> next,
+                                  input->NextChunk().Await());
+            if (!next.has_value()) {
+              break;
+            }
+            if (!next->IsNull()) {
+              ABSL_RETURN_IF_ERROR(send(*next));
+            }
+          }
+        }
+        return output->Finalize({.wait = true}).Await().status();
+      });
+}
+
 /// One run of one flow: feed every input, drain every output, wait.
 ///
 /// Runs the complete invocation used by `flow_lang.invoke`, making the result
@@ -2672,21 +2750,31 @@ FlowRun RunOneFlow(
     const std::map<std::string, std::vector<std::string>>& inputs,
     std::int64_t index, bool prefilled = false,
     std::shared_ptr<flow::TransportStats> stats = nullptr,
-    flow::FrameOptions frames = {}) {
+    flow::FrameOptions frames = {},
+    const actions::ActionSchema* prepared_schema = nullptr,
+    const actions::ActionHandler* prepared_handler = nullptr,
+    bool pipelined_feed = false, bool batched_drain = false,
+    bool raw_single_drain = false) {
   FlowRun ran;
   const flow::ResolvedFlow* found = program->Flow(name);
   if (found == nullptr) {
     ran.status = absl::NotFoundError(name);
     return ran;
   }
-  absl::StatusOr<actions::ActionSchema> schema = flow::FlowSchema(found->plan);
+  absl::StatusOr<actions::ActionSchema> schema =
+      prepared_schema == nullptr
+          ? flow::FlowSchema(found->plan)
+          : absl::StatusOr<actions::ActionSchema>(*prepared_schema);
   if (!schema.ok()) {
     ran.status = schema.status();
     return ran;
   }
-  absl::StatusOr<actions::ActionHandler> handler = flow::MakeHandler(
-      program, name,
-      {.transport_stats = std::move(stats), .frames = std::move(frames)});
+  absl::StatusOr<actions::ActionHandler> handler =
+      prepared_handler == nullptr
+          ? flow::MakeHandler(program, name,
+                              {.transport_stats = std::move(stats),
+                               .frames = std::move(frames)})
+          : absl::StatusOr<actions::ActionHandler>(*prepared_handler);
   if (!handler.ok()) {
     ran.status = handler.status();
     return ran;
@@ -2721,11 +2809,21 @@ FlowRun RunOneFlow(
     for (const auto& [port, unused] : schema->inputs) {
       ABSL_ASSIGN_OR_RETURN(const std::shared_ptr<nodes::AsyncNode> node,
                             (*action)->GetInput(port, false));
+      std::shared_ptr<stores::ChunkStoreWriter> writer;
+      if (pipelined_feed) {
+        ABSL_ASSIGN_OR_RETURN(writer, node->writer());
+      }
       const auto given = inputs.find(port);
       if (given != inputs.end()) {
         for (const std::string& value : given->second) {
-          ABSL_RETURN_IF_ERROR(
-              node->PutChunk(TextChunk(value)).Await().status());
+          if (pipelined_feed) {
+            ABSL_RETURN_IF_ERROR(writer->EnqueueChunk(TextChunk(value))
+                                     .admitted.Await()
+                                     .status());
+          } else {
+            ABSL_RETURN_IF_ERROR(
+                node->PutChunk(TextChunk(value)).Await().status());
+          }
         }
       }
       ABSL_RETURN_IF_ERROR(node->Finalize({.wait = true}).Await().status());
@@ -2751,6 +2849,62 @@ FlowRun RunOneFlow(
   // Drained as the caller would: an output nobody reads stalls its writer.
   for (auto& [port, node] : outputs) {
     while (true) {
+      if (raw_single_drain) {
+        auto fragment = node->NextFragmentRaw().Await(Deadline());
+        if (!fragment.ok()) {
+          ran.status = fragment.status();
+          break;
+        }
+        if (!fragment->has_value()) {
+          break;
+        }
+        auto chunk = (*fragment)->GetChunk();
+        if (!chunk.ok()) {
+          ran.status = chunk.status();
+          break;
+        }
+        ran.status = (*chunk)->Materialize();
+        if (!ran.status.ok()) {
+          break;
+        }
+        if (!(*chunk)->IsNull()) {
+          ++ran.values_out;
+        }
+        continue;
+      }
+      if (batched_drain) {
+        absl::StatusOr<std::vector<std::optional<data::NodeFragment>>> batch =
+            node->NextLogicalFragments(64).Await(Deadline());
+        if (!batch.ok()) {
+          ran.status = batch.status();
+          break;
+        }
+        bool ended = false;
+        for (auto& fragment : *batch) {
+          if (!fragment.has_value()) {
+            ended = true;
+            break;
+          }
+          absl::StatusOr<data::Chunk*> chunk = fragment->GetChunk();
+          if (!chunk.ok()) {
+            ran.status = chunk.status();
+            ended = true;
+            break;
+          }
+          ran.status = (*chunk)->Materialize();
+          if (!ran.status.ok()) {
+            ended = true;
+            break;
+          }
+          if (!(*chunk)->IsNull()) {
+            ++ran.values_out;
+          }
+        }
+        if (ended) {
+          break;
+        }
+        continue;
+      }
       absl::StatusOr<std::optional<data::Chunk>> chunk =
           node->NextChunk().Await(Deadline());
       if (!chunk.ok()) {
@@ -2768,6 +2922,62 @@ FlowRun RunOneFlow(
   if (ran.status.ok()) {
     ran.status = (*action)->Wait(absl::Seconds(30)).Await(Deadline()).status();
   }
+  return ran;
+}
+
+FlowRun RunMatchedEcho(const actions::ActionSchema& schema,
+                       const actions::ActionHandler& handler,
+                       const std::shared_ptr<actions::ActionRegistry>& registry,
+                       std::int64_t index) {
+  FlowRun ran;
+  auto map = nodes::NodeMap::Create();
+  if (!map.ok()) {
+    ran.status = map.status();
+    return ran;
+  }
+  auto action =
+      actions::Action::Create(schema, absl::StrCat("echo-", index), handler,
+                              *map, nullptr, nullptr, registry);
+  if (!action.ok()) {
+    ran.status = action.status();
+    return ran;
+  }
+  auto output = (*action)->GetOutput("out", false);
+  if (!output.ok()) {
+    ran.status = output.status();
+    return ran;
+  }
+  ran.status = (*action)->Run().status();
+  if (!ran.status.ok()) {
+    return ran;
+  }
+  auto input = (*action)->GetInput("text", false);
+  if (!input.ok()) {
+    ran.status = input.status();
+    return ran;
+  }
+  ran.status = (*input)->PutChunk(TextChunk("payload")).Await().status();
+  if (!ran.status.ok()) {
+    return ran;
+  }
+  ran.status = (*input)->Finalize({.wait = true}).Await().status();
+  if (!ran.status.ok()) {
+    return ran;
+  }
+  while (true) {
+    auto chunk = (*output)->NextChunk().Await(Deadline());
+    if (!chunk.ok()) {
+      ran.status = chunk.status();
+      return ran;
+    }
+    if (!chunk->has_value()) {
+      break;
+    }
+    if (!(*chunk)->IsNull()) {
+      ++ran.values_out;
+    }
+  }
+  ran.status = (*action)->Wait(absl::Seconds(30)).Await(Deadline()).status();
   return ran;
 }
 
@@ -3035,12 +3245,12 @@ void FlowSuite(Recorder& recorder, double scale) {
       expected = kind == "sequential" ? 4096 : 1024;
       if (kind == "peak_then_steady") {
         expected += 64;
-        absl::StrAppend(&source, "first = for i in (", sequence(64),
-                        ") parallel 16 { std::text(i) -> result }\n");
+        absl::StrAppend(&source, "first = for i in ", sequence(64),
+                        " parallel 16 { std::text(i) -> result }\n");
       }
-      absl::StrAppend(&source, "for i in (",
+      absl::StrAppend(&source, "for i in ",
                       sequence(kind == "sequential" ? 4096 : 1024),
-                      kind == "parallel" ? ") parallel 4" : ")", " {\n");
+                      kind == "parallel" ? " parallel 4" : "", " {\n");
       if (kind == "escaping") {
         absl::StrAppend(&source, "{value: i, payload: \"",
                         std::string(4096, 'x'), "\"} | json -> result\n");
@@ -3227,9 +3437,58 @@ void FlowSuite(Recorder& recorder, double scale) {
          .note =
              "no flow involved -- the baseline the flow is charged against"});
   }
+  if (Wanted("action_direct_matched")) {
+    recorder.Add({.suite = "flow",
+                  .name = "action_direct_matched",
+                  .metrics = Latency(
+                      [&](std::int64_t index) {
+                        const FlowRun ran =
+                            RunMatchedEcho(echo, echo_handler, registry, index);
+                        CHECK_OK(ran.status);
+                        CHECK_EQ(ran.values_out, 1);
+                      },
+                      calls, calls / 10),
+                  .params = {{"steps", "0"}},
+                  .note = "The same node map, separate PutChunk and Finalize, "
+                          "drain, and registry as RunOneFlow."});
+  }
+  if (Wanted("flow_passthrough_prepared")) {
+    auto program = flow::CompiledProgram::Compile(
+        "flow pass { in text: string required\n out result: string\n"
+        " text -> result\n}",
+        "bench.flow");
+    CHECK_OK(program.status());
+    auto schema = flow::FlowSchema((*program)->Flow("pass")->plan);
+    auto handler = flow::MakeHandler(*program, "pass");
+    CHECK_OK(schema.status());
+    CHECK_OK(handler.status());
+    auto metrics = Latency(
+        [&](std::int64_t index) {
+          const FlowRun ran =
+              RunOneFlow(*program, "pass", registry, {{"text", {"payload"}}},
+                         index, false, nullptr, {}, &*schema, &*handler);
+          CHECK_OK(ran.status);
+          CHECK_EQ(ran.values_out, 1);
+        },
+        calls, calls / 10);
+    auto stats = std::make_shared<flow::TransportStats>();
+    const FlowRun counted =
+        RunOneFlow(*program, "pass", registry, {{"text", {"payload"}}},
+                   calls + 1, false, stats);
+    CHECK_OK(counted.status);
+    metrics["bus_pumps"] = static_cast<double>(stats->bus_pumps.load());
+    metrics["transfer_tasks"] =
+        static_cast<double>(stats->transfer_tasks.load());
+    recorder.Add({.suite = "flow",
+                  .name = "flow_passthrough_prepared",
+                  .metrics = std::move(metrics),
+                  .params = {{"steps", "0"}},
+                  .note = "One Flow action and one pipe, no nested action; "
+                          "schema and handler prepared before timing."});
+  }
 
   for (const int steps : {1, 2, 8}) {
-    if (!Wanted("flow_run")) {
+    if (!Wanted("flow_run") && !Wanted("flow_run_prepared")) {
       break;
     }
     absl::StatusOr<std::shared_ptr<flow::CompiledProgram>> program =
@@ -3238,24 +3497,210 @@ void FlowSuite(Recorder& recorder, double scale) {
       continue;
     }
     const std::string name = absl::StrCat("chain", steps);
-    std::map<std::string, double> metrics = Latency(
-        [&](std::int64_t index) {
-          const FlowRun ran = RunOneFlow(*program, name, registry,
-                                         {{"text", {"payload"}}}, index);
-          (void)ran;
-        },
-        calls, calls / 10);
-    metrics["steps_per_s"] = metrics["ops_per_s"] * steps;
-    recorder.Add({.suite = "flow",
-                  .name = "flow_run",
-                  .metrics = std::move(metrics),
-                  .params = {{"steps", absl::StrCat(steps)}}});
+    if (Wanted("flow_run")) {
+      std::map<std::string, double> metrics = Latency(
+          [&](std::int64_t index) {
+            const FlowRun ran = RunOneFlow(*program, name, registry,
+                                           {{"text", {"payload"}}}, index);
+            (void)ran;
+          },
+          calls, calls / 10);
+      metrics["steps_per_s"] = metrics["ops_per_s"] * steps;
+      if (steps == 1) {
+        auto stats = std::make_shared<flow::TransportStats>();
+        const FlowRun counted =
+            RunOneFlow(*program, name, registry, {{"text", {"payload"}}},
+                       calls + 1, false, stats);
+        CHECK_OK(counted.status);
+        metrics["bus_pumps"] = static_cast<double>(stats->bus_pumps.load());
+        metrics["slot_pumps"] = static_cast<double>(stats->slot_pumps.load());
+        metrics["transfer_tasks"] =
+            static_cast<double>(stats->transfer_tasks.load());
+        metrics["queue_readers"] =
+            static_cast<double>(stats->queue_readers.load());
+      }
+      recorder.Add({.suite = "flow",
+                    .name = "flow_run",
+                    .metrics = std::move(metrics),
+                    .params = {{"steps", absl::StrCat(steps)}}});
+    }
+    if (steps == 1 && Wanted("flow_run_prepared")) {
+      auto schema = flow::FlowSchema((*program)->Flow(name)->plan);
+      auto handler = flow::MakeHandler(*program, name);
+      CHECK_OK(schema.status());
+      CHECK_OK(handler.status());
+      recorder.Add({.suite = "flow",
+                    .name = "flow_run_prepared",
+                    .metrics = Latency(
+                        [&](std::int64_t index) {
+                          const FlowRun ran = RunOneFlow(
+                              *program, name, registry, {{"text", {"payload"}}},
+                              index, false, nullptr, {}, &*schema, &*handler);
+                          CHECK_OK(ran.status);
+                          CHECK_EQ(ran.values_out, 1);
+                        },
+                        calls, calls / 10),
+                    .params = {{"steps", "1"}},
+                    .note = "Schema and handler built once before timing."});
+    }
   }
 
   // Values through `|`. The same counts the Python suite uses, so the two rows
   // divide into the bridge's share of a value and the runtime's.
   absl::StatusOr<std::shared_ptr<flow::CompiledProgram>> piped =
       flow::CompiledProgram::Compile(StageSource(1), "bench.flow");
+  if (piped.ok() && Wanted("pipe_io_variant")) {
+    constexpr int kValues = 4096;
+    std::vector<std::string> values;
+    values.reserve(kValues);
+    for (int index = 0; index < kValues; ++index) {
+      values.push_back(absl::StrCat("value-", index));
+    }
+    const auto schema = flow::FlowSchema((*piped)->Flow("staged1")->plan);
+    const auto handler = flow::MakeHandler(*piped, "staged1");
+    CHECK_OK(schema.status());
+    CHECK_OK(handler.status());
+    for (const bool pipelined_feed : {false, true}) {
+      for (const bool batched_drain : {false, true}) {
+        const std::int64_t iterations = Scaled(20, scale, 4);
+        auto metrics = Throughput(
+            [&](std::int64_t index) {
+              const FlowRun ran =
+                  RunOneFlow(*piped, "staged1", registry, {{"items", values}},
+                             index, false, nullptr, {}, &*schema, &*handler,
+                             pipelined_feed, batched_drain);
+              CHECK_OK(ran.status);
+              CHECK_EQ(ran.values_out, kValues);
+            },
+            iterations, iterations / 10, kValues);
+        metrics["items_per_s"] = metrics["ops_per_s"] * kValues;
+        metrics["us_per_value"] = metrics["ns_per_op"] / 1000.0 / kValues;
+        recorder.Add(
+            {.suite = "flow",
+             .name = "pipe_io_variant",
+             .metrics = std::move(metrics),
+             .params = {{"feed", pipelined_feed ? "admission" : "confirmation"},
+                        {"drain", batched_drain ? "batch64" : "one"},
+                        {"values", absl::StrCat(kValues)}}});
+      }
+    }
+  }
+  if (piped.ok() && Wanted("pipe_raw_single_drain")) {
+    constexpr int kValues = 4096;
+    std::vector<std::string> values;
+    values.reserve(kValues);
+    for (int index = 0; index < kValues; ++index) {
+      values.push_back(absl::StrCat("value-", index));
+    }
+    const auto schema = flow::FlowSchema((*piped)->Flow("staged1")->plan);
+    const auto handler = flow::MakeHandler(*piped, "staged1");
+    CHECK_OK(schema.status());
+    CHECK_OK(handler.status());
+    const std::int64_t iterations = Scaled(40, scale, 4);
+    auto metrics = Throughput(
+        [&](std::int64_t index) {
+          const FlowRun ran = RunOneFlow(
+              *piped, "staged1", registry, {{"items", values}}, index, false,
+              nullptr, {}, &*schema, &*handler, false, false, true);
+          CHECK_OK(ran.status);
+          CHECK_EQ(ran.values_out, kValues);
+        },
+        iterations, iterations / 10, kValues);
+    metrics["items_per_s"] = metrics["ops_per_s"] * kValues;
+    metrics["us_per_value"] = metrics["ns_per_op"] / 1000.0 / kValues;
+    recorder.Add(
+        {.suite = "flow",
+         .name = "pipe_raw_single_drain",
+         .metrics = std::move(metrics),
+         .params = {{"values", absl::StrCat(kValues)}},
+         .note = "diagnostic only: raw reads omit logical reference handling"});
+  }
+  if (piped.ok() && Wanted("pipe_compare_paired")) {
+    constexpr int kValues = 4096;
+    std::vector<std::string> values;
+    values.reserve(kValues);
+    for (int index = 0; index < kValues; ++index) {
+      values.push_back(absl::StrCat("value-", index));
+    }
+    const auto schema = flow::FlowSchema((*piped)->Flow("staged1")->plan);
+    const auto flow_handler = flow::MakeHandler(*piped, "staged1");
+    CHECK_OK(schema.status());
+    CHECK_OK(flow_handler.status());
+    const actions::ActionHandler direct_handler = DirectPipeHandler(true, true);
+    double flow_ns = 0;
+    double direct_ns = 0;
+    const std::int64_t pairs = Scaled(30, scale, 4);
+    const auto run = [&](bool direct, std::int64_t index) {
+      const absl::Time start = absl::Now();
+      const FlowRun ran = RunOneFlow(
+          *piped, "staged1", registry, {{"items", values}}, index, false,
+          nullptr, {}, &*schema, direct ? &direct_handler : &*flow_handler);
+      CHECK_OK(ran.status);
+      CHECK_EQ(ran.values_out, kValues);
+      const double ns = absl::ToDoubleNanoseconds(absl::Now() - start);
+      (direct ? direct_ns : flow_ns) += ns;
+    };
+    for (std::int64_t pair = 0; pair < pairs; ++pair) {
+      run(pair % 2 == 0, pair * 2);
+      run(pair % 2 != 0, pair * 2 + 1);
+    }
+    const double items = static_cast<double>(pairs) * kValues;
+    recorder.Add(
+        {.suite = "flow",
+         .name = "pipe_compare_paired",
+         .metrics = {{"flow_items_per_s", items * 1e9 / flow_ns},
+                     {"direct_items_per_s", items * 1e9 / direct_ns},
+                     {"flow_us_per_value", flow_ns / items / 1000.0},
+                     {"direct_us_per_value", direct_ns / items / 1000.0}},
+         .params = {{"values", absl::StrCat(kValues)},
+                    {"pairs", absl::StrCat(pairs)}},
+         .note = "alternating prepared Flow and batched direct action"});
+  }
+  if (piped.ok() && (Wanted("pipe_direct_raw") || Wanted("pipe_direct_typed") ||
+                     Wanted("pipe_direct_typed_batch"))) {
+    const auto schema = flow::FlowSchema((*piped)->Flow("staged1")->plan);
+    CHECK_OK(schema.status());
+    for (const int mode : {0, 1, 2}) {
+      const bool typed = mode != 0;
+      const bool batched = mode == 2;
+      const char* row = mode == 0   ? "pipe_direct_raw"
+                        : mode == 1 ? "pipe_direct_typed"
+                                    : "pipe_direct_typed_batch";
+      if (!Wanted(row)) {
+        continue;
+      }
+      const actions::ActionHandler handler = DirectPipeHandler(typed, batched);
+      for (const int count : {16, 256, 4096}) {
+        std::vector<std::string> values;
+        values.reserve(static_cast<size_t>(count));
+        for (int index = 0; index < count; ++index) {
+          values.push_back(absl::StrCat("value-", index));
+        }
+        const std::int64_t iterations =
+            Scaled(count <= 256 ? 120 : 20, scale, 4);
+        auto metrics = Throughput(
+            [&](std::int64_t index) {
+              const FlowRun ran =
+                  RunOneFlow(*piped, "staged1", registry, {{"items", values}},
+                             index, false, nullptr, {}, &*schema, &handler);
+              CHECK_OK(ran.status);
+              CHECK_EQ(ran.values_out, count);
+            },
+            iterations, iterations / 10, count);
+        metrics["items_per_s"] = metrics["ops_per_s"] * count;
+        metrics["us_per_value"] = metrics["ns_per_op"] / 1000.0 / count;
+        recorder.Add(
+            {.suite = "flow",
+             .name = row,
+             .metrics = std::move(metrics),
+             .params = {{"values", absl::StrCat(count)}},
+             .note = batched ? "direct action with batched input reads"
+                     : typed
+                         ? "direct action with Flow's native value conversion"
+                         : "direct action forwarding chunks"});
+      }
+    }
+  }
   if (piped.ok() && Wanted("pipe_values")) {
     for (const int count : {16, 256, 4096}) {
       std::vector<std::string> values;

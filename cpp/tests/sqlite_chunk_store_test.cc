@@ -22,6 +22,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <variant>
 #include <vector>
 
@@ -33,6 +34,7 @@
 #include <gtest/gtest.h>
 
 #include "a11/data/types.h"
+#include "a11/stores/chunk_store_writer.h"
 #include "temp_dir.h"
 #include "thread/boost_primitives.h"
 
@@ -66,6 +68,47 @@ std::shared_ptr<SQLiteChunkStore> OpenStore(
 std::string ChunkData(const data::NodeFragment& fragment) {
   const auto* chunk = std::get_if<data::Chunk>(&fragment.data);
   return chunk == nullptr ? std::string() : chunk->data;
+}
+
+class DurableValue final : public data::ChunkObject {
+ public:
+  explicit DurableValue(std::shared_ptr<int> encodes)
+      : encodes_(std::move(encodes)) {}
+
+  std::string_view tag() const override { return "test.DurableValue"; }
+
+  std::string_view mimetype() const override { return "text/plain"; }
+
+  absl::StatusOr<data::Bytes> Encode() const override {
+    ++*encodes_;
+    return std::string("persisted");
+  }
+
+  size_t ApproxBytes() const override { return 32; }
+
+  const void* absl_nonnull address() const override { return this; }
+
+ private:
+  std::shared_ptr<int> encodes_;
+};
+
+TEST(SQLiteChunkStoreTest, WriterMaterializesObjectsForDurableStorage) {
+  TempDir root("a11-sqlite-object");
+  std::shared_ptr<SQLiteChunkStore> store = OpenStore(root, "durable-object");
+  ASSERT_NE(store, nullptr);
+  auto writer = *ChunkStoreWriter::Create(store);
+  auto encodes = std::make_shared<int>(0);
+  data::Chunk chunk;
+  chunk.metadata = data::ChunkMetadata{.mimetype = "text/plain"};
+  chunk.object = std::make_shared<const DurableValue>(encodes);
+  ASSERT_EQ(*writer->PutChunk(std::move(chunk), std::nullopt, true).Await(), 0);
+  auto stored = store->Get(0, Soon()).Await();
+  ASSERT_TRUE(stored.ok()) << stored.status();
+  const data::Chunk* durable = std::get_if<data::Chunk>(&stored->data);
+  ASSERT_NE(durable, nullptr);
+  EXPECT_FALSE(durable->HasObject());
+  EXPECT_EQ(durable->data, "persisted");
+  EXPECT_EQ(*encodes, 1);
 }
 
 TEST(SQLiteChunkStoreTest, PreservesSequenceAndArrivalOrder) {

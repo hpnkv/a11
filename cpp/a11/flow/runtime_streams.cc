@@ -797,8 +797,8 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
             out.push_back(item);
             return absl::OkStatus();
           }
-          for (const Value& held : value.items()) {
-            out.push_back(Item::Of(held));
+          for (size_t index = 0; index < value.list_size(); ++index) {
+            out.push_back(Item::Of(value.list_at(index)));
           }
           return absl::OkStatus();
         });
@@ -1076,23 +1076,14 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
                                "value."));
     }
     const auto width = static_cast<size_t>(stage.count);
-    // A deque of at most `width`, so the cost is the window and not the stream:
-    // one over something endless is what this is for.
-    std::deque<Value> held;
+    WindowBuffer windows(width);
     return each([&](const ItemPtr& item) -> absl::Status {
       ABSL_ASSIGN_OR_RETURN(const Value value, item->Read(&host));
-      held.push_back(value);
-      if (held.size() < width) {
-        // Nothing yet: a window narrower than it was asked for is not a window,
-        // and a stream shorter than one yields nothing at all. That is the
-        // deliberate difference from `batch`, whose last list may be short.
+      std::optional<Value> window = windows.Push(value);
+      if (!window.has_value()) {
         return absl::OkStatus();
       }
-      if (held.size() > width) {
-        held.pop_front();
-      }
-      return sink.One(
-          Item::Of(Value::List(std::vector<Value>(held.begin(), held.end()))));
+      return sink.One(Item::Of(std::move(*window)));
     });
   }
   if (name == "chunk") {

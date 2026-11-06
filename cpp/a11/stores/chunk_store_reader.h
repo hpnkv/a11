@@ -214,6 +214,7 @@ class ChunkStoreReader {
   absl::StatusOr<std::shared_ptr<LogicalState>> GetLogical();
   void CancelLogical();
   absl::Status GetLogicalStatus() const;
+  std::optional<data::NodeFragment> TryTakeSimpleBuffered();
 
   explicit ChunkStoreReader(std::shared_ptr<State> state)
       : state_(std::move(state)) {}

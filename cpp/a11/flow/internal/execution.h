@@ -73,7 +73,8 @@ class Scope {
   absl::Status RunWaitMany(StepId step);
   absl::Status Failure(StepId step);
   absl::Status WriteLog(const graph::LogTail& tail, const ItemPtr& subject);
-  absl::Status LogValue(const Value& value, const Item* absl_nullable carried,
+  absl::Status LogValue(const Value& value,
+                        const ItemPtr* absl_nullable carried,
                         const actions::LogOptions& options);
   absl::Status Logged(const absl::Status& logged);
 
@@ -160,12 +161,42 @@ class Scope {
 
   using WriterGroup = RuntimeLayouts::WriterGroup;
   internal::FrameObjects<WriterGroup> writer_groups_;
-  absl::flat_hash_set<RefId> direct_literals_;
+  absl::InlinedVector<RefId, 4> direct_literals_;
   internal::FrameObjects<Destination> destinations_;
   internal::FrameObjects<CallHandle> calls_;
   using StepState = RuntimeLayouts::Phase;
 
   RuntimeLayouts::StepState& Step(StepId step);
+
+  const absl::Status* absl_nullable Outcome(StepId step) const {
+    const auto slot = runner_layout().step_outcomes[step];
+    if (slot == kNone) {
+      return nullptr;
+    }
+    const auto& value = frame_->Get(layout_->outcomes)[slot];
+    return value.has_value() ? &*value : nullptr;
+  }
+
+  void SetOutcome(StepId step, absl::Status value) {
+    frame_->Get(layout_->outcomes)[runner_layout().step_outcomes[step]] =
+        std::move(value);
+  }
+
+  const int64_t* absl_nullable Winner(StepId step) const {
+    const auto slot = runner_layout().step_winners[step];
+    if (slot == kNone) {
+      return nullptr;
+    }
+    const auto& value = frame_->Get(layout_->winners)[slot];
+    return value.has_value() ? &*value : nullptr;
+  }
+
+  void SetWinner(StepId step, int64_t value) {
+    const auto slot = runner_layout().step_winners[step];
+    if (slot != kNone) {
+      frame_->Get(layout_->winners)[slot] = value;
+    }
+  }
 
   const RuntimeLayouts::StepState& Step(StepId step) const {
     return const_cast<Scope*>(this)->Step(step);
@@ -184,8 +215,13 @@ class Scope {
   /// On the scope that *owns* the ref, so passes of a loop take turns on the
   /// one view of an outer stream rather than each starting it again.
   internal::FrameObjects<ValueCursor> cursors_;
+
   /// Refs whose cursor is being made right now, so only one step subscribes.
-  absl::flat_hash_set<RefId> opening_cursors_;
+  bool& CursorOpening(RefId ref) {
+    return frame_->Get(
+        layout_->opening_cursors)[layout_->cursors.index.at(ref)];
+  }
+
   absl::flat_hash_map<RefId, absl::StatusOr<NodePtr>> nodes_;
   absl::flat_hash_set<RefId> opening_;
   std::vector<RefId> unwritten_;

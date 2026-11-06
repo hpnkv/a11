@@ -106,6 +106,7 @@ struct ChunkStoreWriter::State
 
   struct Batch {
     std::vector<Element> elements;
+    std::vector<std::variant<data::Chunk, data::NodeRef>> wire_payloads;
     std::string store_id;
     std::vector<Tee> streams;
   };
@@ -286,10 +287,7 @@ struct ChunkStoreWriter::State
     Batch& batch = *in_flight_batch;
     batch.store_id = std::move(*id);
 
-    // The one place a chunk carrying a value becomes bytes, and the reason the
-    // rest of the system never has to know such a chunk exists: a store that
-    // persists needs them, and a peer needs them, so either of those turns the.
-    if (!batch.streams.empty() || !store->HoldsObjects()) {
+    if (!store->HoldsObjects()) {
       for (Element& element : batch.elements) {
         auto* chunk = std::get_if<data::Chunk>(&element.payload);
         if (chunk == nullptr) {
@@ -306,13 +304,27 @@ struct ChunkStoreWriter::State
         }
       }
     }
+    if (!batch.streams.empty()) {
+      batch.wire_payloads.reserve(batch.elements.size());
+      for (const Element& element : batch.elements) {
+        auto payload = element.payload;
+        if (auto* chunk = std::get_if<data::Chunk>(&payload)) {
+          if (const absl::Status materialised = chunk->Materialize();
+              !materialised.ok()) {
+            InstallWrite(
+                a11::FailedFuture<std::vector<std::uint32_t>>(materialised),
+                generation);
+            return;
+          }
+        }
+        batch.wire_payloads.push_back(std::move(payload));
+      }
+    }
     fragments.reserve(batch.elements.size());
     for (Element& element : batch.elements) {
-      auto payload =
-          batch.streams.empty() ? std::move(element.payload) : element.payload;
       fragments.push_back(data::NodeFragment{
           .id = batch.store_id,
-          .data = std::move(payload),
+          .data = std::move(element.payload),
           .seq = element.seq,
           .continued = element.continued,
       });
@@ -384,7 +396,7 @@ struct ChunkStoreWriter::State
       for (size_t index = 0; index < active_batch.elements.size(); ++index) {
         message.node_fragments.push_back(data::NodeFragment{
             .id = active_batch.store_id,
-            .data = active_batch.elements[index].payload,
+            .data = std::move(active_batch.wire_payloads[index]),
             .seq = (*result)[index],
             .continued = active_batch.elements[index].continued,
         });

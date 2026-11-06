@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <exception>
 #include <filesystem>
 #include <map>
 #include <memory>
@@ -61,6 +62,7 @@
 #include "native_types.h"
 #include "python/bindings.h"
 #include "python/interop.h"
+#include "python/local_chunk_object.h"
 #include "python/native_types.h"
 #include "sdk/flow/actions/flow_actions.h"
 #include "sdk/flow/actions/policy.h"
@@ -562,6 +564,29 @@ py::object ValueToPython(const flow::Value& value) {
 /// every other Python thread behind it.
 class PythonBridge : public flow::HostBridge {
  public:
+  bool CanPassChunkObject(const data::Chunk& chunk,
+                          std::string_view declared_type) const override {
+    if (!HostBridge::CanPassChunkObject(chunk, declared_type) ||
+        PythonObjectIn(chunk) == nullptr) {
+      return false;
+    }
+    const py::gil_scoped_acquire acquire;
+    try {
+      const py::object registry =
+          py::module_::import("a11.data.serialization")
+              .attr("get_global_serialization_registry")();
+      return registry
+          .attr("_can_pass_local_chunk")(py::cast(chunk),
+                                         std::string(declared_type))
+          .cast<bool>();
+    } catch (py::error_already_set& error) {
+      error.discard_as_unraisable("Flow local object compatibility");
+      return false;
+    } catch (const std::exception&) {
+      return false;
+    }
+  }
+
   absl::StatusOr<flow::Value> Coerce(std::string_view tag,
                                      const flow::Value& value) override {
     const py::gil_scoped_acquire acquire;
@@ -608,11 +633,13 @@ class PythonBridge : public flow::HostBridge {
     // structure -- `application/octet-stream` for a response body, `text/plain`
     // for a log line -- and the default C++ bridge reads those as a bytes or.
     if (absl::IsNotFound(from_registry)) {
+      data::Chunk readable = chunk;
+      ABSL_RETURN_IF_ERROR(readable.Materialize());
       const std::string mimetype = chunk.GetMimetype();
       if (absl::StartsWith(mimetype, "text/")) {
-        return flow::Value::String(chunk.data);
+        return flow::Value::String(readable.data);
       }
-      return flow::Value::Bytes(chunk.data);
+      return flow::Value::Bytes(readable.data);
     }
     return from_registry;
   }
@@ -624,7 +651,7 @@ class PythonBridge : public flow::HostBridge {
     }
     const py::gil_scoped_acquire acquire;
     try {
-      const py::object chunk = Registry().attr("to_chunk")(
+      const py::object chunk = Registry().attr("to_local_chunk")(
           ValueToPython(value), std::string(mimetype));
       return chunk.cast<data::Chunk>();
     } catch (py::error_already_set& error) {
@@ -676,10 +703,16 @@ class PythonBridge : public flow::HostBridge {
       // The same fallback the single-value path takes, for the media types that
       // describe bytes rather than a structure. See [FromChunk].
       if (absl::IsNotFound(from_registry)) {
+        data::Chunk readable = *chunk;
+        const absl::Status materialized = readable.Materialize();
+        if (!materialized.ok()) {
+          values.emplace_back(materialized);
+          continue;
+        }
         const std::string mimetype = chunk->GetMimetype();
         values.emplace_back(absl::StartsWith(mimetype, "text/")
-                                ? flow::Value::String(chunk->data)
-                                : flow::Value::Bytes(chunk->data));
+                                ? flow::Value::String(readable.data)
+                                : flow::Value::Bytes(readable.data));
       } else {
         values.emplace_back(from_registry);
       }
@@ -696,7 +729,7 @@ class PythonBridge : public flow::HostBridge {
     const py::gil_scoped_acquire acquire;
     py::object to_chunk;
     try {
-      to_chunk = Registry().attr("to_chunk");
+      to_chunk = Registry().attr("to_local_chunk");
     } catch (py::error_already_set& error) {
       const absl::Status failed = StatusFromPythonException(error);
       chunks.assign(values.size(), failed);

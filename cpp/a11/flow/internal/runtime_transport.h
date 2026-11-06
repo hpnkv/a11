@@ -19,7 +19,7 @@
 
 namespace a11::flow::internal {
 
-/// One value travelling through a pipe.
+/// Shared decode state for a chunk travelling through a pipe.
 ///
 /// An item read from a node keeps its native [data::Chunk], so a pipe that only
 /// moves values re-writes exactly the producer's bytes and mimetype and never
@@ -27,14 +27,14 @@ namespace a11::flow::internal {
 /// decodes it once, and every reader of the same item shares that.
 class Item {
  public:
-  static std::shared_ptr<Item> OfChunk(data::Chunk chunk);
-  static std::shared_ptr<Item> OfReference(data::NodeRef reference);
+  ~Item();
 
-  static std::shared_ptr<Item> Of(Value value);
+  static ItemPtr OfChunk(data::Chunk chunk);
+  static ItemPtr OfReference(data::NodeRef reference);
+
+  static ItemPtr Of(Value value);
 
   const std::optional<data::Chunk>& chunk() const { return chunk_; }
-
-  const std::optional<data::NodeRef>& reference() const { return reference_; }
 
   std::string Mimetype() const;
 
@@ -42,10 +42,7 @@ class Item {
   absl::StatusOr<Value> Read(HostBridge* absl_nonnull bridge) const;
 
   /// Whether this item still has to be decoded to be read.
-  bool NeedsDecoding() const {
-    thread::MutexLock lock(&mu_);
-    return !decoded_ && chunk_.has_value();
-  }
+  bool NeedsDecoding() const;
 
   /// Give the item the outcome of a decode somebody else did.
   ///
@@ -55,11 +52,12 @@ class Item {
   void Prime(absl::StatusOr<Value> result) const;
 
  private:
+  struct DecodeState;
+  DecodeState* absl_nonnull State() const;
+
   std::optional<data::Chunk> chunk_;
-  std::optional<data::NodeRef> reference_;
-  mutable thread::Mutex mu_;
-  mutable absl::StatusOr<Value> result_;
-  mutable bool decoded_ = false;
+  // Owned here, allocated only if a reader inspects this chunk's value.
+  mutable std::atomic<DecodeState*> state_{nullptr};
 };
 
 /// One reader's view of a stream.
@@ -127,10 +125,41 @@ class FailedReader : public Reader {
 };
 
 struct Slot {
-  std::deque<ItemPtr> items;
-  bool ended = false;
-  absl::Status error;
+  std::vector<ItemPtr> items;
+  size_t head = 0;
   bool dropped = false;
+
+  bool Empty() const { return head == items.size(); }
+
+  size_t Pending() const { return items.size() - head; }
+
+  void Push(const ItemPtr& item) { items.push_back(item); }
+
+  void Append(const std::vector<ItemPtr>& batch) {
+    items.insert(items.end(), batch.begin(), batch.end());
+  }
+
+  ItemPtr Pop() {
+    ItemPtr item = std::move(items[head++]);
+    if (head == items.size()) {
+      items.clear();
+      if (items.capacity() > 2 * kQueueDepth) {
+        std::vector<ItemPtr> empty;
+        items.swap(empty);
+      }
+      head = 0;
+    } else if (head >= kQueueDepth && head >= items.size() / 2) {
+      items.erase(items.begin(), items.begin() + static_cast<ptrdiff_t>(head));
+      head = 0;
+    }
+    return item;
+  }
+
+  void Clear() {
+    std::vector<ItemPtr> empty;
+    items.swap(empty);
+    head = 0;
+  }
 };
 
 /// Publishes one item or an existing batch to a stream consumer.
@@ -247,13 +276,15 @@ class Bus {
   bool Abandoned() ABSL_EXCLUSIVE_LOCKS_REQUIRED(monitor_->mu());
 
   bool finished_ = false;
+  bool ended_ ABSL_GUARDED_BY(monitor_->mu()) = false;
+  absl::Status error_ ABSL_GUARDED_BY(monitor_->mu());
   a11::Task input_pump_ ABSL_GUARDED_BY(monitor_->mu());
 
   Monitor* absl_nonnull monitor_;
   Monitor::Condition moved_;
   std::string label_;
   Produce produce_;
-  std::vector<std::unique_ptr<Slot>> slots_;
+  std::vector<Slot> slots_;
   size_t handed_out_ = 0;
   bool wanted_ = false;
 };

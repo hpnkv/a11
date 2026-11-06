@@ -29,6 +29,7 @@ not fit.
 import asyncio
 import base64
 import binascii
+import copy
 import datetime
 import enum
 import fnmatch
@@ -414,6 +415,7 @@ class _SerializerRegistration:
     #: be quick and is run on the event loop; anything a caller registered may
     #: block for as long as it likes and is handed to a worker thread.
     builtin: bool = False
+    local_passthrough: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -635,8 +637,15 @@ class SerializationRegistry:
         obj_type: type,
         mimetype: str,
         serializer: SerializerFn,
+        *,
+        local_passthrough: bool = False,
     ) -> None:
-        """Register ``serializer(obj)`` for a type and exact media type."""
+        """Register ``serializer(obj)`` for a type and exact media type.
+
+        ``local_passthrough`` permits snapshot-based local delivery when a
+        matching deserializer is registered. The serializer must return bytes
+        or text and round-trip the same value type.
+        """
 
         parsed = self._registration_key(obj_type, mimetype)
         _validate_serializer(serializer)
@@ -648,6 +657,7 @@ class SerializationRegistry:
                 serializer=serializer,
                 order=self._take_order(),
                 builtin=self._registering_defaults,
+                local_passthrough=local_passthrough,
             )
         )
         self._remember_type(obj_type)
@@ -697,8 +707,14 @@ class SerializationRegistry:
         deserializer: DeserializerFn,
         *,
         receives_chunk: bool | None = None,
+        local_passthrough: bool = False,
     ) -> None:
-        """Atomically register a serializer/deserializer pair."""
+        """Register a codec pair.
+
+        ``local_passthrough`` opts in to passing snapshots through local nodes
+        without codec calls. The serializer must return text or bytes, and the
+        deserializer must reconstruct the same value type from those bytes.
+        """
 
         parsed = self._registration_key(obj_type, mimetype)
         _validate_serializer(serializer)
@@ -717,6 +733,7 @@ class SerializationRegistry:
                 serializer,
                 serializer_order,
                 builtin=self._registering_defaults,
+                local_passthrough=local_passthrough,
             )
         )
         self._deserializers.append(
@@ -834,6 +851,88 @@ class SerializationRegistry:
         resolved = (registration, exact_mimetype)
         self._resolution_cache[cache_key] = resolved
         return resolved
+
+    def _local_object_info(
+        self, chunk: types.Chunk
+    ) -> tuple[Any, str, str, SerializerFn] | None:
+        return _native._peek_local_object_chunk(chunk)
+
+    def _can_pass_local_chunk(self, chunk: types.Chunk, tag: str) -> bool:
+        info = self._local_object_info(chunk)
+        if info is None or info[1] != tag or chunk.get_mimetype() != info[2]:
+            return False
+        value, _, mimetype, serializer = info
+        if self._resolve_type(tag) is not type(value):
+            return False
+        try:
+            actual = _parse_mimetype(mimetype, allow_patterns=False)
+        except StatusException:
+            return False
+        writable = any(
+            registration.local_passthrough
+            and registration.obj_type is type(value)
+            and registration.serializer is serializer
+            and _registration_matches(registration.mimetype, actual)
+            for registration in self._serializers
+        )
+        readable = any(
+            registration.obj_type is type(value)
+            and _registration_matches(registration.mimetype, actual)
+            for registration in self._deserializers
+        )
+        return writable and readable
+
+    def _take_local_object(
+        self,
+        chunk: types.Chunk,
+        mimetype_patterns: str | Sequence[str],
+        obj_type: type | None,
+    ) -> tuple[bool, Any]:
+        info = self._local_object_info(chunk)
+        if info is None or mimetype_patterns:
+            return False, None
+        value, tag, _, _ = info
+        if (
+            obj_type is not None and obj_type is not type(value)
+        ) or not self._can_pass_local_chunk(chunk, tag):
+            return False, None
+        try:
+            replay = copy.deepcopy(value)
+        except Exception:
+            return False, None
+        if replay is value or type(replay) is not type(value):
+            return False, None
+        return True, replay
+
+    def to_local_chunk(self, obj: Any, mimetype: str = "") -> types.Chunk:
+        """Attach a replay-safe snapshot when a codec permits local passage."""
+        if not isinstance(mimetype, str) or isinstance(obj, Status):
+            return self.to_chunk(obj, mimetype)
+        registration, exact_mimetype = self._resolve_serializer(obj, mimetype)
+        if (
+            not registration.local_passthrough
+            or self._type_tag(type(obj)) in _GENERIC_TAGS
+        ):
+            return self.to_chunk(obj, mimetype)
+        try:
+            snapshot = copy.deepcopy(obj)
+        except Exception:
+            return self.to_chunk(obj, mimetype)
+        if snapshot is obj or type(snapshot) is not type(obj):
+            return self.to_chunk(obj, mimetype)
+        return _native._make_local_object_chunk(
+            snapshot,
+            registration.serializer,
+            self._type_tag(type(obj)),
+            exact_mimetype,
+        )
+
+    async def to_local_chunk_async(
+        self, obj: Any, mimetype: str = ""
+    ) -> types.Chunk:
+        if self._resolves_to_builtin_serializer(obj, mimetype):
+            return self.to_local_chunk(obj, mimetype)
+        return await asyncio.to_thread(self.to_local_chunk, obj, mimetype)
 
     async def to_chunk_async(self, obj: Any, mimetype: str = "") -> types.Chunk:
         """`to_chunk`, off the event loop only when it might block it.
@@ -1044,6 +1143,14 @@ class SerializationRegistry:
                     message="A status chunk decodes to Status.",
                 ).to_exception()
             return _native.status_from_chunk(chunk)
+
+        taken, value = self._take_local_object(
+            chunk, mimetype_patterns, obj_type
+        )
+        if taken:
+            return value
+        if self._local_object_info(chunk) is not None:
+            chunk.materialize()
 
         actual = None
         actual_mimetype = chunk.get_mimetype()

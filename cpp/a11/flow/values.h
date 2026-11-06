@@ -19,16 +19,19 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <absl/base/nullability.h>
 #include <absl/container/flat_hash_map.h>
+#include <absl/container/inlined_vector.h>
 #include <absl/numeric/int128.h>
 #include <absl/status/status.h>
 #include <absl/status/statusor.h>
@@ -44,6 +47,7 @@
 namespace a11::flow {
 
 class Value;
+class WindowBuffer;
 
 /// A value only the host knows what to do with.
 ///
@@ -132,8 +136,9 @@ class NodeFragmentObject final : public HostObject {
 
 /// One Flow value.
 ///
-/// Immutable and cheap to copy: a container is held behind a `shared_ptr`, so
-/// an item read once and handed to eight readers is one allocation, not eight.
+/// Immutable and cheap to copy: containers and long text are shared, while
+/// short text and scalars stay inline. An item handed to eight readers keeps
+/// one container allocation.
 /// Integers are kept apart from doubles because the language's own output
 /// depends on it -- `text 3` is `"3"` and `text 3.0` is `"3.0"`, exactly as the
 /// Python reference rendered them -- and because a count of values has to be a
@@ -167,7 +172,7 @@ class Value {
   /// A vector rather than a hash map: a flow's objects have a handful of keys,
   /// insertion order is what a value written back out should keep, and a linear
   /// scan over five entries beats hashing them.
-  using Pairs = std::vector<std::pair<std::string, Value>>;
+  class Pairs;
 
   Value() = default;
 
@@ -183,6 +188,7 @@ class Value {
   static Value String(std::string value);
   static Value Bytes(data::Bytes value);
   static Value List(std::vector<Value> items);
+  static Value List(std::vector<Value> items, std::string_view element_type);
   static Value Object(Pairs pairs);
   static Value Status(absl::Status status, Pairs fields);
   static Value Option(std::optional<Value> value);
@@ -215,13 +221,13 @@ class Value {
     return kind_ == Kind::kString || kind_ == Kind::kBytes;
   }
 
-  [[nodiscard]] bool boolean() const { return boolean_; }
+  [[nodiscard]] bool boolean() const;
 
-  [[nodiscard]] std::int64_t integer() const { return integer_; }
+  [[nodiscard]] std::int64_t integer() const;
 
-  [[nodiscard]] double number() const { return number_; }
+  [[nodiscard]] double number() const;
 
-  [[nodiscard]] absl::uint128 magnitude() const { return magnitude_; }
+  [[nodiscard]] absl::uint128 magnitude() const;
 
   [[nodiscard]] bool negative() const { return negative_; }
 
@@ -233,27 +239,29 @@ class Value {
     return kind_ == Kind::kDouble || legacy_number_;
   }
 
-  [[nodiscard]] const std::string& text() const { return *text_; }
+  [[nodiscard]] const std::string& text() const;
 
-  [[nodiscard]] const std::vector<Value>& items() const { return *items_; }
+  [[nodiscard]] const std::vector<Value>& items() const;
 
-  [[nodiscard]] const Pairs& pairs() const { return *pairs_; }
+  [[nodiscard]] size_t list_size() const;
 
-  [[nodiscard]] const absl::Status* absl_nullable native_status() const {
-    return status_.get();
-  }
+  [[nodiscard]] Value list_at(size_t index) const;
 
-  [[nodiscard]] absl::Duration duration() const { return duration_; }
+  [[nodiscard]] bool has_packed_element_type(std::string_view name) const;
 
-  [[nodiscard]] absl::Time time() const { return time_; }
+  [[nodiscard]] const Pairs& pairs() const;
 
-  [[nodiscard]] const data::Chunk& chunk() const { return *chunk_; }
+  [[nodiscard]] const absl::Status* absl_nullable native_status() const;
 
-  [[nodiscard]] const HostObject& host() const { return *host_; }
+  [[nodiscard]] absl::Duration duration() const;
 
-  [[nodiscard]] const std::shared_ptr<const HostObject>& host_object() const {
-    return host_;
-  }
+  [[nodiscard]] absl::Time time() const;
+
+  [[nodiscard]] const data::Chunk& chunk() const;
+
+  [[nodiscard]] const HostObject& host() const;
+
+  [[nodiscard]] const std::shared_ptr<const HostObject>& host_object() const;
 
   /// The value at `key` of an object, or `nullptr`.
   [[nodiscard]] const Value* absl_nullable Get(std::string_view key) const;
@@ -262,24 +270,55 @@ class Value {
   friend bool operator==(const Value& left, const Value& right);
 
  private:
+  friend class WindowBuffer;
+  static Value TextValue(Kind kind, std::string value);
+
+  struct StatusPayload;
+  struct PackedList;
+  struct WindowList;
+  using TextPtr = std::shared_ptr<const std::string>;
+  using ListPtr = std::shared_ptr<const std::vector<Value>>;
+  using PackedListPtr = std::shared_ptr<const PackedList>;
+  using WindowListPtr = std::shared_ptr<const WindowList>;
+  using ObjectPtr = std::shared_ptr<const Pairs>;
+  using StatusPtr = std::shared_ptr<const StatusPayload>;
+  using ChunkPtr = std::shared_ptr<const data::Chunk>;
+  using HostPtr = std::shared_ptr<const HostObject>;
+  using Payload =
+      std::variant<std::monostate, bool, std::int64_t, double, absl::uint128,
+                   absl::Duration, absl::Time, std::string, TextPtr, ListPtr,
+                   PackedListPtr, WindowListPtr, ObjectPtr, StatusPtr, ChunkPtr,
+                   HostPtr>;
+
   Kind kind_ = Kind::kNull;
-  bool boolean_ = false;
   bool option_ = false;
-  std::int64_t integer_ = 0;
-  double number_ = 0.0;
-  absl::uint128 magnitude_ = 0;
   bool negative_ = false;
   bool numeric_signed_ = true;
   bool legacy_number_ = false;
   std::uint8_t numeric_bits_ = 0;
-  absl::Duration duration_;
-  absl::Time time_;
-  std::shared_ptr<const std::string> text_;
-  std::shared_ptr<const std::vector<Value>> items_;
-  std::shared_ptr<const Pairs> pairs_;
-  std::shared_ptr<const absl::Status> status_;
-  std::shared_ptr<const data::Chunk> chunk_;
-  std::shared_ptr<const HostObject> host_;
+  Payload payload_;
+};
+
+/// Builds immutable overlapping lists from append-only blocks.
+class WindowBuffer {
+ public:
+  explicit WindowBuffer(size_t width);
+  std::optional<Value> Push(Value value);
+
+  struct Block;
+
+ private:
+  size_t width_;
+  size_t seen_ = 0;
+  std::deque<Value> small_;
+  std::shared_ptr<Block> previous_;
+  std::shared_ptr<Block> current_;
+};
+
+class Value::Pairs
+    : public absl::InlinedVector<std::pair<std::string, Value>, 2> {
+ public:
+  using absl::InlinedVector<std::pair<std::string, Value>, 2>::InlinedVector;
 };
 
 /// What the process running a flow knows and the language does not.
@@ -307,6 +346,10 @@ class HostBridge {
   /// A chunk holding `value`, in `mimetype` when one is asked for.
   virtual absl::StatusOr<data::Chunk> ToChunk(const Value& value,
                                               std::string_view mimetype) = 0;
+
+  /// Whether a typed port can retain this local object without conversion.
+  virtual bool CanPassChunkObject(const data::Chunk& chunk,
+                                  std::string_view declared_type) const;
 
   /// The values a batch of chunks holds, in order, each with its own outcome.
   ///

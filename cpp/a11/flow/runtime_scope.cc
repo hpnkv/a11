@@ -199,7 +199,7 @@ absl::Status Scope::Prepare() {
       const auto& fact = single_items->refs[ref];
       if (fact.direct_transfer && count == 1 &&
           analysis_->materialise.find(ref) == analysis_->materialise.end()) {
-        direct_literals_.insert(ref);
+        direct_literals_.push_back(ref);
         continue;
       }
 
@@ -230,6 +230,7 @@ absl::Status Scope::Prepare() {
       buffers_.Construct(ref, monitor(), std::move(reader));
     }
   }
+  std::sort(direct_literals_.begin(), direct_literals_.end());
 
   // A node of the flow's own that nothing writes still has to end, or a reader
   // of it would wait for a value that was never coming.
@@ -511,7 +512,8 @@ absl::Status Scope::ReadNode(const NodePtr& node, const Sink& sink,
       // Moved out of the fragment, which nothing else reads: a value's payload
       // is the value, and copying it here is a copy per stage.
       ItemPtr item = Item::OfChunk(std::move(*chunk));
-      if (!port_type.empty()) {
+      if (!port_type.empty() &&
+          !bridge().CanPassChunkObject(*item->chunk(), port_type)) {
         absl::StatusOr<Value> value = item->Read(&bridge());
         if (!value.ok()) {
           ABSL_RETURN_IF_ERROR(sink.Many(items));
@@ -993,8 +995,8 @@ absl::Status Scope::CompleteStep(StepId step, absl::Status status) {
   }
   if (graph::RecordsOutcome(graph().steps[step].kind)) {
     thread::MutexLock lock(&monitor().mu());
-    if (!Step(step).outcome.has_value()) {
-      Step(step).outcome = status;
+    if (Outcome(step) == nullptr) {
+      SetOutcome(step, status);
     }
   }
   WatchVirtual(step, nullptr);

@@ -154,6 +154,28 @@ class CountingSendStream final : public net::WireStream {
   size_t sends_ ABSL_GUARDED_BY(mu_) = 0;
 };
 
+class EncodedOnDemand final : public data::ChunkObject {
+ public:
+  explicit EncodedOnDemand(std::shared_ptr<int> encodes)
+      : encodes_(std::move(encodes)) {}
+
+  std::string_view tag() const override { return "test.Value"; }
+
+  std::string_view mimetype() const override { return "text/plain"; }
+
+  absl::StatusOr<data::Bytes> Encode() const override {
+    ++*encodes_;
+    return std::string("wire bytes");
+  }
+
+  size_t ApproxBytes() const override { return 32; }
+
+  const void* absl_nonnull address() const override { return this; }
+
+ private:
+  std::shared_ptr<int> encodes_;
+};
+
 /// A stream whose every Send fails, standing in for an unreachable peer.
 class FailingSendStream final : public net::WireStream {
  public:
@@ -343,6 +365,52 @@ TEST(ChunkStoreWriterTest, TeesOnlyStoreConfirmedFragments) {
   const absl::Time shutdown_deadline = absl::Now() + absl::Seconds(5);
   ASSERT_TRUE(pair.first->Done().Await(shutdown_deadline).ok());
   ASSERT_TRUE(pair.second->Done().Await(shutdown_deadline).ok());
+}
+
+TEST(ChunkStoreWriterTest, WireTeeEncodesCopyAndKeepsLocalObject) {
+  auto pair = *net::InProcessWireStream::CreatePair();
+  auto receiver = *net::WireStreamWithRecv::Create(pair.second);
+  ASSERT_TRUE(pair.first
+                  ->Start(
+                      [](const std::optional<data::WireMessage>&) {
+                        return a11::ReadyTask();
+                      },
+                      [] { return a11::ReadyTask(); })
+                  .Await()
+                  .ok());
+  ASSERT_TRUE(receiver->Accept().Await().ok());
+
+  auto store = *LocalChunkStore::Create("object-tee");
+  auto writer = *ChunkStoreWriter::Create(store);
+  ASSERT_TRUE(writer->AttachStream(pair.first).ok());
+  auto encodes = std::make_shared<int>(0);
+  data::Chunk chunk;
+  chunk.metadata = data::ChunkMetadata{.mimetype = "text/plain"};
+  chunk.object = std::make_shared<const EncodedOnDemand>(encodes);
+  ASSERT_EQ(*writer->PutChunk(std::move(chunk), std::nullopt, true).Await(), 0);
+
+  auto stored = store->Get(0, absl::Now() + absl::Seconds(5)).Await();
+  ASSERT_TRUE(stored.ok()) << stored.status();
+  const data::Chunk* local = std::get_if<data::Chunk>(&stored->data);
+  ASSERT_NE(local, nullptr);
+  EXPECT_TRUE(local->HasObject());
+  EXPECT_TRUE(local->data.empty());
+
+  auto received = receiver->Receive().Await(absl::Now() + absl::Seconds(5));
+  ASSERT_TRUE(received.ok()) << received.status();
+  ASSERT_TRUE(received->has_value());
+  const data::Chunk* wire =
+      std::get_if<data::Chunk>(&(**received).node_fragments.front().data);
+  ASSERT_NE(wire, nullptr);
+  EXPECT_FALSE(wire->HasObject());
+  EXPECT_EQ(wire->data, "wire bytes");
+  EXPECT_EQ(*encodes, 1);
+
+  ASSERT_TRUE(pair.first->HalfClose().ok());
+  ASSERT_TRUE(receiver->HalfClose().ok());
+  const absl::Time deadline = absl::Now() + absl::Seconds(5);
+  ASSERT_TRUE(pair.first->Done().Await(deadline).ok());
+  ASSERT_TRUE(pair.second->Done().Await(deadline).ok());
 }
 
 TEST(ChunkStoreWriterTest, DrainTeesAClosureMarkerAfterTheData) {

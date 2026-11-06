@@ -16,6 +16,11 @@
 
 namespace a11::flow::internal {
 
+struct ReadyReference {
+  std::optional<data::NodeRef> reference;
+  Value value;
+};
+
 class SingleSlot::Subscription : public Reader {
  public:
   explicit Subscription(std::shared_ptr<SingleSlot> slot)
@@ -177,30 +182,100 @@ class ReplayReader : public Reader {
   bool stopped_ = false;
 };
 
-std::shared_ptr<Item> Item::OfChunk(data::Chunk chunk) {
+struct Item::DecodeState {
+  thread::Mutex mu;
+  absl::StatusOr<Value> result;
+  bool ready = false;
+};
+
+Item::~Item() {
+  delete state_.load(std::memory_order_acquire);
+}
+
+Item::DecodeState* Item::State() const {
+  DecodeState* existing = state_.load(std::memory_order_acquire);
+  if (existing != nullptr) {
+    return existing;
+  }
+  auto created = std::make_unique<DecodeState>();
+  DecodeState* expected = nullptr;
+  if (state_.compare_exchange_strong(expected, created.get(),
+                                     std::memory_order_acq_rel,
+                                     std::memory_order_acquire)) {
+    return created.release();
+  }
+  return expected;
+}
+
+ItemPtr Item::OfChunk(data::Chunk chunk) {
   auto item = std::make_shared<Item>();
   item->chunk_ = std::move(chunk);
-  return item;
+  return ItemPtr(std::move(item));
 }
 
-std::shared_ptr<Item> Item::OfReference(data::NodeRef reference) {
-  auto item = std::make_shared<Item>();
-  item->reference_ = std::move(reference);
-  return item;
+ItemPtr Item::OfReference(data::NodeRef reference) {
+  return ItemPtr(std::make_shared<const ReadyReference>(
+      ReadyReference{std::move(reference), Value::Null()}));
 }
 
-std::shared_ptr<Item> Item::Of(Value value) {
-  auto item = std::make_shared<Item>();
+ItemPtr Item::Of(Value value) {
   if (value.kind() == Value::Kind::kHost) {
     if (const auto* reference =
             dynamic_cast<const NodeReferenceObject*>(&value.host());
         reference != nullptr) {
-      item->reference_ = reference->reference();
+      return ItemPtr(std::make_shared<const ReadyReference>(
+          ReadyReference{reference->reference(), std::move(value)}));
     }
   }
-  item->result_ = std::move(value);
-  item->decoded_ = true;
-  return item;
+  return ItemPtr(std::move(value));
+}
+
+const std::optional<data::Chunk>& ItemPtr::chunk() const {
+  if (const auto* lazy = std::get_if<std::shared_ptr<Item>>(&payload_)) {
+    return (*lazy)->chunk();
+  }
+  static const std::optional<data::Chunk> empty;
+  return empty;
+}
+
+const std::optional<data::NodeRef>& ItemPtr::reference() const {
+  if (const auto* ready =
+          std::get_if<std::shared_ptr<const ReadyReference>>(&payload_)) {
+    return (*ready)->reference;
+  }
+  static const std::optional<data::NodeRef> empty;
+  return empty;
+}
+
+std::string ItemPtr::Mimetype() const {
+  if (const auto* lazy = std::get_if<std::shared_ptr<Item>>(&payload_)) {
+    return (*lazy)->Mimetype();
+  }
+  return std::string(data::kJsonMimetype);
+}
+
+absl::StatusOr<Value> ItemPtr::Read(HostBridge* absl_nonnull bridge) const {
+  if (const auto* ready = std::get_if<Value>(&payload_)) {
+    return *ready;
+  }
+  if (const auto* reference =
+          std::get_if<std::shared_ptr<const ReadyReference>>(&payload_)) {
+    return (*reference)->value;
+  }
+  return std::get<std::shared_ptr<Item>>(payload_)->Read(bridge);
+}
+
+bool ItemPtr::NeedsDecoding() const {
+  if (const auto* lazy = std::get_if<std::shared_ptr<Item>>(&payload_)) {
+    return (*lazy)->NeedsDecoding();
+  }
+  return false;
+}
+
+void ItemPtr::Prime(absl::StatusOr<Value> result) const {
+  if (const auto* lazy = std::get_if<std::shared_ptr<Item>>(&payload_)) {
+    (*lazy)->Prime(std::move(result));
+  }
 }
 
 std::string Item::Mimetype() const {
@@ -211,25 +286,39 @@ std::string Item::Mimetype() const {
 }
 
 absl::StatusOr<Value> Item::Read(HostBridge* absl_nonnull bridge) const {
-  thread::MutexLock lock(&mu_);
-  if (!decoded_) {
+  DecodeState* state = State();
+  thread::MutexLock lock(&state->mu);
+  if (!state->ready) {
     if (!chunk_.has_value()) {
-      result_ = Value::Null();
+      state->result = Value::Null();
     } else {
-      result_ = bridge->FromChunk(*chunk_);
+      state->result = bridge->FromChunk(*chunk_);
     }
-    decoded_ = true;
+    state->ready = true;
   }
-  return result_;
+  return state->result;
+}
+
+bool Item::NeedsDecoding() const {
+  if (!chunk_.has_value()) {
+    return false;
+  }
+  DecodeState* state = state_.load(std::memory_order_acquire);
+  if (state == nullptr) {
+    return true;
+  }
+  thread::MutexLock lock(&state->mu);
+  return !state->ready;
 }
 
 void Item::Prime(absl::StatusOr<Value> result) const {
-  thread::MutexLock lock(&mu_);
-  if (decoded_) {
+  DecodeState* state = State();
+  thread::MutexLock lock(&state->mu);
+  if (state->ready) {
     return;
   }
-  result_ = std::move(result);
-  decoded_ = true;
+  state->result = std::move(result);
+  state->ready = true;
 }
 
 absl::Status Reader::NextMany(std::vector<ItemPtr>& out, size_t limit) {
@@ -344,7 +433,7 @@ Bus::Bus(Monitor& monitor, std::string label, Produce produce, int readers)
       produce_(std::move(produce)) {
   slots_.reserve(static_cast<size_t>(std::max(readers, 0)));
   for (int index = 0; index < readers; ++index) {
-    slots_.push_back(std::make_unique<Slot>());
+    slots_.emplace_back();
   }
 }
 
@@ -391,7 +480,7 @@ bool Bus::Skip() {
   {
     thread::MutexLock lock(&monitor_->mu());
     if (handed_out_ < slots_.size()) {
-      slots_[handed_out_++]->dropped = true;
+      slots_[handed_out_++].dropped = true;
     }
     unused = Abandoned() && !wanted_;
   }
@@ -416,39 +505,40 @@ void Bus::Wanted() {
 
 bool Bus::Abandoned() ABSL_EXCLUSIVE_LOCKS_REQUIRED(monitor_->mu()) {
   return std::all_of(slots_.begin(), slots_.end(),
-                     [](const auto& slot) { return slot->dropped; });
+                     [](const Slot& slot) { return slot.dropped; });
 }
 
 absl::StatusOr<ItemPtr> BusReader::Next() {
   bus_->Wanted();
-  Monitor& monitor = bus_->monitor();
-  thread::MutexLock lock(&monitor.mu());
-  ABSL_RETURN_IF_ERROR(monitor.Wait(
-      bus_->moved(), [this] { return !slot_->items.empty() || slot_->ended; }));
-  if (!slot_->items.empty()) {
-    ItemPtr item = std::move(slot_->items.front());
-    slot_->items.pop_front();
+  thread::MutexLock lock(&bus_->monitor_->mu());
+  ABSL_RETURN_IF_ERROR(bus_->monitor_->Wait(
+      bus_->moved(),
+      [this]() ABSL_EXCLUSIVE_LOCKS_REQUIRED(bus_->monitor_->mu()) {
+        return !slot_->Empty() || bus_->ended_;
+      }));
+  if (!slot_->Empty()) {
+    ItemPtr item = slot_->Pop();
     bus_->moved().Wake();
     return item;
   }
-  ABSL_RETURN_IF_ERROR(slot_->error);
+  ABSL_RETURN_IF_ERROR(bus_->error_);
   return ItemPtr{};
 }
 
 absl::StatusOr<ItemPtr> BusReader::NextUntil(absl::Time deadline) {
   bus_->Wanted();
-  Monitor& monitor = bus_->monitor();
-  thread::MutexLock lock(&monitor.mu());
-  ABSL_RETURN_IF_ERROR(monitor.WaitUntil(bus_->moved(), deadline, [this] {
-    return !slot_->items.empty() || slot_->ended;
-  }));
-  if (!slot_->items.empty()) {
-    ItemPtr item = std::move(slot_->items.front());
-    slot_->items.pop_front();
+  thread::MutexLock lock(&bus_->monitor_->mu());
+  ABSL_RETURN_IF_ERROR(bus_->monitor_->WaitUntil(
+      bus_->moved(), deadline,
+      [this]() ABSL_EXCLUSIVE_LOCKS_REQUIRED(bus_->monitor_->mu()) {
+        return !slot_->Empty() || bus_->ended_;
+      }));
+  if (!slot_->Empty()) {
+    ItemPtr item = slot_->Pop();
     bus_->moved().Wake();
     return item;
   }
-  ABSL_RETURN_IF_ERROR(slot_->error);
+  ABSL_RETURN_IF_ERROR(bus_->error_);
   return ItemPtr{};
 }
 
@@ -457,20 +547,20 @@ absl::Status BusReader::NextMany(std::vector<ItemPtr>& out, size_t limit) {
     return absl::OkStatus();
   }
   bus_->Wanted();
-  Monitor& monitor = bus_->monitor();
   bool room = false;
   {
-    thread::MutexLock lock(&monitor.mu());
-    ABSL_RETURN_IF_ERROR(monitor.Wait(bus_->moved(), [this] {
-      return !slot_->items.empty() || slot_->ended;
-    }));
-    while (!slot_->items.empty() && limit-- > 0) {
-      out.push_back(std::move(slot_->items.front()));
-      slot_->items.pop_front();
+    thread::MutexLock lock(&bus_->monitor_->mu());
+    ABSL_RETURN_IF_ERROR(bus_->monitor_->Wait(
+        bus_->moved(),
+        [this]() ABSL_EXCLUSIVE_LOCKS_REQUIRED(bus_->monitor_->mu()) {
+          return !slot_->Empty() || bus_->ended_;
+        }));
+    while (!slot_->Empty() && limit-- > 0) {
+      out.push_back(slot_->Pop());
       room = true;
     }
     if (!room) {
-      ABSL_RETURN_IF_ERROR(slot_->error);
+      ABSL_RETURN_IF_ERROR(bus_->error_);
     }
   }
   // One wake is sufficient because the producer only tests whether room
@@ -489,7 +579,7 @@ void BusReader::Stop() {
       return;
     }
     slot_->dropped = true;
-    slot_->items.clear();
+    slot_->Clear();
   }
   // The producer may be waiting for room this reader will never make.
   bus_->Wanted();
@@ -643,7 +733,7 @@ absl::StatusOr<ReaderPtr> Bus::Take() {
     return Fail(absl::StrCat("Internal flow error: ", label_,
                              " has more readers than the plan accounted for."));
   }
-  return ReaderPtr(new BusReader(*this, *slots_[handed_out_++]));
+  return ReaderPtr(new BusReader(*this, slots_[handed_out_++]));
 }
 
 absl::Status Bus::Pump() {
@@ -654,8 +744,8 @@ absl::Status Bus::Pump() {
       if (wanted_) {
         return true;
       }
-      for (const auto& slot : slots_) {
-        if (!slot->dropped) {
+      for (const Slot& slot : slots_) {
+        if (!slot.dropped) {
           return false;
         }
       }
@@ -669,8 +759,8 @@ absl::Status Bus::Pump() {
   // Batches may exceed the queue depth once admitted; the next batch waits
   // until every live reader has room.
   const auto room = [this] {
-    for (const std::unique_ptr<Slot>& slot : slots_) {
-      if (!slot->dropped && slot->items.size() >= kQueueDepth) {
+    for (const Slot& slot : slots_) {
+      if (!slot.dropped && slot.Pending() >= kQueueDepth) {
         return false;
       }
     }
@@ -680,9 +770,9 @@ absl::Status Bus::Pump() {
     {
       thread::MutexLock lock(&monitor_->mu());
       ABSL_RETURN_IF_ERROR(monitor_->Wait(moved_, room));
-      for (const std::unique_ptr<Slot>& slot : slots_) {
-        if (!slot->dropped) {
-          slot->items.push_back(item);
+      for (Slot& slot : slots_) {
+        if (!slot.dropped) {
+          slot.Push(item);
         }
       }
     }
@@ -696,11 +786,11 @@ absl::Status Bus::Pump() {
     {
       thread::MutexLock lock(&monitor_->mu());
       ABSL_RETURN_IF_ERROR(monitor_->Wait(moved_, room));
-      for (const std::unique_ptr<Slot>& slot : slots_) {
-        if (slot->dropped) {
+      for (Slot& slot : slots_) {
+        if (slot.dropped) {
           continue;
         }
-        slot->items.insert(slot->items.end(), items.begin(), items.end());
+        slot.Append(items);
       }
     }
     items.clear();
@@ -710,10 +800,8 @@ absl::Status Bus::Pump() {
   error = produce_(Sink(one, many));
   {
     thread::MutexLock lock(&monitor_->mu());
-    for (const std::unique_ptr<Slot>& slot : slots_) {
-      slot->ended = true;
-      slot->error = error;
-    }
+    ended_ = true;
+    error_ = std::move(error);
   }
   moved_.Wake();
   return absl::OkStatus();

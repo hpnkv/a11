@@ -156,13 +156,7 @@ class ChunkObject {
   /** @brief A size estimate that does not encode anything. */
   [[nodiscard]] virtual size_t ApproxBytes() const = 0;
 
-  /**
-   * @brief The address of the held value.
-   *
-   * Do not call this. It is dereferenced in exactly one place --
-   * a11::data::TryTakeObject, which compares tag() first -- and a cast without
-   * that comparison is undefined behaviour with a plausible-looking result.
-   */
+  /** @brief An opaque address supplied by the object implementation. */
   [[nodiscard]] virtual const void* absl_nonnull address() const = 0;
 };
 

@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -35,6 +36,14 @@
 namespace a11::stores {
 
 struct ChunkStoreReader::LogicalState {
+  using NextResult = std::optional<data::NodeFragment>;
+  using ReadyResult = std::optional<absl::StatusOr<NextResult>>;
+
+  struct ChunkStep {
+    bool skipped;
+    NextResult result;
+  };
+
   struct Frame {
     std::shared_ptr<ChunkStore> store;
     std::shared_ptr<ChunkStoreReader> reader;
@@ -44,6 +53,9 @@ struct ChunkStoreReader::LogicalState {
   };
 
   thread::Mutex mu;
+  // Inline reads must not pass a logical read already submitted to a fiber.
+  thread::Mutex issue_mu;
+  size_t issued ABSL_GUARDED_BY(issue_mu) = 0;
   thread::Mutex readers_mu;
   std::vector<Frame> frames ABSL_GUARDED_BY(mu);
   std::vector<std::shared_ptr<ChunkStoreReader>> active
@@ -95,6 +107,65 @@ struct ChunkStoreReader::LogicalState {
   bool SawFinal() {
     thread::MutexLock lock(&mu);
     return root_final;
+  }
+
+  ChunkStep AcceptChunk(data::NodeFragment fragment)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu) {
+    data::Chunk& chunk = std::get<data::Chunk>(fragment.data);
+    if (chunk.IsNull()) {
+      if (!fragment.continued && frames.size() == 1) {
+        ended = true;
+        return {.skipped = false, .result = std::nullopt};
+      }
+      return {.skipped = true, .result = std::nullopt};
+    }
+    if (options.sticky_mimetype) {
+      if (chunk.metadata.has_value() && !chunk.metadata->mimetype.empty()) {
+        mimetype = chunk.metadata->mimetype;
+      } else if (!mimetype.empty()) {
+        if (!chunk.metadata.has_value()) {
+          chunk.metadata = data::ChunkMetadata{};
+        }
+        chunk.metadata->mimetype = mimetype;
+      }
+    }
+    ++emitted;
+    if (options.max_chunks_to_read.has_value() &&
+        emitted >= *options.max_chunks_to_read) {
+      ended = true;
+    }
+    return {.skipped = false, .result = std::move(fragment)};
+  }
+
+  ReadyResult TryNextReady() {
+    thread::MutexLock lock(&mu);
+    if (!status.ok()) {
+      return absl::StatusOr<NextResult>(status);
+    }
+    if (ended) {
+      return absl::StatusOr<NextResult>(NextResult{});
+    }
+    if (options.max_chunks_to_read == 0) {
+      ended = true;
+      return absl::StatusOr<NextResult>(NextResult{});
+    }
+    if (cancelled.load(std::memory_order_acquire)) {
+      return absl::StatusOr<NextResult>(
+          absl::CancelledError("Logical reader cancelled"));
+    }
+    if (frames.size() != 1) {
+      return std::nullopt;
+    }
+    while (auto fragment = frames.front().reader->TryTakeSimpleBuffered()) {
+      if (!fragment->continued) {
+        root_final = true;
+      }
+      ChunkStep accepted = AcceptChunk(std::move(*fragment));
+      if (!accepted.skipped) {
+        return absl::StatusOr<NextResult>(std::move(accepted.result));
+      }
+    }
+    return std::nullopt;
   }
 
   absl::StatusOr<std::optional<data::NodeFragment>> Next(
@@ -215,30 +286,10 @@ struct ChunkStoreReader::LogicalState {
         }
         continue;
       }
-      data::Chunk& chunk = std::get<data::Chunk>(fragment.data);
-      if (chunk.IsNull()) {
-        if (!fragment.continued && frames.size() == 1) {
-          ended = true;
-          return std::nullopt;
-        }
-        continue;
+      ChunkStep accepted = AcceptChunk(std::move(fragment));
+      if (!accepted.skipped) {
+        return std::move(accepted.result);
       }
-      if (options.sticky_mimetype) {
-        if (chunk.metadata.has_value() && !chunk.metadata->mimetype.empty()) {
-          mimetype = chunk.metadata->mimetype;
-        } else if (!mimetype.empty()) {
-          if (!chunk.metadata.has_value()) {
-            chunk.metadata = data::ChunkMetadata{};
-          }
-          chunk.metadata->mimetype = mimetype;
-        }
-      }
-      ++emitted;
-      if (options.max_chunks_to_read.has_value() &&
-          emitted >= *options.max_chunks_to_read) {
-        ended = true;
-      }
-      return fragment;
     }
     ended = true;
     return std::nullopt;
@@ -301,8 +352,25 @@ a11::Future<std::optional<data::NodeFragment>> ChunkStoreReader::NextLogical(
   if (!state.ok()) {
     return a11::FailedFuture<std::optional<data::NodeFragment>>(state.status());
   }
-  return a11::Submit<std::optional<data::NodeFragment>>(
-      [state = *std::move(state), timeout]() { return state->Next(timeout); });
+  a11::Future<LogicalState::NextResult> pending;
+  {
+    thread::MutexLock lock(&(*state)->issue_mu);
+    if ((*state)->issued == 0) {
+      LogicalState::ReadyResult ready = (*state)->TryNextReady();
+      if (ready.has_value()) {
+        return a11::CompletedFuture<LogicalState::NextResult>(
+            *std::move(ready));
+      }
+    }
+    ++(*state)->issued;
+    pending = a11::Submit<LogicalState::NextResult>(
+        [state = *state, timeout]() { return state->Next(timeout); });
+  }
+  pending.OnReady([state = *state](const auto&) {
+    thread::MutexLock lock(&state->issue_mu);
+    --state->issued;
+  });
+  return pending;
 }
 
 a11::Future<std::vector<std::optional<data::NodeFragment>>>
@@ -320,25 +388,35 @@ ChunkStoreReader::NextLogicalMany(size_t limit, absl::Duration timeout) {
   if (!state.ok()) {
     return a11::FailedFuture<Batch>(state.status());
   }
-  return a11::Submit<Batch>(
-      [state = *std::move(state), limit, timeout]() -> absl::StatusOr<Batch> {
-        Batch result;
-        result.reserve(limit);
-        for (size_t index = 0; index < limit; ++index) {
-          auto next = state->Next(index == 0 ? timeout : absl::ZeroDuration());
-          if (!next.ok()) {
-            if (!result.empty() && absl::IsDeadlineExceeded(next.status())) {
-              break;
-            }
-            return next.status();
-          }
-          result.push_back(std::move(*next));
-          if (!result.back().has_value()) {
+  a11::Future<Batch> pending;
+  {
+    thread::MutexLock lock(&(*state)->issue_mu);
+    ++(*state)->issued;
+    pending = a11::Submit<Batch>([state = *state, limit,
+                                  timeout]() -> absl::StatusOr<Batch> {
+      Batch result;
+      result.reserve(limit);
+      for (size_t index = 0; index < limit; ++index) {
+        auto next = state->Next(index == 0 ? timeout : absl::ZeroDuration());
+        if (!next.ok()) {
+          if (!result.empty() && absl::IsDeadlineExceeded(next.status())) {
             break;
           }
+          return next.status();
         }
-        return result;
-      });
+        result.push_back(std::move(*next));
+        if (!result.back().has_value()) {
+          break;
+        }
+      }
+      return result;
+    });
+  }
+  pending.OnReady([state = *state](const auto&) {
+    thread::MutexLock lock(&state->issue_mu);
+    --state->issued;
+  });
+  return pending;
 }
 
 }  // namespace a11::stores

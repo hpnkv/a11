@@ -17,14 +17,19 @@
 #include <algorithm>
 #include <cerrno>
 #include <charconv>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <functional>
 #include <limits>
 #include <set>
 #include <utility>
+#include <variant>
 
+#include <absl/base/thread_annotations.h>
 #include <absl/functional/function_ref.h>
+#include <absl/log/check.h>
 #include <absl/status/status.h>
 #include <absl/status/status_macros.h>
 #include <absl/strings/ascii.h>
@@ -46,6 +51,7 @@
 #include "a11/status.h"
 #include "a11/time.h"
 #include "a11/utf8.h"
+#include "thread/boost_primitives.h"
 
 namespace a11::flow {
 namespace {
@@ -457,13 +463,11 @@ void AppendJson(const Value& value, std::string& out) {
       return;
     case Value::Kind::kList: {
       out.push_back('[');
-      bool first = true;
-      for (const Value& item : value.items()) {
-        if (!first) {
+      for (size_t index = 0; index < value.list_size(); ++index) {
+        if (index != 0) {
           out += ", ";
         }
-        first = false;
-        AppendJson(item, out);
+        AppendJson(value.list_at(index), out);
       }
       out.push_back(']');
       return;
@@ -584,21 +588,28 @@ class NativeBridge final : public HostBridge {
                             data::StatusFromStatusChunk(chunk));
       return StatusRecord(status);
     }
-    const std::string mimetype = chunk.GetMimetype();
+    data::Chunk materialized;
+    const data::Chunk* readable = &chunk;
+    if (chunk.HasObject()) {
+      materialized = chunk;
+      ABSL_RETURN_IF_ERROR(materialized.Materialize());
+      readable = &materialized;
+    }
+    const std::string mimetype = readable->GetMimetype();
     if (absl::StrContains(mimetype, "json") || mimetype.empty()) {
-      auto parsed = ReadJson(chunk.data);
+      auto parsed = ReadJson(readable->data);
       if (parsed.ok()) {
         return *std::move(parsed);
       }
       if (absl::IsOutOfRange(parsed.status())) {
         return parsed.status();
       }
-      return Value::String(chunk.data);
+      return Value::String(readable->data);
     }
     if (absl::StartsWith(mimetype, "text/")) {
-      return Value::String(chunk.data);
+      return Value::String(readable->data);
     }
-    return Value::Bytes(chunk.data);
+    return Value::Bytes(readable->data);
   }
 
   absl::StatusOr<data::Chunk> ToChunk(const Value& value,
@@ -746,6 +757,312 @@ bool NodeFragmentObject::Equals(const HostObject& other) const {
 
 // --- Value -------------------------------------------------------------------
 
+struct Value::StatusPayload {
+  Pairs pairs;
+  absl::Status status;
+};
+
+namespace {
+
+std::string PackedTypeName(std::string_view name) {
+  std::string canonical = Canonical(name);
+  if (absl::StartsWith(canonical, "std::") &&
+      vocabulary::TypeNames().contains(std::string_view(canonical).substr(5))) {
+    canonical.erase(0, 5);
+  }
+  return canonical;
+}
+
+}  // namespace
+
+struct Value::PackedList {
+  enum class Kind { kInteger, kFloat, kBool, kDuration, kTime };
+  Kind kind;
+  int bits = 0;
+  bool is_signed = false;
+  size_t count = 0;
+  std::variant<std::vector<std::byte>, std::vector<absl::Duration>,
+               std::vector<absl::Time>>
+      data;
+  mutable thread::Mutex mu;
+  mutable std::optional<std::vector<Value>> expanded ABSL_GUARDED_BY(mu);
+
+  Value At(size_t index) const {
+    CHECK_LT(index, count);
+    if (kind == Kind::kDuration) {
+      return Value::Duration(
+          std::get<std::vector<absl::Duration>>(data)[index]);
+    }
+    if (kind == Kind::kTime) {
+      return Value::Time(std::get<std::vector<absl::Time>>(data)[index]);
+    }
+    const auto& bytes = std::get<std::vector<std::byte>>(data);
+    const size_t width =
+        kind == Kind::kBool ? 1u : static_cast<size_t>(bits / 8);
+    const std::byte* start = bytes.data() + index * width;
+    if (kind == Kind::kBool) {
+      return Value::Bool(start[0] != std::byte{0});
+    }
+    if (kind == Kind::kFloat) {
+      if (bits == 32) {
+        float number;
+        std::memcpy(&number, start, sizeof(number));
+        return Value::TypedFloat(number, 32);
+      }
+      double number;
+      std::memcpy(&number, start, sizeof(number));
+      return Value::TypedFloat(number, 64);
+    }
+    absl::uint128 raw = 0;
+    for (size_t byte = 0; byte < width; ++byte) {
+      raw |= absl::uint128(std::to_integer<unsigned char>(start[byte]))
+             << static_cast<int>(byte * 8);
+    }
+    const bool negative =
+        is_signed &&
+        (std::to_integer<unsigned char>(start[width - 1]) & 0x80) != 0;
+    if (negative) {
+      raw = (~raw + 1) &
+            (bits == 128 ? ~absl::uint128(0) : (absl::uint128(1) << bits) - 1);
+    }
+    return Value::TypedInteger(raw, negative, bits, is_signed);
+  }
+
+  const std::vector<Value>& Items() const {
+    thread::MutexLock lock(&mu);
+    if (!expanded.has_value()) {
+      std::vector<Value> values;
+      values.reserve(count);
+      for (size_t index = 0; index < count; ++index) {
+        values.push_back(At(index));
+      }
+      expanded.emplace(std::move(values));
+    }
+    return *expanded;
+  }
+};
+
+struct WindowBuffer::Block {
+  mutable thread::Mutex mu;
+  std::vector<Value> values ABSL_GUARDED_BY(mu);
+
+  size_t Append(Value value) {
+    thread::MutexLock lock(&mu);
+    values.push_back(std::move(value));
+    return values.size();
+  }
+
+  Value At(size_t index) const {
+    thread::MutexLock lock(&mu);
+    CHECK_LT(index, values.size());
+    return values[index];
+  }
+};
+
+struct Value::WindowList {
+  std::shared_ptr<WindowBuffer::Block> first;
+  std::shared_ptr<WindowBuffer::Block> second;
+  size_t first_start = 0;
+  size_t first_count = 0;
+  size_t second_count = 0;
+  mutable thread::Mutex mu;
+  mutable std::optional<std::vector<Value>> expanded ABSL_GUARDED_BY(mu);
+
+  size_t Size() const { return first_count + second_count; }
+
+  Value At(size_t index) const {
+    CHECK_LT(index, Size());
+    return index < first_count ? first->At(first_start + index)
+                               : second->At(index - first_count);
+  }
+
+  const std::vector<Value>& Items() const {
+    thread::MutexLock lock(&mu);
+    if (!expanded.has_value()) {
+      std::vector<Value> values;
+      values.reserve(Size());
+      for (size_t index = 0; index < Size(); ++index) {
+        values.push_back(At(index));
+      }
+      expanded.emplace(std::move(values));
+    }
+    return *expanded;
+  }
+};
+
+WindowBuffer::WindowBuffer(size_t width) : width_(width) {
+  CHECK_GT(width_, 0);
+}
+
+std::optional<Value> WindowBuffer::Push(Value value) {
+  if (width_ <= 2) {
+    small_.push_back(std::move(value));
+    if (small_.size() < width_) {
+      return std::nullopt;
+    }
+    if (small_.size() > width_) {
+      small_.pop_front();
+    }
+    return Value::List(std::vector<Value>(small_.begin(), small_.end()));
+  }
+  if (current_ == nullptr) {
+    current_ = std::make_shared<Block>();
+  }
+  size_t position = current_->Append(std::move(value));
+  if (seen_ < width_) {
+    ++seen_;
+  }
+  if (seen_ < width_) {
+    return std::nullopt;
+  }
+
+  auto window = std::make_shared<Value::WindowList>();
+  if (position == width_) {
+    window->first = current_;
+    window->first_count = width_;
+  } else {
+    CHECK_NE(previous_, nullptr);
+    window->first = previous_;
+    window->first_start = position;
+    window->first_count = width_ - position;
+    window->second = current_;
+    window->second_count = position;
+  }
+  Value result;
+  result.kind_ = Value::Kind::kList;
+  result.payload_.emplace<Value::WindowListPtr>(std::move(window));
+  if (position == width_) {
+    previous_ = current_;
+    current_.reset();
+  }
+  return result;
+}
+
+namespace {
+
+template <typename T, typename Variant>
+const T& PayloadAs(const Variant& payload) {
+  const T* held = std::get_if<T>(&payload);
+  CHECK_NE(held, nullptr);
+  return *held;
+}
+
+const size_t kInlineTextBytes = std::min<size_t>(15, std::string{}.capacity());
+
+}  // namespace
+
+bool Value::boolean() const {
+  return PayloadAs<bool>(payload_);
+}
+
+std::int64_t Value::integer() const {
+  return PayloadAs<std::int64_t>(payload_);
+}
+
+double Value::number() const {
+  return PayloadAs<double>(payload_);
+}
+
+absl::uint128 Value::magnitude() const {
+  return PayloadAs<absl::uint128>(payload_);
+}
+
+const std::string& Value::text() const {
+  if (const auto* inline_text = std::get_if<std::string>(&payload_);
+      inline_text != nullptr) {
+    return *inline_text;
+  }
+  return *PayloadAs<TextPtr>(payload_);
+}
+
+const std::vector<Value>& Value::items() const {
+  if (const auto* packed = std::get_if<PackedListPtr>(&payload_)) {
+    return (*packed)->Items();
+  }
+  if (const auto* window = std::get_if<WindowListPtr>(&payload_)) {
+    return (*window)->Items();
+  }
+  return *PayloadAs<ListPtr>(payload_);
+}
+
+size_t Value::list_size() const {
+  if (const auto* packed = std::get_if<PackedListPtr>(&payload_)) {
+    return (*packed)->count;
+  }
+  if (const auto* window = std::get_if<WindowListPtr>(&payload_)) {
+    return (*window)->Size();
+  }
+  return PayloadAs<ListPtr>(payload_)->size();
+}
+
+Value Value::list_at(size_t index) const {
+  if (const auto* packed = std::get_if<PackedListPtr>(&payload_)) {
+    return (*packed)->At(index);
+  }
+  if (const auto* window = std::get_if<WindowListPtr>(&payload_)) {
+    return (*window)->At(index);
+  }
+  return PayloadAs<ListPtr>(payload_)->at(index);
+}
+
+bool Value::has_packed_element_type(std::string_view name) const {
+  const auto* packed = std::get_if<PackedListPtr>(&payload_);
+  if (packed == nullptr) {
+    return false;
+  }
+  const PackedList& list = **packed;
+  const std::string type = PackedTypeName(name);
+  name = type;
+  if (const auto integer = IntegerType(name); integer.has_value()) {
+    return list.kind == PackedList::Kind::kInteger &&
+           list.bits == integer->bits && list.is_signed == integer->is_signed;
+  }
+  return (name == "f32" && list.kind == PackedList::Kind::kFloat &&
+          list.bits == 32) ||
+         (name == "f64" && list.kind == PackedList::Kind::kFloat &&
+          list.bits == 64) ||
+         ((name == "bool" || name == "boolean") &&
+          list.kind == PackedList::Kind::kBool) ||
+         (name == "duration" && list.kind == PackedList::Kind::kDuration) ||
+         (name == "time" && list.kind == PackedList::Kind::kTime);
+}
+
+const Value::Pairs& Value::pairs() const {
+  if (const auto* fields = std::get_if<ObjectPtr>(&payload_);
+      fields != nullptr) {
+    return **fields;
+  }
+  return PayloadAs<StatusPtr>(payload_)->pairs;
+}
+
+const absl::Status* Value::native_status() const {
+  if (const auto* record = std::get_if<StatusPtr>(&payload_);
+      record != nullptr) {
+    return &(*record)->status;
+  }
+  return nullptr;
+}
+
+absl::Duration Value::duration() const {
+  return PayloadAs<absl::Duration>(payload_);
+}
+
+absl::Time Value::time() const {
+  return PayloadAs<absl::Time>(payload_);
+}
+
+const data::Chunk& Value::chunk() const {
+  return *PayloadAs<ChunkPtr>(payload_);
+}
+
+const HostObject& Value::host() const {
+  return *host_object();
+}
+
+const std::shared_ptr<const HostObject>& Value::host_object() const {
+  return PayloadAs<HostPtr>(payload_);
+}
+
 Value Value::Option(std::optional<Value> value) {
   Pairs fields;
   fields.emplace_back("has_value", Bool(value.has_value()));
@@ -758,29 +1075,31 @@ Value Value::Option(std::optional<Value> value) {
 }
 
 Value Value::Status(absl::Status status, Pairs fields) {
-  Value value = Object(std::move(fields));
-  value.status_ = std::make_shared<const absl::Status>(std::move(status));
-  return value;
+  Value made;
+  made.kind_ = Kind::kObject;
+  made.payload_.emplace<StatusPtr>(std::make_shared<const StatusPayload>(
+      StatusPayload{std::move(fields), std::move(status)}));
+  return made;
 }
 
 Value Value::Bool(bool value) {
   Value made;
   made.kind_ = Kind::kBool;
-  made.boolean_ = value;
+  made.payload_.emplace<bool>(value);
   return made;
 }
 
 Value Value::Integer(std::int64_t value) {
   Value made;
   made.kind_ = Kind::kInteger;
-  made.integer_ = value;
+  made.payload_.emplace<std::int64_t>(value);
   return made;
 }
 
 Value Value::Double(double value) {
   Value made;
   made.kind_ = Kind::kDouble;
-  made.number_ = value;
+  made.payload_.emplace<double>(value);
   made.legacy_number_ = true;
   return made;
 }
@@ -789,7 +1108,7 @@ Value Value::TypedInteger(absl::uint128 magnitude, bool negative, int bits,
                           bool is_signed) {
   Value made;
   made.kind_ = Kind::kTypedInteger;
-  made.magnitude_ = magnitude;
+  made.payload_.emplace<absl::uint128>(magnitude);
   made.negative_ = negative && magnitude != 0;
   made.numeric_bits_ = static_cast<std::uint8_t>(bits);
   made.numeric_signed_ = is_signed;
@@ -799,7 +1118,7 @@ Value Value::TypedInteger(absl::uint128 magnitude, bool negative, int bits,
 Value Value::TypedFloat(double value, int bits) {
   Value made;
   made.kind_ = Kind::kTypedFloat;
-  made.number_ = value;
+  made.payload_.emplace<double>(value);
   made.numeric_bits_ = static_cast<std::uint8_t>(bits);
   return made;
 }
@@ -809,52 +1128,163 @@ Value Value::LegacyNumber(Value value) {
   return value;
 }
 
-Value Value::String(std::string value) {
+Value Value::TextValue(Kind kind, std::string value) {
   Value made;
-  made.kind_ = Kind::kString;
-  made.text_ = std::make_shared<const std::string>(std::move(value));
+  made.kind_ = kind;
+  if (value.size() <= kInlineTextBytes) {
+    made.payload_.emplace<std::string>(std::move(value));
+  } else {
+    made.payload_.emplace<TextPtr>(
+        std::make_shared<const std::string>(std::move(value)));
+  }
   return made;
 }
 
+Value Value::String(std::string value) {
+  return TextValue(Kind::kString, std::move(value));
+}
+
 Value Value::Bytes(data::Bytes value) {
-  Value made;
-  made.kind_ = Kind::kBytes;
-  made.text_ = std::make_shared<const std::string>(std::move(value));
-  return made;
+  return TextValue(Kind::kBytes, std::move(value));
 }
 
 Value Value::List(std::vector<Value> items) {
   Value made;
   made.kind_ = Kind::kList;
-  made.items_ = std::make_shared<const std::vector<Value>>(std::move(items));
+  made.payload_.emplace<ListPtr>(
+      std::make_shared<const std::vector<Value>>(std::move(items)));
+  return made;
+}
+
+Value Value::List(std::vector<Value> items, std::string_view element_type) {
+  const std::string type = PackedTypeName(element_type);
+  element_type = type;
+  PackedList::Kind kind;
+  int bits = 0;
+  bool is_signed = false;
+  if (const auto integer = IntegerType(element_type); integer.has_value()) {
+    kind = PackedList::Kind::kInteger;
+    bits = integer->bits;
+    is_signed = integer->is_signed;
+  } else if (element_type == "f32" || element_type == "f64") {
+    kind = PackedList::Kind::kFloat;
+    bits = element_type == "f32" ? 32 : 64;
+  } else if (element_type == "bool" || element_type == "boolean") {
+    kind = PackedList::Kind::kBool;
+  } else if (element_type == "duration") {
+    kind = PackedList::Kind::kDuration;
+  } else if (element_type == "time") {
+    kind = PackedList::Kind::kTime;
+  } else {
+    return List(std::move(items));
+  }
+  for (const Value& item : items) {
+    const bool matches =
+        kind == PackedList::Kind::kInteger
+            ? ((item.kind() == Kind::kTypedInteger &&
+                item.numeric_bits() == bits &&
+                item.numeric_signed() == is_signed) ||
+               (item.kind() == Kind::kInteger && bits == 64 && is_signed))
+        : kind == PackedList::Kind::kFloat
+            ? ((item.kind() == Kind::kTypedFloat &&
+                item.numeric_bits() == bits) ||
+               (item.kind() == Kind::kDouble && bits == 64))
+        : kind == PackedList::Kind::kBool     ? item.kind() == Kind::kBool
+        : kind == PackedList::Kind::kDuration ? item.kind() == Kind::kDuration
+                                              : item.kind() == Kind::kTime;
+    if (!matches) {
+      return List(std::move(items));
+    }
+  }
+  auto packed = std::make_shared<PackedList>();
+  packed->kind = kind;
+  packed->bits = bits;
+  packed->is_signed = is_signed;
+  packed->count = items.size();
+  if (kind == PackedList::Kind::kDuration) {
+    std::vector<absl::Duration> values;
+    values.reserve(items.size());
+    for (const Value& item : items) {
+      values.push_back(item.duration());
+    }
+    packed->data = std::move(values);
+  } else if (kind == PackedList::Kind::kTime) {
+    std::vector<absl::Time> values;
+    values.reserve(items.size());
+    for (const Value& item : items) {
+      values.push_back(item.time());
+    }
+    packed->data = std::move(values);
+  } else {
+    const size_t width =
+        kind == PackedList::Kind::kBool ? 1u : static_cast<size_t>(bits / 8);
+    std::vector<std::byte> bytes(items.size() * width);
+    for (size_t index = 0; index < items.size(); ++index) {
+      const Value& item = items[index];
+      std::byte* start = bytes.data() + index * width;
+      if (kind == PackedList::Kind::kBool) {
+        start[0] = item.boolean() ? std::byte{1} : std::byte{0};
+      } else if (kind == PackedList::Kind::kFloat) {
+        if (bits == 32) {
+          const float number = static_cast<float>(item.number());
+          std::memcpy(start, &number, sizeof(number));
+        } else {
+          const double number = item.number();
+          std::memcpy(start, &number, sizeof(number));
+        }
+      } else {
+        absl::uint128 raw = item.kind() == Kind::kInteger
+                                ? absl::uint128(item.integer())
+                                : item.magnitude();
+        if (item.negative()) {
+          raw = ~raw + 1;
+        }
+        for (size_t byte = 0; byte < width; ++byte) {
+          start[byte] = std::byte{static_cast<unsigned char>(raw & 0xff)};
+          raw >>= 8;
+        }
+      }
+    }
+    packed->data = std::move(bytes);
+  }
+  Value made;
+  made.kind_ = Kind::kList;
+  made.payload_.emplace<PackedListPtr>(std::move(packed));
   return made;
 }
 
 Value Value::Object(Pairs pairs) {
   Value made;
   made.kind_ = Kind::kObject;
-  made.pairs_ = std::make_shared<const Pairs>(std::move(pairs));
+  if (pairs.empty()) {
+    static const auto empty = std::make_shared<const Pairs>();
+    made.payload_.emplace<ObjectPtr>(empty);
+    return made;
+  }
+  made.payload_.emplace<ObjectPtr>(
+      std::make_shared<const Pairs>(std::move(pairs)));
   return made;
 }
 
 Value Value::Duration(absl::Duration value) {
   Value made;
   made.kind_ = Kind::kDuration;
-  made.duration_ = value;
+  made.payload_.emplace<absl::Duration>(value);
   return made;
 }
 
 Value Value::Time(absl::Time value) {
   Value made;
   made.kind_ = Kind::kTime;
-  made.time_ = value;
+  made.payload_.emplace<absl::Time>(value);
   return made;
 }
 
 Value Value::Chunk(data::Chunk chunk) {
   Value made;
   made.kind_ = Kind::kChunk;
-  made.chunk_ = std::make_shared<const data::Chunk>(std::move(chunk));
+  made.payload_.emplace<ChunkPtr>(
+      std::make_shared<const data::Chunk>(std::move(chunk)));
   return made;
 }
 
@@ -864,7 +1294,7 @@ Value Value::Host(std::shared_ptr<const HostObject> object) {
   }
   Value made;
   made.kind_ = Kind::kHost;
-  made.host_ = std::move(object);
+  made.payload_.emplace<HostPtr>(std::move(object));
   return made;
 }
 
@@ -906,7 +1336,7 @@ const Value* absl_nullable Value::Get(std::string_view key) const {
   if (kind_ != Kind::kObject) {
     return nullptr;
   }
-  for (const auto& [name, value] : *pairs_) {
+  for (const auto& [name, value] : pairs()) {
     if (name == key) {
       return &value;
     }
@@ -939,7 +1369,15 @@ bool operator==(const Value& left, const Value& right) {
     case Value::Kind::kBytes:
       return left.text() == right.text();
     case Value::Kind::kList:
-      return left.items() == right.items();
+      if (left.list_size() != right.list_size()) {
+        return false;
+      }
+      for (size_t index = 0; index < left.list_size(); ++index) {
+        if (left.list_at(index) != right.list_at(index)) {
+          return false;
+        }
+      }
+      return true;
     case Value::Kind::kObject: {
       if (left.pairs().size() != right.pairs().size()) {
         return false;
@@ -968,6 +1406,15 @@ bool operator==(const Value& left, const Value& right) {
 
 std::unique_ptr<HostBridge> NativeHostBridge() {
   return std::make_unique<NativeBridge>();
+}
+
+bool HostBridge::CanPassChunkObject(const data::Chunk& chunk,
+                                    std::string_view declared_type) const {
+  return chunk.HasObject() && chunk.data.empty() && chunk.ref.empty() &&
+         chunk.Validate().ok() &&
+         !vocabulary::TypeNames().contains(Canonical(declared_type)) &&
+         chunk.object->tag() == declared_type &&
+         chunk.GetMimetype() == chunk.object->mimetype();
 }
 
 // --- Reading values ----------------------------------------------------------
@@ -1004,10 +1451,10 @@ std::optional<Value> LookupOptional(const Value& value, const Value& key) {
                           ? static_cast<std::int64_t>(key.boolean())
                           : *ExactInt64(key);
     if (at < 0) {
-      at += static_cast<std::int64_t>(base->items().size());
+      at += static_cast<std::int64_t>(base->list_size());
     }
-    if (at >= 0 && at < static_cast<std::int64_t>(base->items().size())) {
-      return base->items()[static_cast<size_t>(at)];
+    if (at >= 0 && at < static_cast<std::int64_t>(base->list_size())) {
+      return base->list_at(static_cast<size_t>(at));
     }
   }
   if (base->kind() == Value::Kind::kHost) {
@@ -1044,17 +1491,17 @@ Value Lookup(const Value& value, const Value& key) {
       if (!ExactInt64(key).has_value() && key.kind() != Value::Kind::kBool) {
         return Value::Null();
       }
-      const auto& items = value.items();
+      const size_t size = value.list_size();
       auto at = key.kind() == Value::Kind::kBool
                     ? static_cast<std::int64_t>(key.boolean())
                     : *ExactInt64(key);
       if (at < 0) {
-        at += static_cast<std::int64_t>(items.size());
+        at += static_cast<std::int64_t>(size);
       }
-      if (at < 0 || at >= static_cast<std::int64_t>(items.size())) {
+      if (at < 0 || at >= static_cast<std::int64_t>(size)) {
         return Value::Null();
       }
-      return items[static_cast<size_t>(at)];
+      return value.list_at(static_cast<size_t>(at));
     }
     case Value::Kind::kHost:
       if (key.kind() == Value::Kind::kString) {
@@ -1085,7 +1532,7 @@ bool Truthy(const Value& value) {
     case Value::Kind::kBytes:
       return !value.text().empty();
     case Value::Kind::kList:
-      return !value.items().empty();
+      return value.list_size() != 0;
     case Value::Kind::kObject:
       return !value.pairs().empty();
     case Value::Kind::kHost:
@@ -1183,7 +1630,7 @@ Value AsNumber(const Value& value) {
     case Value::Kind::kNull:
       return Value::Integer(0);
     case Value::Kind::kList:
-      return Value::Integer(static_cast<std::int64_t>(value.items().size()));
+      return Value::Integer(static_cast<std::int64_t>(value.list_size()));
     case Value::Kind::kObject:
       return Value::Integer(static_cast<std::int64_t>(value.pairs().size()));
     case Value::Kind::kChunk:
@@ -1526,9 +1973,8 @@ std::string DurationText(absl::Duration value, std::string_view spec) {
     return "0s";
   }
   const std::string sign = total < 0 ? "-" : "";
-  std::uint64_t left = total < 0
-                           ? static_cast<std::uint64_t>(-(total + 1)) + 1
-                           : static_cast<std::uint64_t>(total);
+  std::uint64_t left = total < 0 ? static_cast<std::uint64_t>(-(total + 1)) + 1
+                                 : static_cast<std::uint64_t>(total);
   std::string pieces;
   bool coarse = false;
   const auto units = vocabulary::DurationUnits();
@@ -1821,9 +2267,12 @@ bool Contains(const Value& container, const Value& member) {
       return member.kind() == Value::Kind::kString &&
              container.Get(member.text()) != nullptr;
     case Value::Kind::kList:
-      return std::any_of(
-          container.items().begin(), container.items().end(),
-          [&member](const Value& item) { return item == member; });
+      for (size_t index = 0; index < container.list_size(); ++index) {
+        if (container.list_at(index) == member) {
+          return true;
+        }
+      }
+      return false;
     case Value::Kind::kString:
     case Value::Kind::kBytes:
       return absl::StrContains(container.text(), AsText(member));
@@ -1945,7 +2394,7 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
     if (!std::isfinite(input)) {
       return Invalid("A rounding function requires a finite number.");
     }
-    const double rounded = name == "floor" ? std::floor(input)
+    const double rounded = name == "floor"  ? std::floor(input)
                            : name == "ceil" ? std::ceil(input)
                                             : std::round(input);
     if (first.kind() == Value::Kind::kTypedFloat) {
@@ -2503,7 +2952,8 @@ absl::StatusOr<Value> CoerceFieldType(const FieldPlan& field,
         items[index] = *std::move(made);
       }
     }
-    return Value::List(std::move(items));
+    return field.element.empty() ? Value::List(std::move(items))
+                                 : Value::List(std::move(items), field.element);
   }
   syntax::TypeExpression as;
   as.name = field.type;
@@ -2795,6 +3245,10 @@ absl::StatusOr<Value> Coerce(const Value& value,
     return Value::Bytes(AsText(value));
   }
   if (lowered == "list" || lowered == "array") {
+    if (type.parameters.size() == 1 &&
+        value.has_packed_element_type(type.parameters.front().name)) {
+      return value;
+    }
     std::vector<Value> items;
     if (value.kind() == Value::Kind::kList) {
       items = value.items();
@@ -2807,7 +3261,9 @@ absl::StatusOr<Value> Coerce(const Value& value,
                               Coerce(item, type.parameters.front(), context));
       }
     }
-    return Value::List(std::move(items));
+    return type.parameters.size() == 1
+               ? Value::List(std::move(items), type.parameters.front().name)
+               : Value::List(std::move(items));
   }
   if (lowered == "object") {
     if (value.kind() != Value::Kind::kObject || type.parameters.size() > 1) {

@@ -304,6 +304,7 @@ absl::Span<const vocabulary::WordRole> RolesFor(SemanticKind kind) {
     case SemanticKind::kModifierKeyword:
       return absl::MakeConstSpan(kModifier);
     case SemanticKind::kType:
+    case SemanticKind::kBuiltinType:
       return absl::MakeConstSpan(kType);
     case SemanticKind::kConstant:
       return absl::MakeConstSpan(kConstant);
@@ -1562,8 +1563,7 @@ Description Describe(std::string_view source, size_t offset,
           pipeline != nullptr) {
         const auto* starter =
             syntax::As<syntax::CallExpression>(pipeline->source.get());
-        if (starter != nullptr &&
-            offset >= starter->action_location.start &&
+        if (starter != nullptr && offset >= starter->action_location.start &&
             offset < starter->action_location.end) {
           if (const auto* target = resolved.program.Flow(starter->action);
               target != nullptr) {
@@ -1571,8 +1571,7 @@ Description Describe(std::string_view source, size_t offset,
             for (const auto& argument : starter->args) {
               supplied.push_back(argument.port.text);
             }
-            const auto output =
-                SelectPipelineStarterOutput(*target, supplied);
+            const auto output = SelectPipelineStarterOutput(*target, supplied);
             if (output.ok()) {
               pipeline_note =
                   absl::StrCat("\n\n**Pipeline starter** (", starter->mode,
@@ -1952,10 +1951,25 @@ Description Describe(std::string_view source, size_t offset,
 
   // A word or a mark of the language, with the language's own reference for it.
   if (about.summary.empty()) {
+    if (here->kind == SemanticKind::kBuiltinType &&
+        index < lexed.tokens.size() && lexed.tokens[index].IsWord()) {
+      const auto [qualified, first] = DottedAround(lexed.tokens, index);
+      if (qualified.starts_with("std::") &&
+          vocabulary::Documentation(vocabulary::WordRole::kType,
+                                    qualified.substr(5)) != nullptr) {
+        about.text = qualified;
+        about.range =
+            lines.Between(lexed.tokens[first].start,
+                          lexed.tokens[first].start + qualified.size());
+      }
+    }
     for (const vocabulary::WordRole role : RolesFor(here->kind)) {
       const std::string key = role == vocabulary::WordRole::kSymbol ? about.text
                               : here->kind == SemanticKind::kDuration
                                   ? std::string(DurationUnitOf(about.text))
+                              : here->kind == SemanticKind::kBuiltinType &&
+                                      about.text.starts_with("std::")
+                                  ? about.text.substr(5)
                                   : word;
       const vocabulary::WordDoc* doc = vocabulary::Documentation(role, key);
       if (doc == nullptr) {

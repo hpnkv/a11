@@ -102,10 +102,8 @@ class SerializationRegistry;
  * A consumer elsewhere, or a store that persists, calls Chunk::Materialize()
  * and gets exactly the bytes it always got.
  *
- * The pair is templated in the *caller's* translation unit, which is what makes
- * it safe: the value's type is known at both ends, and what crosses between
- * them is a tag comparison rather than a type identity. See
- * a11::data::ChunkObject.
+ * The pair is templated in the caller's translation unit. A matching tag and
+ * concrete object type are both required before a value is copied out.
  */
 template <typename T>
 class TypedChunkObject final : public ChunkObject {
@@ -124,6 +122,8 @@ class TypedChunkObject final : public ChunkObject {
   [[nodiscard]] const void* absl_nonnull address() const override {
     return &value_;
   }
+
+  [[nodiscard]] const T& value() const { return value_; }
 
   [[nodiscard]] absl::StatusOr<Bytes> Encode() const override;
 
@@ -153,9 +153,9 @@ std::optional<T> TryTakeObject(const Chunk& chunk, std::string_view tag) {
   if (chunk.object == nullptr || chunk.object->tag() != tag) {
     return std::nullopt;
   }
-  // Sound because the tags matched, and tags are unique per type across four
-  // languages by construction. This is the only cast of address() anywhere.
-  return *static_cast<const T*>(chunk.object->address());
+  const auto* typed =
+      dynamic_cast<const TypedChunkObject<T>*>(chunk.object.get());
+  return typed == nullptr ? std::nullopt : std::optional<T>(typed->value());
 }
 
 class SerializationRegistry {

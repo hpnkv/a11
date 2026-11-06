@@ -14,9 +14,11 @@
 
 #include "a11/stores/chunk_store_reader.h"
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <absl/status/status.h>
@@ -54,6 +56,81 @@ TEST(ChunkStoreReaderTest, StopsAfterOrderedFinalFragment) {
   EXPECT_TRUE(reader->Next(absl::Seconds(1)).Await()->has_value());
   EXPECT_FALSE(reader->Next(absl::Seconds(1)).Await()->has_value());
   EXPECT_TRUE(reader->GetStatus().ok());
+}
+
+TEST(ChunkStoreReaderTest, LogicalReadCompletesBufferedChunksInline) {
+  auto store = *LocalChunkStore::Create("logical-ready");
+  std::vector<data::NodeFragment> fragments;
+  fragments.push_back(data::NodeFragment{
+      .data =
+          data::Chunk{.metadata = data::ChunkMetadata{.mimetype = "text/plain"},
+                      .data = "first"},
+      .seq = 0,
+      .continued = true});
+  fragments.push_back(data::NodeFragment{
+      .data = data::Chunk{.metadata =
+                              data::ChunkMetadata{
+                                  .mimetype = "application/octet-stream"}},
+      .seq = 1,
+      .continued = true});
+  for (std::uint32_t index = 0; index < 32; ++index) {
+    fragments.push_back(data::NodeFragment{
+        .data = data::Chunk{.data = index == 0 ? "second" : "more"},
+        .seq = index + 2,
+        .continued = index != 31});
+  }
+  ASSERT_TRUE(store->PutMany(std::move(fragments)).Await().ok());
+  auto reader = *ChunkStoreReader::Create(
+      store, ChunkStoreReaderOptions{.sticky_mimetype = true});
+  auto first = reader->NextLogical().Await(absl::Now() + absl::Seconds(2));
+  ASSERT_TRUE(first.ok()) << first.status();
+  ASSERT_TRUE(first->has_value());
+  EXPECT_EQ(std::get<data::Chunk>((*first)->data).data, "first");
+
+  bool saw_inline = false;
+  for (int index = 0; index < 32; ++index) {
+    auto next = reader->NextLogical();
+    saw_inline |= next.IsReady();
+    auto value = next.Await(absl::Now() + absl::Seconds(2));
+    ASSERT_TRUE(value.ok()) << value.status();
+    ASSERT_TRUE(value->has_value());
+    EXPECT_EQ(std::get<data::Chunk>((*value)->data).data,
+              index == 0 ? "second" : "more");
+    EXPECT_EQ(std::get<data::Chunk>((*value)->data).GetMimetype(),
+              "text/plain");
+  }
+  EXPECT_TRUE(saw_inline);
+  EXPECT_FALSE(reader->NextLogical().Await()->has_value());
+}
+
+TEST(ChunkStoreReaderTest, ConcurrentLogicalReadsDoNotLoseValues) {
+  auto store = *LocalChunkStore::Create("logical-order");
+  auto reader = *ChunkStoreReader::Create(store);
+  auto first = reader->NextLogical();
+  auto second = reader->NextLogical();
+  EXPECT_FALSE(first.IsReady());
+  EXPECT_FALSE(second.IsReady());
+  ASSERT_TRUE(store
+                  ->PutMany({
+                      data::NodeFragment{.data = data::Chunk{.data = "first"},
+                                         .seq = 0,
+                                         .continued = true},
+                      data::NodeFragment{.data = data::Chunk{.data = "second"},
+                                         .seq = 1,
+                                         .continued = false},
+                  })
+                  .Await()
+                  .ok());
+  auto one = first.Await(absl::Now() + absl::Seconds(2));
+  auto two = second.Await(absl::Now() + absl::Seconds(2));
+  ASSERT_TRUE(one.ok()) << one.status();
+  ASSERT_TRUE(two.ok()) << two.status();
+  ASSERT_TRUE(one->has_value());
+  ASSERT_TRUE(two->has_value());
+  const std::string a = std::get<data::Chunk>((*one)->data).data;
+  const std::string b = std::get<data::Chunk>((*two)->data).data;
+  EXPECT_TRUE((a == "first" && b == "second") ||
+              (a == "second" && b == "first"));
 }
 
 TEST(ChunkStoreReaderTest, PopReplacesStoredPayloadWithTombstone) {

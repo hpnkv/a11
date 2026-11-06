@@ -98,8 +98,8 @@ def test_the_flow_stub_names_what_it_hands_back() -> None:
         "def stages() -> dict[str, str]:",
         (
             "def make_handler( self, dispatch_stream: WireStream | None = None"
-            ", *, frame_cache_bytes: typing.SupportsInt | typing.SupportsIndex = 262144,"
-            " frame_budget_bytes: ( typing.SupportsInt | typing.SupportsIndex | None ) = None,"
+            ", *, frame_cache_bytes: typing.SupportsInt = 262144,"
+            " frame_budget_bytes: typing.SupportsInt | None = None,"
             " ) -> ActionHandler | NativeActionHandler | None:"
         ),
         "def schema(self) -> ActionSchema:",
@@ -192,12 +192,14 @@ def test_a_future_names_what_it_resolves_to() -> None:
 
 
 def test_only_a_genuinely_untyped_result_is_left_as_any() -> None:
-    """``__anext__`` has no ``obj_type`` to resolve against; nothing else."""
+    """Only untyped stream reads and the private object peek return Any."""
     source = STUB.read_text()
 
-    assert source.count("-> typing.Any") == 1
-    index = source.index("-> typing.Any")
-    assert "async def __anext__(" in source[index - 200 : index]
+    assert source.count("-> typing.Any") == 2
+    assert (
+        "async def __anext__(" in source[: source.index("-> typing.Any")][-200:]
+    )
+    assert "def _peek_local_object_chunk(chunk: Chunk) -> typing.Any:" in source
 
 
 def test_overloads_do_not_change_runtime_dispatch() -> None:

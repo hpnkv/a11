@@ -106,6 +106,36 @@ TEST(FlowNavigate, PredicateStagesAndAfterBlocksDescribeTheirSyntax) {
       << after.markdown;
 }
 
+TEST(FlowNavigate, BuiltinNumberTypesAndFunctionsHaveHoverDocumentation) {
+  for (const std::string_view name :
+       {"i8", "i16", "i32", "i64", "i128", "u8", "u16", "u32", "u64", "u128",
+        "f32", "f64"}) {
+    const std::string source = absl::StrCat("flow f { in value: ", name, " }");
+    const auto about = Describe(source, source.find(name));
+    EXPECT_NE(about.markdown.find("Conversion"), std::string::npos)
+        << name << ": " << about.markdown;
+  }
+  const std::string source = "flow f { in value: std::duration }";
+  const auto about = Describe(source, source.find("std::duration"));
+  EXPECT_EQ(about.text, "std::duration");
+  EXPECT_NE(about.markdown.find("parse_duration"), std::string::npos)
+      << about.markdown;
+
+  for (const std::string_view name :
+       {"floor", "ceil", "round", "nanoseconds", "microseconds", "milliseconds",
+        "seconds", "minutes", "hours", "parse_duration", "parse_time",
+        "infinite_future", "infinite_past", "infinite_duration",
+        "zero_duration"}) {
+    const std::string call = absl::StrCat("std::", name, "(");
+    const std::string code = absl::StrCat("flow f { x = ", call, "0) }");
+    const auto function = Describe(code, code.find(name));
+    EXPECT_NE(function.markdown.find("built-in function"), std::string::npos)
+        << name << ": " << function.markdown;
+    EXPECT_NE(function.markdown.find("Example"), std::string::npos)
+        << name << ": " << function.markdown;
+  }
+}
+
 TEST(FlowNavigate, PipelineStarterHoverNamesItsOutput) {
   const std::string source = R"(
 flow echo { in input: string

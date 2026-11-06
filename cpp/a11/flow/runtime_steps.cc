@@ -51,7 +51,8 @@ absl::Status Scope::Execute(StepId step) {
         };
         for (; next < sources.size(); ++next) {
           subscribed = false;
-          if (direct_literals_.find(sources[next]) != direct_literals_.end()) {
+          if (std::binary_search(direct_literals_.begin(),
+                                 direct_literals_.end(), sources[next])) {
             const auto& ref = graph().refs[sources[next]];
             if (ref.phase_gate != kNone) {
               ABSL_RETURN_IF_ERROR(StepDone(ref.phase_gate));
@@ -236,7 +237,7 @@ absl::Status Scope::Execute(StepId step) {
     case StepKind::kAbort:
       return AbortNode(step);
     case StepKind::kLog:
-      return WriteLog(one.log, nullptr);
+      return WriteLog(one.log, ItemPtr{});
     case StepKind::kBlock: {
       // The same nesting an `if` branch runs in. What a block adds is that its
       // outcome is *its own*: a failure inside it is the block's, and a `try`
@@ -476,8 +477,8 @@ absl::Status Scope::RunWaitMany(StepId step) {
   } else {
     thread::MutexLock lock(&monitor().mu());
     if (chosen.scope != nullptr) {
-      const auto& outcome = chosen.scope->Step(chosen.step).outcome;
-      if (outcome.has_value()) {
+      const auto* outcome = chosen.scope->Outcome(chosen.step);
+      if (outcome != nullptr) {
         status = *outcome;
       }
     } else {
@@ -486,8 +487,8 @@ absl::Status Scope::RunWaitMany(StepId step) {
   }
   {
     thread::MutexLock lock(&monitor().mu());
-    Step(step).winner = static_cast<int64_t>(winner);
-    Step(step).outcome = status;
+    SetWinner(step, static_cast<int64_t>(winner));
+    SetOutcome(step, status);
   }
   const bool tolerated =
       winner < one.subject_tolerant.size() && one.subject_tolerant[winner];
@@ -739,7 +740,7 @@ absl::Status Scope::WriteLog(const graph::LogTail& tail,
 /// on a port is logged as the bytes and mimetype it arrived with rather than
 /// decoded and re-encoded, so audio stays audio and msgpack stays msgpack.
 absl::Status Scope::LogValue(const Value& value,
-                             const Item* absl_nullable carried,
+                             const ItemPtr* absl_nullable carried,
                              const actions::LogOptions& options) {
   const std::shared_ptr<actions::Action>& action = runner_->action();
   if (value.kind() == Value::Kind::kString) {
@@ -784,7 +785,7 @@ absl::Status Scope::Logged(const absl::Status& logged) {
 void Scope::Record(StepId step, const absl::Status& outcome) {
   {
     thread::MutexLock lock(&monitor().mu());
-    Step(step).outcome = outcome;
+    SetOutcome(step, outcome);
   }
   monitor().Wake();
 }

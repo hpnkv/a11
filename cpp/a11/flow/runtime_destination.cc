@@ -176,7 +176,9 @@ absl::Status Destination::WriteRange(absl::Span<const ItemPtr> items,
       continue;
     }
     data::Chunk chunk;
-    if (item->chunk().has_value() && port_type_.empty()) {
+    if (item->chunk().has_value() &&
+        (port_type_.empty() ||
+         bridge->CanPassChunkObject(*item->chunk(), port_type_))) {
       chunk = *item->chunk();
     } else if (computed < encoded.size()) {
       absl::StatusOr<data::Chunk>& ready = encoded[computed++];

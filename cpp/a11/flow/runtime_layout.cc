@@ -26,6 +26,8 @@ absl::StatusOr<std::shared_ptr<const RuntimeLayouts>> BuildRuntimeLayouts(
     const auto& graph = resolved.graph;
     auto& flow = layouts->flows[graph.name];
     flow.step_slots.resize(graph.steps.size(), kNone);
+    flow.step_outcomes.resize(graph.steps.size(), kNone);
+    flow.step_winners.resize(graph.steps.size(), kNone);
     flow.step_captures.resize(graph.steps.size(), kNone);
     flow.joined_captures.resize(graph.refs.size(), kNone);
     flow.condition_captures.resize(graph.refs.size(), kNone);
@@ -36,12 +38,6 @@ absl::StatusOr<std::shared_ptr<const RuntimeLayouts>> BuildRuntimeLayouts(
           captures.try_emplace(std::move(name), captures.size());
       return found->second;
     };
-    flow.carry_capture = capture_id("carry");
-    flow.result_capture = capture_id("$result");
-    for (size_t id = 0; id < graph.refs.size(); ++id) {
-      flow.joined_captures[id] = capture_id(absl::StrCat("merge:", id));
-      flow.condition_captures[id] = capture_id(absl::StrCat("condition:", id));
-    }
     absl::flat_hash_set<RefId> cursors;
     for (const auto& expression : graph.exprs) {
       cursors.insert(expression.refs.begin(), expression.refs.end());
@@ -52,14 +48,28 @@ absl::StatusOr<std::shared_ptr<const RuntimeLayouts>> BuildRuntimeLayouts(
       }
     }
     const auto* singles = program.SingleItems(graph.name);
+    absl::flat_hash_set<StepId> winner_steps;
+    for (const auto& ref : graph.refs) {
+      if (ref.kind == RefKind::kWinner && ref.subject_step != kNone) {
+        winner_steps.insert(ref.subject_step);
+      }
+    }
     for (const auto& body : graph.bodies) {
       const size_t id = flow.bodies.size();
       auto layout = std::make_unique<RuntimeLayouts::Body>();
       layout->analysis = graph::Analyse(graph, id);
+      size_t outcomes = 0;
+      size_t winners = 0;
       for (size_t local = 0; local < body.steps.size(); ++local) {
         const auto step = body.steps[local];
         flow.step_slots[step] = local;
         const auto& one = graph.steps[step];
+        if (graph::RecordsOutcome(one.kind)) {
+          flow.step_outcomes[step] = outcomes++;
+        }
+        if (winner_steps.contains(step)) {
+          flow.step_winners[step] = winners++;
+        }
         if (one.kind == StepKind::kCall) {
           layout->calls.Add(step);
         }
@@ -70,7 +80,10 @@ absl::StatusOr<std::shared_ptr<const RuntimeLayouts>> BuildRuntimeLayouts(
                                             layout->capture_slots.size());
         }
         for (const auto& update : one.variable_updates) {
-          layout->capture_slots.try_emplace(flow.joined_captures[update.result],
+          const auto capture =
+              capture_id(absl::StrCat("merge:", update.result));
+          flow.joined_captures[update.result] = capture;
+          layout->capture_slots.try_emplace(capture,
                                             layout->capture_slots.size());
         }
       }
@@ -116,6 +129,12 @@ absl::StatusOr<std::shared_ptr<const RuntimeLayouts>> BuildRuntimeLayouts(
       ABSL_ASSIGN_OR_RETURN(
           layout->steps,
           layout->storage.Add<RuntimeLayouts::StepState>(body.steps.size()));
+      ABSL_ASSIGN_OR_RETURN(
+          layout->outcomes,
+          layout->storage.Add<std::optional<absl::Status>>(outcomes));
+      ABSL_ASSIGN_OR_RETURN(
+          layout->winners,
+          layout->storage.Add<std::optional<int64_t>>(winners));
       ABSL_ASSIGN_OR_RETURN(layout->captures,
                             layout->storage.Add<std::optional<Value>>(
                                 layout->capture_slots.size()));
@@ -124,6 +143,9 @@ absl::StatusOr<std::shared_ptr<const RuntimeLayouts>> BuildRuntimeLayouts(
       ABSL_ASSIGN_OR_RETURN(
           layout->value_consumers,
           layout->storage.Add<int>(layout->cursors.index.size()));
+      ABSL_ASSIGN_OR_RETURN(
+          layout->opening_cursors,
+          layout->storage.Add<bool>(layout->cursors.index.size()));
       ABSL_RETURN_IF_ERROR(layout->calls.Finalize(layout->storage));
       ABSL_RETURN_IF_ERROR(layout->lazies.Finalize(layout->storage));
       ABSL_RETURN_IF_ERROR(layout->buses.Finalize(layout->storage));
@@ -133,6 +155,22 @@ absl::StatusOr<std::shared_ptr<const RuntimeLayouts>> BuildRuntimeLayouts(
       ABSL_RETURN_IF_ERROR(layout->cursors.Finalize(layout->storage));
       layout->storage.Seal();
       flow.bodies.push_back(std::move(layout));
+    }
+    if (const auto found = captures.find("carry"); found != captures.end()) {
+      flow.carry_capture = found->second;
+    }
+    if (const auto found = captures.find("$result"); found != captures.end()) {
+      flow.result_capture = found->second;
+    }
+    for (size_t id = 0; id < graph.refs.size(); ++id) {
+      if (const auto found = captures.find(absl::StrCat("merge:", id));
+          found != captures.end()) {
+        flow.joined_captures[id] = found->second;
+      }
+      if (const auto found = captures.find(absl::StrCat("condition:", id));
+          found != captures.end()) {
+        flow.condition_captures[id] = found->second;
+      }
     }
   }
   return layouts;

@@ -23,6 +23,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <absl/base/no_destructor.h>
@@ -176,6 +177,22 @@ struct ChunkStoreReader::State
     // The buffer just lost fragments, and the next caller's own Drive() above
     // is what refills it -- so no wake here.
     return taken;
+  }
+
+  std::optional<data::NodeFragment> TryTakeSimpleBuffered() {
+    thread::MutexLock lock(&mu);
+    if (!pending_reads.empty() || buffer.empty()) {
+      return std::nullopt;
+    }
+    const auto* chunk = std::get_if<data::Chunk>(&buffer.front().data);
+    // A ready NextChunk continuation materializes inline; keep host encoders
+    // on the asynchronous path.
+    if (chunk == nullptr || chunk->HasObject()) {
+      return std::nullopt;
+    }
+    data::NodeFragment fragment = std::move(buffer.front());
+    buffer.pop_front();
+    return fragment;
   }
 
   a11::Future<NextResult> Next(absl::Duration timeout) {
@@ -768,6 +785,10 @@ a11::Future<std::optional<data::NodeFragment>> ChunkStoreReader::Next(
         absl::InvalidArgumentError("timeout must be non-negative or infinite"));
   }
   return state_->Next(timeout);
+}
+
+std::optional<data::NodeFragment> ChunkStoreReader::TryTakeSimpleBuffered() {
+  return state_->TryTakeSimpleBuffered();
 }
 
 a11::Future<std::vector<std::optional<data::NodeFragment>>>

@@ -12,9 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <absl/status/status.h>
@@ -22,12 +24,86 @@
 #include <absl/time/time.h>
 #include <gtest/gtest.h>
 
+#include "a11/flow/internal/runtime_transport.h"
 #include "a11/flow/parser.h"
 #include "a11/flow/syntax.h"
 #include "a11/flow/values.h"
 
 namespace a11::flow {
 namespace {
+
+class CountingChunkBridge final : public HostBridge {
+ public:
+  absl::StatusOr<Value> Coerce(std::string_view, const Value& value) override {
+    return value;
+  }
+
+  absl::StatusOr<Value> FromChunk(const data::Chunk& chunk) override {
+    ++decodes;
+    if (chunk.data == "bad") {
+      return absl::InvalidArgumentError("bad chunk");
+    }
+    return Value::String(chunk.data);
+  }
+
+  absl::StatusOr<data::Chunk> ToChunk(const Value&, std::string_view) override {
+    return absl::UnimplementedError("unused");
+  }
+
+  int decodes = 0;
+};
+
+TEST(FlowValuesTest, ChunkDecodeStateIsLazySharedAndCachesFailures) {
+  CountingChunkBridge bridge;
+  internal::ItemPtr item = internal::Item::OfChunk(data::Chunk{.data = "ok"});
+  EXPECT_TRUE(item->NeedsDecoding());
+  ASSERT_TRUE(item->Read(&bridge).ok());
+  EXPECT_FALSE(item->NeedsDecoding());
+  ASSERT_TRUE(item->Read(&bridge).ok());
+  EXPECT_EQ(bridge.decodes, 1);
+
+  internal::ItemPtr failed =
+      internal::Item::OfChunk(data::Chunk{.data = "bad"});
+  EXPECT_EQ(failed->Read(&bridge).status().code(),
+            absl::StatusCode::kInvalidArgument);
+  EXPECT_EQ(failed->Read(&bridge).status().code(),
+            absl::StatusCode::kInvalidArgument);
+  EXPECT_EQ(bridge.decodes, 2);
+
+  internal::ItemPtr primed =
+      internal::Item::OfChunk(data::Chunk{.data = "unread"});
+  primed->Prime(Value::String("ready"));
+  EXPECT_FALSE(primed->NeedsDecoding());
+  ASSERT_TRUE(primed->Read(&bridge).ok());
+  EXPECT_EQ(bridge.decodes, 2);
+}
+
+TEST(FlowValuesTest, CompactSlotQueueKeepsOrderAcrossCompactionAndBatch) {
+  internal::Slot slot;
+  auto bridge = NativeHostBridge();
+  for (int value = 0; value < 32; ++value) {
+    slot.Push(internal::Item::Of(Value::Integer(value)));
+  }
+  for (int value = 0; value < 18; ++value) {
+    auto next = slot.Pop().Read(bridge.get());
+    ASSERT_TRUE(next.ok()) << next.status();
+    EXPECT_EQ(next->integer(), value);
+  }
+  std::vector<internal::ItemPtr> batch;
+  for (int value = 32; value < 44; ++value) {
+    batch.push_back(internal::Item::Of(Value::Integer(value)));
+  }
+  slot.Append(batch);
+  EXPECT_EQ(slot.Pending(), 26);
+  for (int value = 18; value < 44; ++value) {
+    auto next = slot.Pop().Read(bridge.get());
+    ASSERT_TRUE(next.ok()) << next.status();
+    EXPECT_EQ(next->integer(), value);
+  }
+  EXPECT_TRUE(slot.Empty());
+  slot.Clear();
+  EXPECT_EQ(slot.Pending(), 0);
+}
 
 /// The value the expression in a one-statement flow evaluates to.
 ///
@@ -64,6 +140,169 @@ std::string TextOf(std::string_view expression,
     return absl::StrCat("<error: ", value.status().message(), ">");
   }
   return AsText(*value);
+}
+
+TEST(FlowValues, CompactStorageInlinesShortTextAndSharesLongText) {
+  EXPECT_LE(sizeof(Value), 64u);
+  const auto inside = [](const Value& value) {
+    const auto start = reinterpret_cast<std::uintptr_t>(&value);
+    const auto data = reinterpret_cast<std::uintptr_t>(value.text().data());
+    return start <= data && data < start + sizeof(Value);
+  };
+  const size_t inline_bytes = std::min<size_t>(15, std::string{}.capacity());
+  const Value short_text = Value::String(std::string(inline_bytes, 'x'));
+  const Value short_copy = short_text;
+  EXPECT_TRUE(inside(short_text));
+  EXPECT_TRUE(inside(short_copy));
+  EXPECT_NE(short_text.text().data(), short_copy.text().data());
+
+  const Value short_bytes = Value::Bytes(std::string("a\0b", 3));
+  EXPECT_TRUE(inside(short_bytes));
+  EXPECT_EQ(short_bytes.text(), std::string("a\0b", 3));
+
+  const Value long_text = Value::String(std::string(inline_bytes + 1, 'y'));
+  const Value long_copy = long_text;
+  EXPECT_FALSE(inside(long_text));
+  EXPECT_EQ(long_text.text().data(), long_copy.text().data());
+
+  const Value status = StatusRecord(absl::NotFoundError("gone"));
+  const Value status_copy = status;
+  ASSERT_NE(status_copy.native_status(), nullptr);
+  EXPECT_EQ(status_copy.native_status(), status.native_status());
+  EXPECT_EQ(status_copy.native_status()->code(), absl::StatusCode::kNotFound);
+  ASSERT_NE(status_copy.Get("message"), nullptr);
+  EXPECT_EQ(status_copy.Get("message"), status.Get("message"));
+  EXPECT_EQ(status_copy.Get("message")->text(), "gone");
+}
+
+TEST(FlowValues, SmallObjectsKeepFieldsInTheirSharedAllocation) {
+  const Value record = Value::Object(
+      {{"first", Value::Integer(1)}, {"second", Value::String("two")}});
+  const auto& fields = record.pairs();
+  const auto start = reinterpret_cast<std::uintptr_t>(&fields);
+  const auto data = reinterpret_cast<std::uintptr_t>(fields.data());
+  EXPECT_LE(start, data);
+  EXPECT_LT(data, start + sizeof(Value::Pairs));
+  const Value copy = record;
+  EXPECT_EQ(copy.Get("first"), record.Get("first"));
+  EXPECT_EQ(copy.Get("second")->text(), "two");
+
+  const Value empty = Value::Object({});
+  const Value another_empty = Value::Object({});
+  EXPECT_EQ(&empty.pairs(), &another_empty.pairs());
+}
+
+TEST(FlowValues, TypedScalarListsPackAndRetainElementTypes) {
+  const auto list_type = [](std::string element) {
+    syntax::TypeExpression type;
+    type.name = "list";
+    type.parameters.push_back(
+        syntax::TypeExpression{.name = std::move(element)});
+    return type;
+  };
+  const auto signed_values =
+      Coerce(Value::List({Value::Integer(-128), Value::Integer(127)}),
+             list_type("i8"), {});
+  ASSERT_TRUE(signed_values.ok()) << signed_values.status();
+  EXPECT_TRUE(signed_values->has_packed_element_type("i8"));
+  EXPECT_EQ(signed_values->list_size(), 2u);
+  EXPECT_EQ(signed_values->list_at(0).numeric_bits(), 8);
+  EXPECT_EQ(AsText(signed_values->list_at(0)), "-128");
+  EXPECT_EQ(AsText(signed_values->items()[1]), "127");
+  EXPECT_EQ(Coerce(*signed_values, list_type("i8"), {})->items(),
+            signed_values->items());
+
+  const auto wide = Coerce(
+      Value::List({Value::String("340282366920938463463374607431768211455")}),
+      list_type("u128"), {});
+  ASSERT_TRUE(wide.ok()) << wide.status();
+  EXPECT_TRUE(wide->has_packed_element_type("u128"));
+  EXPECT_EQ(AsText(wide->list_at(0)),
+            "340282366920938463463374607431768211455");
+  const auto negative_wide = Coerce(
+      Value::List({Value::String("-170141183460469231731687303715884105728")}),
+      list_type("i128"), {});
+  ASSERT_TRUE(negative_wide.ok()) << negative_wide.status();
+  EXPECT_EQ(AsText(negative_wide->list_at(0)),
+            "-170141183460469231731687303715884105728");
+
+  const auto floats =
+      Coerce(Value::List({Value::Double(1.25)}), list_type("f32"), {});
+  ASSERT_TRUE(floats.ok()) << floats.status();
+  EXPECT_TRUE(floats->has_packed_element_type("f32"));
+  EXPECT_EQ(floats->list_at(0).numeric_bits(), 32);
+  EXPECT_EQ(floats->list_at(0).number(), 1.25);
+
+  const auto booleans =
+      Coerce(Value::List({Value::Bool(true), Value::Bool(false)}),
+             list_type("bool"), {});
+  ASSERT_TRUE(booleans.ok()) << booleans.status();
+  EXPECT_TRUE(booleans->has_packed_element_type("bool"));
+  EXPECT_FALSE(booleans->list_at(1).boolean());
+
+  const auto durations =
+      Coerce(Value::List({Value::Duration(absl::Seconds(2))}),
+             list_type("std::duration"), {});
+  ASSERT_TRUE(durations.ok()) << durations.status();
+  EXPECT_TRUE(durations->has_packed_element_type("std::duration"));
+  EXPECT_EQ(durations->list_at(0).duration(), absl::Seconds(2));
+  const auto times = Coerce(Value::List({Value::Time(absl::UnixEpoch())}),
+                            list_type("std::time"), {});
+  ASSERT_TRUE(times.ok()) << times.status();
+  EXPECT_TRUE(times->has_packed_element_type("time"));
+  EXPECT_EQ(times->list_at(0).time(), absl::UnixEpoch());
+  EXPECT_FALSE(
+      Coerce(Value::List({Value::Integer(256)}), list_type("u8"), {}).ok());
+}
+
+TEST(FlowValues, WindowsShareBlocksAndKeepEarlierSnapshots) {
+  WindowBuffer windows(3);
+  EXPECT_FALSE(windows.Push(Value::Integer(1)).has_value());
+  EXPECT_FALSE(windows.Push(Value::Integer(2)).has_value());
+  const Value first = *windows.Push(Value::Integer(3));
+  const Value second = *windows.Push(Value::Integer(4));
+  const Value third = *windows.Push(Value::Integer(5));
+  EXPECT_EQ(first.list_size(), 3u);
+  EXPECT_EQ(second.list_at(0).integer(), 2);
+  EXPECT_EQ(third.list_at(2).integer(), 5);
+  EXPECT_EQ(AsText(first), "[1, 2, 3]");
+  EXPECT_EQ(AsText(second), "[2, 3, 4]");
+  EXPECT_EQ(AsText(third), "[3, 4, 5]");
+  const auto& materialized = second.items();
+  const Value fourth = *windows.Push(Value::Integer(6));
+  EXPECT_EQ(AsText(fourth), "[4, 5, 6]");
+  EXPECT_EQ(AsText(second), "[2, 3, 4]");
+  EXPECT_EQ(materialized[2].integer(), 4);
+}
+
+TEST(FlowValues, ReadyStreamItemsMoveWithoutSharedDecodeState) {
+  EXPECT_LE(sizeof(internal::ItemPtr), sizeof(Value) + 16);
+  internal::ItemPtr ready = internal::Item::Of(Value::Integer(7));
+  EXPECT_FALSE(ready->NeedsDecoding());
+  const internal::ItemPtr copy = ready;
+  internal::ItemPtr moved = std::move(ready);
+  EXPECT_EQ(ready, nullptr);
+  auto bridge = NativeHostBridge();
+  ASSERT_TRUE(copy->Read(bridge.get()).ok());
+  EXPECT_EQ(moved->Read(bridge.get())->integer(), 7);
+
+  internal::ItemPtr reference =
+      internal::Item::OfReference(data::NodeRef{.id = "node"});
+  EXPECT_FALSE(reference->NeedsDecoding());
+  ASSERT_TRUE(reference->reference().has_value());
+  EXPECT_EQ(reference->reference()->id, "node");
+  EXPECT_TRUE(reference->Read(bridge.get())->IsNull());
+
+  internal::ItemPtr lazy = internal::Item::OfChunk(data::Chunk{
+      .metadata =
+          data::ChunkMetadata{.mimetype = std::string(data::kStatusMimetype)},
+      .data = "{"});
+  const internal::ItemPtr other_reader = lazy;
+  EXPECT_TRUE(lazy->NeedsDecoding());
+  const auto failure = lazy->Read(bridge.get());
+  ASSERT_FALSE(failure.ok());
+  EXPECT_FALSE(other_reader->NeedsDecoding());
+  EXPECT_EQ(other_reader->Read(bridge.get()).status(), failure.status());
 }
 
 TEST(FlowValues, RendersScalarsAsTheReferenceDid) {

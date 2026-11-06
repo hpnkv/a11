@@ -99,7 +99,7 @@ const absl::flat_hash_map<std::string_view, StageArgument>& StageTable() {
           {"text", StageArgument::kNone},
           {"json", StageArgument::kNone},
           {"packb", StageArgument::kNone},
-  };
+      };
   return *table;
 }
 
@@ -686,8 +686,8 @@ flow parsed-header {
         "null(null)"}},
       {"parse_duration",
        {"Parse duration text or fail.", "one text value",
-        "Accepts unit suffixes and compound units, as in `1m30s`. A bare "
-        "number means seconds. Invalid text fails. `seconds` converts a "
+        "Accepts unit suffixes and compound units, as in `1m30s`. Bare "
+        "numeric text means seconds. Invalid text fails. `seconds` converts a "
         "duration to an integral count of seconds.",
         "std::parse_duration(\"1m30s\")\n\n"
         R"(Parse a strict duration budget and expose its numeric seconds.
@@ -1513,22 +1513,85 @@ const absl::flat_hash_map<std::string_view, WordDoc>& TypeDocs() {
        {"Alias of `string`.", "", "Serialized as `text/plain`.",
         "out answer: std::text"}},
       {"number",
-       {"Integer or floating-point number.", "",
-        "Integral values retain their integer representation. Use `int` to "
-        "exclude fractional values.",
+       {"Permissively converted integer or floating-point number.", "",
+        "Integral values retain their integer representation. Use `int` for "
+        "a checked signed 64-bit integer.",
         "in temperature: number"}},
       {"integer",
-       {"Alias of `int`.", "", "Fractional values fail type validation.",
+       {"Alias of `int`.", "",
+        "This is a signed 64-bit integer; fractional and out-of-range values "
+        "fail type validation.",
         "in limit: integer"}},
       {"int",
-       {"Integer value.", "",
-        "Fractional values fail type validation. `integer` is an alias.",
+       {"Signed 64-bit integer.", "",
+        "The same type as `i64`. Conversion rejects fractions and values "
+        "outside its range; arithmetic checks overflow. `integer` is an alias.",
         "in limit: int"}},
       {"bool",
        {"Boolean value.", "",
         "`boolean` is an alias. Conditional expressions use truth testing; "
         "`bool()` applies that conversion explicitly.",
         "in verbose: bool"}},
+      {"i8",
+       {"Signed 8-bit integer.", "",
+        "Range: -128 through 127. Conversion requires a whole value in range; "
+        "arithmetic checks overflow.",
+        "in count: i8"}},
+      {"i16",
+       {"Signed 16-bit integer.", "",
+        "Range: -32768 through 32767. Conversion requires a whole value in "
+        "range; arithmetic checks overflow.",
+        "in count: i16"}},
+      {"i32",
+       {"Signed 32-bit integer.", "",
+        "Range: -2147483648 through 2147483647. Conversion requires a whole "
+        "value in range; arithmetic checks overflow.",
+        "in count: i32"}},
+      {"i64",
+       {"Signed 64-bit integer.", "",
+        "The same type as `int`. Conversion requires a whole value in range; "
+        "arithmetic checks overflow.",
+        "in count: i64"}},
+      {"i128",
+       {"Signed 128-bit integer.", "",
+        "Conversion requires a whole value in range; arithmetic checks "
+        "overflow. Explicitly convert to a float for fractional division.",
+        "in count: i128"}},
+      {"u8",
+       {"Unsigned 8-bit integer.", "",
+        "Range: 0 through 255. Conversion rejects negative and fractional "
+        "values; arithmetic checks overflow and underflow.",
+        "in count: u8"}},
+      {"u16",
+       {"Unsigned 16-bit integer.", "",
+        "Range: 0 through 65535. Conversion rejects negative and fractional "
+        "values; arithmetic checks overflow and underflow.",
+        "in count: u16"}},
+      {"u32",
+       {"Unsigned 32-bit integer.", "",
+        "Range: 0 through 4294967295. Conversion rejects negative and "
+        "fractional values; arithmetic checks overflow and underflow.",
+        "in count: u32"}},
+      {"u64",
+       {"Unsigned 64-bit integer.", "",
+        "Conversion rejects negative, fractional and out-of-range values; "
+        "arithmetic checks overflow and underflow.",
+        "in count: u64"}},
+      {"u128",
+       {"Unsigned 128-bit integer.", "",
+        "Conversion rejects negative, fractional and out-of-range values; "
+        "arithmetic checks overflow and underflow.",
+        "in count: u128"}},
+      {"f32",
+       {"Finite 32-bit floating-point number.", "",
+        "Conversion rounds to 32-bit precision and rejects values outside "
+        "the finite range. Arithmetic rejects non-finite results.",
+        "in score: f32"}},
+      {"f64",
+       {"Finite 64-bit floating-point number.", "",
+        "Conversion rejects non-finite values. Arithmetic rejects "
+        "non-finite results.",
+        "in score: f64"}},
       {"boolean",
        {"Alias of `bool`.", "", "Accepts `true` and `false`.",
         "in verbose: std::boolean"}},
@@ -1560,22 +1623,21 @@ const absl::flat_hash_map<std::string_view, WordDoc>& TypeDocs() {
       {"duration",
        {"Elapsed time or a time interval.", "",
         "Literals accept `ns`, `us`, `ms`, `s`, `m`, and `h`, including "
-        "compound forms such as `1m30s`. Subtracting two `time` values "
-        "produces a duration. `std::seconds` converts it to a number; "
-        "`std::duration` parses text or numeric seconds. JSON transport "
-        "uses a tagged string to preserve the type.",
+        "compound forms such as `1m30s`. Arithmetic combines durations and "
+        "scales them by numeric values. Subtracting two `time` values also "
+        "produces a duration. `std::duration` converts numeric seconds; "
+        "`std::parse_duration` parses text.",
         "std::duration budget = 45s\n"
         "started = std::now()\n"
         "reply = call ask_model(question: prompt) timeout 45s\n"
         "after reply { std::seconds(std::now() - started) -> elapsed }"}},
       {"time",
        {"An instant on the UTC timeline.", "",
-        "`std::now()` reads the clock. `std::time` accepts RFC 3339 text "
-        "and calendar dates; a missing zone is interpreted as UTC. "
-        "Subtract two instants for a `duration`. A later statement is "
-        "not necessarily a later event: use `after` or `wait` to order "
-        "work before taking a completion timestamp. JSON transport uses "
-        "a tagged string to preserve the type.",
+        "`std::now()` reads the clock. `std::time` converts numeric epoch "
+        "seconds; `std::parse_time` parses RFC 3339 text and calendar dates. "
+        "Add or subtract a duration, or subtract two instants for a "
+        "duration. Use `after` or `wait` to order work before taking a "
+        "completion timestamp.",
         "std::time started = std::now()\n"
         "job = run prepare-report()\n"
         "after job { std::now() - started -> elapsed }"}},

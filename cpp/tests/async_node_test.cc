@@ -197,6 +197,31 @@ TEST(ChunkObjectTest, ATagMismatchDoesNotCast) {
       data::TryTakeObject<Counted>(chunk, "a11.test.Counted").has_value());
 }
 
+class SameTagDifferentObject final : public data::ChunkObject {
+ public:
+  std::string_view tag() const override { return "a11.test.Counted"; }
+
+  std::string_view mimetype() const override { return "application/json"; }
+
+  absl::StatusOr<data::Bytes> Encode() const override {
+    return std::string("{\"number\":8}");
+  }
+
+  size_t ApproxBytes() const override { return 32; }
+
+  const void* absl_nonnull address() const override { return this; }
+};
+
+TEST(ChunkObjectTest, MatchingTagDoesNotCastAnotherObjectClass) {
+  data::Chunk chunk;
+  chunk.metadata = data::ChunkMetadata{.mimetype = "application/json"};
+  chunk.object = std::make_shared<const SameTagDifferentObject>();
+  EXPECT_FALSE(
+      data::TryTakeObject<Counted>(chunk, "a11.test.Counted").has_value());
+  ASSERT_TRUE(chunk.Materialize().ok());
+  EXPECT_EQ(chunk.data, "{\"number\":8}");
+}
+
 TEST(AsyncNodeTest, SerializesAndStreamsObjects) {
   auto map = *NodeMap::Create();
   auto node = *map->Get("values");

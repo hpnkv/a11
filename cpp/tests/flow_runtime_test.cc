@@ -43,6 +43,7 @@
 #include "a11/actions/registry.h"
 #include "a11/actions/schema.h"
 #include "a11/concurrency/executor.h"
+#include "a11/data/serializable.h"
 #include "a11/data/serialization.h"
 #include "a11/data/types.h"
 #include "a11/flow/runtime.h"
@@ -57,6 +58,17 @@ namespace {
 
 using Values = std::vector<std::string>;
 using PortValues = std::map<std::string, Values>;
+
+struct LocalCounted {
+  int number = 0;
+};
+
+std::string_view A11SerialTag(data::TypeTag<LocalCounted>) {
+  return "test.LocalCounted";
+}
+
+std::atomic<int> local_encodes{0};
+std::atomic<int> local_decodes{0};
 
 data::Chunk JsonChunk(std::string_view json) {
   return data::Chunk{
@@ -318,6 +330,92 @@ class LogCapture {
 };
 
 // --- The cases ---------------------------------------------------------------
+
+TEST(FlowRuntimeTest, NativeObjectCrossesTypedBranchAndReplayWithoutCodecs) {
+  local_encodes = 0;
+  local_decodes = 0;
+  ASSERT_TRUE(
+      data::GlobalSerializationRegistry()
+          .Register<LocalCounted>(
+              "test.LocalCounted", "application/json",
+              [](const LocalCounted& value) -> absl::StatusOr<data::Chunk> {
+                ++local_encodes;
+                return JsonChunk(std::to_string(value.number));
+              },
+              [](const data::Chunk&) -> absl::StatusOr<LocalCounted> {
+                ++local_decodes;
+                return LocalCounted{.number = 7};
+              })
+          .ok());
+
+  auto actions = std::make_shared<actions::ActionRegistry>();
+  actions::ActionSchema inspect_schema{
+      .name = "inspect-native",
+      .inputs = {{"value",
+                  actions::ActionPortSchema{.name = "value",
+                                            .type = "test.LocalCounted"}}},
+      .outputs = {{"count",
+                   actions::ActionPortSchema{.name = "count", .type = "int"}}},
+  };
+  auto inspect = actions::MakeAsyncActionHandler(
+      [](const std::shared_ptr<actions::Action>& action) -> absl::Status {
+        ABSL_ASSIGN_OR_RETURN(auto input, action->GetInput("value"));
+        ABSL_ASSIGN_OR_RETURN(auto output, action->GetOutput("count"));
+        ABSL_ASSIGN_OR_RETURN(const auto value,
+                              input->NextObject<LocalCounted>().Await());
+        if (!value.has_value()) {
+          return absl::FailedPreconditionError("missing local value");
+        }
+        ABSL_RETURN_IF_ERROR(
+            output->PutChunk(JsonChunk(std::to_string(value->number)))
+                .Await()
+                .status());
+        return output->Finalize({.wait = true}).Await().status();
+      });
+  ASSERT_TRUE(
+      actions->Register("inspect-native", inspect_schema, inspect).ok());
+
+  const std::string source = R"(
+flow main {
+  in value: test::LocalCounted required
+  out counts: int stream
+  for i in [1, 2] | flatten {
+    if true {
+      seen = run inspect-native(value: value)
+      seen.count -> counts
+    }
+  }
+}
+)";
+  auto program = CompiledProgram::Compile(source);
+  ASSERT_TRUE(program.ok()) << program.status();
+  const ResolvedFlow* main = (*program)->Flow("main");
+  ASSERT_NE(main, nullptr);
+  auto schema = FlowSchema(main->plan);
+  ASSERT_TRUE(schema.ok()) << schema.status();
+  auto handler = MakeHandler(*program, "main");
+  ASSERT_TRUE(handler.ok()) << handler.status();
+  auto map = nodes::NodeMap::Create();
+  ASSERT_TRUE(map.ok()) << map.status();
+  auto action = actions::Action::Create(*schema, "flow", *handler, *map,
+                                        nullptr, nullptr, actions);
+  ASSERT_TRUE(action.ok()) << action.status();
+  auto output = (*action)->GetOutput("counts", false);
+  auto input = (*action)->GetInput("value", false);
+  ASSERT_TRUE(output.ok());
+  ASSERT_TRUE(input.ok());
+  ASSERT_TRUE((*action)->Run().ok());
+  ASSERT_TRUE((*input)
+                  ->PutObject(LocalCounted{.number = 7}, "application/json")
+                  .Await()
+                  .ok());
+  ASSERT_TRUE((*input)->Finalize({.wait = true}).Await().ok());
+  auto done = (*action)->Wait(absl::Seconds(20)).Await();
+  ASSERT_TRUE(done.ok()) << done.status();
+  EXPECT_EQ(Collect(*output), (Values{"7", "7"}));
+  EXPECT_EQ(local_encodes.load(), 0);
+  EXPECT_EQ(local_decodes.load(), 0);
+}
 
 TEST(FlowRuntimeTest, PipesAPortIntoAPort) {
   const Outcome outcome = RunFlow(R"(
@@ -2133,7 +2231,8 @@ flow indeterminate {
 }
 
 TEST(FlowRuntimeTest, DurationMultiplicationUsesTryFailureRouting) {
-  const Outcome outcome = RunFlow(R"(
+  const Outcome outcome =
+      RunFlow(R"(
 flow scaled {
   in values: int stream
   out good: std::duration stream
@@ -2143,8 +2242,7 @@ flow scaled {
   failures | count -> rejected
 }
 )",
-                                  "scaled",
-                                  {{"values", {"2", "9223372036854775807"}}});
+              "scaled", {{"values", {"2", "9223372036854775807"}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("good"), Values({"\"4s\""}));
   EXPECT_EQ(outcome.outputs.at("rejected"), Values({"1"}));

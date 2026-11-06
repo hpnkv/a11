@@ -81,6 +81,8 @@ _native_put_reference = AsyncNode.put_reference
 _native_finalize_reference = AsyncNode.finalize_reference
 _native_next_logical_fragment = AsyncNode.next_logical_fragment
 _native_next_logical_fragments = AsyncNode.next_logical_fragments
+_native_next_fragment = AsyncNode.next_fragment
+_native_next_chunk = AsyncNode.next_chunk
 _native_logical_saw_final = AsyncNode.logical_saw_final
 _native_close = AsyncNode.close
 _native_writer_enqueue = _native.ChunkStoreWriter.enqueue_chunk
@@ -633,7 +635,7 @@ class _AsyncNodeProtocol:
                 _native_put_reference(self, value, seq, final),
             )
 
-        chunk = await _get_serialization_registry(self).to_chunk_async(
+        chunk = await _get_serialization_registry(self).to_local_chunk_async(
             value, mimetype
         )
         return await self.put_chunk(chunk, seq=seq, final=final)
@@ -724,9 +726,9 @@ class _AsyncNodeProtocol:
             )
             return
         else:
-            chunk = await _get_serialization_registry(self).to_chunk_async(
-                value, mimetype
-            )
+            chunk = await _get_serialization_registry(
+                self
+            ).to_local_chunk_async(value, mimetype)
         await _native_finalize(self, chunk, seq=seq, wait=wait, close=close)
 
     async def close(self) -> None:
@@ -745,16 +747,13 @@ class _AsyncNodeProtocol:
         self, timeout: timing.Duration | None = None
     ) -> types.NodeFragment | None:
         """Read the next raw fragment, or ``None`` at end of stream."""
-        return await self.reader.next(_read_timeout(timeout))
+        return await _native_next_fragment(self, _read_timeout(timeout))
 
     async def next_chunk(
         self, timeout: timing.Duration | None = None
     ) -> types.Chunk | None:
         """Read the next raw chunk, or ``None`` at end of stream."""
-        fragment = await _native_next_logical_fragment(
-            self, _read_timeout(timeout)
-        )
-        return None if fragment is None else fragment.get_chunk()
+        return await _native_next_chunk(self, _read_timeout(timeout))
 
     async def next_object(
         self,

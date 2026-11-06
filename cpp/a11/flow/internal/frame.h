@@ -122,18 +122,18 @@ class FrameLayout {
 
 template <typename T>
 struct FrameObjectLayout {
-  struct Entry {
-    size_t first = 0;
-    std::optional<T> second;
-  };
-
-  FrameLayout::Slots<Entry> storage;
+  FrameLayout::Slots<std::optional<T>> storage;
   absl::flat_hash_map<size_t, size_t> index;
+  std::vector<size_t> keys;
 
-  void Add(size_t key) { index.try_emplace(key, index.size()); }
+  void Add(size_t key) {
+    if (index.try_emplace(key, index.size()).second) {
+      keys.push_back(key);
+    }
+  }
 
   absl::Status Finalize(FrameLayout& layout) {
-    auto slots = layout.Add<Entry>(index.size());
+    auto slots = layout.Add<std::optional<T>>(index.size());
     if (!slots.ok()) {
       return slots.status();
     }
@@ -239,21 +239,32 @@ class FrameBlock {
 template <typename T>
 class FrameObjects {
  public:
-  using Entry = typename FrameObjectLayout<T>::Entry;
+  using Slot = std::optional<T>;
+
+  struct Entry {
+    size_t first;
+    Slot& second;
+  };
 
   class Iterator {
    public:
-    Iterator(Entry* absl_nullable current, Entry* absl_nullable end)
-        : current_(current), end_(end) {
+    Iterator(Slot* absl_nullable current, Slot* absl_nullable end,
+             const std::vector<size_t>& keys, size_t index)
+        : current_(current), end_(end), keys_(&keys), index_(index) {
       Skip();
     }
 
-    Entry& operator*() const { return *current_; }
+    Entry& operator*() const {
+      proxy_.emplace((*keys_)[index_], *current_);
+      return *proxy_;
+    }
 
-    Entry* absl_nonnull operator->() const { return current_; }
+    Entry* absl_nonnull operator->() const { return &**this; }
 
     Iterator& operator++() {
+      proxy_.reset();
       ++current_;
+      ++index_;
       Skip();
       return *this;
     }
@@ -264,36 +275,38 @@ class FrameObjects {
 
    private:
     void Skip() {
-      while (current_ != end_ && !current_->second.has_value()) {
+      while (current_ != end_ && !current_->has_value()) {
         ++current_;
+        ++index_;
       }
     }
 
-    Entry* absl_nullable current_;
-    Entry* absl_nullable end_;
+    Slot* absl_nullable current_;
+    Slot* absl_nullable end_;
+    const std::vector<size_t>* absl_nonnull keys_;
+    size_t index_;
+    mutable std::optional<Entry> proxy_;
   };
 
   void Bind(FrameBlock& block, const FrameObjectLayout<T>& layout) {
     entries_ = block.Get(layout.storage);
     index_ = &layout.index;
-    for (const auto& [key, local] : layout.index) {
-      entries_[local].first = key;
-    }
+    keys_ = &layout.keys;
   }
 
-  Iterator begin() const { return {entries_.data(), End()}; }
+  Iterator begin() const { return {entries_.data(), End(), *keys_, 0}; }
 
-  Iterator end() const { return {End(), End()}; }
+  Iterator end() const { return {End(), End(), *keys_, entries_.size()}; }
 
   Iterator find(size_t key) const {
     if (index_ == nullptr) {
       return end();
     }
     const auto found = index_->find(key);
-    if (found == index_->end() || !entries_[found->second].second.has_value()) {
+    if (found == index_->end() || !entries_[found->second].has_value()) {
       return end();
     }
-    return {entries_.data() + found->second, End()};
+    return {entries_.data() + found->second, End(), *keys_, found->second};
   }
 
   bool contains(size_t key) const { return find(key) != end(); }
@@ -307,7 +320,7 @@ class FrameObjects {
   template <typename... Args>
   T& Construct(size_t key, Args&&... args) {
     CHECK(index_ != nullptr);
-    auto& value = entries_[index_->at(key)].second;
+    auto& value = entries_[index_->at(key)];
     CHECK(!value.has_value());
     ++size_;
     return value.emplace(std::forward<Args>(args)...);
@@ -317,19 +330,20 @@ class FrameObjects {
 
   void clear() {
     for (auto& entry : entries_) {
-      entry.second.reset();
+      entry.reset();
     }
     size_ = 0;
   }
 
  private:
-  Entry* absl_nullable End() const {
+  Slot* absl_nullable End() const {
     return entries_.empty() ? entries_.data()
                             : entries_.data() + entries_.size();
   }
 
-  absl::Span<Entry> entries_;
+  absl::Span<Slot> entries_;
   const absl::flat_hash_map<size_t, size_t>* absl_nullable index_ = nullptr;
+  const std::vector<size_t>* absl_nullable keys_ = nullptr;
   size_t size_ = 0;
 };
 

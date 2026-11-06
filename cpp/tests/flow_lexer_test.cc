@@ -157,10 +157,8 @@ TEST(FlowLexer, ReadsScientificNotation) {
   EXPECT_EQ(result.tokens[2].number, 300.0);
   EXPECT_EQ(result.tokens[3].kind, TokenKind::kDuration);
   EXPECT_EQ(result.tokens[3].duration, absl::Seconds(1));
-  EXPECT_EQ(Codes("1e"),
-            (std::vector<std::string>{"flow.form.bad-number"}));
-  EXPECT_EQ(Codes("1e+"),
-            (std::vector<std::string>{"flow.form.bad-number"}));
+  EXPECT_EQ(Codes("1e"), (std::vector<std::string>{"flow.form.bad-number"}));
+  EXPECT_EQ(Codes("1e+"), (std::vector<std::string>{"flow.form.bad-number"}));
 }
 
 TEST(FlowLexer, EveryDurationUnitIsRead) {
@@ -436,6 +434,18 @@ TEST(FlowVocabulary, EveryWordOfTheLanguageIsDocumented) {
             nullptr);
   // And a word the language does not have is documented nowhere.
   EXPECT_EQ(vocabulary::AnyDocumentation("shuffle"), nullptr);
+}
+
+TEST(FlowVocabulary, EveryBuiltinTypeHasItsOwnDocumentation) {
+  for (const std::string_view name :
+       vocabulary::WordsOf(vocabulary::WordRole::kType)) {
+    const vocabulary::WordDoc* doc =
+        vocabulary::Documentation(vocabulary::WordRole::kType, name);
+    ASSERT_NE(doc, nullptr) << name;
+    EXPECT_FALSE(doc->summary.empty()) << name;
+    EXPECT_FALSE(doc->detail.empty()) << name;
+    EXPECT_FALSE(doc->example.empty()) << name;
+  }
 }
 
 TEST(FlowVocabulary, EveryRoleHasItsOwnNameAndItsOwnWords) {

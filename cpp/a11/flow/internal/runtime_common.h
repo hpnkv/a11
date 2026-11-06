@@ -27,6 +27,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <absl/base/thread_annotations.h>
@@ -89,7 +90,65 @@ using graph::StepId;
 using graph::StepKind;
 
 class Item;
-using ItemPtr = std::shared_ptr<Item>;
+struct ReadyReference;
+
+/// An inline ready value or a shared chunk/reference that keeps its metadata.
+class ItemPtr {
+ public:
+  ItemPtr() = default;
+
+  ItemPtr(const ItemPtr&) = default;
+  ItemPtr& operator=(const ItemPtr&) = default;
+
+  ItemPtr(ItemPtr&& other) noexcept : payload_(std::move(other.payload_)) {
+    other.reset();
+  }
+
+  ItemPtr& operator=(ItemPtr&& other) noexcept {
+    if (this != &other) {
+      payload_ = std::move(other.payload_);
+      other.reset();
+    }
+    return *this;
+  }
+
+  explicit ItemPtr(Value value) : payload_(std::move(value)) {}
+
+  explicit ItemPtr(std::shared_ptr<Item> item) : payload_(std::move(item)) {}
+
+  explicit ItemPtr(std::shared_ptr<const ReadyReference> reference)
+      : payload_(std::move(reference)) {}
+
+  const ItemPtr* absl_nonnull operator->() const { return this; }
+
+  ItemPtr* absl_nonnull operator->() { return this; }
+
+  const ItemPtr* absl_nullable get() const {
+    return std::holds_alternative<std::monostate>(payload_) ? nullptr : this;
+  }
+
+  void reset() { payload_.emplace<std::monostate>(); }
+
+  friend bool operator==(const ItemPtr& item, std::nullptr_t) {
+    return item.get() == nullptr;
+  }
+
+  friend bool operator!=(const ItemPtr& item, std::nullptr_t) {
+    return item.get() != nullptr;
+  }
+
+  const std::optional<data::Chunk>& chunk() const;
+  const std::optional<data::NodeRef>& reference() const;
+  std::string Mimetype() const;
+  absl::StatusOr<Value> Read(HostBridge* absl_nonnull bridge) const;
+  bool NeedsDecoding() const;
+  void Prime(absl::StatusOr<Value> result) const;
+
+ private:
+  std::variant<std::monostate, Value, std::shared_ptr<Item>,
+               std::shared_ptr<const ReadyReference>>
+      payload_;
+};
 class Reader;
 using ReaderPtr = std::unique_ptr<Reader>;
 using NodePtr = std::shared_ptr<nodes::AsyncNode>;

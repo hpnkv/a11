@@ -848,6 +848,15 @@ void BindData(py::module_& module) {
           "Approximate in-memory size of the chunk in bytes.")
       .def("get_mimetype", &data::Chunk::GetMimetype,
            "Return the chunk's MIME type, or empty if it has no metadata.")
+      .def(
+          "materialize",
+          [](data::Chunk& value) {
+            const absl::Status status = value.Materialize();
+            if (!status.ok()) {
+              ThrowStatus(status);
+            }
+          },
+          "Encode an attached local object into this chunk's payload bytes.")
       .def("is_empty", &data::Chunk::IsEmpty,
            "Return whether the chunk has no payload data.")
       .def("is_null", &data::Chunk::IsNull,

@@ -45,8 +45,8 @@ absl::StatusOr<ItemPtr> Scope::StatusItem(RefId ref) {
     for (Scope* at = this; at != nullptr; at = at->parent_) {
       thread::MutexLock lock(&monitor().mu());
       if (graph().steps[one.subject_step].body == at->body_ &&
-          at->Step(one.subject_step).outcome.has_value()) {
-        return Item::Of(StatusRecord(*at->Step(one.subject_step).outcome));
+          at->Outcome(one.subject_step) != nullptr) {
+        return Item::Of(StatusRecord(*at->Outcome(one.subject_step)));
       }
     }
     return Item::Of(StatusRecord(absl::OkStatus()));
@@ -79,8 +79,8 @@ absl::StatusOr<ItemPtr> Scope::WinnerItem(RefId ref) {
   for (Scope* at = this; at != nullptr; at = at->parent_) {
     thread::MutexLock lock(&monitor().mu());
     if (graph().steps[one.subject_step].body == at->body_ &&
-        at->Step(one.subject_step).winner.has_value()) {
-      return Item::Of(Value::Integer(*at->Step(one.subject_step).winner));
+        at->Winner(one.subject_step) != nullptr) {
+      return Item::Of(Value::Integer(*at->Winner(one.subject_step)));
     }
   }
   // The barrier is done and recorded nothing, which happens when it was given
@@ -151,14 +151,13 @@ absl::StatusOr<Value> Scope::ValueOf(RefId ref, bool take, bool optional) {
     thread::MutexLock lock(&monitor().mu());
     // One cursor per ref, and one *subscription* per ref.
     ABSL_RETURN_IF_ERROR(monitor().Wait([owner, ref] {
-      return owner->cursors_.contains(ref) ||
-             !owner->opening_cursors_.contains(ref);
+      return owner->cursors_.contains(ref) || !owner->CursorOpening(ref);
     }));
     const auto found = owner->cursors_.find(ref);
     if (found != owner->cursors_.end()) {
       cursor = &*found->second;
     } else {
-      owner->opening_cursors_.insert(ref);
+      owner->CursorOpening(ref) = true;
     }
   }
   if (cursor == nullptr) {
@@ -172,7 +171,7 @@ absl::StatusOr<Value> Scope::ValueOf(RefId ref, bool take, bool optional) {
       // Whatever happened, this ref is no longer being opened: a failure that
       // left the flag set would leave every other reader of it waiting for a
       // cursor nobody is making any more.
-      owner->opening_cursors_.erase(ref);
+      owner->CursorOpening(ref) = false;
       if (subscribed.ok()) {
         const graph::Ref& one = graph().refs[ref];
         cursor = &owner->cursors_.Construct(ref, bridge(), *std::move(reader),
@@ -257,7 +256,15 @@ absl::StatusOr<Value> Scope::EvaluateWith(ExprId expr, const Value& it,
     }
     return value;
   }
-  absl::flat_hash_map<RefId, Value> taken;
+  absl::InlinedVector<std::pair<RefId, Value>, 4> taken;
+  const auto taken_value = [&](RefId ref) -> const Value* {
+    for (const auto& [key, value] : taken) {
+      if (key == ref) {
+        return &value;
+      }
+    }
+    return nullptr;
+  };
   EvalContext context;
   context.prepared = &runner_->prepared();
   context.is_option = [&](const syntax::Node& node) {
@@ -278,12 +285,14 @@ absl::StatusOr<Value> Scope::EvaluateWith(ExprId expr, const Value& it,
       const auto* extraction = syntax::As<syntax::PipelineValue>(&node);
       const bool take =
           extraction != nullptr && extraction->take && !one.materialized;
-      if (const auto cached = taken.find(ref); !take && cached != taken.end()) {
-        return std::optional<Value>(cached->second);
+      if (const Value* cached = taken_value(ref); !take && cached != nullptr) {
+        return std::optional<Value>(*cached);
       }
       ABSL_ASSIGN_OR_RETURN(Value value,
                             ValueOf(ref, take, take && extraction->optional));
-      taken.emplace(ref, value);
+      if (taken_value(ref) == nullptr) {
+        taken.emplace_back(ref, value);
+      }
       return std::optional<Value>(std::move(value));
     }
     return std::optional<Value>();
@@ -325,7 +334,7 @@ absl::StatusOr<Value> Scope::EvaluateWith(ExprId expr, const Value& it,
   };
   auto value = flow::Evaluate(*one.node, context);
   for (const RefId ref : one.refs) {
-    if (taken.find(ref) != taken.end() && expression_result_ != nullptr &&
+    if (taken_value(ref) != nullptr && expression_result_ != nullptr &&
         graph().refs[ref].owner == body_) {
       const auto cursor = cursors_.find(ref);
       if (cursor != cursors_.end()) {
@@ -361,7 +370,7 @@ bool Scope::RetireValueReservation(RefId ref) {
     }
     --count;
     unused = count == 0 && !owner->cursors_.contains(ref) &&
-             !owner->opening_cursors_.contains(ref);
+             !owner->CursorOpening(ref);
   }
   return unused;
 }
@@ -451,7 +460,7 @@ absl::StatusOr<Value> Divide(const Value& total, const Value& count) {
 void PrimeBatch(const std::vector<ItemPtr>& items,
                 HostBridge* absl_nonnull bridge) {
   std::vector<const data::Chunk*> chunks;
-  std::vector<const Item*> owners;
+  std::vector<const ItemPtr*> owners;
   for (const ItemPtr& item : items) {
     if (!item->NeedsDecoding()) {
       continue;

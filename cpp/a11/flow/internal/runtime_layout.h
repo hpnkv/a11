@@ -37,17 +37,18 @@ struct RuntimeLayouts {
     bool started = false;
     absl::Status completion;
     uint64_t order = 0;
-    std::optional<absl::Status> outcome;
-    std::optional<int64_t> winner;
   };
 
   struct Body {
     graph::Analysis analysis;
     internal::FrameLayout storage;
     internal::FrameLayout::Slots<StepState> steps;
+    internal::FrameLayout::Slots<std::optional<absl::Status>> outcomes;
+    internal::FrameLayout::Slots<std::optional<int64_t>> winners;
     internal::FrameLayout::Slots<std::optional<Value>> captures;
     internal::FrameLayout::Slots<std::optional<Value>> folds;
     internal::FrameLayout::Slots<int> value_consumers;
+    internal::FrameLayout::Slots<bool> opening_cursors;
     absl::flat_hash_map<size_t, size_t> capture_slots;
     internal::FrameObjectLayout<internal::CallHandle> calls;
     internal::FrameObjectLayout<internal::Lazy> lazies;
@@ -61,6 +62,8 @@ struct RuntimeLayouts {
   struct Flow {
     std::vector<std::unique_ptr<Body>> bodies;
     std::vector<size_t> step_slots;
+    std::vector<size_t> step_outcomes;
+    std::vector<size_t> step_winners;
     std::vector<size_t> step_captures;
     std::vector<size_t> joined_captures;
     std::vector<size_t> condition_captures;

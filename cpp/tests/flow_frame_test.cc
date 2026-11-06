@@ -16,6 +16,8 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <utility>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -209,6 +211,36 @@ TEST(FlowFrameTest, LazyObjectsDestroyExactlyOnceAndUnregisterBeforeReuse) {
   EXPECT_EQ(view.find(3), view.end());
   view.clear();
   EXPECT_TRUE(weak.expired());
+  (*block)->Reset();
+  pool.Return(*std::move(block));
+}
+
+TEST(FlowFrameTest, ObjectKeysLiveInTheSharedLayout) {
+  FrameLayout layout;
+  FrameObjectLayout<int> objects;
+  objects.Add(42);
+  objects.Add(7);
+  objects.Add(42);
+  ASSERT_TRUE(objects.Finalize(layout).ok());
+  EXPECT_EQ(objects.keys, (std::vector<size_t>{42, 7}));
+  EXPECT_EQ(layout.bytes(), 2 * sizeof(std::optional<int>));
+
+  auto budget = std::make_shared<FrameBudget>(FrameOptions{});
+  layout.Seal();
+  FramePool pool(budget);
+  auto block = pool.Acquire(layout);
+  ASSERT_TRUE(block.ok());
+  (*block)->Initialize();
+  FrameObjects<int> view;
+  view.Bind(**block, objects);
+  view.Construct(7, 70);
+  view.Construct(42, 420);
+  std::vector<std::pair<size_t, int>> found;
+  for (auto& [key, value] : view) {
+    found.emplace_back(key, *value);
+  }
+  EXPECT_EQ(found, (std::vector<std::pair<size_t, int>>{{42, 420}, {7, 70}}));
+  view.clear();
   (*block)->Reset();
   pool.Return(*std::move(block));
 }

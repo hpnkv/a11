@@ -41,6 +41,7 @@
 #include "python/bindings.h"
 #include "python/casters.h"
 #include "python/interop.h"
+#include "python/local_chunk_object.h"
 
 namespace a11::python {
 namespace {
@@ -142,6 +143,22 @@ const auto Size = [](const nodes::NodeMap& self) {
 }  // namespace
 
 void BindNodes(py::module_& module) {
+  module.def("_make_local_object_chunk", &MakePythonObjectChunk,
+             "Attach a pinned serializer and a Python value to a local chunk.",
+             py::arg("value"), py::arg("serializer"), py::arg("tag"),
+             py::arg("mimetype"));
+  module.def(
+      "_peek_local_object_chunk",
+      [](const data::Chunk& chunk) -> py::object {
+        const auto* object = PythonObjectIn(chunk);
+        if (object == nullptr) {
+          return py::none();
+        }
+        return py::make_tuple(object->value(), std::string(object->tag()),
+                              std::string(object->mimetype()),
+                              object->serializer());
+      },
+      "Inspect a Python object attached to a local chunk.", py::arg("chunk"));
   py::classh<data::SerializationRegistry>(module, "SerializationRegistry")
       .def(py::init<bool>(),
            "Creates a serialization registry, optionally pre-populated with "

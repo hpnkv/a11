@@ -358,6 +358,10 @@ TEST(FlowValues, ObjectFieldsOmitAbsentOptionsAndUnwrapPresentOnes) {
   EXPECT_FALSE(value->Get("flag")->boolean());
   ASSERT_NE(value->Get("ordinary"), nullptr);
   EXPECT_FALSE(value->Get("ordinary")->is_option());
+  const auto list = EvaluatedIn(R"([{}?.field])");
+  ASSERT_TRUE(list.ok()) << list.status();
+  ASSERT_EQ(list->items().size(), 1u);
+  EXPECT_TRUE(list->items().front().is_option());
 }
 
 TEST(FlowValues, Base64GoesBothWaysInBothAlphabets) {

@@ -72,6 +72,8 @@ enum class TokenKind {
   /// Static namespace qualification, distinct from runtime projection.
   kScope,
   kStar,
+  kSlash,
+  kPercent,
   kComma,
   kLeftBrace,
   kRightBrace,

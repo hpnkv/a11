@@ -99,7 +99,7 @@ Strings and `"""` strings decode `\0` (NUL), `\a`, `\b`, `\f`, `\n`, `\r`,
 | `m::f`, `a11::sdk::Interaction`; `j.output`, `v.field`, `v[index]` | Static qualification / runtime projection. Registered host types need no import; wire tags retain dotted spelling. |
 | `v?.field`, `v?[key]`; `s \| present` | Safe projection returns `std::option[T]`: missing is absent, present null remains present. Safe chaining unwraps an option base. `present` drops absent options and emits present payloads. |
 | `T{field:e}`; `e as T`; `[e, ...]`; `{key:e, ...other}` | Typed record, cast, list, object/spread. Object fields omit absent options and unwrap present ones. Strings: `"..."` or triple quotes. Literals: `true`, `false`, `null`. |
-| `+`, `-`; `== != < <= > >= in`; `not`, `and`, `or` | Numeric/time arithmetic, comparison/membership, short-circuit logic. Space subtraction: `a-b` is a name. No `*` or `/` arithmetic. |
+| `+`, `-`, `*`, `/`, `%`; `== != < <= > >= in`; `not`, `and`, `or` | Checked numeric arithmetic, comparison/membership, short-circuit logic. `%` requires integers; strict integer `/` requires an exact quotient. Time ± duration, duration ± duration, time − time, unary duration minus, and duration × number in either order are supported. Space subtraction: `a-b` is a name. |
 
 `fail` and `abort` accept these named failure codes: `CANCELLED`, `UNKNOWN`,
 `INVALID_ARGUMENT`, `DEADLINE_EXCEEDED`, `NOT_FOUND`, `ALREADY_EXISTS`,
@@ -121,13 +121,18 @@ alias of `std::list`. The qualified spelling remains valid.
 
 | Types | Meaning |
 |---|---|
-| `int`, `number`, `bool`, `string`, `bytes`, `null` | Primitive prelude; prefer `int` (`integer` is an alias). Same-name conversions are unqualified. |
+| `int`/`integer`, `i8`–`i128`, `u8`–`u128`, `f32`, `f64`, `number`, `bool`, `string`, `bytes`, `null` | `int` is checked signed 64-bit; qualified integer widths and finite floats check capacity. `number` retains permissive coercion. Same-name conversions are unqualified. |
 | `object`, `object[V]` | String-keyed heterogeneous / uniformly typed values; no key-type parameter. |
 | `list[T]`, `std::json`, `std::any` | One list value, JSON-compatible data, unrestricted payload. |
-| `std::time`, `std::duration` | Instant / interval; timezone-less input is UTC. Durations: `ns us ms s m h`, e.g. `1m30s`; numeric conversions use seconds. |
+| `std::time`, `std::duration` | Instant / interval. Parse text with `std::parse_time` or `std::parse_duration`; timezone-less time text is UTC. Duration literals use `ns us ms s m h`, e.g. `1m30s`. |
 | `std::status`, `std::option[T]`, `std::stream[T]` | Status data, explicit presence, live stream capability. Prefer optional binding below. Explicit `.has_value` tests presence; absent `.value` access fails. |
-| Standard-type conversions `int(v)`, `list(v)`, etc.; `v as T` | Convert/validate; existing permissive coercions may lose precision or map invalid numeric text to zero. Checked parsers below fail instead. |
+| Standard-type conversions `i32(v)`, `int(v)`, `list(v)`, etc.; `v as T`; `s \| as T` | Convert/validate. Numeric width conversions reject nonintegral or out-of-range values; `number(v)` remains permissive. A failing cast in `try as T` is handled per item. |
 | `std::text`, `std::boolean`, `std::array[T]` | Aliases of string, bool, list. Exposing a standard type also exposes its supported conversion. |
+
+Use decimal text such as `u128("18446744073709551616")` for values beyond the
+signed 64-bit literal range. Numeric port values remain ordinary wire integers
+and numbers; Flow checks their declared widths when reading them.
+Floating literals support scientific notation, for example `1e3` and `2.5E-2`.
 
 ## Optional reads
 
@@ -221,8 +226,10 @@ Brackets mark optional arguments; `v` is a value, `s` text, `xs` a list.
 | `merge(a,b,...)` | Merge records; later keys win. |
 | `match("{name:word}={n:int}",s)` | Flow capture template (not regex): record or null. Holes also support number, bool, line, rest, duration, time, json. |
 | `strformat(fmt,args...)` | printf-style formatting: `%s`, `%d`, `%.2f`, `%2$s`; time `%(%H:%M)s`. |
-| `now()`, `seconds(duration)` | Current instant / numeric seconds. |
-| `time(v)`, `duration(v)` | Permissive temporal conversion; `parse_time(s)`, `parse_duration(s)` fail on invalid text. |
+| `now()`; `infinite_future()`, `infinite_past()`, `infinite_duration()`, `zero_duration()` | Current instant and temporal boundary values. Unary minus negates a duration. |
+| `floor(x)`, `ceil(x)`, `round(x)` | Round numeric values down, up, or to nearest. Halfway values round away from zero. Integers stay unchanged; floats keep their width. |
+| `nanoseconds(x)`, `microseconds(x)`, `milliseconds(x)`, `seconds(x)`, `minutes(x)`, `hours(x)` | A number constructs a duration; a duration returns an integral count truncated toward zero (`seconds(250ms)` → `0`). Text is rejected; invalid input and overflow fail. |
+| `time(v)`, `duration(v)`; `parse_time(s)`, `parse_duration(s)` | Direct temporal conversions accept numeric/temporal values; only the parsers accept text. Declared temporal ports decode wire text at the boundary. |
 | `b64encode(v)`, `b64decode(s)`, `b64urlencode(v)`, `b64urldecode(s)` | Base64 / URL-safe encoding and decoding to bytes. |
 | `utf8encode(s)`, `utf8decode(bytes)` | Text ↔ UTF-8 bytes. |
 | `to_chunk(v[,mimetype])`, `from_chunk(chunk)` | Host-aware encode/decode, preserving payload metadata. |
@@ -241,6 +248,7 @@ expressions, evaluated once per activation outside `it`.
 | Stage | Effect |
 |---|---|
 | `map e`; `where e` | Transform / filter each item. |
+| `as T` | Convert each item to T; `try as T failures into dest` routes failed items and continues. |
 | `take while e`; `take until e` | Prefix while true / until true; exclude the boundary item. |
 | `first N`; `last N`; `drop N`; `distinct` | Prefix / suffix / skip / deduplicate. |
 | `truncate N`; `chunk N` | Shorten each value / split text or bytes into ≤N-byte chunks. |

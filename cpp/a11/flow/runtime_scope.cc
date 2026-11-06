@@ -15,6 +15,7 @@
 #include <absl/cleanup/cleanup.h>
 
 #include "a11/flow/internal/execution.h"
+#include "a11/flow/vocabulary.h"
 
 namespace a11::flow::internal {
 
@@ -269,9 +270,22 @@ absl::Status Scope::Prepare() {
     }
     const bool tolerant = one.kind == RefKind::kCallPort && one.call != kNone &&
                           flow.steps[one.call].tolerant;
+    std::string port_type;
+    if (one.kind == RefKind::kFlowPort &&
+        one.direction == syntax::PortDirection::kOutput) {
+      if (const PortPlan* port =
+              runner_->plan().Port(one.name, syntax::PortDirection::kOutput);
+          port != nullptr) {
+        const std::string& type = port->type;
+        if (vocabulary::IsNumericType(type) || type == "duration" ||
+            type == "std::duration" || type == "time" || type == "std::time") {
+          port_type = type;
+        }
+      }
+    }
     destinations_.Construct(
         ref, monitor(), one.label, [this, ref] { return DestinationNode(ref); },
-        count, tolerant);
+        count, tolerant, std::move(port_type));
   }
   return absl::OkStatus();
 }
@@ -466,7 +480,8 @@ absl::StatusOr<NodePtr> Scope::ReadableNode(RefId ref) {
   }
 }
 
-absl::Status Scope::ReadNode(const NodePtr& node, const Sink& sink) {
+absl::Status Scope::ReadNode(const NodePtr& node, const Sink& sink,
+                             std::string_view port_type) {
   // Batched logical reads follow references without waiting to fill a batch.
   std::vector<ItemPtr> items;
   items.reserve(kQueueDepth);
@@ -495,7 +510,24 @@ absl::Status Scope::ReadNode(const NodePtr& node, const Sink& sink) {
       }
       // Moved out of the fragment, which nothing else reads: a value's payload
       // is the value, and copying it here is a copy per stage.
-      items.push_back(Item::OfChunk(std::move(*chunk)));
+      ItemPtr item = Item::OfChunk(std::move(*chunk));
+      if (!port_type.empty()) {
+        absl::StatusOr<Value> value = item->Read(&bridge());
+        if (!value.ok()) {
+          ABSL_RETURN_IF_ERROR(sink.Many(items));
+          return value.status();
+        }
+        syntax::TypeExpression type;
+        type.name = std::string(port_type);
+        value = Coerce(*value, type,
+                       {.bridge = &bridge(), .allow_temporal_text = true});
+        if (!value.ok()) {
+          ABSL_RETURN_IF_ERROR(sink.Many(items));
+          return value.status();
+        }
+        item = Item::Of(*std::move(value));
+      }
+      items.push_back(std::move(item));
     }
     ABSL_RETURN_IF_ERROR(sink.Many(items));
     if (ended) {

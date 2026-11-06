@@ -231,7 +231,6 @@ class Bus {
 
   absl::Status CompletePump(absl::Status status);
 
-
   bool Skip();
 
   void Wanted();
@@ -351,13 +350,14 @@ class Destination {
   using Open = std::function<absl::StatusOr<NodePtr>()>;
 
   Destination(Monitor& monitor, std::string label, Open open, int writers,
-              bool tolerant)
+              bool tolerant, std::string port_type)
       : monitor_(&monitor),
         turn_(monitor),
         label_(std::move(label)),
         open_(std::move(open)),
         writers_(writers),
-        tolerant_(tolerant) {
+        tolerant_(tolerant),
+        port_type_(std::move(port_type)) {
     // A destination with no writers starts complete.
     if (writers_ <= 0) {
       finished_ = true;
@@ -461,6 +461,7 @@ class Destination {
   absl::Status failure_ ABSL_GUARDED_BY(monitor_->mu());
   int writers_ = 0;
   bool tolerant_ = false;
+  std::string port_type_;
   bool feeds_stopped_ ABSL_GUARDED_BY(monitor_->mu()) = false;
   bool writing_ = false;
   bool closed_ = false;

@@ -97,6 +97,12 @@
       "summary": "A carry references a value outside its repeat state."
     },
     {
+      "code": "flow.form.arithmetic-type",
+      "family": "form",
+      "severity": "error",
+      "summary": "Arithmetic operands have incompatible types."
+    },
+    {
       "code": "flow.form.bad-number",
       "family": "form",
       "severity": "error",

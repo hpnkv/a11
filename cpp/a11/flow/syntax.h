@@ -395,6 +395,7 @@ struct LogTail {
 struct Stage : NodeOf<NodeKind::kStage> {
   std::string name;
   vocabulary::StageArgument takes = vocabulary::StageArgument::kNone;
+  std::optional<TypeExpression> type;
   /// `kNumber`: a constant count, when the argument folds to an integer.
   double number = 0.0;
   long long integer = 0;

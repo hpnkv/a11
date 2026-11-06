@@ -37,8 +37,8 @@ constexpr std::array kStageOrder = {
     std::string_view("first"),      std::string_view("last"),
     std::string_view("drop"),       std::string_view("truncate"),
     std::string_view("batch"),      std::string_view("window"),
-    std::string_view("context"),    std::string_view("flatten"),
-    std::string_view("present"),
+    std::string_view("context"),    std::string_view("as"),
+    std::string_view("flatten"),    std::string_view("present"),
     std::string_view("group"),      std::string_view("sort"),
     std::string_view("where"),      std::string_view("map"),
     std::string_view("scan"),       std::string_view("match"),
@@ -72,6 +72,7 @@ const absl::flat_hash_map<std::string_view, StageArgument>& StageTable() {
           {"where", StageArgument::kExpression},
           {"context", StageArgument::kExpression},
           {"map", StageArgument::kExpression},
+          {"as", StageArgument::kType},
           {"group", StageArgument::kExpression},
           {"join", StageArgument::kOptionalString},
           {"strformat", StageArgument::kString},
@@ -98,7 +99,7 @@ const absl::flat_hash_map<std::string_view, StageArgument>& StageTable() {
           {"text", StageArgument::kNone},
           {"json", StageArgument::kNone},
           {"packb", StageArgument::kNone},
-      };
+  };
   return *table;
 }
 
@@ -573,6 +574,11 @@ flow joined {
         "Already packed values pass through with their metadata intact. "
         "MessagePack supports byte strings.",
         "clips | packb -> transcribe.audio"}},
+      {"as",
+       {"Convert every value to a named type.", "a type",
+        "Each value is checked independently; a failure stops the stream "
+        "unless the stage is tried.",
+        "values | as i32 -> output"}},
   };
   return *table;
 }
@@ -601,7 +607,57 @@ flow parsed-header {
 })"}},
       {"int",
        {"Convert a value to an integer.", "one value",
-        "Alias of `integer`. Fractional values are rejected.", "int(\"12\")"}},
+        "Alias of `i64`. Fractions and out-of-range values fail.",
+        "int(\"12\")"}},
+      {"i8",
+       {"Convert to signed 8-bit integer.", "one value",
+        "Checks whole values and range.", "i8(42)"}},
+      {"i16",
+       {"Convert to signed 16-bit integer.", "one value",
+        "Checks whole values and range.", "i16(42)"}},
+      {"i32",
+       {"Convert to signed 32-bit integer.", "one value",
+        "Checks whole values and range.", "i32(42)"}},
+      {"i64",
+       {"Convert to signed 64-bit integer.", "one value",
+        "Checks whole values and range.", "i64(42)"}},
+      {"i128",
+       {"Convert to signed 128-bit integer.", "one value",
+        "Checks whole values and range.", "i128(42)"}},
+      {"u8",
+       {"Convert to unsigned 8-bit integer.", "one value",
+        "Checks whole values and range.", "u8(42)"}},
+      {"u16",
+       {"Convert to unsigned 16-bit integer.", "one value",
+        "Checks whole values and range.", "u16(42)"}},
+      {"u32",
+       {"Convert to unsigned 32-bit integer.", "one value",
+        "Checks whole values and range.", "u32(42)"}},
+      {"u64",
+       {"Convert to unsigned 64-bit integer.", "one value",
+        "Checks whole values and range.", "u64(42)"}},
+      {"u128",
+       {"Convert to unsigned 128-bit integer.", "one value",
+        "Checks whole values and range.", "u128(42)"}},
+      {"f32",
+       {"Convert to finite 32-bit float.", "one value",
+        "Rounds floating input and rejects overflowing values.", "f32(0.5)"}},
+      {"f64",
+       {"Convert to finite 64-bit float.", "one value",
+        "Rejects non-finite values.", "f64(0.5)"}},
+      {"floor",
+       {"Round a number toward negative infinity.", "one number",
+        "Integers are unchanged; floating results retain their input width.",
+        "std::floor(f64(2.75))"}},
+      {"ceil",
+       {"Round a number toward positive infinity.", "one number",
+        "Integers are unchanged; floating results retain their input width.",
+        "std::ceil(f64(2.25))"}},
+      {"round",
+       {"Round a number to the nearest whole value.", "one number",
+        "Halfway values round away from zero. Integers are unchanged; "
+        "floating results retain their input width.",
+        "std::round(f64(-2.5))"}},
       {"string",
        {"Render a value as text.", "one value",
         "See `text` for rendering rules.", "string(12)"}},
@@ -630,17 +686,46 @@ flow parsed-header {
         "null(null)"}},
       {"parse_duration",
        {"Parse duration text or fail.", "one text value",
-        "Accepts the same units as duration(), including compound units and "
-        "bare seconds. Invalid text fails instead of falling back to zero. "
-        "`duration` performs the permissive conversion; `seconds` converts "
-        "a duration to a number.",
+        "Accepts unit suffixes and compound units, as in `1m30s`. A bare "
+        "number means seconds. Invalid text fails. `seconds` converts a "
+        "duration to an integral count of seconds.",
         "std::parse_duration(\"1m30s\")\n\n"
         R"(Parse a strict duration budget and expose its numeric seconds.
 flow deadline-budget {
-  out seconds: number
+  out seconds: int
   budget = std::parse_duration("1m30s")
   std::seconds(budget) -> seconds
 })"}},
+      {"nanoseconds",
+       {"Construct nanoseconds or count a duration in nanoseconds.",
+        "one number or duration",
+        "Numeric input constructs a duration; duration input returns an "
+        "integral count truncated toward zero.",
+        "std::nanoseconds(500)"}},
+      {"microseconds",
+       {"Construct microseconds or count a duration in microseconds.",
+        "one number or duration",
+        "Numeric input constructs a duration; duration input returns an "
+        "integral count truncated toward zero.",
+        "std::microseconds(500)"}},
+      {"milliseconds",
+       {"Construct milliseconds or count a duration in milliseconds.",
+        "one number or duration",
+        "Numeric input constructs a duration; duration input returns an "
+        "integral count truncated toward zero.",
+        "std::milliseconds(500)"}},
+      {"minutes",
+       {"Construct minutes or count a duration in minutes.",
+        "one number or duration",
+        "Numeric input constructs a duration; duration input returns an "
+        "integral count truncated toward zero.",
+        "std::minutes(2)"}},
+      {"hours",
+       {"Construct hours or count a duration in hours.",
+        "one number or duration",
+        "Numeric input constructs a duration; duration input returns an "
+        "integral count truncated toward zero.",
+        "std::hours(2)"}},
       {"parse_time",
        {"Parse time text or fail.", "one text value",
         "Accepts RFC 3339 instants and UTC calendar dates. Invalid text fails "
@@ -915,24 +1000,38 @@ flow stamped {
   std::text(clock) -> started
   std::strformat("started at %s", clock) -> line
 })"}},
+      {"infinite_future",
+       {"Return the future infinite instant.", "",
+        "The result is a std::time value.", "std::infinite_future()"}},
+      {"infnite_future",
+       {"Return the future infinite instant.", "", "Alias of infinite_future.",
+        "std::infnite_future()"}},
+      {"infinite_past",
+       {"Return the past infinite instant.", "",
+        "The result is a std::time value.", "std::infinite_past()"}},
+      {"infinite_duration",
+       {"Return the positive infinite duration.", "",
+        "Unary minus returns its negative.", "std::infinite_duration()"}},
+      {"zero_duration",
+       {"Return a zero duration.", "", "The result is a std::duration value.",
+        "std::zero_duration()"}},
       {"duration",
        {"Convert a value to a duration.", "one value",
-        "Accepts unit suffixes such as `ms`, `s`, and `h`, including compound "
-        "forms such as `1m30s`. A bare number represents seconds.",
-        "std::duration(header.budget) -> budget"}},
+        "A number represents seconds. Use `std::parse_duration` for text.",
+        "std::duration(90) -> budget"}},
       {"time",
        {"Convert a value to an instant.", "one value",
-        "Accepts RFC 3339 timestamps and calendar dates. A missing time zone "
-        "is interpreted as UTC.",
-        "std::time(page.published) -> published"}},
+        "Use `std::parse_time` for timestamps and calendar dates in text.",
+        "std::time(epoch_seconds) -> published"}},
       {"seconds",
-       {"Convert a duration to numeric seconds.", "one duration",
-        "Returns a floating-point number, preserving subsecond values. "
-        "`parse_duration` validates text before conversion.",
+       {"Construct seconds or count a duration in seconds.",
+        "one number or duration",
+        "A number constructs a duration. A duration returns its integral "
+        "count of seconds, truncated toward zero.",
         "std::seconds(std::now() - started) -> elapsed\n\n"
         R"(Parse a strict duration budget and expose its numeric seconds.
 flow deadline-budget {
-  out seconds: number
+  out seconds: int
   budget = std::parse_duration("1m30s")
   std::seconds(budget) -> seconds
 })"}},
@@ -1045,8 +1144,7 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StatementDocs() {
         "model = call ask-model(question: q)\n"
         "wait all of search, model"}},
       {"wait all",
-       {"Wait for directly induced work in the current scope.",
-        "no arguments",
+       {"Wait for directly induced work in the current scope.", "no arguments",
         "Following statements activate after the preceding phase completes. "
         "A stream may first be read in either phase, but independent readers "
         "of that stream must stay in one phase. Successive `take` reads "
@@ -1730,7 +1828,8 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StatusFieldDocs() {
 constexpr std::string_view kDurationDetail =
     "Durations support comparison and addition to another duration or an "
     "instant. `seconds()` converts one to a number. Units may be combined, "
-    "as in `1m30s500ms`. A negative duration represents an infinite bound.";
+    "as in `1m30s500ms`. `std::infinite_duration()` constructs the infinite "
+    "duration; unary minus reverses its sign.";
 
 const absl::flat_hash_map<std::string_view, WordDoc>& DurationUnitDocs() {
   static const auto* table = new absl::flat_hash_map<std::string_view, WordDoc>{
@@ -1751,6 +1850,7 @@ constexpr std::array kSymbolOrder = {
     std::string_view("="),  std::string_view("=="), std::string_view("!="),
     std::string_view("<"),  std::string_view("<="), std::string_view(">"),
     std::string_view(">="), std::string_view("+"),  std::string_view("-"),
+    std::string_view("*"),  std::string_view("/"),  std::string_view("%"),
     std::string_view("."),  std::string_view(".."), std::string_view("..."),
     std::string_view(":"),  std::string_view(","),  std::string_view("{"),
     std::string_view("}"),  std::string_view("("),  std::string_view(")"),
@@ -1815,8 +1915,8 @@ const absl::flat_hash_map<std::string_view, WordDoc>& SymbolDocs() {
         "if code >= 200 and code < 300 { .. }"}},
       {"+",
        {"Adds two values.", "two numbers, or an instant and a duration",
-        "Supports numbers, durations, and an instant plus a duration. A "
-        "number combined with a duration is interpreted as seconds.",
+        "Numeric operands need compatible types. Durations combine with "
+        "durations; an instant combines with a duration.",
         "std::time deadline = std::now() + 30s"}},
       {"-",
        {"Subtracts one value from another.",
@@ -1824,6 +1924,18 @@ const absl::flat_hash_map<std::string_view, WordDoc>& SymbolDocs() {
         "Subtracting two instants produces a duration. Spaces distinguish "
         "subtraction (`a - b`) from a hyphenated name (`a-b`).",
         "std::seconds(std::now() - started) -> elapsed"}},
+      {"*",
+       {"Multiply compatible numbers.", "two numbers",
+        "Integer overflow and non-finite floating results fail.",
+        "i32(6) * i32(7)"}},
+      {"/",
+       {"Divide compatible numbers.", "two numbers",
+        "Integer division requires an exact quotient. Division by zero fails.",
+        "i32(12) / i32(3)"}},
+      {"%",
+       {"Find an integer remainder.", "two integers",
+        "The remainder has the dividend's sign. Division by zero fails.",
+        "i32(13) % i32(5)"}},
       {".",
        {"Access a member of a value, step, or node.",
         "a value, a step or a node on the left, a name on the right",
@@ -1963,6 +2075,12 @@ constexpr std::array kTypeOrder = {
     std::string_view("string"),  std::string_view("text"),
     std::string_view("number"),  std::string_view("integer"),
     std::string_view("int"),     std::string_view("bool"),
+    std::string_view("i8"),      std::string_view("i16"),
+    std::string_view("i32"),     std::string_view("i64"),
+    std::string_view("i128"),    std::string_view("u8"),
+    std::string_view("u16"),     std::string_view("u32"),
+    std::string_view("u64"),     std::string_view("u128"),
+    std::string_view("f32"),     std::string_view("f64"),
     std::string_view("boolean"), std::string_view("duration"),
     std::string_view("time"),    std::string_view("object"),
     std::string_view("json"),    std::string_view("list"),
@@ -1981,6 +2099,21 @@ constexpr std::array kBuiltinOrder = {
     std::string_view("trim"),
     std::string_view("text"),
     std::string_view("number"),
+    std::string_view("i8"),
+    std::string_view("i16"),
+    std::string_view("i32"),
+    std::string_view("i64"),
+    std::string_view("i128"),
+    std::string_view("u8"),
+    std::string_view("u16"),
+    std::string_view("u32"),
+    std::string_view("u64"),
+    std::string_view("u128"),
+    std::string_view("f32"),
+    std::string_view("f64"),
+    std::string_view("floor"),
+    std::string_view("ceil"),
+    std::string_view("round"),
     std::string_view("bool"),
     std::string_view("keys"),
     std::string_view("values"),
@@ -2003,9 +2136,19 @@ constexpr std::array kBuiltinOrder = {
     std::string_view("utf8encode"),
     std::string_view("utf8decode"),
     std::string_view("now"),
+    std::string_view("infinite_future"),
+    std::string_view("infnite_future"),
+    std::string_view("infinite_past"),
+    std::string_view("infinite_duration"),
+    std::string_view("zero_duration"),
     std::string_view("duration"),
     std::string_view("time"),
     std::string_view("seconds"),
+    std::string_view("nanoseconds"),
+    std::string_view("microseconds"),
+    std::string_view("milliseconds"),
+    std::string_view("minutes"),
+    std::string_view("hours"),
     std::string_view("parse_time"),
     std::string_view("parse_duration"),
     std::string_view("integer"),
@@ -2182,6 +2325,8 @@ std::string_view StageArgumentName(StageArgument argument) {
       return "duration";
     case StageArgument::kStream:
       return "stream";
+    case StageArgument::kType:
+      return "type";
     case StageArgument::kLog:
       return "log";
     case StageArgument::kLogFormat:
@@ -2192,8 +2337,18 @@ std::string_view StageArgumentName(StageArgument argument) {
 
 bool IsPrimitiveType(std::string_view name) {
   return name == "int" || name == "integer" || name == "number" ||
+         name == "i8" || name == "i16" || name == "i32" || name == "i64" ||
+         name == "i128" || name == "u8" || name == "u16" || name == "u32" ||
+         name == "u64" || name == "u128" || name == "f32" || name == "f64" ||
          name == "bool" || name == "string" || name == "bytes" ||
          name == "object" || name == "null" || name == "list";
+}
+
+bool IsNumericType(std::string_view name) {
+  return name == "number" || name == "int" || name == "integer" ||
+         name == "i8" || name == "i16" || name == "i32" || name == "i64" ||
+         name == "i128" || name == "u8" || name == "u16" || name == "u32" ||
+         name == "u64" || name == "u128" || name == "f32" || name == "f64";
 }
 
 const WordDoc* absl_nullable StageDocumentation(
@@ -2415,8 +2570,8 @@ const absl::flat_hash_set<std::string_view>& ParallelStages() {
   // gathers, orders or counts: `| collect parallel 8` has one value to make and
   // `| sort parallel 8` has an order to keep, so both would be asking.
   static const auto* words =
-      MakeSet({"map", "where", "at", "truncate", "match", "mime", "flatten",
-               "text", "json", "packb", "strformat", "chunk"});
+      MakeSet({"map", "as", "where", "at", "truncate", "match", "mime",
+               "flatten", "text", "json", "packb", "strformat", "chunk"});
   return *words;
 }
 

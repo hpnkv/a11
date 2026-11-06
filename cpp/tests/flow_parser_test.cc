@@ -499,7 +499,8 @@ flow main {
   run echo() | map it -> output
 }
 )");
-  ASSERT_TRUE(parsed.diagnostics.empty()) << absl::StrJoin(Messages(parsed), "; ");
+  ASSERT_TRUE(parsed.diagnostics.empty())
+      << absl::StrJoin(Messages(parsed), "; ");
   ASSERT_EQ(parsed.flows.size(), 1u);
   const auto& body = parsed.flows.front()->body;
   ASSERT_EQ(body.size(), 3u);
@@ -507,8 +508,8 @@ flow main {
   for (size_t i : {1u, 2u}) {
     const auto* pipe = syntax::As<syntax::Pipe>(body[i].get());
     ASSERT_NE(pipe, nullptr);
-    EXPECT_NE(syntax::As<syntax::CallExpression>(
-                  pipe->pipeline->source.get()), nullptr);
+    EXPECT_NE(syntax::As<syntax::CallExpression>(pipe->pipeline->source.get()),
+              nullptr);
   }
 }
 
@@ -1374,7 +1375,7 @@ TEST(FlowParser, CompleteFollowingStatementsKeepTheirBoundaries) {
 
 TEST(FlowParser, ExplicitTerminatorsStopAllContinuationAndDoNotReplaceCommas) {
   for (const auto* source :
-       {"flow f { x = 1; + 2 -> output }",
+       {"flow f { x = 1; * 2 -> output }",
         "flow f { rows; | collect -> output }",
         "flow f { log std::join([1; 2], \",\") }",
         "flow f { run work(a: 1; b: 2) }", "flow f { log (\"one\"; \"two\") }",

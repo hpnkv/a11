@@ -125,7 +125,7 @@ absl::Status Destination::WriteRange(absl::Span<const ItemPtr> items,
       std::count_if(items.begin(), items.end(), [](const auto& item) {
         return !item->chunk().has_value() && !item->reference().has_value();
       }));
-  if (computed_count > 1) {
+  if (computed_count > 1 && port_type_.empty()) {
     std::vector<const Value*> values;
     std::vector<absl::StatusOr<Value>> read;
     read.reserve(computed_count);
@@ -162,6 +162,11 @@ absl::Status Destination::WriteRange(absl::Span<const ItemPtr> items,
   size_t computed = 0;
   for (const ItemPtr& item : items) {
     if (item->reference().has_value()) {
+      if (!port_type_.empty()) {
+        status = absl::InvalidArgumentError(
+            "A typed output requires a value, not a reference.");
+        break;
+      }
       stores::ChunkStoreWrite write =
           (*writer)->EnqueueReference(*item->reference());
       status = write.admitted.Await().status();
@@ -171,7 +176,7 @@ absl::Status Destination::WriteRange(absl::Span<const ItemPtr> items,
       continue;
     }
     data::Chunk chunk;
-    if (item->chunk().has_value()) {
+    if (item->chunk().has_value() && port_type_.empty()) {
       chunk = *item->chunk();
     } else if (computed < encoded.size()) {
       absl::StatusOr<data::Chunk>& ready = encoded[computed++];
@@ -185,6 +190,15 @@ absl::Status Destination::WriteRange(absl::Span<const ItemPtr> items,
       if (!value.ok()) {
         status = value.status();
         break;
+      }
+      if (!port_type_.empty()) {
+        syntax::TypeExpression type;
+        type.name = port_type_;
+        value = Coerce(*value, type, {.bridge = bridge});
+        if (!value.ok()) {
+          status = value.status();
+          break;
+        }
       }
       absl::StatusOr<data::Chunk> one = bridge->ToChunk(*value, {});
       if (!one.ok()) {

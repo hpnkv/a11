@@ -276,6 +276,11 @@ nlohmann::json NodeJson(const syntax::Node* node) {
         case vocabulary::StageArgument::kStream:
           value["arg"] = NodeJson(stage->argument.get());
           break;
+        case vocabulary::StageArgument::kType:
+          value["arg"] = stage->type.has_value()
+                             ? nlohmann::json(stage->type->ToString())
+                             : nlohmann::json(nullptr);
+          break;
         case vocabulary::StageArgument::kNone:
           value["arg"] = nullptr;
           break;

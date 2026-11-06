@@ -1207,6 +1207,19 @@ TEST(FlowResolve, ReassignmentKeepsTheDeclaredType) {
           .HasErrors());
 }
 
+TEST(FlowResolve, RejectsKnownIncompatibleArithmeticAndTemporalOperands) {
+  for (const char* expression :
+       {"1 + true", "30s + 30", "i8(1) + u8(1)", "1s * 1s",
+        "std::seconds(\"250ms\")", "std::duration(\"1s\")"}) {
+    const auto result = Check(absl::StrCat("flow f { ", expression, " -> _ }"));
+    const auto codes = Codes(result);
+    EXPECT_NE(
+        std::find(codes.begin(), codes.end(), "flow.form.arithmetic-type"),
+        codes.end());
+  }
+  EXPECT_FALSE(Check("flow f { 1s * 2 -> _ }").HasErrors());
+}
+
 TEST(FlowResolve, QualifiedUnknownCallsAreErrorsAtTheTarget) {
   const auto result = Check("flow f { run nested::test() }");
   ASSERT_TRUE(result.HasErrors());
@@ -1336,9 +1349,10 @@ TEST(FlowResolve, ScopeBarriersRejectValuesModifiersAndStreamingCycles) {
         "work = run producer()\n work.output -> _\n wait all",
         "in input: string stream\n input -> _\n wait all",
         "in input: string stream\n wait all\n input -> _"}) {
-    const auto result = Check(
-        absl::StrCat("flow producer { out output: string stream\n \"x\" "
-                     "-> output }\nflow main {\n", body, "\n}"));
+    const auto result =
+        Check(absl::StrCat("flow producer { out output: string stream\n \"x\" "
+                           "-> output }\nflow main {\n",
+                           body, "\n}"));
     EXPECT_FALSE(result.HasErrors()) << body << ": " << Messages(result);
   }
   EXPECT_FALSE(Check(R"(

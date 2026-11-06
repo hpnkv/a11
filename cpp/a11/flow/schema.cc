@@ -156,6 +156,15 @@ bool BoundsLength(std::string_view type) {
 
 /// The `type`, `format` and `x-a11-type` a Flow scalar goes out as.
 void WriteScalar(std::string_view type, nlohmann::json& out) {
+  if ((type.size() > 1 && (type.front() == 'i' || type.front() == 'u') &&
+       (type.substr(1) == "8" || type.substr(1) == "16" ||
+        type.substr(1) == "32" || type.substr(1) == "64" ||
+        type.substr(1) == "128")) ||
+      type == "f32" || type == "f64") {
+    out["type"] = type.front() == 'f' ? "number" : "integer";
+    out[std::string(kFlowTypeKey)] = type;
+    return;
+  }
   if (type == "string" || type == "text") {
     out["type"] = "string";
     return;
@@ -487,6 +496,13 @@ const absl::flat_hash_set<std::string>& KnownKeywords() {
 
 /// The Flow scalar type a property's JSON type says it is.
 std::string ScalarType(const nlohmann::json& property) {
+  if (const auto marked = property.find(std::string(kFlowTypeKey));
+      marked != property.end() && marked->is_string()) {
+    const std::string name = marked->get<std::string>();
+    if (vocabulary::TypeNames().contains(name)) {
+      return name;
+    }
+  }
   const auto marked = property.find(std::string(kFlowTypeKey));
   if (marked != property.end() && marked->is_string()) {
     return marked->get<std::string>();

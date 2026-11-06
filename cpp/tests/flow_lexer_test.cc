@@ -147,6 +147,22 @@ TEST(FlowLexer, ReadsNumbersAndDurations) {
   EXPECT_EQ(result.tokens[3].duration, absl::Minutes(90));
 }
 
+TEST(FlowLexer, ReadsScientificNotation) {
+  const LexResult result = Lex("1e3 2.5E-2 3e+2 1e3ms");
+  ASSERT_FALSE(result.HasErrors());
+  ASSERT_EQ(result.tokens.size(), 5u);
+  EXPECT_EQ(result.tokens[0].number, 1000.0);
+  EXPECT_FALSE(result.tokens[0].is_integer);
+  EXPECT_EQ(result.tokens[1].number, 0.025);
+  EXPECT_EQ(result.tokens[2].number, 300.0);
+  EXPECT_EQ(result.tokens[3].kind, TokenKind::kDuration);
+  EXPECT_EQ(result.tokens[3].duration, absl::Seconds(1));
+  EXPECT_EQ(Codes("1e"),
+            (std::vector<std::string>{"flow.form.bad-number"}));
+  EXPECT_EQ(Codes("1e+"),
+            (std::vector<std::string>{"flow.form.bad-number"}));
+}
+
 TEST(FlowLexer, EveryDurationUnitIsRead) {
   for (const std::string_view unit : vocabulary::DurationUnits()) {
     const LexResult result = Lex(absl::StrCat("1", unit));
@@ -348,8 +364,11 @@ TEST(FlowVocabulary, EveryStageAndFunctionIsDocumented) {
         *vocabulary::StageTakes(stage) != vocabulary::StageArgument::kNone);
   }
   for (const std::string_view name : vocabulary::OrderedBuiltins()) {
-    // Every function but `now()` is given something; `now()` is the clock.
-    documented(vocabulary::BuiltinDocumentation(name), name, name != "now");
+    const bool no_arguments =
+        name == "now" || name == "infinite_future" ||
+        name == "infnite_future" || name == "infinite_past" ||
+        name == "infinite_duration" || name == "zero_duration";
+    documented(vocabulary::BuiltinDocumentation(name), name, !no_arguments);
   }
 
   // A word that is both is documented as both, and they do not say the same

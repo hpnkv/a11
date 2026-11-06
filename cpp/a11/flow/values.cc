@@ -15,6 +15,8 @@
 #include "a11/flow/values.h"
 
 #include <algorithm>
+#include <cerrno>
+#include <charconv>
 #include <cstdio>
 #include <cstdlib>
 #include <functional>
@@ -44,7 +46,6 @@
 #include "a11/status.h"
 #include "a11/time.h"
 #include "a11/utf8.h"
-#include "absl/strings/match.h"
 
 namespace a11::flow {
 namespace {
@@ -52,6 +53,154 @@ namespace {
 absl::Status Invalid(std::string_view message) {
   return absl::InvalidArgumentError(message);
 }
+
+struct IntegerSpec {
+  int bits;
+  bool is_signed;
+};
+
+std::optional<IntegerSpec> IntegerType(std::string_view name) {
+  if (name == "int" || name == "integer") {
+    return IntegerSpec{64, true};
+  }
+  if (name.size() < 2 || (name.front() != 'i' && name.front() != 'u')) {
+    return std::nullopt;
+  }
+  const bool is_signed = name.front() == 'i';
+  const std::string_view width = name.substr(1);
+  if (width == "8") {
+    return IntegerSpec{8, is_signed};
+  }
+  if (width == "16") {
+    return IntegerSpec{16, is_signed};
+  }
+  if (width == "32") {
+    return IntegerSpec{32, is_signed};
+  }
+  if (width == "64") {
+    return IntegerSpec{64, is_signed};
+  }
+  if (width == "128") {
+    return IntegerSpec{128, is_signed};
+  }
+  return std::nullopt;
+}
+
+absl::uint128 Maximum(IntegerSpec type, bool negative) {
+  const int magnitude_bits = type.bits - (type.is_signed ? 1 : 0);
+  if (negative) {
+    return absl::uint128(1) << magnitude_bits;
+  }
+  if (magnitude_bits == 128) {
+    return ~absl::uint128(0);
+  }
+  return (absl::uint128(1) << magnitude_bits) - 1;
+}
+
+std::string UnsignedText(absl::uint128 value) {
+  if (value == 0) {
+    return "0";
+  }
+  std::string text;
+  while (value != 0) {
+    const unsigned digit = static_cast<unsigned>(value % 10);
+    text.push_back(static_cast<char>('0' + digit));
+    value /= 10;
+  }
+  std::reverse(text.begin(), text.end());
+  return text;
+}
+
+std::string IntegerText(absl::uint128 magnitude, bool negative) {
+  std::string text = UnsignedText(magnitude);
+  if (negative && magnitude != 0) {
+    text.insert(text.begin(), '-');
+  }
+  return text;
+}
+
+absl::StatusOr<std::pair<absl::uint128, bool>> ParseInteger(
+    std::string_view text) {
+  bool negative = false;
+  if (!text.empty() && (text.front() == '-' || text.front() == '+')) {
+    negative = text.front() == '-';
+    text.remove_prefix(1);
+  }
+  if (text.empty()) {
+    return Invalid("An integer requires decimal digits.");
+  }
+  absl::uint128 magnitude = 0;
+  const absl::uint128 maximum = ~absl::uint128(0);
+  for (const char digit : text) {
+    if (digit < '0' || digit > '9') {
+      return Invalid("An integer requires decimal digits.");
+    }
+    const unsigned next = static_cast<unsigned>(digit - '0');
+    if (magnitude > (maximum - next) / 10) {
+      return absl::OutOfRangeError("An integer exceeds 128 bits.");
+    }
+    magnitude = magnitude * 10 + next;
+  }
+  return std::pair{magnitude, negative && magnitude != 0};
+}
+
+std::optional<std::pair<absl::uint128, bool>> IntegerParts(const Value& value) {
+  if (value.kind() == Value::Kind::kTypedInteger) {
+    return std::pair{value.magnitude(), value.negative()};
+  }
+  if (value.kind() != Value::Kind::kInteger) {
+    return std::nullopt;
+  }
+  const std::int64_t number = value.integer();
+  const bool negative = number < 0;
+  const std::uint64_t magnitude =
+      negative ? static_cast<std::uint64_t>(-(number + 1)) + 1
+               : static_cast<std::uint64_t>(number);
+  return std::pair{absl::uint128(magnitude), negative};
+}
+
+absl::StatusOr<Value> CheckedInteger(const Value& value, IntegerSpec type) {
+  std::pair<absl::uint128, bool> parts;
+  if (const auto integer = IntegerParts(value); integer.has_value()) {
+    parts = *integer;
+  } else if (value.kind() == Value::Kind::kString) {
+    ABSL_ASSIGN_OR_RETURN(parts, ParseInteger(value.text()));
+  } else if (value.kind() == Value::Kind::kDouble ||
+             value.kind() == Value::Kind::kTypedFloat) {
+    const double number = value.number();
+    if (!std::isfinite(number) || std::trunc(number) != number) {
+      return Invalid("An integer requires a finite whole number.");
+    }
+    char buffer[400];
+    const auto result = std::to_chars(buffer, buffer + sizeof(buffer), number,
+                                      std::chars_format::fixed, 0);
+    if (result.ec != std::errc{}) {
+      return absl::OutOfRangeError("An integer exceeds 128 bits.");
+    }
+    ABSL_ASSIGN_OR_RETURN(parts,
+                          ParseInteger(std::string_view(buffer, result.ptr)));
+  } else {
+    return Invalid("An integer requires a number or decimal text.");
+  }
+  if (parts.second && !type.is_signed) {
+    return absl::OutOfRangeError("An unsigned integer cannot be negative.");
+  }
+  if (parts.first > Maximum(type, parts.second)) {
+    return absl::OutOfRangeError("An integer is outside its type's range.");
+  }
+  if (type.bits == 64 && type.is_signed) {
+    const std::int64_t number =
+        parts.second ? (parts.first == (absl::uint128(1) << 63)
+                            ? std::numeric_limits<std::int64_t>::min()
+                            : -static_cast<std::int64_t>(parts.first))
+                     : static_cast<std::int64_t>(parts.first);
+    return Value::Integer(number);
+  }
+  return Value::TypedInteger(parts.first, parts.second, type.bits,
+                             type.is_signed);
+}
+
+absl::StatusOr<Value> ReadJson(std::string_view text);
 
 // absl's predicates take an `unsigned char`; the casts are the conversion the
 // standard library asks for rather than anything about the character.
@@ -290,7 +439,11 @@ void AppendJson(const Value& value, std::string& out) {
     case Value::Kind::kInteger:
       absl::StrAppend(&out, value.integer());
       return;
+    case Value::Kind::kTypedInteger:
+      out += IntegerText(value.magnitude(), value.negative());
+      return;
     case Value::Kind::kDouble:
+    case Value::Kind::kTypedFloat:
       if (std::isnan(value.number())) {
         out += "NaN";
       } else if (std::isinf(value.number())) {
@@ -336,18 +489,75 @@ std::string Canonical(std::string_view word) {
 }
 
 bool NumericEqual(const Value& left, const Value& right) {
-  const bool integral = (left.kind() == Value::Kind::kInteger ||
-                         left.kind() == Value::Kind::kBool) &&
-                        (right.kind() == Value::Kind::kInteger ||
-                         right.kind() == Value::Kind::kBool);
+  const bool integral =
+      (IntegerParts(left).has_value() || left.kind() == Value::Kind::kBool) &&
+      (IntegerParts(right).has_value() || right.kind() == Value::Kind::kBool);
   if (integral) {
-    auto whole = [](const Value& value) -> std::int64_t {
-      return value.kind() == Value::Kind::kBool ? (value.boolean() ? 1 : 0)
-                                                : value.integer();
+    auto whole = [](const Value& value) -> std::pair<absl::uint128, bool> {
+      return value.kind() == Value::Kind::kBool
+                 ? std::pair{absl::uint128(value.boolean() ? 1 : 0), false}
+                 : *IntegerParts(value);
     };
     return whole(left) == whole(right);
   }
+  if (IntegerParts(left).has_value() &&
+      (right.kind() == Value::Kind::kDouble ||
+       right.kind() == Value::Kind::kTypedFloat)) {
+    const auto converted =
+        CheckedInteger(right, {128, IntegerParts(left)->second});
+    return converted.ok() && IntegerParts(left) == IntegerParts(*converted);
+  }
+  if (IntegerParts(right).has_value() &&
+      (left.kind() == Value::Kind::kDouble ||
+       left.kind() == Value::Kind::kTypedFloat)) {
+    const auto converted =
+        CheckedInteger(left, {128, IntegerParts(right)->second});
+    return converted.ok() && IntegerParts(right) == IntegerParts(*converted);
+  }
   return AsDouble(left) == AsDouble(right);
+}
+
+int CompareIntegerParts(const std::pair<absl::uint128, bool>& left,
+                        const std::pair<absl::uint128, bool>& right) {
+  if (left.second != right.second) {
+    return left.second ? -1 : 1;
+  }
+  if (left.first == right.first) {
+    return 0;
+  }
+  const bool less = left.first < right.first;
+  return (less != left.second) ? -1 : 1;
+}
+
+int CompareIntegerFloat(const std::pair<absl::uint128, bool>& integer,
+                        double number) {
+  if (std::isnan(number)) {
+    return 0;
+  }
+  if (std::isinf(number)) {
+    return number > 0 ? -1 : 1;
+  }
+  const bool negative = number != 0 && std::signbit(number);
+  int exponent = 0;
+  const double fraction = std::frexp(std::abs(number), &exponent);
+  if (exponent > 128) {
+    return negative ? 1 : -1;
+  }
+  const std::uint64_t significand =
+      static_cast<std::uint64_t>(std::ldexp(fraction, 53));
+  const int shift = exponent - 53;
+  absl::uint128 whole = 0;
+  bool fractional = false;
+  if (shift >= 0) {
+    whole = absl::uint128(significand) << shift;
+  } else if (shift > -64) {
+    whole = significand >> -shift;
+    fractional = (significand & ((std::uint64_t(1) << -shift) - 1)) != 0;
+  } else {
+    fractional = significand != 0;
+  }
+  const int comparison = CompareIntegerParts(integer, {whole, negative});
+  return comparison != 0 ? comparison : fractional ? (negative ? 1 : -1) : 0;
 }
 
 /// Whether the value is one that compares with a number rather than as text.
@@ -376,7 +586,14 @@ class NativeBridge final : public HostBridge {
     }
     const std::string mimetype = chunk.GetMimetype();
     if (absl::StrContains(mimetype, "json") || mimetype.empty()) {
-      return AsJson(Value::String(chunk.data));
+      auto parsed = ReadJson(chunk.data);
+      if (parsed.ok()) {
+        return *std::move(parsed);
+      }
+      if (absl::IsOutOfRange(parsed.status())) {
+        return parsed.status();
+      }
+      return Value::String(chunk.data);
     }
     if (absl::StartsWith(mimetype, "text/")) {
       return Value::String(chunk.data);
@@ -516,8 +733,7 @@ Value NodeFragmentObject::Element(const Value& key) const {
 
 std::optional<Value> NodeFragmentObject::FindField(
     std::string_view name) const {
-  if (name == "id" || name == "seq" || name == "continued" ||
-      name == "data") {
+  if (name == "id" || name == "seq" || name == "continued" || name == "data") {
     return Field(name);
   }
   return std::nullopt;
@@ -565,7 +781,32 @@ Value Value::Double(double value) {
   Value made;
   made.kind_ = Kind::kDouble;
   made.number_ = value;
+  made.legacy_number_ = true;
   return made;
+}
+
+Value Value::TypedInteger(absl::uint128 magnitude, bool negative, int bits,
+                          bool is_signed) {
+  Value made;
+  made.kind_ = Kind::kTypedInteger;
+  made.magnitude_ = magnitude;
+  made.negative_ = negative && magnitude != 0;
+  made.numeric_bits_ = static_cast<std::uint8_t>(bits);
+  made.numeric_signed_ = is_signed;
+  return made;
+}
+
+Value Value::TypedFloat(double value, int bits) {
+  Value made;
+  made.kind_ = Kind::kTypedFloat;
+  made.number_ = value;
+  made.numeric_bits_ = static_cast<std::uint8_t>(bits);
+  return made;
+}
+
+Value Value::LegacyNumber(Value value) {
+  value.legacy_number_ = true;
+  return value;
 }
 
 Value Value::String(std::string value) {
@@ -689,6 +930,11 @@ bool operator==(const Value& left, const Value& right) {
       return left.integer() == right.integer();
     case Value::Kind::kDouble:
       return left.number() == right.number();
+    case Value::Kind::kTypedInteger:
+      return left.magnitude() == right.magnitude() &&
+             left.negative() == right.negative();
+    case Value::Kind::kTypedFloat:
+      return left.number() == right.number();
     case Value::Kind::kString:
     case Value::Kind::kBytes:
       return left.text() == right.text();
@@ -728,8 +974,7 @@ std::unique_ptr<HostBridge> NativeHostBridge() {
 
 std::optional<Value> HostObject::FindField(std::string_view name) const {
   Value found = Field(name);
-  return found.IsNull() ? std::nullopt
-                        : std::optional<Value>(std::move(found));
+  return found.IsNull() ? std::nullopt : std::optional<Value>(std::move(found));
 }
 
 std::optional<Value> HostObject::FindElement(const Value& key) const {
@@ -737,8 +982,7 @@ std::optional<Value> HostObject::FindElement(const Value& key) const {
     return FindField(key.text());
   }
   Value found = Element(key);
-  return found.IsNull() ? std::nullopt
-                        : std::optional<Value>(std::move(found));
+  return found.IsNull() ? std::nullopt : std::optional<Value>(std::move(found));
 }
 
 std::optional<Value> LookupOptional(const Value& value, const Value& key) {
@@ -755,11 +999,10 @@ std::optional<Value> LookupOptional(const Value& value, const Value& key) {
     return found == nullptr ? std::nullopt : std::optional<Value>(*found);
   }
   if (base->kind() == Value::Kind::kList &&
-      (key.kind() == Value::Kind::kInteger ||
-       key.kind() == Value::Kind::kBool)) {
+      (ExactInt64(key).has_value() || key.kind() == Value::Kind::kBool)) {
     std::int64_t at = key.kind() == Value::Kind::kBool
                           ? static_cast<std::int64_t>(key.boolean())
-                          : key.integer();
+                          : *ExactInt64(key);
     if (at < 0) {
       at += static_cast<std::int64_t>(base->items().size());
     }
@@ -798,13 +1041,13 @@ Value Lookup(const Value& value, const Value& key) {
       return found == nullptr ? Value::Null() : *found;
     }
     case Value::Kind::kList: {
-      if (!CountsAsNumber(key) || key.kind() == Value::Kind::kDouble) {
+      if (!ExactInt64(key).has_value() && key.kind() != Value::Kind::kBool) {
         return Value::Null();
       }
       const auto& items = value.items();
       auto at = key.kind() == Value::Kind::kBool
                     ? static_cast<std::int64_t>(key.boolean())
-                    : key.integer();
+                    : *ExactInt64(key);
       if (at < 0) {
         at += static_cast<std::int64_t>(items.size());
       }
@@ -833,7 +1076,10 @@ bool Truthy(const Value& value) {
       return value.boolean();
     case Value::Kind::kInteger:
       return value.integer() != 0;
+    case Value::Kind::kTypedInteger:
+      return value.magnitude() != 0;
     case Value::Kind::kDouble:
+    case Value::Kind::kTypedFloat:
       return value.number() != 0.0;
     case Value::Kind::kString:
     case Value::Kind::kBytes:
@@ -862,7 +1108,10 @@ std::string AsText(const Value& value) {
       return value.boolean() ? "true" : "false";
     case Value::Kind::kInteger:
       return absl::StrCat(value.integer());
+    case Value::Kind::kTypedInteger:
+      return IntegerText(value.magnitude(), value.negative());
     case Value::Kind::kDouble:
+    case Value::Kind::kTypedFloat:
       return FormatDouble(value.number());
     case Value::Kind::kDuration:
       return DurationText(value.duration());
@@ -889,6 +1138,12 @@ Value AsNumber(const Value& value) {
     case Value::Kind::kInteger:
     case Value::Kind::kDouble:
       return value;
+    case Value::Kind::kTypedInteger: {
+      const auto parsed = std::strtod(AsText(value).c_str(), nullptr);
+      return Value::Double(parsed);
+    }
+    case Value::Kind::kTypedFloat:
+      return Value::Double(value.number());
     case Value::Kind::kDuration:
       return Value::Double(DurationSeconds(value.duration()));
     case Value::Kind::kTime: {
@@ -941,6 +1196,18 @@ Value AsNumber(const Value& value) {
     }
   }
   return Value::Integer(0);
+}
+
+std::optional<std::int64_t> ExactInt64(const Value& value) {
+  const auto parts = IntegerParts(value);
+  if (!parts.has_value() || parts->first > Maximum({64, true}, parts->second)) {
+    return std::nullopt;
+  }
+  if (parts->second && parts->first == (absl::uint128(1) << 63)) {
+    return std::numeric_limits<std::int64_t>::min();
+  }
+  const std::int64_t magnitude = static_cast<std::int64_t>(parts->first);
+  return parts->second ? -magnitude : magnitude;
 }
 
 double AsDouble(const Value& value) {
@@ -1011,49 +1278,155 @@ Value MatchCompiled(const pattern::Pattern& compiled,
   return Value::Object(std::move(pairs));
 }
 
+namespace {
+
+// SAX retains the decimal token when a JSON integer exceeds 64 bits. The DOM
+// parser would turn that token into a double before Flow can check its width.
+class ValueJsonSax final : public nlohmann::json_sax<nlohmann::json> {
+ public:
+  using Json = nlohmann::json;
+  using string_t = Json::string_t;
+  using binary_t = Json::binary_t;
+  using number_integer_t = Json::number_integer_t;
+  using number_unsigned_t = Json::number_unsigned_t;
+  using number_float_t = Json::number_float_t;
+
+  bool null() override { return Put(Value::Null()); }
+
+  bool boolean(bool value) override { return Put(Value::Bool(value)); }
+
+  bool number_integer(number_integer_t value) override {
+    return Put(Value::Integer(value));
+  }
+
+  bool number_unsigned(number_unsigned_t value) override {
+    return Put(value <= static_cast<std::uint64_t>(
+                            std::numeric_limits<std::int64_t>::max())
+                   ? Value::Integer(static_cast<std::int64_t>(value))
+                   : Value::TypedInteger(value, false, 64, false));
+  }
+
+  bool number_float(number_float_t value, const string_t& raw) override {
+    std::string_view digits = raw;
+    if (!digits.empty() && digits.front() == '-') {
+      digits.remove_prefix(1);
+    }
+    if (!digits.empty() && std::all_of(digits.begin(), digits.end(), IsDigit)) {
+      const auto parts = ParseInteger(raw);
+      if (!parts.ok()) {
+        return Fail(parts.status());
+      }
+      const bool is_signed =
+          parts->second || parts->first <= Maximum({128, true}, false);
+      const auto integer = CheckedInteger(Value::String(raw), {128, is_signed});
+      return integer.ok() ? Put(*integer) : Fail(integer.status());
+    }
+    if (!std::isfinite(value)) {
+      return Fail(absl::OutOfRangeError("A JSON number is not finite."));
+    }
+    return Put(Value::Double(value));
+  }
+
+  bool string(string_t& value) override {
+    return Put(Value::String(std::move(value)));
+  }
+
+  bool binary(binary_t& /*value*/) override {
+    return Fail(Invalid("Binary data is not JSON."));
+  }
+
+  bool start_object(std::size_t /*elements*/) override {
+    stack_.push_back(Frame{.object = true});
+    return true;
+  }
+
+  bool key(string_t& value) override {
+    stack_.back().key = std::move(value);
+    return true;
+  }
+
+  bool end_object() override {
+    auto pairs = std::move(stack_.back().pairs);
+    stack_.pop_back();
+    std::sort(pairs.begin(), pairs.end(),
+              [](const auto& a, const auto& b) { return a.first < b.first; });
+    return Put(Value::Object(std::move(pairs)));
+  }
+
+  bool start_array(std::size_t /*elements*/) override {
+    stack_.push_back(Frame{.object = false});
+    return true;
+  }
+
+  bool end_array() override {
+    auto items = std::move(stack_.back().items);
+    stack_.pop_back();
+    return Put(Value::List(std::move(items)));
+  }
+
+  bool parse_error(std::size_t /*position*/, const std::string& /*last_token*/,
+                   const nlohmann::detail::exception& error) override {
+    return Fail(Invalid(error.what()));
+  }
+
+  [[nodiscard]] const absl::Status& error() const { return error_; }
+
+  Value Take() { return std::move(*root_); }
+
+ private:
+  struct Frame {
+    bool object = false;
+    Value::Pairs pairs;
+    std::vector<Value> items;
+    std::string key;
+  };
+
+  bool Fail(absl::Status error) {
+    if (error_.ok()) {
+      error_ = std::move(error);
+    }
+    return false;
+  }
+
+  bool Put(Value value) {
+    if (stack_.empty()) {
+      root_ = std::move(value);
+    } else if (Frame& frame = stack_.back(); frame.object) {
+      auto found = std::find_if(
+          frame.pairs.begin(), frame.pairs.end(),
+          [&](const auto& pair) { return pair.first == frame.key; });
+      if (found == frame.pairs.end()) {
+        frame.pairs.emplace_back(std::move(frame.key), std::move(value));
+      } else {
+        found->second = std::move(value);
+      }
+    } else {
+      stack_.back().items.push_back(std::move(value));
+    }
+    return true;
+  }
+
+  std::vector<Frame> stack_;
+  std::optional<Value> root_;
+  absl::Status error_;
+};
+
+absl::StatusOr<Value> ReadJson(std::string_view text) {
+  ValueJsonSax sax;
+  if (!nlohmann::json::sax_parse(text, &sax)) {
+    return sax.error().ok() ? Invalid("Invalid JSON.") : sax.error();
+  }
+  return sax.Take();
+}
+
+}  // namespace
+
 Value AsJson(const Value& value) {
   if (!value.IsTextlike()) {
     return value;
   }
-  const nlohmann::json parsed =
-      nlohmann::json::parse(value.text(), nullptr, false);
-  if (parsed.is_discarded()) {
-    return value;
-  }
-  const std::function<Value(const nlohmann::json&)> convert =
-      [&convert](const nlohmann::json& node) -> Value {
-    switch (node.type()) {
-      case nlohmann::json::value_t::null:
-        return Value::Null();
-      case nlohmann::json::value_t::boolean:
-        return Value::Bool(node.get<bool>());
-      case nlohmann::json::value_t::number_integer:
-      case nlohmann::json::value_t::number_unsigned:
-        return Value::Integer(node.get<std::int64_t>());
-      case nlohmann::json::value_t::number_float:
-        return Value::Double(node.get<double>());
-      case nlohmann::json::value_t::string:
-        return Value::String(node.get<std::string>());
-      case nlohmann::json::value_t::array: {
-        std::vector<Value> items;
-        items.reserve(node.size());
-        for (const nlohmann::json& item : node) {
-          items.push_back(convert(item));
-        }
-        return Value::List(std::move(items));
-      }
-      case nlohmann::json::value_t::object: {
-        Value::Pairs pairs;
-        for (const auto& [key, item] : node.items()) {
-          pairs.emplace_back(key, convert(item));
-        }
-        return Value::Object(std::move(pairs));
-      }
-      default:
-        return Value::Null();
-    }
-  };
-  return convert(parsed);
+  const auto parsed = ReadJson(value.text());
+  return parsed.ok() ? *parsed : value;
 }
 
 Value Truncate(const Value& value, std::int64_t size) {
@@ -1128,13 +1501,23 @@ absl::Time AsTime(const Value& value) {
 }
 
 std::string DurationText(absl::Duration value, std::string_view spec) {
-  if (value == absl::InfiniteDuration() || value == -absl::InfiniteDuration()) {
+  if (value == absl::InfiniteDuration()) {
     return "forever";
+  }
+  if (value == -absl::InfiniteDuration()) {
+    return "-forever";
   }
   // Counted in nanoseconds, which is what a duration is: `1500us + 500ns`
   // renders as `1500.5us`, and not as float arithmetic's opinion of it.
   const absl::StatusOr<std::int64_t> exact = DurationNanoseconds(value);
-  const std::int64_t total = exact.ok() ? *exact : 0;
+  if (!exact.ok()) {
+    if (const auto seconds = vocabulary::DurationUnitSeconds(spec);
+        seconds.has_value()) {
+      return TrimNumber(absl::FDivDuration(value, absl::Seconds(*seconds)));
+    }
+    return absl::FormatDuration(value);
+  }
+  const std::int64_t total = *exact;
   if (const auto seconds = vocabulary::DurationUnitSeconds(spec);
       seconds.has_value()) {
     return TrimNumber(static_cast<double>(total) / (*seconds * 1e9));
@@ -1143,7 +1526,9 @@ std::string DurationText(absl::Duration value, std::string_view spec) {
     return "0s";
   }
   const std::string sign = total < 0 ? "-" : "";
-  std::int64_t left = std::abs(total);
+  std::uint64_t left = total < 0
+                           ? static_cast<std::uint64_t>(-(total + 1)) + 1
+                           : static_cast<std::uint64_t>(total);
   std::string pieces;
   bool coarse = false;
   const auto units = vocabulary::DurationUnits();
@@ -1160,10 +1545,10 @@ std::string DurationText(absl::Duration value, std::string_view spec) {
       coarse = true;
     }
     const auto step = static_cast<std::int64_t>(std::llround(seconds * 1e9));
-    const std::int64_t count = left / step;
+    const std::uint64_t count = left / static_cast<std::uint64_t>(step);
     if (count != 0) {
       absl::StrAppend(&pieces, count, unit);
-      left -= count * step;
+      left -= count * static_cast<std::uint64_t>(step);
     }
     if (left <= 0) {
       break;
@@ -1173,6 +1558,12 @@ std::string DurationText(absl::Duration value, std::string_view spec) {
 }
 
 std::string TimeText(absl::Time value, std::string_view spec) {
+  if (value == absl::InfiniteFuture()) {
+    return "infinite-future";
+  }
+  if (value == absl::InfinitePast()) {
+    return "infinite-past";
+  }
   const absl::StatusOr<std::int64_t> nanoseconds =
       TimeNanosecondsSinceEpoch(value);
   if (spec == "epoch") {
@@ -1463,6 +1854,9 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
                                   absl::Span<const Value> arguments,
                                   HostBridge* absl_nullable bridge,
                                   const PreparedExpressions* prepared) {
+  if (name.starts_with("std::")) {
+    name.remove_prefix(5);
+  }
   const Value& first = Argument(arguments, 0);
   if (prepared != nullptr && first.kind() == Value::Kind::kString) {
     if (name == "strformat") {
@@ -1500,6 +1894,30 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
   if (name == "now") {
     return Value::Time(a11::Now());
   }
+  if (name == "infinite_future" || name == "infnite_future") {
+    if (!arguments.empty()) {
+      return Invalid("This time constant takes no arguments.");
+    }
+    return Value::Time(absl::InfiniteFuture());
+  }
+  if (name == "infinite_past") {
+    if (!arguments.empty()) {
+      return Invalid("This time constant takes no arguments.");
+    }
+    return Value::Time(absl::InfinitePast());
+  }
+  if (name == "infinite_duration") {
+    if (!arguments.empty()) {
+      return Invalid("This duration constant takes no arguments.");
+    }
+    return Value::Duration(absl::InfiniteDuration());
+  }
+  if (name == "zero_duration") {
+    if (!arguments.empty()) {
+      return Invalid("This duration constant takes no arguments.");
+    }
+    return Value::Duration(absl::ZeroDuration());
+  }
   if (name == "parse_duration" || name == "parse_time") {
     if (arguments.size() != 1 || !first.IsTextlike()) {
       return Invalid("A checked time parser requires one text value.");
@@ -1516,8 +1934,147 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
                ? absl::StatusOr<Value>(Value::Time(*parsed))
                : absl::StatusOr<Value>(Invalid("Cannot parse time text."));
   }
-  if (name == "seconds") {
-    return Value::Double(DurationSeconds(AsDuration(first)));
+  if (name == "floor" || name == "ceil" || name == "round") {
+    if (arguments.size() != 1 || !first.IsNumber()) {
+      return Invalid("A rounding function requires one number.");
+    }
+    if (IntegerParts(first).has_value()) {
+      return first;
+    }
+    const double input = first.number();
+    if (!std::isfinite(input)) {
+      return Invalid("A rounding function requires a finite number.");
+    }
+    const double rounded = name == "floor" ? std::floor(input)
+                           : name == "ceil" ? std::ceil(input)
+                                            : std::round(input);
+    if (first.kind() == Value::Kind::kTypedFloat) {
+      return Value::TypedFloat(rounded, first.numeric_bits());
+    }
+    Value result = Value::Double(rounded);
+    return first.is_legacy_number() ? Value::LegacyNumber(std::move(result))
+                                    : result;
+  }
+  if (name == "nanoseconds" || name == "microseconds" ||
+      name == "milliseconds" || name == "seconds" || name == "minutes" ||
+      name == "hours") {
+    if (arguments.size() != 1) {
+      return Invalid("A duration unit requires one value.");
+    }
+    if (first.kind() == Value::Kind::kDuration) {
+      const absl::Duration duration = first.duration();
+      if (duration == absl::InfiniteDuration() ||
+          duration == -absl::InfiniteDuration()) {
+        return absl::OutOfRangeError(
+            "An infinite duration has no finite count.");
+      }
+      std::int64_t count;
+      absl::Duration minimum;
+      absl::Duration maximum;
+      absl::Duration quantum;
+      if (name == "nanoseconds") {
+        count = absl::ToInt64Nanoseconds(duration);
+        minimum = absl::Nanoseconds(std::numeric_limits<std::int64_t>::min());
+        maximum = absl::Nanoseconds(std::numeric_limits<std::int64_t>::max());
+        quantum = absl::Nanoseconds(1);
+      } else if (name == "microseconds") {
+        count = absl::ToInt64Microseconds(duration);
+        minimum = absl::Microseconds(std::numeric_limits<std::int64_t>::min());
+        maximum = absl::Microseconds(std::numeric_limits<std::int64_t>::max());
+        quantum = absl::Microseconds(1);
+      } else if (name == "milliseconds") {
+        count = absl::ToInt64Milliseconds(duration);
+        minimum = absl::Milliseconds(std::numeric_limits<std::int64_t>::min());
+        maximum = absl::Milliseconds(std::numeric_limits<std::int64_t>::max());
+        quantum = absl::Milliseconds(1);
+      } else if (name == "minutes") {
+        count = absl::ToInt64Minutes(duration);
+        minimum = absl::Minutes(std::numeric_limits<std::int64_t>::min());
+        maximum = absl::Minutes(std::numeric_limits<std::int64_t>::max());
+        quantum = absl::Minutes(1);
+      } else if (name == "hours") {
+        count = absl::ToInt64Hours(duration);
+        minimum = absl::Hours(std::numeric_limits<std::int64_t>::min());
+        maximum = absl::Hours(std::numeric_limits<std::int64_t>::max());
+        quantum = absl::Hours(1);
+      } else {
+        count = absl::ToInt64Seconds(duration);
+        minimum = absl::Seconds(std::numeric_limits<std::int64_t>::min());
+        maximum = absl::Seconds(std::numeric_limits<std::int64_t>::max());
+        quantum = absl::Seconds(1);
+      }
+      if (duration <= minimum - quantum || duration >= maximum + quantum) {
+        return absl::OutOfRangeError("Duration count exceeds i64 range.");
+      }
+      return Value::Integer(count);
+    }
+    if (!first.IsNumber()) {
+      return Invalid("A duration unit requires a number or duration.");
+    }
+    absl::Duration duration;
+    if (const auto parts = IntegerParts(first); parts.has_value()) {
+      if (const auto count = ExactInt64(first); count.has_value()) {
+        if (name == "nanoseconds") {
+          duration = absl::Nanoseconds(*count);
+        } else if (name == "microseconds") {
+          duration = absl::Microseconds(*count);
+        } else if (name == "milliseconds") {
+          duration = absl::Milliseconds(*count);
+        } else if (name == "seconds") {
+          duration = absl::Seconds(*count);
+        } else if (name == "minutes") {
+          duration = absl::Minutes(*count);
+        } else {
+          duration = absl::Hours(*count);
+        }
+      } else {
+        const absl::uint128 per_second = name == "nanoseconds"    ? 1000000000
+                                         : name == "microseconds" ? 1000000
+                                         : name == "milliseconds" ? 1000
+                                                                  : 0;
+        if (per_second == 0 ||
+            parts->first / per_second > Maximum({64, true}, parts->second)) {
+          return absl::OutOfRangeError("Duration overflow.");
+        }
+        const absl::uint128 whole = parts->first / per_second;
+        const std::int64_t seconds =
+            parts->second ? (whole == (absl::uint128(1) << 63)
+                                 ? std::numeric_limits<std::int64_t>::min()
+                                 : -static_cast<std::int64_t>(whole))
+                          : static_cast<std::int64_t>(whole);
+        const std::int64_t nanoseconds = static_cast<std::int64_t>(
+            (parts->first % per_second) * (1000000000 / per_second));
+        duration =
+            absl::Seconds(seconds) +
+            absl::Nanoseconds(parts->second ? -nanoseconds : nanoseconds);
+      }
+    } else {
+      const double count = first.number();
+      if (!std::isfinite(count)) {
+        return Invalid("A duration unit requires a finite number.");
+      }
+      if (name == "nanoseconds") {
+        duration = absl::Nanoseconds(count);
+      } else if (name == "microseconds") {
+        duration = absl::Microseconds(count);
+      } else if (name == "milliseconds") {
+        duration = absl::Milliseconds(count);
+      } else if (name == "seconds") {
+        duration = absl::Seconds(count);
+      } else if (name == "minutes") {
+        duration = absl::Minutes(count);
+      } else {
+        duration = absl::Hours(count);
+      }
+      if (count != 0 && duration == absl::ZeroDuration()) {
+        return absl::OutOfRangeError("Duration underflow.");
+      }
+    }
+    if (duration == absl::InfiniteDuration() ||
+        duration == -absl::InfiniteDuration()) {
+      return absl::OutOfRangeError("Duration overflow.");
+    }
+    return Value::Duration(duration);
   }
   if (name == "len") {
     switch (first.kind()) {
@@ -2075,7 +2632,11 @@ absl::StatusOr<Value> CoerceShape(const DtoPlan& shape, const Value& value,
 absl::StatusOr<Value> Coerce(const Value& value,
                              const syntax::TypeExpression& type,
                              const CoerceContext& context) {
-  const std::string lowered = Canonical(type.name);
+  std::string lowered = Canonical(type.name);
+  if (absl::StartsWith(lowered, "std::") &&
+      vocabulary::TypeNames().contains(std::string_view(lowered).substr(5))) {
+    lowered.erase(0, 5);
+  }
   if (lowered == "null") {
     return value.IsNull() ? absl::StatusOr<Value>(value)
                           : absl::StatusOr<Value>(Invalid("Expected null."));
@@ -2143,27 +2704,88 @@ absl::StatusOr<Value> Coerce(const Value& value,
     return Value::String(AsText(value));
   }
   if (lowered == "number") {
-    return AsNumber(value);
+    return Value::LegacyNumber(AsNumber(value));
   }
-  if (lowered == "integer" || lowered == "int") {
-    if (value.kind() == Value::Kind::kInteger) {
-      return value;
+  if (const auto integer = IntegerType(lowered); integer.has_value()) {
+    return CheckedInteger(value, *integer);
+  }
+  if (lowered == "f32" || lowered == "f64") {
+    double number;
+    if (value.IsNumber()) {
+      number = AsDouble(value);
+    } else if (value.kind() == Value::Kind::kString) {
+      const std::string& text = value.text();
+      if (text.empty() ||
+          absl::ascii_isspace(static_cast<unsigned char>(text.front())) ||
+          absl::ascii_isspace(static_cast<unsigned char>(text.back()))) {
+        return Invalid("A float requires numeric text.");
+      }
+      char* end = nullptr;
+      errno = 0;
+      number = std::strtod(text.c_str(), &end);
+      if (end != text.c_str() + text.size()) {
+        return Invalid("A float requires numeric text.");
+      }
+      if (errno == ERANGE && number == 0) {
+        return absl::OutOfRangeError("A float is below the f64 range.");
+      }
+    } else {
+      return Invalid("A float requires a number or numeric text.");
     }
-    const double number = AsDouble(value);
-    if (!std::isfinite(number) || number < -9223372036854775808.0 ||
-        number >= 9223372036854775808.0) {
-      return Invalid(
-          "An int assignment requires a finite value in signed 64-bit range.");
+    if (!std::isfinite(number)) {
+      return absl::OutOfRangeError("A float must be finite.");
     }
-    return Value::Integer(static_cast<std::int64_t>(number));
+    if (lowered == "f32") {
+      const float narrowed = static_cast<float>(number);
+      if (!std::isfinite(narrowed) || (number != 0 && narrowed == 0)) {
+        return absl::OutOfRangeError("A value is outside the f32 range.");
+      }
+      if (const auto original = IntegerParts(value); original.has_value()) {
+        const auto recovered =
+            CheckedInteger(Value::Double(narrowed), {128, original->second});
+        if (!recovered.ok() || IntegerParts(*recovered) != original) {
+          return absl::OutOfRangeError(
+              "An integer cannot be represented exactly as f32.");
+        }
+      }
+      return Value::TypedFloat(narrowed, 32);
+    }
+    if (const auto original = IntegerParts(value); original.has_value()) {
+      const auto recovered =
+          CheckedInteger(Value::Double(number), {128, original->second});
+      if (!recovered.ok() || IntegerParts(*recovered) != original) {
+        return absl::OutOfRangeError(
+            "An integer cannot be represented exactly as f64.");
+      }
+    }
+    return Value::TypedFloat(number, 64);
   }
   if (lowered == "bool" || lowered == "boolean") {
     return Value::Bool(Truthy(value));
   }
   if (lowered == "duration") {
+    if (value.IsTextlike()) {
+      if (!context.allow_temporal_text) {
+        return Invalid("Use std::parse_duration to read duration text.");
+      }
+      const auto parsed = ParseDuration(value.text());
+      return parsed.has_value()
+                 ? absl::StatusOr<Value>(Value::Duration(*parsed))
+                 : absl::StatusOr<Value>(
+                       Invalid("Cannot parse duration text."));
+    }
     return Value::Duration(AsDuration(value));
   }
   if (lowered == "time") {
+    if (value.IsTextlike()) {
+      if (!context.allow_temporal_text) {
+        return Invalid("Use std::parse_time to read time text.");
+      }
+      const auto parsed = ParseTime(value.text());
+      return parsed.has_value()
+                 ? absl::StatusOr<Value>(Value::Time(*parsed))
+                 : absl::StatusOr<Value>(Invalid("Cannot parse time text."));
+    }
     return Value::Time(AsTime(value));
   }
   if (lowered == "bytes") {
@@ -2232,41 +2854,298 @@ absl::StatusOr<Value> Coerce(const Value& value,
 
 namespace {
 
+absl::StatusOr<Value> ContextualNumber(const Value& value,
+                                       const syntax::Node& expression,
+                                       const Value& other) {
+  if (expression.kind != syntax::NodeKind::kLiteral || !value.IsNumber()) {
+    return value;
+  }
+  if (other.kind() == Value::Kind::kTypedInteger) {
+    return CheckedInteger(value,
+                          {other.numeric_bits(), other.numeric_signed()});
+  }
+  if (other.kind() == Value::Kind::kTypedFloat) {
+    syntax::TypeExpression type;
+    type.name = other.numeric_bits() == 32 ? "f32" : "f64";
+    return Coerce(value, type, {});
+  }
+  if (other.kind() == Value::Kind::kDouble &&
+      value.kind() == Value::Kind::kInteger) {
+    return Value::Double(static_cast<double>(value.integer()));
+  }
+  if (other.is_legacy_number() && value.kind() == Value::Kind::kInteger) {
+    return Value::LegacyNumber(value);
+  }
+  return value;
+}
+
 absl::StatusOr<Value> Arithmetic(std::string_view op, const Value& left,
                                  const Value& right) {
   if (left.IsTimelike() || right.IsTimelike()) {
+    const auto finite_duration = [](absl::Duration value) {
+      return value != absl::InfiniteDuration() &&
+             value != -absl::InfiniteDuration();
+    };
+    const auto finite_time = [](absl::Time value) {
+      return value != absl::InfiniteFuture() && value != absl::InfinitePast();
+    };
     const bool left_time = left.kind() == Value::Kind::kTime;
     const bool right_time = right.kind() == Value::Kind::kTime;
+    const bool left_duration = left.kind() == Value::Kind::kDuration;
+    const bool right_duration = right.kind() == Value::Kind::kDuration;
+    if (op == "*" && (left_duration != right_duration) &&
+        (left_duration ? right.IsNumber() : left.IsNumber())) {
+      const absl::Duration duration =
+          left_duration ? left.duration() : right.duration();
+      const Value& scalar = left_duration ? right : left;
+      if (const auto integer = IntegerParts(scalar); integer.has_value()) {
+        if (integer->first == 0) {
+          if (!finite_duration(duration)) {
+            return Invalid("An infinite duration times zero is undefined.");
+          }
+          return Value::Duration(absl::ZeroDuration());
+        }
+        absl::Duration scaled = absl::ZeroDuration();
+        absl::Duration part = integer->second ? -duration : duration;
+        if (finite_duration(duration) && !finite_duration(part)) {
+          return absl::OutOfRangeError("Duration multiplication overflow.");
+        }
+        absl::uint128 remaining = integer->first;
+        while (remaining != 0) {
+          if ((remaining & 1) != 0) {
+            const absl::Duration next = scaled + part;
+            if (finite_duration(scaled) && finite_duration(part) &&
+                !finite_duration(next)) {
+              return absl::OutOfRangeError("Duration multiplication overflow.");
+            }
+            scaled = next;
+          }
+          remaining >>= 1;
+          if (remaining != 0) {
+            const absl::Duration next = part + part;
+            if (finite_duration(part) && !finite_duration(next)) {
+              return absl::OutOfRangeError("Duration multiplication overflow.");
+            }
+            part = next;
+          }
+        }
+        return Value::Duration(scaled);
+      }
+      const double multiplier = scalar.number();
+      if (!std::isfinite(multiplier)) {
+        return Invalid("A duration multiplier must be finite.");
+      }
+      if (!finite_duration(duration) && multiplier == 0) {
+        return Invalid("An infinite duration times zero is undefined.");
+      }
+      const absl::Duration scaled = duration * multiplier;
+      if (finite_duration(duration) && !finite_duration(scaled)) {
+        return absl::OutOfRangeError("Duration multiplication overflow.");
+      }
+      if (duration != absl::ZeroDuration() && multiplier != 0 &&
+          scaled == absl::ZeroDuration()) {
+        return absl::OutOfRangeError("Duration multiplication underflow.");
+      }
+      return Value::Duration(scaled);
+    }
+    if (op != "+" && op != "-") {
+      return Invalid("Time and duration do not support this arithmetic.");
+    }
     if (left_time && right_time) {
       if (op == "-") {
-        return Value::Duration(left.time() - right.time());
+        if (left.time() == right.time() &&
+            (left.time() == absl::InfiniteFuture() ||
+             left.time() == absl::InfinitePast())) {
+          return Invalid("Subtracting equal infinite instants is undefined.");
+        }
+        const absl::Duration result = left.time() - right.time();
+        if (finite_time(left.time()) && finite_time(right.time()) &&
+            !finite_duration(result)) {
+          return absl::OutOfRangeError("Time subtraction overflow.");
+        }
+        return Value::Duration(result);
       }
       return Invalid("Two instants can be subtracted, but not added.");
     }
-    if (left_time) {
-      const absl::Duration other = AsDuration(right);
-      return Value::Time(op == "+" ? left.time() + other : left.time() - other);
+    if (left_time && right_duration) {
+      if ((left.time() == absl::InfiniteFuture() &&
+           right.duration() == (op == "+" ? -absl::InfiniteDuration()
+                                          : absl::InfiniteDuration())) ||
+          (left.time() == absl::InfinitePast() &&
+           right.duration() == (op == "+" ? absl::InfiniteDuration()
+                                          : -absl::InfiniteDuration()))) {
+        return Invalid("Opposing infinite time and duration are undefined.");
+      }
+      const absl::Time result = op == "+" ? left.time() + right.duration()
+                                          : left.time() - right.duration();
+      if (finite_time(left.time()) && finite_duration(right.duration()) &&
+          !finite_time(result)) {
+        return absl::OutOfRangeError("Time arithmetic overflow.");
+      }
+      return Value::Time(result);
     }
-    if (right_time) {
+    if (left_duration && right_time) {
       if (op == "+") {
-        return Value::Time(right.time() + AsDuration(left));
+        if ((right.time() == absl::InfiniteFuture() &&
+             left.duration() == -absl::InfiniteDuration()) ||
+            (right.time() == absl::InfinitePast() &&
+             left.duration() == absl::InfiniteDuration())) {
+          return Invalid("Opposing infinite time and duration are undefined.");
+        }
+        const absl::Time result = right.time() + left.duration();
+        if (finite_time(right.time()) && finite_duration(left.duration()) &&
+            !finite_time(result)) {
+          return absl::OutOfRangeError("Time arithmetic overflow.");
+        }
+        return Value::Time(result);
       }
       return Invalid("An instant cannot be subtracted from a duration.");
     }
-    const absl::Duration first = AsDuration(left);
-    const absl::Duration second = AsDuration(right);
-    return Value::Duration(op == "+" ? first + second : first - second);
+    if (left_duration && right_duration) {
+      if ((left.duration() == absl::InfiniteDuration() &&
+           right.duration() == (op == "+" ? -absl::InfiniteDuration()
+                                          : absl::InfiniteDuration())) ||
+          (left.duration() == -absl::InfiniteDuration() &&
+           right.duration() == (op == "+" ? absl::InfiniteDuration()
+                                          : -absl::InfiniteDuration()))) {
+        return Invalid("Opposing infinite durations are undefined.");
+      }
+      const absl::Duration result = op == "+"
+                                        ? left.duration() + right.duration()
+                                        : left.duration() - right.duration();
+      if (finite_duration(left.duration()) &&
+          finite_duration(right.duration()) && !finite_duration(result)) {
+        return absl::OutOfRangeError("Duration arithmetic overflow.");
+      }
+      return Value::Duration(result);
+    }
+    return Invalid("A duration cannot be mixed with a number.");
   }
-  const Value first = AsNumber(left);
-  const Value second = AsNumber(right);
-  if (first.kind() == Value::Kind::kInteger &&
-      second.kind() == Value::Kind::kInteger) {
-    return Value::Integer(op == "+" ? first.integer() + second.integer()
-                                    : first.integer() - second.integer());
+  const auto first = IntegerParts(left);
+  const auto second = IntegerParts(right);
+  if (first.has_value() && second.has_value()) {
+    if (left.is_legacy_number() != right.is_legacy_number()) {
+      return Invalid("Arithmetic needs compatible numeric types.");
+    }
+    const bool first_signed =
+        left.kind() == Value::Kind::kInteger || left.numeric_signed();
+    const bool second_signed =
+        right.kind() == Value::Kind::kInteger || right.numeric_signed();
+    if (first_signed != second_signed) {
+      return Invalid(
+          "Arithmetic needs matching signedness; convert explicitly.");
+    }
+    const IntegerSpec type{
+        std::max(
+            left.kind() == Value::Kind::kInteger ? 64 : left.numeric_bits(),
+            right.kind() == Value::Kind::kInteger ? 64 : right.numeric_bits()),
+        first_signed};
+    absl::uint128 magnitude = 0;
+    bool negative = false;
+    const bool subtract = op == "-";
+    if (op == "+" || subtract) {
+      const bool right_negative = second->second != subtract;
+      if (first->second == right_negative) {
+        negative = first->second;
+        const absl::uint128 maximum = Maximum(type, negative);
+        if (first->first > maximum || second->first > maximum - first->first) {
+          return absl::OutOfRangeError("Integer arithmetic overflow.");
+        }
+        magnitude = first->first + second->first;
+      } else if (first->first >= second->first) {
+        magnitude = first->first - second->first;
+        negative = first->second;
+      } else {
+        magnitude = second->first - first->first;
+        negative = right_negative;
+      }
+    } else if (op == "*") {
+      negative = first->second != second->second;
+      const absl::uint128 maximum = Maximum(type, negative);
+      if (second->first != 0 && first->first > maximum / second->first) {
+        return absl::OutOfRangeError("Integer arithmetic overflow.");
+      }
+      magnitude = first->first * second->first;
+    } else if (op == "/" || op == "%") {
+      if (second->first == 0) {
+        return Invalid("Division by zero.");
+      }
+      const absl::uint128 remainder = first->first % second->first;
+      if (op == "/" && remainder != 0) {
+        return Invalid("Integer division requires an exact quotient.");
+      }
+      magnitude = op == "/" ? first->first / second->first : remainder;
+      negative = op == "/" ? first->second != second->second : first->second;
+    } else {
+      return Invalid("Unknown arithmetic operator.");
+    }
+    if (magnitude == 0) {
+      negative = false;
+    }
+    if (negative && !type.is_signed) {
+      return absl::OutOfRangeError("Unsigned arithmetic underflow.");
+    }
+    if (magnitude > Maximum(type, negative)) {
+      return absl::OutOfRangeError("Integer arithmetic overflow.");
+    }
+    ABSL_ASSIGN_OR_RETURN(
+        Value result,
+        CheckedInteger(Value::String(IntegerText(magnitude, negative)), type));
+    return left.is_legacy_number() ? Value::LegacyNumber(std::move(result))
+                                   : result;
   }
-  const double one = AsDouble(first);
-  const double two = AsDouble(second);
-  return Value::Double(op == "+" ? one + two : one - two);
+  const bool left_float = left.kind() == Value::Kind::kDouble ||
+                          left.kind() == Value::Kind::kTypedFloat;
+  const bool right_float = right.kind() == Value::Kind::kDouble ||
+                           right.kind() == Value::Kind::kTypedFloat;
+  const bool legacy =
+      (left.kind() == Value::Kind::kDouble || left.is_legacy_number()) &&
+      (right.kind() == Value::Kind::kDouble || right.is_legacy_number());
+  const bool strict_float = left.kind() == Value::Kind::kTypedFloat &&
+                            right.kind() == Value::Kind::kTypedFloat;
+  if ((!legacy && !strict_float) || (!left_float && !left.is_legacy_number()) ||
+      (!right_float && !right.is_legacy_number())) {
+    return Invalid("Arithmetic needs compatible numeric types.");
+  }
+  const double one = AsDouble(left);
+  const double two = AsDouble(right);
+  if ((op == "/" || op == "%") && two == 0) {
+    return Invalid("Division by zero.");
+  }
+  if (op == "%") {
+    return Invalid("Remainder requires integers.");
+  }
+  double result;
+  if (op == "+") {
+    result = one + two;
+  } else if (op == "-") {
+    result = one - two;
+  } else if (op == "*") {
+    result = one * two;
+  } else if (op == "/") {
+    result = one / two;
+  } else {
+    return Invalid("Unknown arithmetic operator.");
+  }
+  if (!std::isfinite(result)) {
+    return absl::OutOfRangeError("Floating arithmetic overflow.");
+  }
+  if (strict_float && result == 0 && one != 0 && two != 0 &&
+      (op == "*" || op == "/")) {
+    return absl::OutOfRangeError("Floating arithmetic underflow.");
+  }
+  if (legacy) {
+    return Value::Double(result);
+  }
+  const int bits = std::max(left.numeric_bits(), right.numeric_bits());
+  if (bits == 32) {
+    const float narrowed = static_cast<float>(result);
+    if (!std::isfinite(narrowed) || (result != 0 && narrowed == 0)) {
+      return absl::OutOfRangeError("Floating arithmetic exceeds f32 range.");
+    }
+    return Value::TypedFloat(narrowed, 32);
+  }
+  return Value::TypedFloat(result, 64);
 }
 
 /// Where the two sit relative to one another: -1, 0 or 1.
@@ -2276,6 +3155,29 @@ absl::StatusOr<Value> Arithmetic(std::string_view op, const Value& left,
 /// difference between an instant and a length. Otherwise a number compares as a
 /// number and everything else as text, so a flow never dies on `"3" < 5`.
 int OrderImpl(const Value& left, const Value& right) {
+  if (left.kind() == Value::Kind::kTime && right.kind() == Value::Kind::kTime) {
+    return left.time() < right.time() ? -1 : left.time() > right.time() ? 1 : 0;
+  }
+  if (left.kind() == Value::Kind::kDuration &&
+      right.kind() == Value::Kind::kDuration) {
+    return left.duration() < right.duration()   ? -1
+           : left.duration() > right.duration() ? 1
+                                                : 0;
+  }
+  if (const auto one = IntegerParts(left), two = IntegerParts(right);
+      one.has_value() && two.has_value()) {
+    return CompareIntegerParts(*one, *two);
+  }
+  if (const auto one = IntegerParts(left);
+      one.has_value() && (right.kind() == Value::Kind::kDouble ||
+                          right.kind() == Value::Kind::kTypedFloat)) {
+    return CompareIntegerFloat(*one, right.number());
+  }
+  if (const auto two = IntegerParts(right);
+      two.has_value() && (left.kind() == Value::Kind::kDouble ||
+                          left.kind() == Value::Kind::kTypedFloat)) {
+    return -CompareIntegerFloat(*two, left.number());
+  }
   if (left.IsTimelike() && right.IsTimelike()) {
     const double one = AsDouble(left);
     const double two = AsDouble(right);
@@ -2427,9 +3329,8 @@ absl::StatusOr<Value> Evaluate(const syntax::Node& node,
         type.name = "option";
         ABSL_ASSIGN_OR_RETURN(base, Coerce(base, type, context.Coercion()));
       }
-      if (index.optional &&
-          (base.IsNull() ||
-           (base.is_option() && base.Get("value") == nullptr))) {
+      if (index.optional && (base.IsNull() || (base.is_option() &&
+                                               base.Get("value") == nullptr))) {
         return Value::Option(std::nullopt);
       }
       ABSL_ASSIGN_OR_RETURN(Value key, Evaluate(*index.index, context));
@@ -2462,7 +3363,42 @@ absl::StatusOr<Value> Evaluate(const syntax::Node& node,
     case syntax::NodeKind::kUnary: {
       const auto& unary = static_cast<const syntax::Unary&>(node);
       ABSL_ASSIGN_OR_RETURN(Value value, Evaluate(*unary.operand, context));
-      return Value::Bool(!Truthy(value));
+      if (unary.op == "not") {
+        return Value::Bool(!Truthy(value));
+      }
+      if (!value.IsNumber() && value.kind() != Value::Kind::kDuration) {
+        return Invalid("Unary arithmetic requires a number or duration.");
+      }
+      if (unary.op == "+") {
+        return value;
+      }
+      if (unary.op == "-") {
+        if (value.kind() == Value::Kind::kDuration) {
+          const absl::Duration result = -value.duration();
+          if (value.duration() != absl::InfiniteDuration() &&
+              value.duration() != -absl::InfiniteDuration() &&
+              (result == absl::InfiniteDuration() ||
+               result == -absl::InfiniteDuration())) {
+            return absl::OutOfRangeError("Duration negation overflow.");
+          }
+          return Value::Duration(result);
+        }
+        if (value.kind() == Value::Kind::kTypedInteger) {
+          return Arithmetic("-",
+                            Value::TypedInteger(0, false, value.numeric_bits(),
+                                                value.numeric_signed()),
+                            value);
+        }
+        if (value.kind() == Value::Kind::kTypedFloat) {
+          return Value::TypedFloat(-value.number(), value.numeric_bits());
+        }
+        return Arithmetic("-",
+                          value.kind() == Value::Kind::kInteger
+                              ? Value::Integer(0)
+                              : Value::Double(0),
+                          value);
+      }
+      return Invalid("Unknown unary operator.");
     }
     case syntax::NodeKind::kBinary: {
       const auto& binary = static_cast<const syntax::Binary&>(node);
@@ -2499,7 +3435,12 @@ absl::StatusOr<Value> Evaluate(const syntax::Node& node,
       if (binary.op == "in") {
         return Value::Bool(Contains(right, left));
       }
-      if (binary.op == "+" || binary.op == "-") {
+      if (binary.op == "+" || binary.op == "-" || binary.op == "*" ||
+          binary.op == "/" || binary.op == "%") {
+        ABSL_ASSIGN_OR_RETURN(left,
+                              ContextualNumber(left, *binary.left, right));
+        ABSL_ASSIGN_OR_RETURN(right,
+                              ContextualNumber(right, *binary.right, left));
         return Arithmetic(binary.op, left, right);
       }
       const int order = OrderImpl(left, right);
@@ -2564,13 +3505,12 @@ std::optional<absl::StatusCode> StatusCodeOf(const Value& value) {
   if (value.kind() == Value::Kind::kBool) {
     return std::nullopt;
   }
-  if (value.kind() == Value::Kind::kInteger) {
-    const std::int64_t number = value.integer();
-    if (number < 0 ||
-        number >= static_cast<std::int64_t>(vocabulary::StatusCodes().size())) {
+  if (const auto number = ExactInt64(value); number.has_value()) {
+    if (*number < 0 || *number >= static_cast<std::int64_t>(
+                                      vocabulary::StatusCodes().size())) {
       return std::nullopt;
     }
-    return static_cast<absl::StatusCode>(number);
+    return static_cast<absl::StatusCode>(*number);
   }
   if (value.kind() == Value::Kind::kString) {
     std::string wanted = Canonical(absl::StripAsciiWhitespace(value.text()));

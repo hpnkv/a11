@@ -181,10 +181,12 @@ contexts:
       scope: storage.type.tag.a11flow
     - match: |-
         (?x) \b (
-          string|text|number|integer|int|bool|boolean|duration|time
-          |object|json|list|array|bytes|any|status|null|option|stream
-          |STRING|TEXT|NUMBER|INTEGER|INT|BOOL|BOOLEAN|DURATION|TIME
-          |OBJECT|JSON|LIST|ARRAY|BYTES|ANY|STATUS|NULL|OPTION|STREAM
+          string|text|number|integer|int|bool|i8|i16|i32|i64|i128|u8
+          |u16|u32|u64|u128|f32|f64|boolean|duration|time|object|json
+          |list|array|bytes|any|status|null|option|stream|STRING|TEXT
+          |NUMBER|INTEGER|INT|BOOL|I8|I16|I32|I64|I128|U8|U16|U32|U64
+          |U128|F32|F64|BOOLEAN|DURATION|TIME|OBJECT|JSON|LIST|ARRAY
+          |BYTES|ANY|STATUS|NULL|OPTION|STREAM
         ) {{kw_boundary}}
       scope: storage.type.a11flow
 
@@ -311,14 +313,15 @@ contexts:
             (?x) \b (
               read_with|ref|(?:take|TAKE)\s+(?:while|WHILE)
               |(?:take|TAKE)\s+(?:until|UNTIL)|first|last|drop
-              |truncate|batch|window|context|flatten|present|group
+              |truncate|batch|window|context|as|flatten|present|group
               |sort|where|map|scan|match|distinct|then|log|logf|mime
               |strformat|chunk|collect|consume|count|sum|min|max|avg
               |fold|join|text|json|packb|timeout|pace|READ_WITH|REF
-              |FIRST|LAST|DROP|TRUNCATE|BATCH|WINDOW|CONTEXT|FLATTEN
-              |PRESENT|GROUP|SORT|WHERE|MAP|SCAN|MATCH|DISTINCT|THEN
-              |LOG|LOGF|MIME|STRFORMAT|CHUNK|COLLECT|CONSUME|COUNT|SUM
-              |MIN|MAX|AVG|FOLD|JOIN|TEXT|JSON|PACKB|TIMEOUT|PACE
+              |FIRST|LAST|DROP|TRUNCATE|BATCH|WINDOW|CONTEXT|AS
+              |FLATTEN|PRESENT|GROUP|SORT|WHERE|MAP|SCAN|MATCH
+              |DISTINCT|THEN|LOG|LOGF|MIME|STRFORMAT|CHUNK|COLLECT
+              |CONSUME|COUNT|SUM|MIN|MAX|AVG|FOLD|JOIN|TEXT|JSON|PACKB
+              |TIMEOUT|PACE
             ) {{kw_boundary}}
           scope: support.function.stage.a11flow
           pop: true
@@ -390,19 +393,26 @@ contexts:
   builtins:
     - match: |-
         (?x) \b (
-          len|lower|upper|trim|text|number|bool|keys|values|join|split
-          |merge|contains|startswith|endswith|replace|match|slice
-          |to_chunk|from_chunk|strformat|b64encode|b64decode
+          len|lower|upper|trim|text|number|i8|i16|i32|i64|i128|u8|u16
+          |u32|u64|u128|f32|f64|floor|ceil|round|bool|keys|values|join
+          |split|merge|contains|startswith|endswith|replace|match
+          |slice|to_chunk|from_chunk|strformat|b64encode|b64decode
           |b64urlencode|b64urldecode|utf8encode|utf8decode|now
-          |duration|time|seconds|parse_time|parse_duration|integer|int
-          |string|bytes|object|list|boolean|array|any|json|option
-          |status|null|LEN|LOWER|UPPER|TRIM|TEXT|NUMBER|BOOL|KEYS
-          |VALUES|JOIN|SPLIT|MERGE|CONTAINS|STARTSWITH|ENDSWITH
-          |REPLACE|MATCH|SLICE|TO_CHUNK|FROM_CHUNK|STRFORMAT|B64ENCODE
-          |B64DECODE|B64URLENCODE|B64URLDECODE|UTF8ENCODE|UTF8DECODE
-          |NOW|DURATION|TIME|SECONDS|PARSE_TIME|PARSE_DURATION|INTEGER
-          |INT|STRING|BYTES|OBJECT|LIST|BOOLEAN|ARRAY|ANY|JSON|OPTION
-          |STATUS|NULL
+          |infinite_future|infnite_future|infinite_past
+          |infinite_duration|zero_duration|duration|time|seconds
+          |nanoseconds|microseconds|milliseconds|minutes|hours
+          |parse_time|parse_duration|integer|int|string|bytes|object
+          |list|boolean|array|any|json|option|status|null|LEN|LOWER
+          |UPPER|TRIM|TEXT|NUMBER|I8|I16|I32|I64|I128|U8|U16|U32|U64
+          |U128|F32|F64|FLOOR|CEIL|ROUND|BOOL|KEYS|VALUES|JOIN|SPLIT
+          |MERGE|CONTAINS|STARTSWITH|ENDSWITH|REPLACE|MATCH|SLICE
+          |TO_CHUNK|FROM_CHUNK|STRFORMAT|B64ENCODE|B64DECODE
+          |B64URLENCODE|B64URLDECODE|UTF8ENCODE|UTF8DECODE|NOW
+          |INFINITE_FUTURE|INFNITE_FUTURE|INFINITE_PAST
+          |INFINITE_DURATION|ZERO_DURATION|DURATION|TIME|SECONDS
+          |NANOSECONDS|MICROSECONDS|MILLISECONDS|MINUTES|HOURS
+          |PARSE_TIME|PARSE_DURATION|INTEGER|INT|STRING|BYTES|OBJECT
+          |LIST|BOOLEAN|ARRAY|ANY|JSON|OPTION|STATUS|NULL
         ) {{kw_boundary}} (?=\s*\()
       scope: support.function.builtin.a11flow
 
@@ -434,9 +444,9 @@ contexts:
       scope: constant.language.a11flow
     # A number with a duration unit: 500ns, 250ms, 30s, 5m, 1h. Longest first,
     # so `250ms` is milliseconds rather than a number of metres.
-    - match: '\b-?[0-9]+(?:\.[0-9]+)?(ns|us|ms|s|m|h){{kw_boundary}}'
+    - match: '\b-?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?(ns|us|ms|s|m|h){{kw_boundary}}'
       scope: constant.numeric.duration.a11flow
-    - match: '\b-?[0-9]+(?:\.[0-9]+)?\b'
+    - match: '\b-?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?\b'
       scope: constant.numeric.a11flow
 
   strings:

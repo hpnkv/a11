@@ -29,6 +29,7 @@
 
 #include <absl/base/nullability.h>
 #include <absl/container/flat_hash_map.h>
+#include <absl/numeric/int128.h>
 #include <absl/status/status.h>
 #include <absl/status/statusor.h>
 #include <absl/time/time.h>
@@ -147,6 +148,8 @@ class Value {
     kBool,
     kInteger,
     kDouble,
+    kTypedInteger,
+    kTypedFloat,
     kString,
     kBytes,
     kList,
@@ -173,6 +176,10 @@ class Value {
   static Value Bool(bool value);
   static Value Integer(std::int64_t value);
   static Value Double(double value);
+  static Value TypedInteger(absl::uint128 magnitude, bool negative, int bits,
+                            bool is_signed);
+  static Value TypedFloat(double value, int bits);
+  static Value LegacyNumber(Value value);
   static Value String(std::string value);
   static Value Bytes(data::Bytes value);
   static Value List(std::vector<Value> items);
@@ -194,7 +201,8 @@ class Value {
   [[nodiscard]] bool IsNull() const { return kind_ == Kind::kNull; }
 
   [[nodiscard]] bool IsNumber() const {
-    return kind_ == Kind::kInteger || kind_ == Kind::kDouble;
+    return kind_ == Kind::kInteger || kind_ == Kind::kDouble ||
+           kind_ == Kind::kTypedInteger || kind_ == Kind::kTypedFloat;
   }
 
   [[nodiscard]] bool IsTimelike() const {
@@ -212,6 +220,18 @@ class Value {
   [[nodiscard]] std::int64_t integer() const { return integer_; }
 
   [[nodiscard]] double number() const { return number_; }
+
+  [[nodiscard]] absl::uint128 magnitude() const { return magnitude_; }
+
+  [[nodiscard]] bool negative() const { return negative_; }
+
+  [[nodiscard]] bool numeric_signed() const { return numeric_signed_; }
+
+  [[nodiscard]] int numeric_bits() const { return numeric_bits_; }
+
+  [[nodiscard]] bool is_legacy_number() const {
+    return kind_ == Kind::kDouble || legacy_number_;
+  }
 
   [[nodiscard]] const std::string& text() const { return *text_; }
 
@@ -247,6 +267,11 @@ class Value {
   bool option_ = false;
   std::int64_t integer_ = 0;
   double number_ = 0.0;
+  absl::uint128 magnitude_ = 0;
+  bool negative_ = false;
+  bool numeric_signed_ = true;
+  bool legacy_number_ = false;
+  std::uint8_t numeric_bits_ = 0;
   absl::Duration duration_;
   absl::Time time_;
   std::shared_ptr<const std::string> text_;
@@ -389,6 +414,7 @@ std::string AsText(const Value& value);
 ///
 /// Integral where the value was integral, so `%d` of a count is the count.
 Value AsNumber(const Value& value);
+std::optional<std::int64_t> ExactInt64(const Value& value);
 
 /// The fields a pattern pulls out of `subject`, or null where it does not fit.
 ///
@@ -475,6 +501,7 @@ std::string Strformat(const Value& format, absl::Span<const Value> arguments);
 struct CoerceContext {
   HostBridge* absl_nullable bridge = nullptr;
   const Program* absl_nullable shapes = nullptr;
+  bool allow_temporal_text = false;
 };
 
 /// What an expression is evaluated against.

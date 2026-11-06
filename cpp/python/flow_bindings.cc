@@ -433,7 +433,23 @@ flow::Value ValueFromPython(const py::handle& value) {
     return flow::Value::Bool(value.cast<bool>());
   }
   if (py::isinstance<py::int_>(value)) {
-    return flow::Value::Integer(value.cast<std::int64_t>());
+    int overflow = 0;
+    const long long integer =
+        PyLong_AsLongLongAndOverflow(value.ptr(), &overflow);
+    if (PyErr_Occurred()) {
+      throw py::error_already_set();
+    }
+    if (overflow == 0) {
+      return flow::Value::Integer(static_cast<std::int64_t>(integer));
+    }
+    flow::syntax::TypeExpression type;
+    type.name = overflow < 0 ? "i128" : "u128";
+    auto parsed = flow::Coerce(
+        flow::Value::String(py::str(value).cast<std::string>()), type, {});
+    if (!parsed.ok()) {
+      throw py::value_error(std::string(parsed.status().message()));
+    }
+    return *std::move(parsed);
   }
   if (py::isinstance<py::float_>(value)) {
     return flow::Value::Double(value.cast<double>());
@@ -487,7 +503,10 @@ py::object ValueToPython(const flow::Value& value) {
       return py::bool_(value.boolean());
     case flow::Value::Kind::kInteger:
       return py::int_(value.integer());
+    case flow::Value::Kind::kTypedInteger:
+      return py::module_::import("builtins").attr("int")(flow::AsText(value));
     case flow::Value::Kind::kDouble:
+    case flow::Value::Kind::kTypedFloat:
       return py::float_(value.number());
     case flow::Value::Kind::kString:
       return py::str(value.text());

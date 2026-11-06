@@ -105,6 +105,8 @@ std::string_view StageTail(vocabulary::StageArgument argument) {
       return " duration";
     case vocabulary::StageArgument::kStream:
       return " source";
+    case vocabulary::StageArgument::kType:
+      return " type";
     case vocabulary::StageArgument::kLog:
       return " [level] [expr]";
     case vocabulary::StageArgument::kLogFormat:
@@ -827,8 +829,7 @@ class Completer {
       AddStages();
       return;
     }
-    if (PreviousIs(TokenKind::kDot) ||
-        PreviousIs(TokenKind::kQuestionDot)) {
+    if (PreviousIs(TokenKind::kDot) || PreviousIs(TokenKind::kQuestionDot)) {
       ProposeMembers();
       return;
     }
@@ -1563,8 +1564,7 @@ class Completer {
     };
     const auto has_source = [&](std::string_view name) {
       const std::string word = vocabulary::Canonical(name);
-      if (word == "true" || word == "false" || word == "null" ||
-          word == "_") {
+      if (word == "true" || word == "false" || word == "null" || word == "_") {
         return false;
       }
       if (flow_ == nullptr) {

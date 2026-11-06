@@ -145,10 +145,14 @@ TEST(FlowShape, SaysWhichFieldWasWrongAndWhy) {
           .find("twice"),
       std::string::npos);
 
-  // A duration bound compares by its length, however the value arrived.
+  EXPECT_NE(fails({{"id", Value::String("a")},
+                   {"url", Value::String("https://x")},
+                   {"ttl", Value::String("30s")}})
+                .find("parse_duration"),
+            std::string::npos);
   EXPECT_TRUE(fails({{"id", Value::String("a")},
                      {"url", Value::String("https://x")},
-                     {"ttl", Value::String("30s")}})
+                     {"ttl", Value::Duration(absl::Seconds(30))}})
                   .empty());
   EXPECT_NE(fails({{"id", Value::String("a")},
                    {"url", Value::String("https://x")},

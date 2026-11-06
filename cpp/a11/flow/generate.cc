@@ -653,9 +653,9 @@ contexts:
       scope: constant.language.a11flow
     # A number with a duration unit: 500ns, 250ms, 30s, 5m, 1h. Longest first,
     # so `250ms` is milliseconds rather than a number of metres.
-    - match: '\b-?[0-9]+(?:\.[0-9]+)?(@DURATION_UNITS@){{kw_boundary}}'
+    - match: '\b-?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?(@DURATION_UNITS@){{kw_boundary}}'
       scope: constant.numeric.duration.a11flow
-    - match: '\b-?[0-9]+(?:\.[0-9]+)?\b'
+    - match: '\b-?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?\b'
       scope: constant.numeric.a11flow
 
   strings:
@@ -1173,8 +1173,8 @@ class A11FlowLexer(RegexLexer):
         ],
         "literal": [
             (_group(CONSTANTS), Keyword.Constant),
-            (r"-?\d+(?:\.\d+)?(?:" + DURATION_UNITS + r")" + BOUNDARY, Number),
-            (r"-?\d+(?:\.\d+)?", Number),
+            (r"-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?(?:" + DURATION_UNITS + r")" + BOUNDARY, Number),
+            (r"-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?", Number),
         ],
         "operator": [
             (r"->|<-", Operator),
@@ -1324,11 +1324,11 @@ constexpr std::string_view kVsCodeTemplate = R"JSON({
     "duration": {
       "//": "Longest unit first: a pattern offering `m` before `ms` reads `250ms` as metres.",
       "name": "constant.numeric.duration.a11flow",
-      "match": "\\b[0-9]+(?:\\.[0-9]+)?(?:@DURATION_UNITS@)\\b"
+      "match": "\\b[0-9]+(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?(?:@DURATION_UNITS@)\\b"
     },
     "number": {
       "name": "constant.numeric.a11flow",
-      "match": "\\b[0-9]+(?:\\.[0-9]+)?\\b"
+      "match": "\\b[0-9]+(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?\\b"
     },
     "declaration-name": {
       "//": "The name a `flow` or a `struct` declaration gives, which is what a caller dispatches.",

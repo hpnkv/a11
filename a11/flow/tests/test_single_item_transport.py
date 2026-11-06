@@ -24,6 +24,19 @@ from a11.status import StatusException
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("type_name", "value"),
+    [("i128", -(1 << 100)), ("u128", 1 << 100)],
+)
+async def test_wide_integer_ports_preserve_python_integers(type_name, value):
+    program = flow.loads(
+        f"flow main {{ in value: {type_name} required\n"
+        f"out result: {type_name}\n value -> result }}"
+    )
+    assert await program.main.invoke(value=value) == {"result": value}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("enabled", [False, True])
 async def test_slots_preserve_null_eof_fanout_and_replay(enabled):
     source = """
@@ -45,10 +58,7 @@ flow main {
     program = flow.loads(source, single_item_slots=enabled)
     actual = await program.main.invoke(registry=ActionRegistry())
     assert actual == {
-        "result": {
-            "first": {"has_value": True, "value": None},
-            "second": {"has_value": False},
-        },
+        "result": {"first": None},
         "replay": ["one"] * 3,
     }
 

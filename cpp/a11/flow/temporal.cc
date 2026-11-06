@@ -40,6 +40,13 @@ std::optional<absl::Duration> ParseDuration(std::string_view text) {
   if (lowered == "forever" || lowered == "infinite" || lowered == "inf") {
     return absl::InfiniteDuration();
   }
+  if (lowered == "-forever" || lowered == "-infinite" || lowered == "-inf") {
+    return -absl::InfiniteDuration();
+  }
+  absl::Duration exact;
+  if (absl::ParseDuration(trimmed, &exact)) {
+    return exact;
+  }
   double total = 0.0;
   double sign = 1.0;
   size_t at = 0;
@@ -108,6 +115,12 @@ std::optional<absl::Time> ParseTime(std::string_view text) {
   const std::string_view trimmed = absl::StripAsciiWhitespace(text);
   if (trimmed.empty()) {
     return std::nullopt;
+  }
+  if (trimmed == "infinite-future") {
+    return absl::InfiniteFuture();
+  }
+  if (trimmed == "infinite-past") {
+    return absl::InfinitePast();
   }
   // The spellings RFC 3339 allows and `TimeText` writes, and the one a
   // timestamp with no zone arrives as: that one is UTC here, which is the zone

@@ -296,12 +296,35 @@ Modules cannot be created inside flows or structs. std is reserved.
 ?. and ?[] project optional fields and indexed items.
 Host type source a11::sdk::Interaction retains wire tag a11.sdk.Interaction.
 
-Primitive prelude: int/integer, bool, number, string, bytes, object, null;
+Primitive prelude: int/integer (strict i64), i8/i16/i32/i64/i128,
+u8/u16/u32/u64/u128, f32/f64, bool, permissive number, string, bytes,
+object, null;
 literals true, false, null. Exposed types expose their conversions too.
 Other standard types: std::status, std::time, std::duration, std::list[T],
 std::option[T], std::stream[T]. object[V] has string keys and one value type;
 bare object is heterogeneous. Typed initialization uses existing coercions and
 checks the target invariant. Initializers may not be omitted.
+Strict integer conversions require a whole value in range; signed and unsigned
+arithmetic checks overflow. Strict floats are finite and f32 rounds explicitly.
+Floating literals accept scientific notation such as 1e3 and 2.5E-2.
+Use decimal text with i128/u128 constructors for values beyond literal i64 range.
+Compatible numeric families support +, -, *, / and integer %. Integer division
+requires an exact quotient. std::floor, std::ceil and std::round preserve
+numeric width; std::round sends halfway values away from zero.
+Time +/- duration and duration +/- duration work;
+durations support unary minus. std::infinite_future(),
+std::infinite_past(), std::infinite_duration(), and std::zero_duration()
+construct temporal boundary values.
+Durations multiply by numeric scalars in either order. Overflow, underflow,
+and an infinite duration multiplied by zero fail.
+std::nanoseconds(x), std::microseconds(x), std::milliseconds(x),
+std::seconds(x), std::minutes(x), and std::hours(x) construct durations from
+numbers. Given a duration, each returns its integral count in that unit,
+truncated toward zero. Use std::parse_time(text) and
+std::parse_duration(text) to parse temporal text explicitly; direct temporal
+casts reject text. Declared temporal ports can decode their wire text values.
+Conversion, arithmetic, and duration-construction failures propagate as Flow
+statuses; `try` stages and blocks can handle them.
 
 File imports require explicitly approved source_roots; none means filesystem
 imports are disallowed. Explicit in-memory modules remain available. Parsing

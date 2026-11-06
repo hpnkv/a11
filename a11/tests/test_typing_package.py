@@ -98,8 +98,8 @@ def test_the_flow_stub_names_what_it_hands_back() -> None:
         "def stages() -> dict[str, str]:",
         (
             "def make_handler( self, dispatch_stream: WireStream | None = None"
-            ", *, frame_cache_bytes: typing.SupportsInt = 262144,"
-            " frame_budget_bytes: typing.SupportsInt | None = None,"
+            ", *, frame_cache_bytes: typing.SupportsInt | typing.SupportsIndex = 262144,"
+            " frame_budget_bytes: ( typing.SupportsInt | typing.SupportsIndex | None ) = None,"
             " ) -> ActionHandler | NativeActionHandler | None:"
         ),
         "def schema(self) -> ActionSchema:",

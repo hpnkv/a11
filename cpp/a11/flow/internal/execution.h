@@ -99,7 +99,8 @@ class Scope {
   absl::StatusOr<NodePtr> MakeLocalNode(RefId ref);
 
   /// Read a node as items, each keeping the producer's own chunk.
-  absl::Status ReadNode(const NodePtr& node, const Sink& sink);
+  absl::Status ReadNode(const NodePtr& node, const Sink& sink,
+                        std::string_view port_type = {});
   absl::Status ReadConfiguredNode(
       const std::shared_ptr<stores::ChunkStoreReader>& reader, const Sink& sink,
       bool fragments);

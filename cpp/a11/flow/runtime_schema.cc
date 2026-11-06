@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <nlohmann/json.hpp>
+
 #include "a11/flow/internal/runtime_common.h"
 
 namespace a11::flow {
@@ -24,6 +26,16 @@ namespace {
 /// Python names so generated Flow schemas match hand-written action schemas.
 /// Tags and mimetypes are preserved as written.
 std::string SchemaType(std::string_view declared) {
+  if (declared == "f32" || declared == "f64") {
+    return "float";
+  }
+  if (declared.size() > 1 &&
+      (declared.front() == 'i' || declared.front() == 'u') &&
+      (declared.substr(1) == "8" || declared.substr(1) == "16" ||
+       declared.substr(1) == "32" || declared.substr(1) == "64" ||
+       declared.substr(1) == "128")) {
+    return "int";
+  }
   static const auto* const kNames =
       new absl::flat_hash_map<std::string_view, std::string_view>{
           {"string", "str"},
@@ -62,6 +74,13 @@ absl::StatusOr<actions::ActionSchema> FlowSchema(const FlowPlan& plan,
     entry.description = port.description;
     entry.required = port.required;
     entry.unary = port.unary;
+    if (port.type != "int" && port.type != "integer" && port.type != "number" &&
+        (entry.type == "int" || entry.type == "float")) {
+      entry.json_schema = nlohmann::json{
+          {"type", entry.type == "int" ? "integer" : "number"},
+          {"x-a11-type",
+           port.type}}.dump();
+    }
     if (shapes != nullptr) {
       if (const auto* shape = shapes->Dto(port.type); shape != nullptr) {
         entry.json_schema = DtoToJsonSchema(*shape, *shapes).dump();

@@ -2642,6 +2642,9 @@ class ParserImpl {
         // one, so its argument is whatever a pipeline may start with.
         stage->argument = ParsePostfix();
         break;
+      case vocabulary::StageArgument::kType:
+        stage->type = ParseType();
+        break;
       case vocabulary::StageArgument::kOptionalExpression:
         // `| sum` is the values themselves and `| sum it.price` one field of
         // each.
@@ -2942,14 +2945,9 @@ class ParserImpl {
     return left;
   }
 
-  /// `a + b` and `a - b`: numbers, and times.
-  ///
-  /// The only arithmetic the language has, and it is here for durations -- "how
-  /// long did that take", "is this older than the deadline" -- which a
-  /// composition cannot express any other way. `-` needs its spaces: `a-b` is
-  /// one name, because an action is called `text-upper`.
+  /// Additive arithmetic. `a-b` remains one name; subtraction needs spaces.
   NodePtr ParseAdditive() {
-    NodePtr left = ParseCast();
+    NodePtr left = ParseMultiplicative();
     while (ContinueToken(TokenKind::kPlus) ||
            ContinueToken(TokenKind::kMinus)) {
       const Token& op = Advance();
@@ -2957,10 +2955,38 @@ class ParserImpl {
       binary->op = std::string(KindName(op.kind));
       binary->left = std::move(left);
       SkipNewlines();
-      binary->right = ParseCast();
+      binary->right = ParseMultiplicative();
       left = Bounded(std::move(binary));
     }
     return left;
+  }
+
+  NodePtr ParseMultiplicative() {
+    NodePtr left = ParseNumericUnary();
+    while (ContinueToken(TokenKind::kStar) ||
+           ContinueToken(TokenKind::kSlash) ||
+           ContinueToken(TokenKind::kPercent)) {
+      const Token& op = Advance();
+      auto binary = Make<syntax::Binary>(op);
+      binary->op = std::string(KindName(op.kind));
+      binary->left = std::move(left);
+      SkipNewlines();
+      binary->right = ParseNumericUnary();
+      left = Bounded(std::move(binary));
+    }
+    return left;
+  }
+
+  NodePtr ParseNumericUnary() {
+    if (ContinueToken(TokenKind::kPlus) || ContinueToken(TokenKind::kMinus)) {
+      const Token& op = Advance();
+      auto unary = Make<syntax::Unary>(op);
+      unary->op = std::string(KindName(op.kind));
+      SkipNewlines();
+      unary->operand = ParseNumericUnary();
+      return Bounded(std::move(unary));
+    }
+    return ParseCast();
   }
 
   /// `expr as TYPE` -- the value, made a value of that type.

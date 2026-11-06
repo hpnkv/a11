@@ -286,17 +286,21 @@ TEST(FlowValues, ArithmeticIsThereForTimes) {
   EXPECT_EQ(TextOf("1.5 + 1"), "2.5");
   EXPECT_EQ(TextOf("30s + 30s"), "1m");
   EXPECT_EQ(TextOf("1m - 30s"), "30s");
-  // A bare number beside a duration counts as seconds.
-  EXPECT_EQ(TextOf("30s + 30"), "1m");
-  EXPECT_EQ(TextOf(R"(time("2026-08-05T21:54:22Z") + 60s)"),
+  EXPECT_EQ(TextOf("-30s + 1m"), "30s");
+  EXPECT_FALSE(EvaluatedIn("30s + 30").ok());
+  EXPECT_EQ(TextOf(R"(parse_time("2026-08-05T21:54:22Z") + 60s)"),
             "2026-08-05T21:55:22Z");
-  EXPECT_EQ(TextOf(R"(time("2026-08-05T21:55:22Z") - )"
-                   R"(time("2026-08-05T21:54:22Z"))"),
+  EXPECT_EQ(TextOf(R"(60s + parse_time("2026-08-05T21:54:22Z"))"),
+            "2026-08-05T21:55:22Z");
+  EXPECT_EQ(TextOf(R"(parse_time("2026-08-05T21:55:22Z") - 60s)"),
+            "2026-08-05T21:54:22Z");
+  EXPECT_EQ(TextOf(R"(parse_time("2026-08-05T21:55:22Z") - )"
+                   R"(parse_time("2026-08-05T21:54:22Z"))"),
             "1m");
   // The one combination that means nothing says so rather than inventing an
   // answer.
-  EXPECT_FALSE(EvaluatedIn(R"(time("2026-08-05T21:54:22Z") + )"
-                           R"(time("2026-08-05T21:54:22Z"))")
+  EXPECT_FALSE(EvaluatedIn(R"(parse_time("2026-08-05T21:54:22Z") + )"
+                           R"(parse_time("2026-08-05T21:54:22Z"))")
                    .ok());
 }
 
@@ -316,7 +320,7 @@ TEST(FlowValues, CallsTheFixedFunctionSet) {
   EXPECT_EQ(TextOf(R"(replace("a-b-c", "-", "+"))"), "a+b+c");
   EXPECT_EQ(TextOf(R"(slice("abcdef", 1, 3))"), "bc");
   EXPECT_EQ(TextOf(R"(slice("abcdef", -2))"), "ef");
-  EXPECT_EQ(TextOf(R"(seconds(duration("1m30s")))"), "90.0");
+  EXPECT_EQ(TextOf(R"(seconds(parse_duration("1m30s")))"), "90");
   EXPECT_EQ(TextOf(R"(strformat("%s!", "hi"))"), "hi!");
   EXPECT_FALSE(EvaluatedIn(R"(nonesuch("x"))").ok());
   const std::vector<Value> removed = {Value::Null(), Value::Integer(1)};
@@ -449,6 +453,111 @@ TEST(FlowValues, CoercesToTheBuiltInTypes) {
             std::string::npos);
 }
 
+TEST(FlowValues, CheckedNumericConversions) {
+  EXPECT_EQ(TextOf("i8(127)"), "127");
+  EXPECT_EQ(TextOf("u8(255)"), "255");
+  EXPECT_EQ(TextOf("i32(3.0)"), "3");
+  EXPECT_EQ(TextOf(R"(i32("42"))"), "42");
+  EXPECT_FALSE(EvaluatedIn("i8(128)").ok());
+  EXPECT_FALSE(EvaluatedIn("u8(-1)").ok());
+  EXPECT_FALSE(EvaluatedIn("i32(3.5)").ok());
+  EXPECT_FALSE(EvaluatedIn("i32(true)").ok());
+  EXPECT_FALSE(EvaluatedIn(R"(i32("bad"))").ok());
+  EXPECT_FALSE(EvaluatedIn(R"(f64("1e-9999"))").ok());
+  EXPECT_EQ(TextOf(R"(u128("340282366920938463463374607431768211455"))"),
+            "340282366920938463463374607431768211455");
+  EXPECT_FALSE(
+      EvaluatedIn(R"(u128("340282366920938463463374607431768211456"))").ok());
+}
+
+TEST(FlowValues, CheckedArithmetic) {
+  EXPECT_EQ(TextOf("1.5 + 2.5"), "4.0");
+  EXPECT_EQ(TextOf("i8(6) * i8(7)"), "42");
+  EXPECT_EQ(TextOf("i8(12) / i8(3)"), "4");
+  EXPECT_EQ(TextOf("i8(13) % i8(5)"), "3");
+  EXPECT_EQ(TextOf("i8(2) + 3"), "5");
+  EXPECT_EQ(TextOf("i8(2) + i16(3)"), "5");
+  EXPECT_FALSE(EvaluatedIn("i8(127) + i8(1)").ok());
+  EXPECT_FALSE(EvaluatedIn("i8(5) / i8(2)").ok());
+  EXPECT_FALSE(EvaluatedIn("i8(5) / i8(0)").ok());
+  EXPECT_FALSE(EvaluatedIn("f64(1e-300) * f64(1e-300)").ok());
+  EXPECT_FALSE(EvaluatedIn("u8(0) - u8(1)").ok());
+  EXPECT_FALSE(EvaluatedIn("i8(1) + u8(1)").ok());
+  EXPECT_FALSE(EvaluatedIn("1 + true").ok());
+  EXPECT_EQ(
+      TextOf(R"(u128("18446744073709551616") > u128("18446744073709551615"))"),
+      "true");
+  EXPECT_EQ(TextOf(R"(u128("1267650600228229401496703205377") > )"
+                   R"(f64("1267650600228229401496703205376"))"),
+            "true");
+}
+
+TEST(FlowValues, InfiniteTimeAndDurationConstants) {
+  EXPECT_EQ(TextOf("std::infinite_future()"), "infinite-future");
+  EXPECT_EQ(TextOf("std::infinite_past()"), "infinite-past");
+  EXPECT_EQ(TextOf("std::infinite_duration()"), "forever");
+  EXPECT_EQ(TextOf("-std::infinite_duration()"), "-forever");
+  EXPECT_EQ(TextOf("std::zero_duration()"), "0s");
+  EXPECT_EQ(TextOf("std::infinite_future() + 1s"), "infinite-future");
+  EXPECT_FALSE(
+      EvaluatedIn("std::infinite_future() - std::infinite_future()").ok());
+  EXPECT_FALSE(EvaluatedIn("std::seconds(9223372036854775806) + 2s").ok());
+}
+
+TEST(FlowValues, DurationUnitFunctions) {
+  EXPECT_EQ(TextOf("std::nanoseconds(500)"), "500ns");
+  EXPECT_EQ(TextOf("std::microseconds(2)"), "2us");
+  EXPECT_EQ(TextOf("std::milliseconds(3)"), "3ms");
+  EXPECT_EQ(TextOf("std::seconds(4)"), "4s");
+  EXPECT_EQ(TextOf("std::minutes(5)"), "5m");
+  EXPECT_EQ(TextOf("std::hours(6)"), "6h");
+  EXPECT_EQ(TextOf("std::seconds(90s)"), "90");
+  EXPECT_EQ(TextOf("std::seconds(250ms)"), "0");
+  EXPECT_EQ(TextOf("std::seconds(-250ms)"), "0");
+  EXPECT_EQ(TextOf("std::milliseconds(1s)"), "1000");
+  EXPECT_EQ(
+      TextOf(R"(std::nanoseconds(u128("18446744073709551616")) == )"
+             R"(std::seconds(18446744073) + std::nanoseconds(709551616))"),
+      "true");
+  EXPECT_FALSE(EvaluatedIn("std::seconds(true)").ok());
+  EXPECT_FALSE(EvaluatedIn(R"(std::seconds("250ms"))").ok());
+  EXPECT_EQ(TextOf(R"(std::seconds(std::parse_duration("250ms")))"), "0");
+}
+
+TEST(FlowValues, RoundingFunctionsPreserveNumericTypes) {
+  EXPECT_EQ(TextOf("1.5 + 2.5"), "4.0");
+  EXPECT_EQ(TextOf("std::floor(f64(2.75))"), "2.0");
+  EXPECT_EQ(TextOf("std::ceil(f32(-2.75))"), "-2.0");
+  EXPECT_EQ(TextOf("std::round(f64(-2.5))"), "-3.0");
+  EXPECT_EQ(TextOf("std::round(i128(7))"), "7");
+  EXPECT_EQ(TextOf("std::round(number(2.5)) + number(1)"), "4.0");
+  EXPECT_EQ(TextOf("std::floor(2.5) + 1.5"), "3.5");
+  EXPECT_FALSE(EvaluatedIn("std::floor(true)").ok());
+  EXPECT_FALSE(EvaluatedIn("std::ceil(1s)").ok());
+}
+
+TEST(FlowValues, DurationsScaleByNumericValues) {
+  EXPECT_EQ(TextOf("250ms * 4"), "1s");
+  EXPECT_EQ(TextOf("4 * 250ms"), "1s");
+  EXPECT_EQ(TextOf("2s * f64(0.25)"), "500ms");
+  EXPECT_EQ(TextOf("f32(-2) * 250ms"), "-500ms");
+  EXPECT_EQ(TextOf("std::parse_duration(text(1s * 9223372036854775807)) == "
+                   "1s * 9223372036854775807"),
+            "true");
+  EXPECT_EQ(TextOf(R"(1ns * u128("18446744073709551616") == )"
+                   R"(std::seconds(18446744073) + 709551616ns)"),
+            "true");
+  EXPECT_FALSE(EvaluatedIn("std::infinite_duration() * 0").ok());
+  EXPECT_FALSE(EvaluatedIn("std::seconds(9223372036854775806) * 2").ok());
+  EXPECT_FALSE(EvaluatedIn("1ns * f64(0.01)").ok());
+  EXPECT_FALSE(EvaluatedIn("1s * true").ok());
+}
+
+TEST(FlowValues, ScientificLiteralsEvaluateAsFloatingNumbers) {
+  EXPECT_EQ(TextOf("1e3 + 2.5E-2"), "1000.025");
+  EXPECT_EQ(TextOf("1e3ms * 2"), "2s");
+}
+
 TEST(FlowValues, StatusesAreData) {
   const Value record = StatusRecord(absl::NotFoundError("gone"));
   EXPECT_EQ(
@@ -479,9 +588,34 @@ TEST(FlowValues, ChunksTravelWholeUntilSomethingLooksInside) {
   EXPECT_EQ(Lookup(*read, Value::String("a")).integer(), 1);
 }
 
+TEST(FlowValues, JsonChunkPreservesNestedWideIntegers) {
+  auto bridge = NativeHostBridge();
+  data::Chunk chunk;
+  chunk.metadata = data::ChunkMetadata{.mimetype = "application/json"};
+  chunk.data = R"({"n":340282366920938463463374607431768211455})";
+  const auto parsed = bridge->FromChunk(chunk);
+  ASSERT_TRUE(parsed.ok()) << parsed.status();
+  const Value* number = parsed->Get("n");
+  ASSERT_NE(number, nullptr);
+  EXPECT_EQ(AsText(*number), "340282366920938463463374607431768211455");
+
+  chunk.data = R"({"n":340282366920938463463374607431768211456})";
+  EXPECT_TRUE(absl::IsOutOfRange(bridge->FromChunk(chunk).status()));
+
+  const Value nested = AsJson(Value::String(
+      R"({"first":{"has_value":true,"value":null},"second":{"has_value":false}})"));
+  EXPECT_EQ(
+      JsonText(nested),
+      R"({"first": {"has_value": true, "value": null}, "second": {"has_value": false}})");
+}
+
 }  // namespace
 
 TEST(FlowValues, CheckedTimeParsersAndIntegerAssignmentsRejectInvalidValues) {
+  EXPECT_FALSE(EvaluatedIn(R"(duration("1s"))").ok());
+  EXPECT_FALSE(EvaluatedIn(R"(time("2026-10-30"))").ok());
+  EXPECT_FALSE(EvaluatedIn(R"("1s" as std::duration)").ok());
+  EXPECT_FALSE(EvaluatedIn(R"("2026-10-30" as std::time)").ok());
   EXPECT_FALSE(EvaluatedIn(R"(parse_duration("not a duration"))").ok());
   EXPECT_FALSE(EvaluatedIn(R"(parse_time("not a time"))").ok());
   EXPECT_EQ(TextOf(R"(parse_duration("1m30s"))"), "1m30s");

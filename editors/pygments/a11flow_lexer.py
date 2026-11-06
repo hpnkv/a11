@@ -96,9 +96,10 @@ FIELD_MODIFIERS = _keywords(
 
 #: The built-in port type names.
 TYPES = _keywords(
-    "string", "text", "number", "integer", "int", "bool", "boolean",
-    "duration", "time", "object", "json", "list", "array", "bytes", "any",
-    "status", "null", "option", "stream"
+    "string", "text", "number", "integer", "int", "bool", "i8", "i16",
+    "i32", "i64", "i128", "u8", "u16", "u32", "u64", "u128", "f32", "f64",
+    "boolean", "duration", "time", "object", "json", "list", "array",
+    "bytes", "any", "status", "null", "option", "stream"
 )
 
 #: What may follow a ``header``.
@@ -129,7 +130,7 @@ MODIFIERS = _keywords(
 #: Every pipeline stage.
 STAGES = _keywords(
     "read_with", "ref", "take while", "take until", "first", "last",
-    "drop", "truncate", "batch", "window", "context", "flatten",
+    "drop", "truncate", "batch", "window", "context", "as", "flatten",
     "present", "group", "sort", "where", "map", "scan", "match",
     "distinct", "then", "log", "logf", "mime", "strformat", "chunk",
     "collect", "consume", "count", "sum", "min", "max", "avg", "fold",
@@ -147,14 +148,18 @@ OPERATOR_WORDS = _keywords("and", "or", "not", "in")
 
 #: The language's fixed function set. No user code, ever: a flow stays data.
 BUILTINS = _keywords(
-    "len", "lower", "upper", "trim", "text", "number", "bool", "keys",
-    "values", "join", "split", "merge", "contains", "startswith",
-    "endswith", "replace", "match", "slice", "to_chunk", "from_chunk",
-    "strformat", "b64encode", "b64decode", "b64urlencode", "b64urldecode",
-    "utf8encode", "utf8decode", "now", "duration", "time", "seconds",
-    "parse_time", "parse_duration", "integer", "int", "string", "bytes",
-    "object", "list", "boolean", "array", "any", "json", "option",
-    "status", "null"
+    "len", "lower", "upper", "trim", "text", "number", "i8", "i16", "i32",
+    "i64", "i128", "u8", "u16", "u32", "u64", "u128", "f32", "f64",
+    "floor", "ceil", "round", "bool", "keys", "values", "join", "split",
+    "merge", "contains", "startswith", "endswith", "replace", "match",
+    "slice", "to_chunk", "from_chunk", "strformat", "b64encode",
+    "b64decode", "b64urlencode", "b64urldecode", "utf8encode",
+    "utf8decode", "now", "infinite_future", "infnite_future",
+    "infinite_past", "infinite_duration", "zero_duration", "duration",
+    "time", "seconds", "nanoseconds", "microseconds", "milliseconds",
+    "minutes", "hours", "parse_time", "parse_duration", "integer", "int",
+    "string", "bytes", "object", "list", "boolean", "array", "any",
+    "json", "option", "status", "null"
 )
 
 #: The canonical status codes, which is what ``fail`` names.
@@ -390,8 +395,8 @@ class A11FlowLexer(RegexLexer):
         ],
         "literal": [
             (_group(CONSTANTS), Keyword.Constant),
-            (r"-?\d+(?:\.\d+)?(?:" + DURATION_UNITS + r")" + BOUNDARY, Number),
-            (r"-?\d+(?:\.\d+)?", Number),
+            (r"-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?(?:" + DURATION_UNITS + r")" + BOUNDARY, Number),
+            (r"-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?", Number),
         ],
         "operator": [
             (r"->|<-", Operator),

@@ -433,6 +433,28 @@ class Lexer {
       }
       ++index_;
     }
+    if (index_ < source_.size() &&
+        (source_[index_] == 'e' || source_[index_] == 'E')) {
+      fractional = true;
+      ++index_;
+      if (index_ < source_.size() &&
+          (source_[index_] == '+' || source_[index_] == '-')) {
+        ++index_;
+      }
+      const size_t digits = index_;
+      while (index_ < source_.size() && IsDigit(source_[index_])) {
+        ++index_;
+      }
+      if (index_ == digits) {
+        while (index_ < source_.size() && IsAsciiLetter(source_[index_])) {
+          ++index_;
+        }
+        Report("flow.form.bad-number", "An exponent requires digits.", start,
+               index_, Family::kForm);
+        Push(TokenKind::kBad, start, index_);
+        return;
+      }
+    }
     const size_t number_end = index_;
     const std::string_view number_text =
         source_.substr(start, number_end - start);
@@ -552,6 +574,10 @@ class Lexer {
         return Take(TokenKind::kDot, start, 1);
       case '*':
         return Take(TokenKind::kStar, start, 1);
+      case '/':
+        return Take(TokenKind::kSlash, start, 1);
+      case '%':
+        return Take(TokenKind::kPercent, start, 1);
       case '{':
         return Take(TokenKind::kLeftBrace, start, 1);
       case '}':
@@ -676,6 +702,10 @@ std::string_view KindName(TokenKind kind) {
       return "::";
     case TokenKind::kStar:
       return "*";
+    case TokenKind::kSlash:
+      return "/";
+    case TokenKind::kPercent:
+      return "%";
     case TokenKind::kComma:
       return ",";
     case TokenKind::kLeftBrace:
@@ -713,7 +743,8 @@ TokenKind KindFromName(std::string_view name) {
       TokenKind::kGreaterEqual, TokenKind::kPlus,
       TokenKind::kMinus,        TokenKind::kPipe,
       TokenKind::kColon,        TokenKind::kScope,
-      TokenKind::kStar,         TokenKind::kComma,
+      TokenKind::kStar,         TokenKind::kSlash,
+      TokenKind::kPercent,      TokenKind::kComma,
       TokenKind::kLeftBrace,    TokenKind::kRightBrace,
       TokenKind::kLeftParen,    TokenKind::kRightParen,
       TokenKind::kLeftBracket,  TokenKind::kRightBracket,

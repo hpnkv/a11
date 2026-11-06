@@ -24,12 +24,13 @@ absl::StatusOr<int> Scope::Parallelism(int count, ExprId expression) {
     return std::max(count, 1);
   }
   ABSL_ASSIGN_OR_RETURN(Value value, Evaluate(expression));
-  if (value.kind() != Value::Kind::kInteger || value.integer() < 1 ||
-      value.integer() > std::numeric_limits<int>::max()) {
+  const auto whole = ExactInt64(value);
+  if (!whole.has_value() || *whole < 1 ||
+      *whole > std::numeric_limits<int>::max()) {
     return absl::InvalidArgumentError(
         "parallel requires a positive signed 32-bit integer.");
   }
-  return static_cast<int>(value.integer());
+  return static_cast<int>(*whole);
 }
 
 absl::StatusOr<ItemPtr> Scope::StatusItem(RefId ref) {

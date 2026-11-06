@@ -2110,7 +2110,7 @@ async def test_durations_add_subtract_compare_and_format(registry):
           out sum:    string
           out diff:   string
           out longer: bool
-          out secs:   number
+          out secs:   int
           out milli:  string
           30s + 15s | text -> sum
           90s - 30s | text -> diff
@@ -2124,7 +2124,7 @@ async def test_durations_add_subtract_compare_and_format(registry):
     assert result["sum"] == "45s"
     assert result["diff"] == "1m"
     assert result["longer"] is True
-    assert result["secs"] == 1.5
+    assert result["secs"] == 1
     assert result["milli"] == "1500ms"
 
 
@@ -2136,7 +2136,7 @@ async def test_an_instant_minus_an_instant_is_a_duration(registry):
         flow clocked {
           out ahead:  bool
           out year:   string
-          out gap:    number
+          out gap:    int
           (std::now() + 60s > std::now())            -> ahead
           std::strformat("%(%Y)s", std::now())       -> year
           std::seconds((std::now() + 90s) - std::now())   -> gap
@@ -2146,8 +2146,8 @@ async def test_an_instant_minus_an_instant_is_a_duration(registry):
     )
     assert result["ahead"] is True
     assert result["year"].isdigit() and len(result["year"]) == 4
-    # Two separate readings of the clock, so a shade under the 90 added.
-    assert 89.0 < result["gap"] <= 90.0
+    # The count is integral; coarse clocks can report the full 90 seconds.
+    assert 88 <= result["gap"] <= 90
 
 
 @pytest.mark.asyncio
@@ -2215,7 +2215,7 @@ def test_forward_wants_the_word_headers_after_it():
 
 @pytest.mark.asyncio
 async def test_a_duration_is_written_and_read_back_in_the_same_units(registry):
-    """What the language writes, `duration` reads: the same spelling both ways.
+    """What the language writes, `parse_duration` reads in the same units.
 
     A duration reaches a flow as text often enough -- a header, a JSON field, a
     model's answer -- that reading one back has to be as ordinary as writing
@@ -2228,12 +2228,12 @@ async def test_a_duration_is_written_and_read_back_in_the_same_units(registry):
           out compact: string
           out fine:    string
           out tiny:    string
-          out secs:    number
-          out counted: number
-          std::duration(given)          | text -> compact
-          std::duration("1ms500us")     | text -> fine
+          out secs:    int
+          out counted: int
+          std::parse_duration(given)    | text -> compact
+          std::parse_duration("1ms500us") | text -> fine
           500ns + 1500ns           | text -> tiny
-          std::seconds("250ms")                -> secs
+          std::seconds(std::parse_duration("250ms")) -> secs
           std::seconds(std::duration(90))           -> counted
         }
         """,
@@ -2243,13 +2243,13 @@ async def test_a_duration_is_written_and_read_back_in_the_same_units(registry):
     assert result["compact"] == "1m30s500ms"
     assert result["fine"] == "1ms500us"
     assert result["tiny"] == "2us"
-    assert result["secs"] == 0.25
+    assert result["secs"] == 0
     assert result["counted"] == 90
 
 
 @pytest.mark.asyncio
 async def test_an_instant_can_be_read_from_text_and_compared(registry):
-    """`time` is the other half of formatting one: text in, instant out."""
+    """`parse_time` reads a timestamp before comparisons and formatting."""
     result = await run_flow(
         """
         flow stamped {
@@ -2258,12 +2258,12 @@ async def test_an_instant_can_be_read_from_text_and_compared(registry):
           out older:  bool
           out gap:    string
           out at:     string
-          std::time(stamp)                    | text -> same
-          (std::time(stamp) < std::now())                 -> older
-          start = std::time("1970-01-01T00:00:00Z")
-          end = std::time("1970-01-01T00:01:00Z")
+          std::parse_time(stamp)              | text -> same
+          (std::parse_time(stamp) < std::now()) -> older
+          start = std::parse_time("1970-01-01T00:00:00Z")
+          end = std::parse_time("1970-01-01T00:01:00Z")
           (end - start) | text -> gap
-          (std::time(stamp) + 1h) | strformat "%(%H:%M)s" -> at
+          (std::parse_time(stamp) + 1h) | strformat "%(%H:%M)s" -> at
         }
         """,
         registry,
@@ -2289,7 +2289,7 @@ async def test_a_duration_below_zero_says_so_rather_than_meaning_forever(
         """
         flow backwards {
           out behind: string
-          out number: number
+          out number: int
           out under:  bool
           (30s - 1m)   | text -> behind
           std::seconds(30s - 1m)   -> number
@@ -2299,7 +2299,7 @@ async def test_a_duration_below_zero_says_so_rather_than_meaning_forever(
         registry,
     )
     assert result["behind"] == "-30s"
-    assert result["number"] == -30.0
+    assert result["number"] == -30
     assert result["under"] is True
 
 

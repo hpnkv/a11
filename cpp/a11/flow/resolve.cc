@@ -190,7 +190,48 @@ bool IsSizedType(std::string_view type) {
 /// Whether a value of this type is a magnitude a range may bound directly.
 bool IsScalarType(std::string_view type) {
   return type == "number" || type == "integer" || type == "int" ||
+         type == "i8" || type == "i16" || type == "i32" || type == "i64" ||
+         type == "i128" || type == "u8" || type == "u16" || type == "u32" ||
+         type == "u64" || type == "u128" || type == "f32" || type == "f64" ||
          type == "duration" || type == "time";
+}
+
+int NumericFamily(std::string_view type) {
+  if (type == "integer" || type == "int" || type == "i8" || type == "i16" ||
+      type == "i32" || type == "i64" || type == "i128") {
+    return 1;
+  }
+  if (type == "u8" || type == "u16" || type == "u32" || type == "u64" ||
+      type == "u128") {
+    return 2;
+  }
+  if (type == "f32" || type == "f64") {
+    return 3;
+  }
+  if (type == "number") {
+    return 4;
+  }
+  return 0;
+}
+
+int NumericWidth(std::string_view type) {
+  if (type == "integer" || type == "int" || type == "i64" || type == "u64" ||
+      type == "f64" || type == "number") {
+    return 64;
+  }
+  if (type == "i128" || type == "u128") {
+    return 128;
+  }
+  if (type == "i32" || type == "u32" || type == "f32") {
+    return 32;
+  }
+  if (type == "i16" || type == "u16") {
+    return 16;
+  }
+  if (type == "i8" || type == "u8") {
+    return 8;
+  }
+  return 0;
 }
 
 /// Whether a constant could be a value of the named type.
@@ -208,15 +249,12 @@ bool ConstantFits(const syntax::Constant& value, std::string_view type) {
     case Kind::kBool:
       return type == "bool" || type == "boolean";
     case Kind::kInteger:
-      return type == "number" || type == "integer" || type == "int" ||
-             type == "duration" || type == "time";
+      return NumericFamily(type) != 0 || type == "duration" || type == "time";
     case Kind::kDouble:
-      return type == "number" || type == "duration" || type == "time";
+      return type == "number" || type == "f32" || type == "f64" ||
+             type == "duration" || type == "time";
     case Kind::kString:
-      // A byte string is written as text and a time is written as text, so a
-      // string constant is a plausible default for either.
-      return IsTextType(type) || type == "bytes" || type == "time" ||
-             type == "duration";
+      return IsTextType(type) || type == "bytes";
     case Kind::kDuration:
       return type == "duration";
     case Kind::kList:
@@ -685,6 +723,10 @@ std::string StageLabel(const syntax::Stage& stage) {
     case vocabulary::StageArgument::kDuration:
       return written(
           absl::StrCat(stage.name, " ", absl::FormatDuration(stage.duration)));
+    case vocabulary::StageArgument::kType:
+      return written(
+          absl::StrCat(stage.name, " ",
+                       stage.type.has_value() ? stage.type->ToString() : "?"));
     default:
       break;
   }
@@ -713,6 +755,10 @@ std::string StageBodyLabel(const syntax::Stage& stage) {
     case vocabulary::StageArgument::kExpression:
     case vocabulary::StageArgument::kStream:
       return absl::StrCat(stage.name, " ", Unparse(stage.argument.get()));
+    case vocabulary::StageArgument::kType:
+      return absl::StrCat(
+          stage.name, " ",
+          stage.type.has_value() ? stage.type->ToString() : "?");
     case vocabulary::StageArgument::kLog:
     case vocabulary::StageArgument::kLogFormat: {
       if (stage.log.has_format) {
@@ -1132,6 +1178,10 @@ class FlowResolver {
         break;
       case vocabulary::StageArgument::kStream:
         made.stream = stream;
+        break;
+      case vocabulary::StageArgument::kType:
+        made.name = "coerce";
+        made.type = stage.type;
         break;
       case vocabulary::StageArgument::kLog:
       case vocabulary::StageArgument::kLogFormat:
@@ -1728,12 +1778,12 @@ class FlowResolver {
       const auto earlier = earlier_reads.find(read.ref);
       if (earlier != earlier_reads.end() &&
           (earlier->second == graph::kNone || earlier->second < gate)) {
-        const auto prior = std::find_if(reads.begin(), reads.end(),
-                                        [&](const Read& candidate) {
-          return candidate.ref == read.ref &&
-                 (!read.value_cursor || !candidate.value_cursor) &&
-                 (candidate.gate == graph::kNone || candidate.gate < gate);
-        });
+        const auto prior = std::find_if(
+            reads.begin(), reads.end(), [&](const Read& candidate) {
+              return candidate.ref == read.ref &&
+                     (!read.value_cursor || !candidate.value_cursor) &&
+                     (candidate.gate == graph::kNone || candidate.gate < gate);
+            });
         cycle(read.step, gate, prior->step,
               "The same stream is read on both sides of 'wait all'. "
               "Keep its readers in one phase.");
@@ -3870,13 +3920,12 @@ class FlowResolver {
         break;
       }
     }
-    const Ref result =
-        CallPort(index, (*selected)->name, syntax::PortDirection::kOutput,
-                 call.location);
+    const Ref result = CallPort(index, (*selected)->name,
+                                syntax::PortDirection::kOutput, call.location);
     carried = {};
     carried.category = ExpressionCategory::kStream;
     carried.type = (*selected)->declared.empty() ? (*selected)->type
-                                                  : (*selected)->declared;
+                                                 : (*selected)->declared;
     carried.unary = (*selected)->unary;
     carried.cardinality_known = true;
     carried.action = call.action;
@@ -4250,6 +4299,13 @@ class FlowResolver {
       ref.shape = ShapeAfter(*stage, ref.shape);
       graph::Stage made =
           GraphStage(*stage, stream, expr, std::move(log), failures);
+      if ((stage->name == "fold" || stage->name == "scan") &&
+          NumericFamily(carried.type) != 0) {
+        auto type = ParseTypeExpression(carried.type);
+        if (type.ok()) {
+          made.type = std::move(*type);
+        }
+      }
       if (stage->name == "map") {
         auto type = ParseTypeExpression(carried.type);
         if (type.ok() &&
@@ -4273,6 +4329,10 @@ class FlowResolver {
         carried.type = mapped.type;
         carried.shape = mapped.shape;
         carried.fields = mapped.fields;
+      } else if (stage->name == "as" && stage->type.has_value()) {
+        carried.type = stage->type->ToString();
+        carried.shape = known_.Dto(carried.type);
+        carried.fields.clear();
       } else if (stage->name == "context") {
         carried.type = stage->context_numbered ? "list[object]"
                        : carried.type.empty()
@@ -4300,12 +4360,12 @@ class FlowResolver {
                            : "";
       } else if (stage->name == "present") {
         auto type = ParseTypeExpression(carried.type);
-        carried.type = type.ok() &&
-                               (type->name == "option" ||
-                                type->name == "std::option") &&
-                               type->parameters.size() == 1
-                           ? type->parameters.front().ToString()
-                           : "";
+        carried.type =
+            type.ok() &&
+                    (type->name == "option" || type->name == "std::option") &&
+                    type->parameters.size() == 1
+                ? type->parameters.front().ToString()
+                : "";
         carried.shape = nullptr;
         carried.fields.clear();
       } else {
@@ -4337,8 +4397,7 @@ class FlowResolver {
     if (name == "present") {
       auto type = ParseTypeExpression(carried);
       return type.ok() &&
-                     (type->name == "option" ||
-                      type->name == "std::option") &&
+                     (type->name == "option" || type->name == "std::option") &&
                      type->parameters.size() == 1
                  ? type->parameters.front().ToString()
                  : "";
@@ -4571,15 +4630,57 @@ class FlowResolver {
       info.unary = true;
       info.cardinality_known = true;
       const auto& name = function->name;
+      if ((name == "time" || name == "duration") && !function->args.empty() &&
+          DescribeExpression(function->args.front().get(), scope).type ==
+              "string") {
+        Report("flow.form.arithmetic-type",
+               "Parse temporal text with std::parse_time or "
+               "std::parse_duration.",
+               function->location, Severity::kError, Family::kForm);
+      }
       if (name == "ref") {
         info.type = "a11.NodeRef";
-      } else if (name == "now" || name == "time" || name == "parse_time") {
+      } else if (name == "floor" || name == "ceil" || name == "round") {
+        const std::string argument_type =
+            function->args.empty()
+                ? ""
+                : DescribeExpression(function->args.front().get(), scope).type;
+        if (NumericFamily(argument_type) != 0 || argument_type.empty()) {
+          info.type = argument_type;
+        } else {
+          Report("flow.form.arithmetic-type",
+                 "A rounding function requires a number.",
+                 function->location, Severity::kError, Family::kForm);
+        }
+      } else if (name == "now" || name == "time" || name == "parse_time" ||
+                 name == "infinite_future" || name == "infinite_past" ||
+                 name == "infnite_future") {
         info.type = "time";
-      } else if (name == "duration" || name == "parse_duration") {
+      } else if (name == "duration" || name == "parse_duration" ||
+                 name == "infinite_duration" || name == "zero_duration") {
         info.type = "duration";
       } else if (name == "integer" || name == "int" || name == "len") {
         info.type = "integer";
-      } else if (name == "number" || name == "seconds") {
+      } else if (NumericFamily(name) != 0 && name != "number") {
+        info.type = name;
+      } else if (name == "nanoseconds" || name == "microseconds" ||
+                 name == "milliseconds" || name == "seconds" ||
+                 name == "minutes" || name == "hours") {
+        const std::string argument_type =
+            function->args.empty()
+                ? ""
+                : DescribeExpression(function->args.front().get(), scope).type;
+        if (argument_type == "duration") {
+          info.type = "int";
+        } else if (NumericFamily(argument_type) != 0 || argument_type.empty()) {
+          info.type = "duration";
+        } else {
+          Report(
+              "flow.form.arithmetic-type",
+              "A duration unit takes a number or duration; parse text first.",
+              function->location, Severity::kError, Family::kForm);
+        }
+      } else if (name == "number") {
         info.type = "number";
       } else if (name == "bool" || name == "contains" || name == "startswith" ||
                  name == "endswith") {
@@ -4638,18 +4739,50 @@ class FlowResolver {
       info.category = ExpressionCategory::kValue;
       const auto left = DescribeExpression(binary->left.get(), scope).type;
       const auto right = DescribeExpression(binary->right.get(), scope).type;
-      if (binary->op == "+" || binary->op == "-") {
+      const bool arithmetic = binary->op == "+" || binary->op == "-" ||
+                              binary->op == "*" || binary->op == "/" ||
+                              binary->op == "%";
+      if (arithmetic) {
         if (left == "time" && right == "time" && binary->op == "-") {
           info.type = "duration";
-        } else if (left == "time" &&
-                   (right == "duration" || right == "number" ||
-                    right == "integer")) {
+        } else if (left == "time" && right == "duration" &&
+                   (binary->op == "+" || binary->op == "-")) {
           info.type = "time";
-        } else if (left == right) {
-          info.type = left;
-        } else if ((left == "integer" || left == "number") &&
-                   (right == "integer" || right == "number")) {
-          info.type = "number";
+        } else if (left == "duration" && right == "time" && binary->op == "+") {
+          info.type = "time";
+        } else if (left == "duration" && right == "duration" &&
+                   (binary->op == "+" || binary->op == "-")) {
+          info.type = "duration";
+        } else if (binary->op == "*" &&
+                   ((left == "duration" && NumericFamily(right) != 0) ||
+                    (right == "duration" && NumericFamily(left) != 0))) {
+          info.type = "duration";
+        } else {
+          const int left_family = NumericFamily(left);
+          const int right_family = NumericFamily(right);
+          const bool left_literal =
+              syntax::As<syntax::Literal>(binary->left.get()) != nullptr;
+          const bool right_literal =
+              syntax::As<syntax::Literal>(binary->right.get()) != nullptr;
+          if (left_family != 0 && right_family != 0 &&
+              (left_family == right_family || left_literal || right_literal) &&
+              (binary->op != "%" || (left_family <= 2 && right_family <= 2))) {
+            if (left_literal && !right_literal) {
+              info.type = right;
+            } else if (right_literal && !left_literal) {
+              info.type = left;
+            } else if (left_family == right_family) {
+              info.type =
+                  NumericWidth(left) >= NumericWidth(right) ? left : right;
+            } else {
+              info.type = left_family == 4 ? left : right;
+            }
+          } else if (!left.empty() && !right.empty()) {
+            Report("flow.form.arithmetic-type",
+                   absl::StrCat("Cannot apply '", binary->op, "' to ", left,
+                                " and ", right, ". Convert explicitly."),
+                   binary->location, Severity::kError, Family::kForm);
+          }
         }
       } else if (binary->op == "and" || binary->op == "or") {
         std::string payload = left;
@@ -4901,10 +5034,10 @@ class FlowResolver {
       info = DescribeExpression(index->base.get(), scope);
       info.shape = nullptr;
       const size_t bracket = info.type.find('[');
-      const bool option_base =
-          info.type == "option" || info.type == "std::option" ||
-          info.type.starts_with("option[") ||
-          info.type.starts_with("std::option[");
+      const bool option_base = info.type == "option" ||
+                               info.type == "std::option" ||
+                               info.type.starts_with("option[") ||
+                               info.type.starts_with("std::option[");
       if (!option_base && bracket != std::string::npos &&
           info.type.back() == ']') {
         info.type =
@@ -5073,8 +5206,7 @@ class FlowResolver {
         }
         Ref ref = *std::move(inner);
         const graph::RefId source = ref.node;
-        absl::StrAppend(&ref.label, attr->optional ? "?." : ".",
-                        attr->name);
+        absl::StrAppend(&ref.label, attr->optional ? "?." : ".", attr->name);
         ref.kind = Ref::Kind::kDerived;
         ref.has_front = false;
         ref.writable = false;
@@ -5141,8 +5273,7 @@ class FlowResolver {
     }
     Symbol& symbol = resolved_.symbols[index];
     if (attr->optional &&
-        (symbol.kind == SymbolKind::kCall ||
-         symbol.kind == SymbolKind::kNode ||
+        (symbol.kind == SymbolKind::kCall || symbol.kind == SymbolKind::kNode ||
          symbol.kind == SymbolKind::kSink ||
          symbol.kind == SymbolKind::kBarrier)) {
       Report("flow.form.field-type-mismatch",

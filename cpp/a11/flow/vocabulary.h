@@ -71,6 +71,8 @@ enum class StageArgument {
   kDuration,
   /// Another stream to read after this one: `| then other`.
   kStream,
+  /// A named type: `| as i32`.
+  kType,
   /// An optional level word and an optional expression, with `it` bound to the
   /// value in hand: `| log`, `| log warning it.error`.
   kLog,
@@ -279,6 +281,7 @@ const absl::flat_hash_set<std::string_view>& Builtins();
 /// the tag a serialisation registry knows it by (`a11.sdk.AudioBuffer`), say
 /// what a generic one holds (`list[a11.NodeFragment]`), or quote a mimetype.
 const absl::flat_hash_set<std::string_view>& TypeNames();
+bool IsNumericType(std::string_view name);
 
 /// How many type parameters a built-in type may be given.
 ///

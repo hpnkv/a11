@@ -48,11 +48,12 @@ absl::StatusOr<ReferenceOptions> ParseReferenceOptions(const Value& record) {
   ReferenceOptions result;
   for (const auto& [key, value] : record.pairs()) {
     if (key == "offset" || key == "length") {
-      if (value.kind() != Value::Kind::kInteger || value.integer() < 0) {
+      const auto whole = ExactInt64(value);
+      if (!whole.has_value() || *whole < 0) {
         return absl::InvalidArgumentError(
             absl::StrCat("Invalid 'ref' value for '", key, "'"));
       }
-      const auto count = static_cast<std::uint64_t>(value.integer());
+      const auto count = static_cast<std::uint64_t>(*whole);
       if (key == "offset") {
         if (count > std::numeric_limits<std::uint32_t>::max()) {
           return absl::InvalidArgumentError("Reference offset exceeds 2^32");
@@ -99,12 +100,13 @@ absl::StatusOr<ConfiguredRead> ParseReadOptions(const Value& record) {
   bool follow_given = false;
   const auto number = [](const Value& value, std::string_view name,
                          std::uint64_t limit) -> absl::StatusOr<std::uint64_t> {
-    if (value.kind() != Value::Kind::kInteger || value.integer() < 0 ||
-        static_cast<std::uint64_t>(value.integer()) > limit) {
+    const auto whole = ExactInt64(value);
+    if (!whole.has_value() || *whole < 0 ||
+        static_cast<std::uint64_t>(*whole) > limit) {
       return absl::InvalidArgumentError(
           absl::StrCat("Invalid 'read_with' value for '", name, "'"));
     }
-    return static_cast<std::uint64_t>(value.integer());
+    return static_cast<std::uint64_t>(*whole);
   };
   const auto boolean = [](const Value& value,
                           std::string_view name) -> absl::StatusOr<bool> {
@@ -284,7 +286,16 @@ absl::Status Scope::Produce(RefId ref, const Sink& sink) {
     case RefKind::kFlowPort: {
       ABSL_ASSIGN_OR_RETURN(const NodePtr node,
                             runner_->action()->GetInput(one.name));
-      return ReadNode(node, onward);
+      const PortPlan* port =
+          runner_->plan().Port(one.name, syntax::PortDirection::kInput);
+      const std::string_view type =
+          port != nullptr &&
+                  (vocabulary::IsNumericType(port->type) ||
+                   port->type == "duration" || port->type == "std::duration" ||
+                   port->type == "time" || port->type == "std::time")
+              ? std::string_view(port->type)
+              : std::string_view();
+      return ReadNode(node, onward, type);
     }
     default:
       return Fail(
@@ -477,14 +488,15 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
   if (one.stage.takes == vocabulary::StageArgument::kNumber &&
       one.stage.expr != kNone) {
     ABSL_ASSIGN_OR_RETURN(const Value count, Evaluate(one.stage.expr));
-    if (count.kind() != Value::Kind::kInteger) {
+    const auto whole = ExactInt64(count);
+    if (!whole.has_value()) {
       return Fail(absl::StrCat("The count for '", one.stage.name,
                                "' must be an integer."));
     }
     if (!configured.has_value()) {
       configured = one.stage;
     }
-    configured->count = count.integer();
+    configured->count = *whole;
   }
   const graph::Stage& stage = configured.has_value() ? *configured : one.stage;
   if (stage.name == "ref") {
@@ -649,28 +661,26 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
   if (name == "at") {
     const Value fixed_key =
         stage.indexed ? Value::Integer(stage.index) : Value::String(stage.text);
-    return per_value(
-        [&](const ItemPtr& item, std::vector<ItemPtr>& out) -> absl::Status {
-          ABSL_ASSIGN_OR_RETURN(Value value, item->Read(&host));
-          if (stage.optional && stage.type.has_value() &&
-              !value.is_option()) {
-            ABSL_ASSIGN_OR_RETURN(
-                value, Coerce(value, *stage.type,
-                              CoerceContext{.bridge = &host,
-                                            .shapes = &shapes()}));
-          }
-          Value key = fixed_key;
-          if (stage.expr != kNone) {
-            ABSL_ASSIGN_OR_RETURN(key, EvaluateWith(stage.expr, value));
-          }
-          if (stage.optional) {
-            out.push_back(Item::Of(Value::Option(LookupOptional(value, key))));
-            return absl::OkStatus();
-          }
-          ABSL_ASSIGN_OR_RETURN(Value selected, LookupChecked(value, key));
-          out.push_back(Item::Of(std::move(selected)));
-          return absl::OkStatus();
-        });
+    return per_value([&](const ItemPtr& item,
+                         std::vector<ItemPtr>& out) -> absl::Status {
+      ABSL_ASSIGN_OR_RETURN(Value value, item->Read(&host));
+      if (stage.optional && stage.type.has_value() && !value.is_option()) {
+        ABSL_ASSIGN_OR_RETURN(
+            value, Coerce(value, *stage.type,
+                          CoerceContext{.bridge = &host, .shapes = &shapes()}));
+      }
+      Value key = fixed_key;
+      if (stage.expr != kNone) {
+        ABSL_ASSIGN_OR_RETURN(key, EvaluateWith(stage.expr, value));
+      }
+      if (stage.optional) {
+        out.push_back(Item::Of(Value::Option(LookupOptional(value, key))));
+        return absl::OkStatus();
+      }
+      ABSL_ASSIGN_OR_RETURN(Value selected, LookupChecked(value, key));
+      out.push_back(Item::Of(std::move(selected)));
+      return absl::OkStatus();
+    });
   }
   if (name == "present") {
     return per_value(
@@ -688,19 +698,18 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
         });
   }
   if (name == "map") {
-    return per_value(
-        [&](const ItemPtr& item, std::vector<ItemPtr>& out) -> absl::Status {
-          ABSL_ASSIGN_OR_RETURN(Value value, item->Read(&host));
-          if (stage.type.has_value() && !value.is_option()) {
-            ABSL_ASSIGN_OR_RETURN(
-                value, Coerce(value, *stage.type,
-                              CoerceContext{.bridge = &host,
-                                            .shapes = &shapes()}));
-          }
-          ABSL_ASSIGN_OR_RETURN(Value mapped, EvaluateWith(stage.expr, value));
-          out.push_back(Item::Of(std::move(mapped)));
-          return absl::OkStatus();
-        });
+    return per_value([&](const ItemPtr& item,
+                         std::vector<ItemPtr>& out) -> absl::Status {
+      ABSL_ASSIGN_OR_RETURN(Value value, item->Read(&host));
+      if (stage.type.has_value() && !value.is_option()) {
+        ABSL_ASSIGN_OR_RETURN(
+            value, Coerce(value, *stage.type,
+                          CoerceContext{.bridge = &host, .shapes = &shapes()}));
+      }
+      ABSL_ASSIGN_OR_RETURN(Value mapped, EvaluateWith(stage.expr, value));
+      out.push_back(Item::Of(std::move(mapped)));
+      return absl::OkStatus();
+    });
   }
   if (name == "take while" || name == "take until") {
     std::int64_t seq = 0;
@@ -965,22 +974,24 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
     std::int64_t seq = 0;
     const auto count = [&](ExprId expression) -> absl::StatusOr<size_t> {
       ABSL_ASSIGN_OR_RETURN(const Value value, Evaluate(expression));
-      if (value.kind() != Value::Kind::kInteger || value.integer() < 0 ||
-          value.integer() > std::numeric_limits<int>::max()) {
+      const auto whole = ExactInt64(value);
+      if (!whole.has_value() || *whole < 0 ||
+          *whole > std::numeric_limits<int>::max()) {
         return absl::InvalidArgumentError(
             "context counts must be nonnegative signed 32-bit integers.");
       }
-      return static_cast<size_t>(value.integer());
+      return static_cast<size_t>(*whole);
     };
     ABSL_ASSIGN_OR_RETURN(const size_t before, count(stage.context_before));
     ABSL_ASSIGN_OR_RETURN(const size_t after, count(stage.context_after));
     long long index = 1;
     if (stage.context_base != graph::kNone) {
       ABSL_ASSIGN_OR_RETURN(const Value base, Evaluate(stage.context_base));
-      if (base.kind() != Value::Kind::kInteger) {
+      const auto whole = ExactInt64(base);
+      if (!whole.has_value()) {
         return absl::InvalidArgumentError("context base must be an integer.");
       }
-      index = base.integer();
+      index = *whole;
     }
     bool exhausted = false;
     std::deque<Value> preceding;
@@ -1182,7 +1193,11 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
     std::int64_t seen = 0;
     ABSL_RETURN_IF_ERROR(each([&](const ItemPtr& item) -> absl::Status {
       ABSL_ASSIGN_OR_RETURN(const Value value, StageValue(stage, item, host));
-      ABSL_ASSIGN_OR_RETURN(total, Add(total, value));
+      if (seen == 0) {
+        total = value;
+      } else {
+        ABSL_ASSIGN_OR_RETURN(total, Add(total, value));
+      }
       ++seen;
       return absl::OkStatus();
     }));
@@ -1227,6 +1242,11 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
     // Two things bound rather than one: `it` is the value in hand and the name
     // the author chose is what the last pass produced.
     Value carried = Value::Of(stage.start);
+    if (stage.type.has_value()) {
+      ABSL_ASSIGN_OR_RETURN(
+          carried,
+          Coerce(carried, *stage.type, {.bridge = &host, .shapes = &shapes()}));
+    }
     ABSL_RETURN_IF_ERROR(each([&](const ItemPtr& item) -> absl::Status {
       ABSL_ASSIGN_OR_RETURN(const Value value, item->Read(&host));
       ABSL_ASSIGN_OR_RETURN(carried, EvaluateFold(stage, carried, value));
@@ -1238,6 +1258,11 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
     // `fold`, with the values published as they are computed rather than only
     // the last one.
     Value carried = Value::Of(stage.start);
+    if (stage.type.has_value()) {
+      ABSL_ASSIGN_OR_RETURN(
+          carried,
+          Coerce(carried, *stage.type, {.bridge = &host, .shapes = &shapes()}));
+    }
     return each([&](const ItemPtr& item) -> absl::Status {
       ABSL_ASSIGN_OR_RETURN(const Value value, item->Read(&host));
       ABSL_ASSIGN_OR_RETURN(carried, EvaluateFold(stage, carried, value));

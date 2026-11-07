@@ -98,7 +98,7 @@ class FlowCodeInsightTest : BasePlatformTestCase() {
     fun `test hovering a flow this file declares describes the flow`() {
         val html = docAt(source.indexOf("call research(") + "call ".length)
         assertNotNull(html)
-        assertTrue(html!!, html.contains("research</b></code> flow"))
+        assertTrue(html!!, html.contains("research</b></code> peer call of a flow"))
     }
 
     fun `test hovering a stage shows the language's reference for it`() {

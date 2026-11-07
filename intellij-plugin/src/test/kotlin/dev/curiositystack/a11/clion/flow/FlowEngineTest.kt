@@ -168,7 +168,7 @@ class FlowEngineTest {
         val proposals = engine().complete(source, source.length)!!["proposals"] as List<*>
         val barrier = proposals.map { it as Map<*, *> }.first { it["name"] == "all" }
         assertTrue(barrier.toString().contains(
-            "Wait for all preceding work in this scope before activating following statements."
+            "Wait for work directly induced in this scope before activating following statements."
         ))
     }
 

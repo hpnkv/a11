@@ -488,9 +488,20 @@ flow shrink {
 }
 ```
 
-`run`, `call`, `node`, `status`, `wait`, and `close` can appear inside
+`run`, `call`, `node`, `id`, `status`, `wait`, and `close` can appear inside
 expressions. Parenthesize an invocation before selecting one of its outputs:
 `(run fetch(url: url)).metadata`. Keep the handle when several consumers use it.
+
+`id job` reads a run or call's action ID as a string when the action starts.
+The read does not wait for completion. `id-into` writes that ID once to a
+writable destination; it works with generated IDs and `id EXPR`:
+
+```a11flow
+job = run fetch(url: url) id "fetch-1" id-into action_ids
+id job -> another_id_port
+```
+
+An action output port named `id` remains available as `job.id`.
 
 An action argument can use a source with the same name as its input port:
 `run fetch(url)` means `run fetch(url: url)`. Argument order is free, and

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -84,6 +85,30 @@ std::string ReadFile(const std::filesystem::path& path) {
   std::stringstream buffer;
   buffer << stream.rdbuf();
   return buffer.str();
+}
+
+TEST(FlowResolve, ActionIdWorksForCallsAndRequiresAWritableTarget) {
+  const ResolveResult valid = Check(R"(
+declare flow external { out value: string }
+flow main {
+  out ids: string stream
+  job = call external() id "requested" id-into ids
+  id job -> ids
+}
+)");
+  EXPECT_TRUE(valid.diagnostics.empty()) << Messages(valid);
+
+  const ResolveResult invalid = Check(R"(
+declare flow external { out value: string }
+flow main {
+  in source: string
+  job = run external() id-into source
+  id source -> _
+}
+)");
+  const auto codes = Codes(invalid);
+  EXPECT_NE(std::find(codes.begin(), codes.end(), "flow.name.not-writable"),
+            codes.end());
 }
 
 TEST(FlowResolve, RejectsRemovedDefaultFunctionButKeepsDeclarationDefaults) {

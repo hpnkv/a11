@@ -297,8 +297,9 @@ contexts:
     # `headers` is only ever the second word of `forward headers "x-name"`.
     - match: |-
         (?x) \b (
-          tee|via|timeout|deadline|after|with|id|forward|headers|TEE
-          |VIA|TIMEOUT|DEADLINE|AFTER|WITH|ID|FORWARD|HEADERS
+          tee|via|timeout|deadline|after|with|id|id-into|forward
+          |headers|TEE|VIA|TIMEOUT|DEADLINE|AFTER|WITH|ID|ID-INTO
+          |FORWARD|HEADERS
         ) {{kw_boundary}}
       scope: storage.modifier.a11flow
 
@@ -383,7 +384,7 @@ contexts:
     # `a11.sdk.Interaction{...}`: a value of a named type.
     - match: '{{name}}(?:::{{name}})+(?=\s*\{)'
       scope: storage.type.a11flow
-    - match: '\b(interleave|status|take|zip|INTERLEAVE|STATUS|TAKE|ZIP){{kw_boundary}}'
+    - match: '\b(id|interleave|status|take|zip|ID|INTERLEAVE|STATUS|TAKE|ZIP){{kw_boundary}}'
       scope: keyword.other.status.a11flow
     - match: '\b(it|IT){{kw_boundary}}'
       scope: variable.language.it.a11flow

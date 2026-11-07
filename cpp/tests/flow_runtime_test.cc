@@ -568,6 +568,79 @@ flow shout {
   EXPECT_EQ(outcome.outputs.at("loudest"), Values({"\"HI\"", "\"HI\""}));
 }
 
+TEST(FlowRuntimeTest, ActionIdsReadAndForwardWithoutWaitingForCompletion) {
+  const Outcome outcome = RunFlow(R"(
+flow ids {
+  out explicit_id: string
+  out forwarded_id: string
+  out generated_id: string
+  job = run twice(text: "hi") id "known-id" id-into forwarded_id
+  observed = id job
+  observed -> explicit_id
+  fresh = run twice(text: "bye")
+  id fresh -> generated_id
+}
+)",
+                                  "ids");
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("explicit_id"), Values({"\"known-id\""}));
+  EXPECT_EQ(outcome.outputs.at("forwarded_id"), Values({"\"known-id\""}));
+  ASSERT_EQ(outcome.outputs.at("generated_id").size(), 1u);
+  EXPECT_GT(outcome.outputs.at("generated_id").front().size(), 2u);
+  EXPECT_NE(outcome.outputs.at("generated_id").front(), "\"known-id\"");
+}
+
+TEST(FlowRuntimeTest, ActionIdDoesNotShadowAnIdOutputPort) {
+  const Outcome outcome = RunFlow(R"(
+flow child {
+  out id: string
+  "payload" -> id
+}
+flow main {
+  out action_id: string
+  out port_id: string
+  job = run child() id "action-identity"
+  id job -> action_id
+  job.id -> port_id
+}
+)",
+                                  "main");
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("action_id"), Values({"\"action-identity\""}));
+  EXPECT_EQ(outcome.outputs.at("port_id"), Values({"\"payload\""}));
+}
+
+TEST(FlowRuntimeTest, IdIntoEmitsOnceForEachLoopInvocation) {
+  const Outcome outcome = RunFlow(R"(
+flow main {
+  out ids: string stream
+  for item in ["a", "b", "c"] {
+    run twice(text: item) id-into ids
+  }
+}
+)",
+                                  "main");
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  const auto& ids = outcome.outputs.at("ids");
+  ASSERT_EQ(ids.size(), 3u);
+  EXPECT_NE(ids[0], ids[1]);
+  EXPECT_NE(ids[0], ids[2]);
+  EXPECT_NE(ids[1], ids[2]);
+}
+
+TEST(FlowRuntimeTest, IdIntoEmitsBeforeAToleratedActionFails) {
+  const Outcome outcome = RunFlow(R"(
+flow main {
+  out ids: string stream
+  job = try run boom() id "failed-action" id-into ids
+  wait job
+}
+)",
+                                  "main");
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("ids"), Values({"\"failed-action\""}));
+}
+
 TEST(FlowRuntimeTest, ANodeOfItsOwnIsWrittenAndReadBack) {
   const Outcome outcome = RunFlow(R"(
 flow keep {

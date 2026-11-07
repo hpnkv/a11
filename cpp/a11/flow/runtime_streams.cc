@@ -269,6 +269,12 @@ absl::Status Scope::Produce(RefId ref, const Sink& sink) {
       ABSL_ASSIGN_OR_RETURN(const std::string id, node->GetId());
       return onward.One(Item::Of(Value::String(id)));
     }
+    case RefKind::kCallId: {
+      ABSL_ASSIGN_OR_RETURN(CallHandle * handle, Call(one.call));
+      ABSL_ASSIGN_OR_RETURN(const std::shared_ptr<actions::Action> action,
+                            handle->Action());
+      return onward.One(Item::Of(Value::String(action->GetId())));
+    }
     case RefKind::kNode: {
       ABSL_ASSIGN_OR_RETURN(const NodePtr node, LocalNode(ref));
       return ReadNode(node, onward);

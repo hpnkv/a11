@@ -120,13 +120,14 @@ Strings and `"""` strings decode `\0` (NUL), `\a`, `\b`, `\f`, `\n`, `\r`,
 | `wait all` | Scope-local phase barrier: work activated earlier completes before later work activates. A stream may first be read on either side; independent readers of the same stream stay in one phase. Successive `take` reads share one cursor and may cross phases. No binding/modifiers. |
 | `wait j`; `wait all of a, b`; `wait first of a, b` | Wait for subjects; the race yields the zero-based winning index. Explicit-subject waits are not scope-wide barriers. |
 | `status j`; `outcome = wait j` | Completion status: `.ok`, `.code`, `.message`, `.details`. Unhandled failure ends the scope. |
+| `id j` | Read a run or call's assigned action ID as one string, without waiting for completion. |
 | `try run/call ...`; `attempt = try { ... }`; `try s -> dest` | Tolerate call / block / transfer failure; inspect its status. No rollback of outputs/effects. Tolerating a call does not suppress aborted-output read errors. |
 | `n = node([id])`; `close n`; `abort n [code [message]]` | Create/attach stream node; close normally / with error. `n.id` passes its identity to a tool. |
 | `nodes m { ... }`; `nodes m`; `... via m` | Scoped/named node map. Local calls keep intermediates off the wire unless `tee`. |
 | `cancel j`; `fail [code [message]]`; `fail status_value` | Cancel an action / fail the scope. Use conditions, data dependencies, or `after` to gate side effects. Valid codes are listed below. |
 | `skip N s` | Drop the first N items for every reader; `drop N` affects one pipeline. |
 | `log [level] e`; `logf [level] "fmt" e, ...` | Log without output ports; default `info`; levels: `debug`, `info`, `warning`, `error`, `critical`. |
-| Call tail: `timeout D`, `deadline t`, `after subjects`, `via m`, `tee`, `id e`, `with "k": e`, `forward headers "pattern"` | Positive relative duration / absolute time; earlier limit wins. Deadline is eager; `after` delays its entire expression. Waits also accept timeout/deadline. |
+| Call tail: `timeout D`, `deadline t`, `after subjects`, `via m`, `tee`, `id e`, `id-into dest`, `with "k": e`, `forward headers "pattern"` | Positive relative duration / absolute time; earlier limit wins. `id-into` writes the assigned action ID once. Deadline is eager; `after` delays its entire expression. Waits also accept timeout/deadline. |
 | `mod m [exported] { ... }`; `declare mod m { ... }`; `declare flow m::f { interface }` | Modules/members default private. Contracts describe local, imported, or host-supplied implementations; structs are fully defined. No modules inside flows/structs; `std` reserved. |
 | `import "dir/lib.flow" [as m]`; `from lib import f [as g], T`; `from lib import *` | Default namespace `lib`; symbol/wildcard imports also work in module/flow scopes. `from std import f` exposes standard names. Filesystem imports require approved host roots. |
 | `export symbol [as alias]`; `struct T [exported] { fields }` | Explicit reexport; record type. Fields: `name: T`, `required` or `default LITERAL` (exclusive), numeric bounds `1..10`, text RE2 regex `matching "pattern"`, `one of [...]`, list `unique`. |

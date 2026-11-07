@@ -646,6 +646,9 @@ std::string Unparse(const Node* node) {
     case NodeKind::kOutcome:
       return absl::StrCat(
           "status ", Unparse(syntax::As<syntax::Outcome>(node)->subject.get()));
+    case NodeKind::kActionId:
+      return absl::StrCat(
+          "id ", Unparse(syntax::As<syntax::ActionId>(node)->subject.get()));
     case NodeKind::kPipelineValue:
       return absl::StrCat(
           "(", Unparse(syntax::As<syntax::PipelineValue>(node)->pipeline.get()),
@@ -1768,6 +1771,7 @@ class FlowResolver {
       if (ref.kind == graph::RefKind::kBound ||
           ref.kind == graph::RefKind::kHeader ||
           ref.kind == graph::RefKind::kNodeId ||
+          ref.kind == graph::RefKind::kCallId ||
           ref.kind == graph::RefKind::kStatus ||
           ref.kind == graph::RefKind::kWinner ||
           ref.kind == graph::RefKind::kSink) {
@@ -1867,6 +1871,7 @@ class FlowResolver {
       return HasDataDependency(attr->base.get(), scope);
     }
     if (expression->kind == NodeKind::kOutcome ||
+        expression->kind == NodeKind::kActionId ||
         expression->kind == NodeKind::kWait ||
         expression->kind == NodeKind::kClose ||
         expression->kind == NodeKind::kNodeExpression) {
@@ -3802,6 +3807,34 @@ class FlowResolver {
       }
       steps.push_back(std::move(feed));
     }
+    if (call.modifiers->id_into != nullptr) {
+      const Ref destination =
+          ResolveDestination(call.modifiers->id_into.get(), scope);
+      StepPlan feed;
+      feed.kind = "pipe";
+      feed.label = absl::StrCat("id ", label, " -> ", destination.label);
+      feed.source = absl::StrCat("id ", label);
+      feed.destination = destination.label;
+      feed.after = after;
+      feed.location = call.modifiers->id_into->location;
+      if (builder_ != nullptr && made != graph::kNone &&
+          destination.node != graph::kNone) {
+        graph::Ref identity;
+        identity.kind = graph::RefKind::kCallId;
+        identity.label = feed.source;
+        identity.owner = builder_->step(made).body;
+        identity.call = made;
+        const graph::RefId source = builder_->AddRef(std::move(identity));
+        const graph::StepId pipe =
+            NewStep(graph::StepKind::kPipe, feed.label, feed.location);
+        builder_->step(pipe).source = source;
+        builder_->step(pipe).destination = destination.node;
+        builder_->step(pipe).after = held;
+        builder_->step(pipe).deferred = anonymous;
+        builder_->step(pipe).activation = made;
+      }
+      steps.push_back(std::move(feed));
+    }
     return index;
   }
 
@@ -4649,8 +4682,8 @@ class FlowResolver {
           info.type = argument_type;
         } else {
           Report("flow.form.arithmetic-type",
-                 "A rounding function requires a number.",
-                 function->location, Severity::kError, Family::kForm);
+                 "A rounding function requires a number.", function->location,
+                 Severity::kError, Family::kForm);
         }
       } else if (name == "now" || name == "time" || name == "parse_time" ||
                  name == "infinite_future" || name == "infinite_past" ||
@@ -4997,6 +5030,11 @@ class FlowResolver {
         info.type = "integer";
         info.fields.clear();
       }
+    } else if (expression->kind == NodeKind::kActionId) {
+      info.category = ExpressionCategory::kValue;
+      info.type = "string";
+      info.unary = true;
+      info.cardinality_known = true;
     } else if (const auto* value =
                    syntax::As<syntax::PipelineValue>(expression);
                value != nullptr) {
@@ -5106,6 +5144,9 @@ class FlowResolver {
       case NodeKind::kOutcome:
         return ResolveOutcome(
             syntax::As<syntax::Outcome>(expression)->subject.get(), scope);
+      case NodeKind::kActionId:
+        return ResolveActionId(
+            syntax::As<syntax::ActionId>(expression)->subject.get(), scope);
       case NodeKind::kName: {
         const auto* name = syntax::As<syntax::Name>(expression);
         Symbol* found = Find(scope, name->name);
@@ -5343,6 +5384,42 @@ class FlowResolver {
       return ref;
     }
     return std::nullopt;
+  }
+
+  /// The action ID of a run or call, available when it starts.
+  Ref ResolveActionId(const Node* expression, Scope& scope) {
+    if (IsOperation(expression)) {
+      const size_t index = ResolveOperation(expression, scope);
+      syntax::Name named;
+      named.name = resolved_.symbols[index].name;
+      named.location = expression->location;
+      return ResolveActionId(&named, scope);
+    }
+    const auto* name = syntax::As<syntax::Name>(expression);
+    const size_t index =
+        name == nullptr ? kNoSymbol : Lookup(scope, name->name);
+    if (index == kNoSymbol ||
+        resolved_.symbols[index].kind != SymbolKind::kCall) {
+      Report("flow.form.field-type-mismatch",
+             "An action ID belongs to a run or call handle.",
+             expression->location, Severity::kError, Family::kForm);
+      return Ref{Ref::Kind::kUnknown, Unparse(expression)};
+    }
+    Symbol& symbol = resolved_.symbols[index];
+    ++symbol.reads;
+    Ref result;
+    result.kind = Ref::Kind::kValue;
+    result.label = absl::StrCat("id ", symbol.name);
+    result.symbol = index;
+    if (builder_ != nullptr && symbol.step != graph::kNone) {
+      graph::Ref ref;
+      ref.kind = graph::RefKind::kCallId;
+      ref.label = result.label;
+      ref.owner = builder_->step(symbol.step).body;
+      ref.call = symbol.step;
+      result.node = builder_->AddRef(std::move(ref));
+    }
+    return result;
   }
 
   /// The status of what `expression` names.
@@ -5731,7 +5808,8 @@ class FlowResolver {
     while (!checking.empty()) {
       const auto* node = checking.back();
       checking.pop_back();
-      if (node->kind == NodeKind::kOutcome) {
+      if (node->kind == NodeKind::kOutcome ||
+          node->kind == NodeKind::kActionId) {
         continue;
       }
       if (const auto* attr = syntax::As<syntax::Attr>(node);
@@ -6192,6 +6270,13 @@ class FlowResolver {
             out, expression,
             ResolveOutcome(
                 syntax::As<syntax::Outcome>(expression)->subject.get(), scope)
+                .node);
+        return;
+      case NodeKind::kActionId:
+        Remember(
+            out, expression,
+            ResolveActionId(
+                syntax::As<syntax::ActionId>(expression)->subject.get(), scope)
                 .node);
         return;
       case NodeKind::kName: {

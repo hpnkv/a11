@@ -61,6 +61,8 @@ enum class RefKind {
   /// A node's id, as one value -- what a flow hands to an action that expects
   /// to be told where to write.
   kNodeId,
+  /// The ID assigned to a run or call, as one value.
+  kCallId,
   /// The outcome of a call, a node, a port or a barrier, as a status record.
   kStatus,
   /// One header of the call running this flow, as a single value.
@@ -595,6 +597,7 @@ class GraphBuilder {
     switch (ref.kind) {
       case RefKind::kHeader:
       case RefKind::kNodeId:
+      case RefKind::kCallId:
       case RefKind::kStatus:
       case RefKind::kWinner:
       case RefKind::kExpr:

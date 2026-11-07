@@ -52,6 +52,7 @@ export const FLOW_KEYWORDS: readonly string[] = [
   "from",
   "header",
   "id",
+  "id-into",
   "if",
   "import",
   "in",

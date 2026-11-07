@@ -255,6 +255,7 @@ class Inference {
         break;
       case RefKind::kHeader:
       case RefKind::kNodeId:
+      case RefKind::kCallId:
       case RefKind::kStatus:
       case RefKind::kWinner:
         fact.upper = 1;

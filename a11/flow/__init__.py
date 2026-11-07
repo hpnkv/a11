@@ -215,8 +215,11 @@ whole expression. deadline std::now() + 30s after action and the parenthesized
 form have identical meaning. timeout timeout and deadline deadline are valid
 when the names hold the corresponding values. The earlier bound applies when
 both modifiers are present. Expiry is DEADLINE_EXCEEDED.
-Other call modifiers: via MAP, tee, id EXPR, with "header": EXPR,
+Other call modifiers: via MAP, tee, id EXPR, id-into DEST,
+with "header": EXPR,
 forward headers "name". Local nodes stay off the wire.
+`id job` reads a run/call's action ID when it starts, without waiting for
+completion. `id-into DEST` forwards that ID once to a writable destination.
 
 source | stage -> destination [, destination]; -> _ discards results.
 source | run flow_name(config: value) | call module::flow_name() composes
@@ -346,6 +349,10 @@ def loads(
     single_item_slots: bool = True,
 ) -> Program:
     """Compile Flow source into a [Program][a11.flow.plan.Program].
+
+    An anonymous ``flow { ... }`` is available as ``program.entry``. Pass that
+    FlowPlan to [runtime.start][a11.flow.runtime.start] for live ports, or use
+    [run_program][a11.flow.run_program] for CLI-style execution.
 
     Args:
         source: The text of one or more ``flow`` declarations.

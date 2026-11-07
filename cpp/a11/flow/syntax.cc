@@ -243,6 +243,8 @@ std::string_view NodeKindName(NodeKind kind) {
       return "pipeline";
     case NodeKind::kOutcome:
       return "outcome";
+    case NodeKind::kActionId:
+      return "action-id";
     case NodeKind::kPipelineValue:
       return "pipeline-value";
     case NodeKind::kCallModifiers:
@@ -560,6 +562,9 @@ void VisitChildren(const Node& node,
     case NodeKind::kOutcome:
       one(static_cast<const Outcome&>(node).subject);
       return;
+    case NodeKind::kActionId:
+      one(static_cast<const ActionId&>(node).subject);
+      return;
     case NodeKind::kPipelineValue: {
       const PipelinePtr& pipeline =
           static_cast<const PipelineValue&>(node).pipeline;
@@ -574,6 +579,7 @@ void VisitChildren(const Node& node,
         one(value);
       }
       one(modifiers.action_id);
+      one(modifiers.id_into);
       one(modifiers.deadline);
       one(modifiers.timeout_expression);
       return;

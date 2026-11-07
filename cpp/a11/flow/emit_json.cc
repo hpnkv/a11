@@ -343,6 +343,10 @@ nlohmann::json NodeJson(const syntax::Node* node) {
       value["subject"] =
           NodeJson(syntax::As<syntax::Outcome>(node)->subject.get());
       break;
+    case syntax::NodeKind::kActionId:
+      value["subject"] =
+          NodeJson(syntax::As<syntax::ActionId>(node)->subject.get());
+      break;
     case syntax::NodeKind::kPipelineValue:
       value["take"] = syntax::As<syntax::PipelineValue>(node)->take;
       value["optional"] = syntax::As<syntax::PipelineValue>(node)->optional;
@@ -362,6 +366,7 @@ nlohmann::json NodeJson(const syntax::Node* node) {
       value["after"] = WordList(modifiers->after);
       value["headers"] = PairsJson(modifiers->headers);
       value["action_id"] = NodeJson(modifiers->action_id.get());
+      value["id_into"] = NodeJson(modifiers->id_into.get());
       value["forward"] = modifiers->forward;
       break;
     }

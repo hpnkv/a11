@@ -317,7 +317,7 @@ class ParserImpl {
           return true;
         }
         if (kind == TokenKind::kArrow) {
-          return !needs_transfer && !operand_after_name;
+          return word == "id" || (!needs_transfer && !operand_after_name);
         }
         if (kind == TokenKind::kLeftBrace && word == "after") {
           return true;
@@ -2390,6 +2390,8 @@ class ParserImpl {
         modifiers->deadline = ParseExpression();
       } else if (modifier == "id") {
         modifiers->action_id = ParseExpression();
+      } else if (modifier == "id-into") {
+        modifiers->id_into = ParseReference();
       } else if (modifier == "after") {
         modifiers->after.push_back(ParseCompletionSubject());
         while (At(TokenKind::kComma) && Peek(2).kind != TokenKind::kColon &&
@@ -2834,13 +2836,14 @@ class ParserImpl {
     // `_` is reference-shaped and only a pipe's target may be one, so it is let
     // through here and refused by the resolver -- which knows which of the
     // several statements that read a reference this is.
-    if (syntax::IsAnyOf(node.get(),
-                        {syntax::NodeKind::kName, syntax::NodeKind::kAttr,
-                         syntax::NodeKind::kOutcome, syntax::NodeKind::kDiscard,
-                         syntax::NodeKind::kCallExpression,
-                         syntax::NodeKind::kNodeExpression,
-                         syntax::NodeKind::kWait, syntax::NodeKind::kClose,
-                         syntax::NodeKind::kPipe, syntax::NodeKind::kError})) {
+    if (syntax::IsAnyOf(
+            node.get(),
+            {syntax::NodeKind::kName, syntax::NodeKind::kAttr,
+             syntax::NodeKind::kOutcome, syntax::NodeKind::kDiscard,
+             syntax::NodeKind::kActionId, syntax::NodeKind::kCallExpression,
+             syntax::NodeKind::kNodeExpression, syntax::NodeKind::kWait,
+             syntax::NodeKind::kClose, syntax::NodeKind::kPipe,
+             syntax::NodeKind::kError})) {
       return node;
     }
     Report("flow.syntax.unexpected",
@@ -3252,6 +3255,13 @@ class ParserImpl {
       auto outcome = Make<syntax::Outcome>(token);
       outcome->subject = ParseReference();
       return outcome;
+    }
+    if (AtWord("id") &&
+        (Following().IsWord() || Following().kind == TokenKind::kLeftParen)) {
+      Advance();
+      auto identity = Make<syntax::ActionId>(token);
+      identity->subject = ParseReference();
+      return identity;
     }
     if (AtWord("wait") &&
         (Following().IsWord() || Following().kind == TokenKind::kLeftParen)) {

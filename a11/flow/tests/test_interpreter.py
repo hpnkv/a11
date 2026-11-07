@@ -49,6 +49,7 @@ import pytest
 import a11
 from a11 import flow
 from a11.actions import ActionRegistry
+from a11.flow import runtime
 
 # The flow in `ASKS_A_MODEL` names `a11.sdk.Interaction` in a `map` tag, and a
 # tag resolves only to a type this process has imported.
@@ -69,6 +70,58 @@ async def run(source: str, **how) -> dict:
         asyncio.to_thread(flow.run_program, source, "test.flow", **how),
         timeout=PATIENCE,
     )
+
+
+@pytest.mark.asyncio
+async def test_anonymous_entry_is_accessible_as_a_streaming_flow():
+    source = """
+    flow {
+      in prompt: string
+      out reply: string
+      prompt -> reply
+    }
+    """
+    program = flow.loads(source, "entry.flow")
+    assert program.has_entry
+    assert program.entry is not None
+    assert program.entry.entry
+    assert program.entry.name == ""
+    assert program.entry.describe()["entry"] is True
+    assert program.names == []
+    assert program.get("") is None
+    with pytest.raises(KeyError, match="no implemented named flow"):
+        _ = program.main
+
+    running = await runtime.start(
+        program.entry,
+        registry=ActionRegistry(),
+        open_inputs=("prompt",),
+        action_id="entry-test",
+    )
+    assert running.inputs["prompt"].get_id() == "entry-test#prompt"
+    assert running.outputs["reply"].get_id() == "entry-test#reply"
+    await (await running.inputs["prompt"].put("hello"))
+    await running.inputs["prompt"].finalize()
+    assert await asyncio.wait_for(running.collect(), timeout=10) == {
+        "reply": "hello"
+    }
+
+
+@pytest.mark.asyncio
+async def test_anonymous_entry_keeps_cli_run_available():
+    source = "flow { run write_stdout(content: \"from CLI\\n\") }"
+    program = flow.loads(source, "cli.flow")
+    assert program.entry is not None
+    outcome = await run(source, arguments=["cli.flow"])
+    assert outcome["exit_code"] == 0
+
+
+def test_named_program_without_entry_keeps_named_lookup():
+    program = flow.loads('flow named { out answer: string\n "ok" -> answer }')
+    assert program.entry is None
+    assert not program.has_entry
+    assert program.names == ["named"]
+    assert program.main.name == "named"
 
 
 # --- the plainest thing a program does ---------------------------------------

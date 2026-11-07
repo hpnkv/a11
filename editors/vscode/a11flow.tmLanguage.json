@@ -114,11 +114,11 @@
       }
     },
     "statement": {
-      "match": "\\b(abort|after|base|before|by|call|cancel|close|desc|else|fail|(?:failures|FAILURES)\s+(?:into|INTO)|for|if|interleave|log|logf|max|nodes|numbered|of|parallel|repeat|run|skip|status|take|try|unordered|until|wait|while|zip|ABORT|AFTER|BASE|BEFORE|BY|CALL|CANCEL|CLOSE|DESC|ELSE|FAIL|FOR|IF|INTERLEAVE|LOG|LOGF|MAX|NODES|NUMBERED|OF|PARALLEL|REPEAT|RUN|SKIP|STATUS|TAKE|TRY|UNORDERED|UNTIL|WAIT|WHILE|ZIP)\\b",
+      "match": "\\b(abort|after|base|before|by|call|cancel|close|desc|else|fail|(?:failures|FAILURES)\s+(?:into|INTO)|for|id|if|interleave|log|logf|max|nodes|numbered|of|parallel|repeat|run|skip|status|take|try|unordered|until|wait|while|zip|ABORT|AFTER|BASE|BEFORE|BY|CALL|CANCEL|CLOSE|DESC|ELSE|FAIL|FOR|ID|IF|INTERLEAVE|LOG|LOGF|MAX|NODES|NUMBERED|OF|PARALLEL|REPEAT|RUN|SKIP|STATUS|TAKE|TRY|UNORDERED|UNTIL|WAIT|WHILE|ZIP)\\b",
       "name": "keyword.control.a11flow"
     },
     "modifier": {
-      "match": "\\b(tee|via|timeout|deadline|after|with|id|forward|headers|TEE|VIA|TIMEOUT|DEADLINE|AFTER|WITH|ID|FORWARD|HEADERS)\\b",
+      "match": "\\b(tee|via|timeout|deadline|after|with|id|id-into|forward|headers|TEE|VIA|TIMEOUT|DEADLINE|AFTER|WITH|ID|ID-INTO|FORWARD|HEADERS)\\b",
       "name": "keyword.other.modifier.a11flow"
     },
     "status-code": {

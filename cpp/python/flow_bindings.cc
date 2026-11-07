@@ -823,9 +823,11 @@ std::shared_ptr<flow::HostBridge> HostBridgeForPython() {
 struct BoundFlow {
   std::shared_ptr<const flow::CompiledProgram> program;
   std::string name;
+  bool entry = false;
 
   [[nodiscard]] const flow::FlowPlan& plan() const {
-    const flow::ResolvedFlow* found = program->Flow(name);
+    const flow::ResolvedFlow* found =
+        entry ? program->Entry() : program->Flow(name);
     if (found == nullptr) {
       throw py::key_error(absl::StrCat("No flow named '", name, "' any more."));
     }
@@ -842,7 +844,8 @@ PyJsonObject DescribeFlow(const BoundFlow& flow) {
   const nlohmann::json envelope = flow::PlanToJsonValue(
       flow.program->source_name(), flow.program->program());
   for (const nlohmann::json& one : envelope.at("flows")) {
-    if (one.value("flow", std::string()) == flow.name) {
+    if (one.value("entry", false) == flow.entry &&
+        (flow.entry || one.value("flow", std::string()) == flow.name)) {
       return JsonToPython(one).cast<PyJsonObject>();
     }
   }
@@ -1638,6 +1641,9 @@ handler taken from one still runs after the program variable has gone.
       .def_property_readonly("name",
                              [](const BoundFlow& self) { return self.name; })
       .def_property_readonly(
+          "entry", [](const BoundFlow& self) { return self.entry; },
+          "Whether this is the anonymous program entry Flow.")
+      .def_property_readonly(
           "exported",
           [](const BoundFlow& self) { return self.plan().exported; },
           "Whether the flow is part of its module's public API.")
@@ -1666,10 +1672,16 @@ handler taken from one still runs after the program variable has gone.
       .def(
           "action_schema",
           [](const BoundFlow& self) {
-            const auto* resolved = self.program->Flow(self.name);
-            return ValueOrThrow(flow::FlowSchema(
-                resolved->implementation.value_or(resolved->plan),
-                &self.program->program()));
+            const auto* resolved = self.entry ? self.program->Entry()
+                                              : self.program->Flow(self.name);
+            auto plan = resolved->implementation.value_or(resolved->plan);
+            // Action schemas require a nonempty runtime name. The source entry
+            // remains anonymous; this name is only for its Python action.
+            if (self.entry) {
+              plan.name = "anonymous_flow";
+            }
+            return ValueOrThrow(
+                flow::FlowSchema(plan, &self.program->program()));
           },
           "The selected native implementation's action schema, including "
           "header defaults.")
@@ -1698,8 +1710,13 @@ nested bodies and all.
             }
             // A native handler, handed over as the opaque holder the bindings
             // accept anywhere a handler is taken:
-            return py::cast(NativeActionHandler(ValueOrThrow(flow::MakeHandler(
-                self.program, self.name, std::move(options)))));
+            auto handler =
+                self.entry
+                    ? flow::MakeEntryHandler(self.program, std::move(options))
+                    : flow::MakeHandler(self.program, self.name,
+                                        std::move(options));
+            return py::cast(
+                NativeActionHandler(ValueOrThrow(std::move(handler))));
           },
           py::arg("dispatch_stream") = py::none(), py::kw_only(),
           py::arg("frame_cache_bytes") = 256 * 1024,
@@ -1755,9 +1772,20 @@ them.
           },
           R"doc(Whether the file declares a `flow { ... }` -- a program.
 
-Returns a bool because an entry flow has no name and cannot be accessed through
-`program["..."]`, `run`, or `call`. Use this to choose between `run_program` and
-a named flow from `names`.
+An entry flow has no name and cannot be accessed through `program["..."]`,
+`run`, or `call`. Use `program.entry` to run it as a streaming FlowPlan.
+)doc")
+      .def_property_readonly(
+          "entry",
+          [](const BoundProgram& self) -> std::optional<BoundFlow> {
+            if (self.program->Entry() == nullptr) {
+              return std::nullopt;
+            }
+            return BoundFlow{self.program, "", true};
+          },
+          R"doc(The anonymous `flow { ... }` as a streaming FlowPlan, or None.
+
+This does not make the entry flow callable by name or change CLI execution.
 )doc")
       .def(
           "get",

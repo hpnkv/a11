@@ -99,7 +99,7 @@ const absl::flat_hash_map<std::string_view, StageArgument>& StageTable() {
           {"text", StageArgument::kNone},
           {"json", StageArgument::kNone},
           {"packb", StageArgument::kNone},
-      };
+  };
   return *table;
 }
 
@@ -1438,10 +1438,15 @@ const absl::flat_hash_map<std::string_view, WordDoc>& ModifierDocs() {
         "forwarded by `forward headers`.",
         "llm = run ask_model(..) with \"x-a11-provider\": provider"}},
       {"id",
-       {"Set the node ID used by a step.", "an expression",
+       {"Set the action ID used by a step.", "an expression",
         "An external session can use this ID to read or write the node while "
         "the flow executes.",
         "sink = run collect-audio(frames: mic.audio) id session"}},
+      {"id-into",
+       {"Write the step's action ID to a destination.", "a destination",
+        "Emits one string after the action ID is assigned, without waiting "
+        "for the action to finish.",
+        "job = run work() id-into ids"}},
       {"forward headers", kForwardHeadersDoc},
       {"forward", kForwardHeadersDoc},
       {"headers", kForwardHeadersDoc},
@@ -1451,6 +1456,11 @@ const absl::flat_hash_map<std::string_view, WordDoc>& ModifierDocs() {
 
 const absl::flat_hash_map<std::string_view, WordDoc>& SourceDocs() {
   static const auto* table = new absl::flat_hash_map<std::string_view, WordDoc>{
+      {"id",
+       {"Read a run or call's action ID as one string.", "a call handle",
+        "The value is available after the action starts, without waiting "
+        "for its completion.",
+        "job = run work()\nid job -> ids"}},
       {"status",
        {"Read a subject's completion status as a record.", "a subject",
         "Contains `ok`, `code`, `number`, `message`, and `details`. Reading "
@@ -2285,10 +2295,15 @@ constexpr std::array kFieldModifierOrder = {
 // As they read after a call: what it does with its nodes, then how long, then
 // what it waits for, then what it is told.
 constexpr std::array kModifierOrder = {
-    std::string_view("tee"),     std::string_view("via"),
-    std::string_view("timeout"), std::string_view("deadline"),
-    std::string_view("after"),   std::string_view("with"),
-    std::string_view("id"),      std::string_view("forward headers"),
+    std::string_view("tee"),
+    std::string_view("via"),
+    std::string_view("timeout"),
+    std::string_view("deadline"),
+    std::string_view("after"),
+    std::string_view("with"),
+    std::string_view("id"),
+    std::string_view("id-into"),
+    std::string_view("forward headers"),
 };
 
 constexpr std::array kPortModifierOrder = {
@@ -2706,9 +2721,11 @@ absl::Span<const std::string_view> OrderedModifiers() {
 }
 
 const absl::flat_hash_set<std::string_view>& SourceWords() {
-  // `status x` reads an outcome, `zip(a, b)` reads several streams in step, and
+  // `id x` reads a call ID, `status x` reads an outcome, and
+  // `zip(a, b)` reads several streams in step, while
   // `interleave(a, b)` reads several as one, in the order values arrive.
-  static const auto* words = MakeSet({"take", "status", "zip", "interleave"});
+  static const auto* words =
+      MakeSet({"take", "id", "status", "zip", "interleave"});
   return *words;
 }
 

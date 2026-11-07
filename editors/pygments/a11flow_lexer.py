@@ -123,8 +123,8 @@ CLAUSES = _keywords(
 
 #: What may follow a call's closing parenthesis.
 MODIFIERS = _keywords(
-    "tee", "via", "timeout", "deadline", "after", "with", "id", "forward",
-    "headers"
+    "tee", "via", "timeout", "deadline", "after", "with", "id", "id-into",
+    "forward", "headers"
 )
 
 #: Every pipeline stage.
@@ -141,7 +141,7 @@ STAGES = _keywords(
 BARE_STAGES = _keywords("where", "then")
 
 #: Words that open a pipeline source rather than naming one.
-SOURCE_WORDS = _keywords("interleave", "status", "take", "zip")
+SOURCE_WORDS = _keywords("id", "interleave", "status", "take", "zip")
 
 #: Operators that are words.
 OPERATOR_WORDS = _keywords("and", "or", "not", "in")

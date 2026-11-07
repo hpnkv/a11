@@ -314,7 +314,7 @@ TEST(FlowComplete, AModifierFollowsACallsClosingParenthesis) {
   EXPECT_EQ(
       Names("flow t {\n  in q: string\n  x = run a(q: q) |CARET|"),
       (std::vector<std::string>{"tee", "via", "timeout", "deadline", "after",
-                                "with", "id", "forward headers"}));
+                                "with", "id", "id-into", "forward headers"}));
 }
 
 TEST(FlowComplete, ViaIsFollowedByTheNodeMapsDeclared) {

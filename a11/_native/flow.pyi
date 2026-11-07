@@ -515,6 +515,12 @@ class FlowPlan:
     @property
     def description(self) -> str: ...
     @property
+    def entry(self) -> bool:
+        """
+        Whether this is the anonymous program entry Flow.
+        """
+
+    @property
     def exported(self) -> bool:
         """
         Whether the flow is part of its module's public API.
@@ -801,6 +807,14 @@ class Program:
         """
 
     @property
+    def entry(self) -> FlowPlan | None:
+        """
+        The anonymous `flow { ... }` as a streaming FlowPlan, or None.
+
+        This does not make the entry flow callable by name or change CLI execution.
+        """
+
+    @property
     def flows(self) -> dict[str, FlowPlan]:
         """
         Every flow, by name, in declaration order.
@@ -811,9 +825,8 @@ class Program:
         """
         Whether the file declares a `flow { ... }` -- a program.
 
-        Returns a bool because an entry flow has no name and cannot be accessed through
-        `program["..."]`, `run`, or `call`. Use this to choose between `run_program` and
-        a named flow from `names`.
+        An entry flow has no name and cannot be accessed through `program["..."]`,
+        `run`, or `call`. Use `program.entry` to run it as a streaming FlowPlan.
         """
 
     @property

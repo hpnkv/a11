@@ -172,6 +172,7 @@ enum class NodeKind {
   kStage,
   kPipeline,
   kOutcome,
+  kActionId,
   kPipelineValue,
 
   kCallModifiers,
@@ -461,6 +462,11 @@ struct Outcome : NodeOf<NodeKind::kOutcome> {
   NodePtr subject;
 };
 
+/// `id subject` -- the identity assigned to a run or call.
+struct ActionId : NodeOf<NodeKind::kActionId> {
+  NodePtr subject;
+};
+
 /// `(stream | stage ...)` used where a value is expected.
 struct PipelineValue : NodeOf<NodeKind::kPipelineValue> {
   PipelinePtr pipeline;
@@ -471,7 +477,7 @@ struct PipelineValue : NodeOf<NodeKind::kPipelineValue> {
 
 // --- Calls -------------------------------------------------------------------
 
-/// The `tee`/`via`/`timeout`/`after`/`with`/`id`/`forward` tail of a call.
+/// The `tee`/`via`/`timeout`/`after`/`with`/`id`/`id-into`/`forward` tail.
 struct CallModifiers : NodeOf<NodeKind::kCallModifiers> {
   /// Modifier keyword positions, in source order.
   std::vector<Location> clause_locations;
@@ -483,6 +489,7 @@ struct CallModifiers : NodeOf<NodeKind::kCallModifiers> {
   std::vector<Word> after;
   std::vector<std::pair<std::string, NodePtr>> headers;
   NodePtr action_id;
+  NodePtr id_into;
   /// Header names, or `*` patterns, that `forward headers` names.
   std::vector<std::string> forward;
 };

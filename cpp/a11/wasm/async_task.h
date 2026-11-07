@@ -33,7 +33,7 @@ class AsyncTask : public std::enable_shared_from_this<AsyncTask> {
   static std::shared_ptr<AsyncTask> Start(Work work);
   ~AsyncTask();
   void Launch();
-  Result* Poll();
+  Result* Take();
   void Cancel();
 
  private:

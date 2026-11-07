@@ -354,7 +354,7 @@ if(A11_WASM_BUILD_BOOST_PROBE)
 
     add_executable(a11_wasm_native
       bridge_core.cc bridge_native.cc bridge_native_objects.cc
-      host_stream.cc host_binary_channel.cc host_settings.cc
+      completion_signal.cc host_stream.cc host_binary_channel.cc host_settings.cc
       graph_snapshot.cc runtime.cc async_task.cc
       thread/ucontext_compat.cc thread/native_module_main.cc)
     set_target_properties(a11_wasm_native PROPERTIES
@@ -367,7 +367,7 @@ if(A11_WASM_BUILD_BOOST_PROBE)
       -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=web,worker,node
       -sPTHREAD_POOL_SIZE=1 -sALLOW_MEMORY_GROWTH=1
       -sMAXIMUM_MEMORY=${A11_WASM_MAXIMUM_MEMORY_BYTES} -sFILESYSTEM=0
-      -sEXPORTED_FUNCTIONS=_malloc,_free,_a11_wasm_native_flow_start,_a11_wasm_native_objects_new,_a11_wasm_native_objects_free,_a11_wasm_native_command_start,_a11_wasm_task_launch,_a11_wasm_task_poll,_a11_wasm_task_cancel,_a11_wasm_task_free,_a11_wasm_result_data,_a11_wasm_result_size,_a11_wasm_result_code,_a11_wasm_result_ready,_a11_wasm_result_free
+      -sEXPORTED_FUNCTIONS=_malloc,_free,_a11_wasm_native_flow_start,_a11_wasm_native_objects_new,_a11_wasm_native_objects_free,_a11_wasm_native_command_start,_a11_wasm_task_key,_a11_wasm_task_launch,_a11_wasm_task_take,_a11_wasm_task_cancel,_a11_wasm_task_free,_a11_wasm_completion_notify,_a11_wasm_result_data,_a11_wasm_result_size,_a11_wasm_result_code,_a11_wasm_result_ready,_a11_wasm_result_free
       -sEXPORTED_RUNTIME_METHODS=HEAPU8)
     if(CMAKE_BUILD_TYPE STREQUAL "Debug")
       target_link_options(a11_wasm_native PRIVATE -g -sASSERTIONS=2)

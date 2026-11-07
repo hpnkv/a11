@@ -70,6 +70,7 @@ export async function createA11WasmRuntime(options = {}) {
   const registryGenerations = new Map();
   const activeCallbacks = new Map();
   const hostStreams = new Map();
+  const locallyDetached = new WeakSet();
   const hostChannels = new Map();
   const channelCallbacks = new Map();
   const attachedChannelStreams = new Map();
@@ -189,6 +190,10 @@ export async function createA11WasmRuntime(options = {}) {
               }
             }
             const stream = hostStreams.get(event.streamId);
+            if (event.kind === 'done' &&
+                (!stream || locallyDetached.has(stream))) {
+              return {code: StatusCode.OK, message: '', details: []};
+            }
             if (!stream) return {code: StatusCode.NOT_FOUND,
               message: 'Host wire stream is not attached', details: []};
             let result;
@@ -589,6 +594,7 @@ export async function createA11WasmRuntime(options = {}) {
     async detachWireStream(id) {
       const stream = hostStreams.get(id);
       if (stream && !releasingHostStreams.has(id)) {
+        locallyDetached.add(stream);
         const cancelled = {code: StatusCode.CANCELLED,
           message: 'Host wire stream detached', details: []};
         await command({operation: 'host_stream_abort', id,

@@ -14,10 +14,12 @@
 
 #include "async_task.h"
 
+#include <cstdint>
 #include <memory>
 #include <utility>
 
 #include <absl/status/status.h>
+#include <emscripten.h>
 
 #include "a11/concurrency/executor.h"
 #include "bridge_core.h"
@@ -42,6 +44,9 @@ void AsyncTask::Publish(std::unique_ptr<Result> result) {
                                       std::memory_order_release,
                                       std::memory_order_relaxed)) {
     result.release();
+    MAIN_THREAD_EM_ASM({
+      globalThis.__a11WasmTaskReady?.($0);
+    }, reinterpret_cast<std::uintptr_t>(this));
   }
 }
 
@@ -77,10 +82,10 @@ void AsyncTask::Launch() {
   MaybeCancel();
 }
 
-Result* AsyncTask::Poll() {
+Result* AsyncTask::Take() {
   Result* found = result_.load(std::memory_order_acquire);
   if (found == nullptr) {
-    return new Result{0, {}, false};
+    return Failure(absl::FailedPreconditionError("Task is not complete"));
   }
   if (consumed_.exchange(true, std::memory_order_acq_rel)) {
     return Failure(absl::FailedPreconditionError("Task result was consumed"));

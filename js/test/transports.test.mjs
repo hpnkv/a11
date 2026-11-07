@@ -774,6 +774,18 @@ test('WebRTC client completes offer, answer, ICE, and data-channel startup', asy
     assert.deepEqual(suffix, [index, 0, 0, 0, 0, 0, 0, 0],
       `frame ${index} must end with its little-endian sequence`);
   }
+  connection.channel.bufferedAmount = 128;
+  assert.equal(isOk(await stream.halfClose()), true);
+  let drained = false;
+  const draining = stream.drainOutgoingMessages().then(status => {
+    drained = true;
+    return status;
+  });
+  await Promise.resolve();
+  assert.equal(drained, false);
+  connection.channel.bufferedAmount = 0;
+  connection.channel.emit('bufferedamountlow');
+  assert.equal(isOk(await draining), true);
   // No path MTU assertions here any more, and their absence is the result.
   //
   // A probe is now a padded SCTP HEARTBEAT emitted by the stack itself, which any

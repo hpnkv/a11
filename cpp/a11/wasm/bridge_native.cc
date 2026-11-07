@@ -46,6 +46,7 @@
 #include "sdk/flow/actions/time_actions.h"
 #include "async_task.h"
 #include "bridge_core.h"
+#include "completion_signal.h"
 #include "host_settings.h"
 #include "native_objects.h"
 #include "thread/wasm_system_actions.h"
@@ -56,15 +57,12 @@ absl::Status HostInvokeCallback(const std::string& callback_id,
                                 const std::string& payload,
                                 bool session_callback,
                                 const std::string& flow_id = "") {
-  constexpr int kPending = 0;
-  constexpr int kCompleted = 1;
   constexpr size_t kMessageCapacity = 16 * 1024;
   constexpr int kInternalCode =
       static_cast<int>(absl::StatusCode::kInternal);
   constexpr int kResourceExhaustedCode =
       static_cast<int>(absl::StatusCode::kResourceExhausted);
-  constexpr absl::Duration kCompletionPollInterval = absl::Milliseconds(1);
-  std::atomic<int> done{kPending};
+  a11::wasm::CompletionSignal completion;
   std::atomic<int> code{kInternalCode};
   std::array<char, kMessageCapacity> message{};
   MAIN_THREAD_ASYNC_EM_ASM({
@@ -84,27 +82,24 @@ absl::Status HostInvokeCallback(const std::string& callback_id,
           message: "Host callback returned no status", details: []});
       }
       if (lengthBytesUTF8(encoded) >= $5) {
-        code = $8;
-        encoded = JSON.stringify({code: $8,
+        code = $7;
+        encoded = JSON.stringify({code: $7,
           message: "Host callback status exceeds the WASM bridge limit",
           details: []});
       }
       stringToUTF8(encoded, $4, $5);
       Atomics.store(HEAP32, $3 >> 2, code);
-      Atomics.store(HEAP32, $2 >> 2, $7);
-      Atomics.notify(HEAP32, $2 >> 2);
+      globalThis.__a11WasmCompletion($2);
     };
-    Promise.resolve().then(() => ($9
+    Promise.resolve().then(() => ($8
       ? globalThis.__a11WasmInvokeSession
       : globalThis.__a11WasmInvokeAction)(
-      UTF8ToString($0), UTF8ToString($1), UTF8ToString($10))).then(complete,
+      UTF8ToString($0), UTF8ToString($1), UTF8ToString($9))).then(complete,
       error => complete({code: $6, message: String(error?.message ?? error)}));
-  }, callback_id.c_str(), payload.c_str(), &done, &code,
-     message.data(), message.size(), kInternalCode, kCompleted,
+  }, callback_id.c_str(), payload.c_str(), &completion, &code,
+     message.data(), message.size(), kInternalCode,
      kResourceExhaustedCode, session_callback, flow_id.c_str());
-  while (done.load(std::memory_order_acquire) == kPending) {
-    thread::SleepFor(kCompletionPollInterval);
-  }
+  completion.Wait();
   const int final_code = code.load(std::memory_order_acquire);
   if (final_code < static_cast<int>(absl::StatusCode::kOk) ||
       final_code > static_cast<int>(absl::StatusCode::kUnauthenticated)) {
@@ -459,12 +454,17 @@ extern "C" std::shared_ptr<a11::wasm::AsyncTask>* a11_wasm_native_flow_start(
   return new std::shared_ptr<a11::wasm::AsyncTask>(std::move(task));
 }
 
-extern "C" Result* a11_wasm_task_poll(
+extern "C" std::uintptr_t a11_wasm_task_key(
+    std::shared_ptr<a11::wasm::AsyncTask>* task) {
+  return task == nullptr ? 0 : reinterpret_cast<std::uintptr_t>(task->get());
+}
+
+extern "C" Result* a11_wasm_task_take(
     std::shared_ptr<a11::wasm::AsyncTask>* task) {
   if (task == nullptr) {
     return Failure(absl::InvalidArgumentError("Task handle is null"));
   }
-  return (*task)->Poll();
+  return (*task)->Take();
 }
 
 extern "C" void a11_wasm_task_launch(

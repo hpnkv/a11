@@ -15,7 +15,6 @@
 #include "host_stream.h"
 
 #include <array>
-#include <atomic>
 #include <memory>
 #include <optional>
 #include <string>
@@ -25,12 +24,12 @@
 
 #include <absl/status/status.h>
 #include <absl/status/status_macros.h>
-#include <absl/time/time.h>
 
 #include "a11/concurrency/executor.h"
 #include "a11/data/json.h"
 #include "a11/json_codec.h"
 #include "a11/status.h"
+#include "completion_signal.h"
 #include "thread/boost_primitives.h"
 
 namespace a11::wasm {
@@ -38,11 +37,9 @@ namespace {
 
 absl::Status HostWireEvent(const std::string& id, const char* kind,
                            const std::string& payload) {
-  constexpr int kPending = 0;
-  constexpr int kCompleted = 1;
   constexpr size_t kStatusCapacity = 16 * 1024;
   constexpr int kInternalCode = static_cast<int>(absl::StatusCode::kInternal);
-  std::atomic<int> done{kPending};
+  CompletionSignal completion;
   std::array<char, kStatusCapacity> encoded{};
   MAIN_THREAD_ASYNC_EM_ASM({
     const complete = status => {
@@ -55,18 +52,15 @@ absl::Status HostWireEvent(const std::string& id, const char* kind,
           message: 'Wire callback status exceeds the bridge limit'});
       }
       stringToUTF8(value, $3, $4);
-      Atomics.store(HEAP32, $6 >> 2, $7);
-      Atomics.notify(HEAP32, $6 >> 2);
+      globalThis.__a11WasmCompletion($6);
     };
     Promise.resolve().then(() => globalThis.__a11WasmWireEvent(
       UTF8ToString($0), UTF8ToString($1),
       JSON.parse(UTF8ToString($2)))).then(complete,
       error => complete({code: $5, message: String(error?.message ?? error)}));
   }, id.c_str(), kind, payload.c_str(), encoded.data(), encoded.size(),
-     kInternalCode, &done, kCompleted);
-  while (done.load(std::memory_order_acquire) == kPending) {
-    thread::SleepFor(absl::Milliseconds(1));
-  }
+     kInternalCode, &completion);
+  completion.Wait();
   ABSL_ASSIGN_OR_RETURN(auto value,
                         a11::ParseJson(encoded.data(), "host wire status"));
   ABSL_ASSIGN_OR_RETURN(auto status, a11::StatusFromJson(value));

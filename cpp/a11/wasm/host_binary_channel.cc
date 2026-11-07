@@ -15,7 +15,6 @@
 #include "host_binary_channel.h"
 
 #include <array>
-#include <atomic>
 #include <string>
 #include <utility>
 
@@ -24,23 +23,21 @@
 #include <absl/status/status.h>
 #include <absl/status/status_macros.h>
 #include <absl/strings/escaping.h>
-#include <absl/time/time.h>
 
 #include "a11/json_codec.h"
 #include "a11/status.h"
+#include "completion_signal.h"
 
 namespace a11::wasm {
 
 absl::StatusOr<nlohmann::json> HostBinaryChannel::Call(
     std::string_view kind, const nlohmann::json& payload) const {
-  constexpr int kPending = 0;
-  constexpr int kCompleted = 1;
   constexpr size_t kCapacity = 16 * 1024;
   constexpr int kInternalCode = static_cast<int>(absl::StatusCode::kInternal);
   ABSL_ASSIGN_OR_RETURN(auto encoded_payload,
                         a11::DumpJson(payload, "binary channel event"));
   const std::string kind_text(kind);
-  std::atomic<int> done{kPending};
+  CompletionSignal completion;
   std::array<char, kCapacity> encoded{};
   MAIN_THREAD_ASYNC_EM_ASM({
     const complete = value => {
@@ -53,8 +50,7 @@ absl::StatusOr<nlohmann::json> HostBinaryChannel::Call(
           message: 'Binary channel response exceeds bridge limit'}});
       }
       stringToUTF8(text, $3, $4);
-      Atomics.store(HEAP32, $6 >> 2, $7);
-      Atomics.notify(HEAP32, $6 >> 2);
+      globalThis.__a11WasmCompletion($6);
     };
     Promise.resolve().then(() => globalThis.__a11WasmBinaryEvent(
       UTF8ToString($0), UTF8ToString($1),
@@ -62,10 +58,8 @@ absl::StatusOr<nlohmann::json> HostBinaryChannel::Call(
       error => complete({status: {code: $5,
         message: String(error?.message ?? error)}}));
   }, id_.c_str(), kind_text.c_str(), encoded_payload.c_str(),
-     encoded.data(), encoded.size(), kInternalCode, &done, kCompleted);
-  while (done.load(std::memory_order_acquire) == kPending) {
-    thread::SleepFor(absl::Milliseconds(1));
-  }
+     encoded.data(), encoded.size(), kInternalCode, &completion);
+  completion.Wait();
   ABSL_ASSIGN_OR_RETURN(auto answer,
                         a11::ParseJson(encoded.data(), "binary channel reply"));
   if (!answer.is_object()) {

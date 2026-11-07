@@ -32,7 +32,11 @@ try {
   const module = await createModule({ locateFile: name =>
     name.endsWith(".wasm") ? wasmUrl : name });
   const { input, result, encoder, decoder } = createBridge(module);
+  globalThis.__a11WasmCompletion = pointer =>
+    module._a11_wasm_completion_notify(pointer);
   const running = new Map();
+  const readyWaiters = new Map();
+  globalThis.__a11WasmTaskReady = id => readyWaiters.get(id)?.();
   const hostCalls = new Map();
   const wireCalls = new Map();
   const binaryCalls = new Map();
@@ -99,6 +103,7 @@ try {
       return;
     }
     let handle = 0;
+    let key = 0;
     try {
       handle = command === undefined
         ? input(encoder.encode(JSON.stringify({ ...request, host })), (pointer, size) =>
@@ -106,23 +111,25 @@ try {
         : input(encoder.encode(JSON.stringify(command)), (pointer, size) =>
           module._a11_wasm_native_command_start(objects, pointer, size));
       if (!handle) throw new Error("WASM task allocation failed");
+      key = module._a11_wasm_task_key(handle);
+      if (!key) throw new Error("WASM task has no notification key");
       running.set(id, handle);
-      let launchError = null;
-      setTimeout(() => {
-        if (running.get(id) !== handle) return;
-        try { module._a11_wasm_task_launch(handle); }
-        catch (error) { launchError = error; }
-      }, 0);
-      let encoded = null;
-      while (encoded === null) {
-        if (launchError) throw launchError;
-        encoded = result(module._a11_wasm_task_poll(handle));
-        if (encoded === null) await new Promise(resolve => setTimeout(resolve, 8));
-      }
+      let resolveReady;
+      let rejectReady;
+      const ready = new Promise((resolve, reject) => {
+        resolveReady = resolve;
+        rejectReady = reject;
+      });
+      readyWaiters.set(key, resolveReady);
+      try { module._a11_wasm_task_launch(handle); }
+      catch (error) { rejectReady(error); }
+      await ready;
+      const encoded = result(module._a11_wasm_task_take(handle));
       send({ id, output: JSON.parse(decoder.decode(encoded)) });
     } catch (error) {
       send({id, error: statusFromThrown(error)});
     } finally {
+      readyWaiters.delete(key);
       running.delete(id);
       if (handle) module._a11_wasm_task_free(handle);
     }

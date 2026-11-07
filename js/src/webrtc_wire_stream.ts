@@ -498,7 +498,6 @@ class RtcDataChannelMember {
   private closed = false;
   private failure: NonOkStatus | null = null;
   private messageChain: Promise<void> = Promise.resolve();
-  private pollTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     readonly dataChannel: RTCDataChannel,
@@ -565,7 +564,6 @@ class RtcDataChannelMember {
   closeChannel(): void {
     if (this.closed) this.closed = true;
     this.closed = true;
-    if (this.pollTimer !== null) { clearTimeout(this.pollTimer); this.pollTimer = null; }
     try { this.dataChannel.close(); } catch { /* best effort */ }
   }
 
@@ -632,7 +630,6 @@ class MultiplexedRtcChannel implements BinaryChannel {
   private readonly opened = new Deferred<Status>();
   private failure: NonOkStatus | null = null;
   private readonly drainWaiters: Array<Deferred<Status>> = [];
-  private pollTimer: ReturnType<typeof setTimeout> | null = null;
   private primaryChannel: RTCDataChannel | null = null;
 
   private constructor(
@@ -755,14 +752,12 @@ class MultiplexedRtcChannel implements BinaryChannel {
     if (amount === 0) return Promise.resolve(okStatus());
     const waiter = new Deferred<Status>();
     this.drainWaiters.push(waiter);
-    this.scheduleDrainPoll();
     return waiter.promise;
   }
 
   close(): Status {
     if (this.closed) return okStatus();
     this.closed = true;
-    if (this.pollTimer !== null) { clearTimeout(this.pollTimer); this.pollTimer = null; }
     const stop = this.failure ?? cancelledError('WebRTC channel closed.');
     for (const waiter of this.drainWaiters.splice(0)) waiter.resolve(stop);
     for (const member of this.members.splice(0)) member.channel.closeChannel();
@@ -853,6 +848,7 @@ class MultiplexedRtcChannel implements BinaryChannel {
       }
     } finally {
       this.flushing = false;
+      this.checkDrain();
     }
   }
 
@@ -989,15 +985,6 @@ class MultiplexedRtcChannel implements BinaryChannel {
     this.opened.resolve(status);
     for (const waiter of this.drainWaiters.splice(0)) waiter.resolve(status);
     try { this.callbacks?.onError(status); } catch { /* avoid escape */ }
-  }
-
-  private scheduleDrainPoll(): void {
-    if (this.pollTimer !== null || this.drainWaiters.length === 0) return;
-    this.pollTimer = setTimeout(() => {
-      this.pollTimer = null;
-      this.checkDrain();
-      if (this.drainWaiters.length > 0) this.scheduleDrainPoll();
-    }, 4);
   }
 
   private checkDrain(): void {

@@ -96,11 +96,12 @@ try {
 
   const early = runtime.session('host-wire-early-detach');
   await early.ready();
-  let earlyAbort;
+  const earlyAborts = [];
   await early.addStream({...host, id: 'host-wire-early',
-    abort: status => { earlyAbort = status; return status; }});
+    abort: status => { earlyAborts.push(status); return status; }});
   await runtime.detachWireStream('host-wire-early');
-  assert.equal(earlyAbort.code, StatusCode.CANCELLED);
+  assert.deepEqual(earlyAborts.map(status => status.code),
+    [StatusCode.CANCELLED]);
 
   const orphan = runtime.session('host-wire-dispose-session');
   await orphan.ready();

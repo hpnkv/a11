@@ -82,6 +82,8 @@ cache headers for packaged binary assets.
 
 The native store, node, action, session, and Flow APIs run in the worker-bound
 module. Browser or Node cryptographic APIs provide secure entropy and SHA-256.
+Native task completion notifies the worker directly. Host callbacks wake their
+waiting fibers through condition variables when JavaScript returns.
 Native node handles accept and return typed fragment JSON at their boundary;
 `putFragment` and `nextFragment` preserve both local and storage-qualified
 `NodeRef` values. Their offsets and lengths count fragments.

@@ -29,6 +29,7 @@
 
 #include <absl/container/flat_hash_map.h>
 #include <absl/container/flat_hash_set.h>
+#include <absl/container/inlined_vector.h>
 #include <absl/status/status.h>
 #include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
@@ -82,6 +83,14 @@ struct LocalChunkStore::State
 
   a11::Future<data::NodeFragment> Read(ReadKind kind, std::uint64_t value,
                                        absl::Time deadline) {
+    {
+      thread::MutexLock lock(&mu);
+      auto result = LookupReadLocked(kind, value);
+      if (result.has_value()) {
+        return a11::CompletedFuture<data::NodeFragment>(std::move(*result));
+      }
+    }
+
     auto request = std::make_shared<ReadRequest>(kind, value);
     a11::Future<data::NodeFragment> future = request->promise.future();
     const std::weak_ptr<State> weak_state = weak_from_this();
@@ -106,7 +115,7 @@ struct LocalChunkStore::State
     {
       thread::MutexLock lock(&mu);
       std::optional<absl::StatusOr<data::NodeFragment>> result =
-          LookupReadLocked(*request);
+          LookupReadLocked(kind, value);
       if (result.has_value() && request->TryClaim()) {
         completions.push_back(ReadCompletion{
             .request = request,
@@ -139,17 +148,17 @@ struct LocalChunkStore::State
   }
 
   std::optional<absl::StatusOr<data::NodeFragment>> LookupReadLocked(
-      const ReadRequest& request) const ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu) {
+      ReadKind kind, std::uint64_t value) const
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu) {
     std::optional<std::uint32_t> seq;
-    if (request.kind == ReadKind::kSequence) {
-      const auto requested_seq = static_cast<std::uint32_t>(request.value);
+    if (kind == ReadKind::kSequence) {
+      const auto requested_seq = static_cast<std::uint32_t>(value);
       if (chunks.find(requested_seq) != chunks.end()) {
         seq = requested_seq;
       }
     } else {
-      const auto arrival = arrival_order_to_seq.find(request.value);
-      if (arrival != arrival_order_to_seq.end()) {
-        seq = arrival->second;
+      if (value < arrival_order_to_seq.size()) {
+        seq = arrival_order_to_seq[static_cast<size_t>(value)];
         if (chunks.find(*seq) == chunks.end()) {
           return absl::DataLossError(
               "Chunk store index references a missing chunk");
@@ -173,10 +182,9 @@ struct LocalChunkStore::State
       return *status;
     }
     return absl::NotFoundError(
-        request.kind == ReadKind::kSequence
-            ? absl::StrCat("Chunk store closed without seq ", request.value)
-            : absl::StrCat("Chunk store closed without arrival order ",
-                           request.value));
+        kind == ReadKind::kSequence
+            ? absl::StrCat("Chunk store closed without seq ", value)
+            : absl::StrCat("Chunk store closed without arrival order ", value));
   }
 
   void CollectReadsLocked(std::vector<ReadCompletion>* completions)
@@ -188,7 +196,7 @@ struct LocalChunkStore::State
         continue;
       }
       std::optional<absl::StatusOr<data::NodeFragment>> result =
-          LookupReadLocked(**request);
+          LookupReadLocked((*request)->kind, (*request)->value);
       if (!result.has_value() || !(*request)->TryClaim()) {
         ++request;
         continue;
@@ -277,7 +285,11 @@ struct LocalChunkStore::State
         return absl::OkStatus();
       }
       if (found == chunks.end()) {
-        *waiter = changed;
+        *waiter = changed.lock();
+        if (*waiter == nullptr) {
+          *waiter = std::make_shared<thread::PermanentEvent>();
+          changed = *waiter;
+        }
         return std::nullopt;
       }
       ++total_chunks_read;
@@ -292,9 +304,7 @@ struct LocalChunkStore::State
 
   thread::Mutex mu;
   const std::string node_id;
-  absl::flat_hash_map<std::uint32_t, std::uint64_t> seq_to_arrival_order
-      ABSL_GUARDED_BY(mu);
-  absl::flat_hash_map<std::uint64_t, std::uint32_t> arrival_order_to_seq
+  absl::InlinedVector<std::uint32_t, 4> arrival_order_to_seq
       ABSL_GUARDED_BY(mu);
   absl::flat_hash_map<std::uint32_t, std::variant<data::Chunk, data::NodeRef>>
       chunks ABSL_GUARDED_BY(mu);
@@ -303,8 +313,7 @@ struct LocalChunkStore::State
   std::uint64_t total_chunks_read ABSL_GUARDED_BY(mu) = 0;
   std::optional<absl::Status> status ABSL_GUARDED_BY(mu);
   std::vector<std::shared_ptr<ReadRequest>> pending_reads ABSL_GUARDED_BY(mu);
-  std::shared_ptr<thread::PermanentEvent> changed ABSL_GUARDED_BY(mu) =
-      std::make_shared<thread::PermanentEvent>();
+  std::weak_ptr<thread::PermanentEvent> changed ABSL_GUARDED_BY(mu);
 };
 
 absl::StatusOr<std::shared_ptr<LocalChunkStore>> LocalChunkStore::Create(
@@ -490,37 +499,30 @@ a11::Future<std::vector<std::uint32_t>> LocalChunkStore::PutMany(
             }
           }
 
-          // Stage all values and reserve the destination tables before
-          // publishing the batch. This keeps the commit compact and avoids
-          // growth allocations once mutation begins.
+          // Stage values and reserve both destinations before publishing.
           absl::flat_hash_map<std::uint32_t,
                               std::variant<data::Chunk, data::NodeRef>>
               chunk_nodes;
-          absl::flat_hash_map<std::uint64_t, std::uint32_t> arrival_nodes;
-          absl::flat_hash_map<std::uint32_t, std::uint64_t> reverse_nodes;
           for (size_t index = 0; index < fragments.size(); ++index) {
-            const std::uint64_t arrival = state->total_chunks_put + index;
             chunk_nodes.emplace(assigned[index],
                                 std::move(fragments[index].data));
-            arrival_nodes.emplace(arrival, assigned[index]);
-            reverse_nodes.emplace(assigned[index], arrival);
           }
           state->chunks.reserve(state->chunks.size() + chunk_nodes.size());
           state->arrival_order_to_seq.reserve(
-              state->arrival_order_to_seq.size() + arrival_nodes.size());
-          state->seq_to_arrival_order.reserve(
-              state->seq_to_arrival_order.size() + reverse_nodes.size());
+              state->arrival_order_to_seq.size() + assigned.size());
           state->chunks.merge(chunk_nodes);
-          state->arrival_order_to_seq.merge(arrival_nodes);
-          state->seq_to_arrival_order.merge(reverse_nodes);
+          state->arrival_order_to_seq.insert(state->arrival_order_to_seq.end(),
+                                             assigned.begin(), assigned.end());
           state->total_chunks_put += fragments.size();
           state->final_seq = pending_final;
-          notify = std::exchange(state->changed,
-                                 std::make_shared<thread::PermanentEvent>());
+          notify = state->changed.lock();
+          state->changed.reset();
           state->CollectReadsLocked(&read_completions);
         }
         State::CompleteReads(std::move(read_completions));
-        notify->Notify();
+        if (notify != nullptr) {
+          notify->Notify();
+        }
         return assigned;
       });
 }
@@ -560,12 +562,11 @@ a11::Future<std::uint32_t> LocalChunkStore::GetSeqForArrivalOrder(
       [state = std::move(state),
        arrival_order]() -> absl::StatusOr<std::uint32_t> {
         thread::MutexLock lock(&state->mu);
-        const auto found = state->arrival_order_to_seq.find(arrival_order);
-        if (found == state->arrival_order_to_seq.end()) {
+        if (arrival_order >= state->arrival_order_to_seq.size()) {
           return absl::NotFoundError(
               absl::StrCat("No fragment has arrival order ", arrival_order));
         }
-        return found->second;
+        return state->arrival_order_to_seq[static_cast<size_t>(arrival_order)];
       });
 }
 
@@ -603,12 +604,14 @@ a11::Future<absl::Status> LocalChunkStore::CloseWritesWithStatus(
           }
           state->status = std::move(status);
           published = *state->status;
-          notify = std::exchange(state->changed,
-                                 std::make_shared<thread::PermanentEvent>());
+          notify = state->changed.lock();
+          state->changed.reset();
           state->CollectReadsLocked(&read_completions);
         }
         State::CompleteReads(std::move(read_completions));
-        notify->Notify();
+        if (notify != nullptr) {
+          notify->Notify();
+        }
         return absl::StatusOr<absl::Status>(std::in_place,
                                             std::move(published));
       });

@@ -40,7 +40,7 @@ absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> Action::GetStreamSourcesNode(
     thread::MutexLock lock(&mu_);
     streams_enabled_ = true;
     if (request_payload) {
-      stream_reader_requested_ = true;
+      EnsureStreamStateLocked().reader_requested = true;
       std::vector<std::string> supported;
       const auto inherited = headers_.find(std::string(kStreamStorageHeader));
       for (const auto& identity : accessible) {
@@ -58,9 +58,8 @@ absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> Action::GetStreamSourcesNode(
       headers_.insert_or_assign(std::string(kStreamStorageHeader),
                                 absl::StrJoin(supported, ","));
     }
-    headers_.insert_or_assign(
-        std::string(kStreamScopeHeader),
-        output_ids_.at(std::string(kActionStreamsOutput)));
+    headers_.insert_or_assign(std::string(kStreamScopeHeader),
+                              OutputIdLocked(kActionStreamsOutput));
   }
   return GetOutput(std::string(kActionStreamsOutput), false);
 }
@@ -69,7 +68,8 @@ absl::Status Action::ExposeStreamSources(std::string port,
                                          std::string purpose) {
   {
     thread::MutexLock lock(&mu_);
-    if (outputs_finished_ || !stream_references_.empty()) {
+    if (outputs_finished_ ||
+        (stream_state_ != nullptr && !stream_state_->references.empty())) {
       return absl::FailedPreconditionError(
           "Expose stream sources before registering producers");
     }
@@ -78,7 +78,8 @@ absl::Status Action::ExposeStreamSources(std::string port,
       return absl::InvalidArgumentError(
           "A declared output and purpose are required");
     }
-    stream_source_ports_.insert_or_assign(std::move(port), std::move(purpose));
+    EnsureStreamStateLocked().source_ports.insert_or_assign(std::move(port),
+                                                            std::move(purpose));
   }
   return GetStreamSourcesNode(false).status();
 }
@@ -107,7 +108,7 @@ absl::StatusOr<StreamReference> Action::RegisterStream(
       return absl::FailedPreconditionError(
           "Only a running action may register streams");
     }
-    owned_stream_ids_.insert(node_id);
+    EnsureStreamStateLocked().owned_ids.insert(node_id);
   }
   ABSL_RETURN_IF_ERROR(PublishStreamReference(reference));
   return reference;
@@ -126,8 +127,8 @@ absl::Status Action::ReceiveStreamReference(const StreamReference& reference) {
   {
     thread::MutexLock lock(&mu_);
     const auto capabilities = headers_.find(std::string(kStreamStorageHeader));
-    if (stream_reader_requested_ && reference.node.storage.has_value() &&
-        capabilities != headers_.end()) {
+    if (stream_state_ != nullptr && stream_state_->reader_requested &&
+        reference.node.storage.has_value() && capabilities != headers_.end()) {
       for (const auto identity : absl::StrSplit(capabilities->second, ',')) {
         if (identity == reference.node.storage->id) {
           require_direct = true;
@@ -143,6 +144,7 @@ absl::Status Action::ReceiveStreamReference(const StreamReference& reference) {
 
 absl::Status Action::PublishStreamReference(const StreamReference& reference) {
   ABSL_ASSIGN_OR_RETURN(data::Chunk chunk, StreamReferenceToChunk(reference));
+  const auto stored_reference = std::make_shared<StreamReference>(reference);
   const std::string& producer = reference.producer_id;
   const std::string& purpose = reference.purpose;
   const auto source_map = GetNodeMap();
@@ -172,12 +174,14 @@ absl::Status Action::PublishStreamReference(const StreamReference& reference) {
           }
         }
         if (direct_storage) {
-          current->direct_stream_ids_.insert(reference.node.id);
+          current->EnsureStreamStateLocked().direct_ids.insert(
+              reference.node.id);
         }
       }
-      const auto found = current->stream_references_.find(producer);
-      if (found != current->stream_references_.end()) {
-        if (found->second != reference) {
+      StreamState& state = current->EnsureStreamStateLocked();
+      const auto found = state.references.find(producer);
+      if (found != state.references.end()) {
+        if (*found->second != reference) {
           return absl::AlreadyExistsError(
               "Conflicting stream producer identity");
         }
@@ -186,14 +190,14 @@ absl::Status Action::PublishStreamReference(const StreamReference& reference) {
         if (current->outputs_finished_) {
           return absl::FailedPreconditionError("The stream scope has finished");
         }
-        if (current->stream_references_.size() >= kMaxStreamReferences) {
+        if (state.references.size() >= kMaxStreamReferences) {
           return absl::ResourceExhaustedError(
               "Stream scope exceeds 4096 producers");
         }
         current->streams_enabled_ = true;
-        current->stream_references_.emplace(producer, reference);
+        state.references.emplace(producer, stored_reference);
         ports.emplace_back(kActionStreamsOutput);
-        for (const auto& [port, wanted] : current->stream_source_ports_) {
+        for (const auto& [port, wanted] : state.source_ports) {
           if (wanted == purpose) {
             ports.push_back(port);
           }

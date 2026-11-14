@@ -481,6 +481,30 @@ class Action : public std::enable_shared_from_this<Action> {
  private:
   enum class Mode { kNone, kRun, kCall, kCancelled };
 
+  struct PortOverrides {
+    absl::flat_hash_map<std::string, std::string> inputs;
+    absl::flat_hash_map<std::string, std::string> outputs;
+  };
+
+  struct StreamState {
+    bool reader_requested = false;
+    absl::flat_hash_set<std::string> direct_ids;
+    absl::flat_hash_map<std::string, std::string> source_ports;
+    absl::flat_hash_map<std::string, std::shared_ptr<const StreamReference>>
+        references;
+    absl::flat_hash_set<std::string> owned_ids;
+  };
+
+  struct DispatchState {
+    DispatchState()
+        : promise(std::make_shared<a11::Promise<a11::Unit>>()),
+          future(promise->future()) {}
+
+    std::optional<absl::Status> status;
+    std::shared_ptr<a11::Promise<a11::Unit>> promise;
+    a11::Task future;
+  };
+
   absl::Status ReceiveStreamReference(const StreamReference& reference);
   absl::Status PublishStreamReference(const StreamReference& reference);
   absl::Status WaitForStreamChildren();
@@ -490,10 +514,18 @@ class Action : public std::enable_shared_from_this<Action> {
          std::shared_ptr<net::WireStream> stream,
          const std::shared_ptr<service::Session>& session,
          std::shared_ptr<ActionRegistry> registry,
-         std::shared_ptr<ActionLimiter> nested_limiter);
+         size_t max_concurrent_nested_actions);
 
   absl::Status Begin(Mode mode);
   absl::Status RemapDefaultPorts() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
+  [[nodiscard]] bool IsOutputPortLocked(std::string_view name) const
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
+  [[nodiscard]] std::string InputIdLocked(std::string_view name) const
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
+  [[nodiscard]] std::string OutputIdLocked(std::string_view name) const
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
+  PortOverrides& EnsurePortOverridesLocked() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
+  StreamState& EnsureStreamStateLocked() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
   absl::Status AttachStreamIfRequested(
       const std::shared_ptr<nodes::AsyncNode>& node, bool bind);
   std::shared_ptr<ReferenceMirrorRegistry> MirrorRegistry();
@@ -561,9 +593,7 @@ class Action : public std::enable_shared_from_this<Action> {
   std::shared_ptr<ActionRegistry> registry_ ABSL_GUARDED_BY(mu_);
   std::shared_ptr<const VerifiedAuthorization> verified_authorization_
       ABSL_GUARDED_BY(mu_);
-  absl::flat_hash_map<std::string, std::string> input_ids_ ABSL_GUARDED_BY(mu_);
-  absl::flat_hash_map<std::string, std::string> output_ids_
-      ABSL_GUARDED_BY(mu_);
+  std::unique_ptr<PortOverrides> port_overrides_ ABSL_GUARDED_BY(mu_);
   absl::flat_hash_set<std::shared_ptr<nodes::AsyncNode>> input_nodes_
       ABSL_GUARDED_BY(mu_);
   absl::flat_hash_set<std::shared_ptr<nodes::AsyncNode>> output_nodes_
@@ -590,23 +620,15 @@ class Action : public std::enable_shared_from_this<Action> {
   // owns presentation, so WriteLog stops reporting to the process sink.
   bool log_claimed_ ABSL_GUARDED_BY(mu_) = false;
   bool streams_enabled_ ABSL_GUARDED_BY(mu_) = false;
-  bool stream_reader_requested_ ABSL_GUARDED_BY(mu_) = false;
-  absl::flat_hash_set<std::string> direct_stream_ids_ ABSL_GUARDED_BY(mu_);
-  absl::flat_hash_map<std::string, std::string> stream_source_ports_
-      ABSL_GUARDED_BY(mu_);
-  absl::flat_hash_map<std::string, StreamReference> stream_references_
-      ABSL_GUARDED_BY(mu_);
-  absl::flat_hash_set<std::string> owned_stream_ids_ ABSL_GUARDED_BY(mu_);
-  std::optional<absl::Status> dispatch_status_ ABSL_GUARDED_BY(mu_);
+  std::unique_ptr<StreamState> stream_state_ ABSL_GUARDED_BY(mu_);
   std::shared_ptr<a11::Promise<a11::Unit>> done_promise_ ABSL_GUARDED_BY(mu_);
   a11::Task done_future_ ABSL_GUARDED_BY(mu_);
-  std::shared_ptr<a11::Promise<a11::Unit>> dispatch_promise_
-      ABSL_GUARDED_BY(mu_);
-  a11::Task dispatch_future_ ABSL_GUARDED_BY(mu_);
+  std::unique_ptr<DispatchState> dispatch_ ABSL_GUARDED_BY(mu_);
   std::vector<OnActionCancelled> cancel_callbacks_ ABSL_GUARDED_BY(mu_);
   std::weak_ptr<Action> parent_ ABSL_GUARDED_BY(mu_);
   absl::flat_hash_set<std::shared_ptr<Action>> children_ ABSL_GUARDED_BY(mu_);
   std::shared_ptr<ActionLimiter> nested_limiter_ ABSL_GUARDED_BY(mu_);
+  const size_t max_concurrent_nested_actions_;
 
   friend class ActionRegistry;
   friend class service::Session;

@@ -54,12 +54,12 @@ namespace a11::stores {
  * explicit sequence discontinuities self-describing.
  */
 struct ChunkStoreWriterOptions {
-  /// Sequence number at which writing begins.
-  std::uint32_t offset = 0;
-  /// Maximum number of chunks flushed to the store per batch.
-  std::uint64_t max_chunks_to_write_at_once = 8;
   /// Optional bound on the in-flight write buffer size.
   std::optional<std::uint64_t> num_chunks_to_buffer = {};
+  /// Maximum number of chunks flushed to the store per batch.
+  std::uint64_t max_chunks_to_write_at_once = 8;
+  /// Sequence number at which writing begins.
+  std::uint32_t offset = 0;
   /// Whether repeated contiguous chunk mimetypes are omitted when writing.
   bool sticky_mimetype = false;
 

@@ -24,6 +24,7 @@
 
 #include <absl/status/status.h>
 #include <absl/status/status_builder.h>
+#include <absl/status/status_macros.h>
 #include <absl/status/statusor.h>
 #include <absl/time/clock.h>
 #include <absl/time/time.h>
@@ -101,7 +102,10 @@ struct ChunkStoreReader::LogicalState {
 
   absl::Status Status() {
     thread::MutexLock lock(&mu);
-    return status;
+    if (!status.ok() || frames.empty()) {
+      return status;
+    }
+    return frames.front().reader->GetStatus();
   }
 
   bool SawFinal() {
@@ -296,28 +300,90 @@ struct ChunkStoreReader::LogicalState {
   }
 };
 
-absl::StatusOr<std::shared_ptr<ChunkStoreReader::LogicalState>>
-ChunkStoreReader::GetLogical() {
-  thread::MutexLock lock(&logical_mu_);
-  if (logical_ == nullptr) {
-    auto raw_options = options();
-    raw_options.max_chunks_to_read.reset();
-    raw_options.sticky_mimetype = false;
-    auto raw = ChunkStoreReader::Create(store(), raw_options);
-    if (!raw.ok()) {
-      return raw.status();
-    }
-    logical_ =
-        std::make_shared<LogicalState>(store(), *raw, resolver_, options());
+struct ChunkStoreReader::LogicalHolder {
+  thread::Mutex mu;
+  std::shared_ptr<LogicalChunkStoreReader> state ABSL_GUARDED_BY(mu);
+};
+
+absl::StatusOr<std::shared_ptr<LogicalChunkStoreReader>>
+LogicalChunkStoreReader::Create(std::shared_ptr<ChunkStore> store,
+                                ChunkStoreReaderOptions options,
+                                std::shared_ptr<ReferenceResolver> resolver) {
+  ABSL_RETURN_IF_ERROR(options.Validate());
+  auto raw_options = options;
+  raw_options.max_chunks_to_read.reset();
+  raw_options.sticky_mimetype = false;
+  auto raw = ChunkStoreReader::Create(store, raw_options);
+  if (!raw.ok()) {
+    return raw.status();
   }
-  return logical_;
+  auto state = std::make_shared<ChunkStoreReader::LogicalState>(
+      std::move(store), *raw, std::move(resolver), options);
+
+  struct MakeSharedEnabler final : LogicalChunkStoreReader {
+    explicit MakeSharedEnabler(
+        std::shared_ptr<ChunkStoreReader::LogicalState> state)
+        : LogicalChunkStoreReader(std::move(state)) {}
+  };
+
+  return std::make_shared<MakeSharedEnabler>(std::move(state));
+}
+
+void LogicalChunkStoreReader::Cancel() {
+  state_->Cancel();
+}
+
+absl::Status LogicalChunkStoreReader::GetStatus() const {
+  return state_->Status();
+}
+
+bool LogicalChunkStoreReader::SawFinal() const {
+  return state_->SawFinal();
+}
+
+ChunkStoreReader::~ChunkStoreReader() {
+  delete logical_holder_.load(std::memory_order_relaxed);
+}
+
+ChunkStoreReader::LogicalHolder* ChunkStoreReader::GetLogicalHolder() {
+  auto holder = logical_holder_.load(std::memory_order_acquire);
+  if (holder != nullptr) {
+    return holder;
+  }
+  auto* created = new LogicalHolder();
+  if (logical_holder_.compare_exchange_strong(holder, created,
+                                              std::memory_order_release,
+                                              std::memory_order_acquire)) {
+    return created;
+  }
+  delete created;
+  return holder;
+}
+
+absl::StatusOr<std::shared_ptr<LogicalChunkStoreReader>>
+ChunkStoreReader::GetLogical() {
+  auto holder = GetLogicalHolder();
+  thread::MutexLock lock(&holder->mu);
+  if (holder->state == nullptr) {
+    auto created =
+        LogicalChunkStoreReader::Create(store(), options(), resolver_);
+    if (!created.ok()) {
+      return created.status();
+    }
+    holder->state = std::move(*created);
+  }
+  return holder->state;
 }
 
 void ChunkStoreReader::CancelLogical() {
-  std::shared_ptr<LogicalState> state;
+  auto holder = logical_holder_.load(std::memory_order_acquire);
+  if (holder == nullptr) {
+    return;
+  }
+  std::shared_ptr<LogicalChunkStoreReader> state;
   {
-    thread::MutexLock lock(&logical_mu_);
-    state = logical_;
+    thread::MutexLock lock(&holder->mu);
+    state = holder->state;
   }
   if (state != nullptr) {
     state->Cancel();
@@ -325,19 +391,27 @@ void ChunkStoreReader::CancelLogical() {
 }
 
 absl::Status ChunkStoreReader::GetLogicalStatus() const {
-  std::shared_ptr<LogicalState> state;
-  {
-    thread::MutexLock lock(&logical_mu_);
-    state = logical_;
+  auto holder = logical_holder_.load(std::memory_order_acquire);
+  if (holder == nullptr) {
+    return absl::OkStatus();
   }
-  return state == nullptr ? absl::OkStatus() : state->Status();
+  std::shared_ptr<LogicalChunkStoreReader> state;
+  {
+    thread::MutexLock lock(&holder->mu);
+    state = holder->state;
+  }
+  return state == nullptr ? absl::OkStatus() : state->GetStatus();
 }
 
 bool ChunkStoreReader::LogicalSawFinal() const {
-  std::shared_ptr<LogicalState> state;
+  auto holder = logical_holder_.load(std::memory_order_acquire);
+  if (holder == nullptr) {
+    return false;
+  }
+  std::shared_ptr<LogicalChunkStoreReader> state;
   {
-    thread::MutexLock lock(&logical_mu_);
-    state = logical_;
+    thread::MutexLock lock(&holder->mu);
+    state = holder->state;
   }
   return state != nullptr && state->SawFinal();
 }
@@ -352,21 +426,31 @@ a11::Future<std::optional<data::NodeFragment>> ChunkStoreReader::NextLogical(
   if (!state.ok()) {
     return a11::FailedFuture<std::optional<data::NodeFragment>>(state.status());
   }
-  a11::Future<LogicalState::NextResult> pending;
+  return (*state)->Next(timeout);
+}
+
+a11::Future<std::optional<data::NodeFragment>> LogicalChunkStoreReader::Next(
+    absl::Duration timeout) {
+  if (timeout < absl::ZeroDuration() && timeout != absl::InfiniteDuration()) {
+    return a11::FailedFuture<std::optional<data::NodeFragment>>(
+        absl::InvalidArgumentError("timeout must be non-negative or infinite"));
+  }
+  auto state = state_;
+  a11::Future<ChunkStoreReader::LogicalState::NextResult> pending;
   {
-    thread::MutexLock lock(&(*state)->issue_mu);
-    if ((*state)->issued == 0) {
-      LogicalState::ReadyResult ready = (*state)->TryNextReady();
+    thread::MutexLock lock(&state->issue_mu);
+    if (state->issued == 0) {
+      ChunkStoreReader::LogicalState::ReadyResult ready = state->TryNextReady();
       if (ready.has_value()) {
-        return a11::CompletedFuture<LogicalState::NextResult>(
+        return a11::CompletedFuture<ChunkStoreReader::LogicalState::NextResult>(
             *std::move(ready));
       }
     }
-    ++(*state)->issued;
-    pending = a11::Submit<LogicalState::NextResult>(
-        [state = *state, timeout]() { return state->Next(timeout); });
+    ++state->issued;
+    pending = a11::Submit<ChunkStoreReader::LogicalState::NextResult>(
+        [state, timeout]() { return state->Next(timeout); });
   }
-  pending.OnReady([state = *state](const auto&) {
+  pending.OnReady([state](const auto&) {
     thread::MutexLock lock(&state->issue_mu);
     --state->issued;
   });
@@ -388,31 +472,47 @@ ChunkStoreReader::NextLogicalMany(size_t limit, absl::Duration timeout) {
   if (!state.ok()) {
     return a11::FailedFuture<Batch>(state.status());
   }
+  return (*state)->NextMany(limit, timeout);
+}
+
+a11::Future<std::vector<std::optional<data::NodeFragment>>>
+LogicalChunkStoreReader::NextMany(size_t limit, absl::Duration timeout) {
+  using Batch = std::vector<std::optional<data::NodeFragment>>;
+  if (limit == 0) {
+    return a11::FailedFuture<Batch>(
+        absl::InvalidArgumentError("Logical read limit must be positive"));
+  }
+  if (timeout < absl::ZeroDuration() && timeout != absl::InfiniteDuration()) {
+    return a11::FailedFuture<Batch>(
+        absl::InvalidArgumentError("timeout must be non-negative or infinite"));
+  }
+  auto state = state_;
   a11::Future<Batch> pending;
   {
-    thread::MutexLock lock(&(*state)->issue_mu);
-    ++(*state)->issued;
-    pending = a11::Submit<Batch>([state = *state, limit,
-                                  timeout]() -> absl::StatusOr<Batch> {
-      Batch result;
-      result.reserve(limit);
-      for (size_t index = 0; index < limit; ++index) {
-        auto next = state->Next(index == 0 ? timeout : absl::ZeroDuration());
-        if (!next.ok()) {
-          if (!result.empty() && absl::IsDeadlineExceeded(next.status())) {
-            break;
+    thread::MutexLock lock(&state->issue_mu);
+    ++state->issued;
+    pending =
+        a11::Submit<Batch>([state, limit, timeout]() -> absl::StatusOr<Batch> {
+          Batch result;
+          result.reserve(limit);
+          for (size_t index = 0; index < limit; ++index) {
+            auto next =
+                state->Next(index == 0 ? timeout : absl::ZeroDuration());
+            if (!next.ok()) {
+              if (!result.empty() && absl::IsDeadlineExceeded(next.status())) {
+                break;
+              }
+              return next.status();
+            }
+            result.push_back(std::move(*next));
+            if (!result.back().has_value()) {
+              break;
+            }
           }
-          return next.status();
-        }
-        result.push_back(std::move(*next));
-        if (!result.back().has_value()) {
-          break;
-        }
-      }
-      return result;
-    });
+          return result;
+        });
   }
-  pending.OnReady([state = *state](const auto&) {
+  pending.OnReady([state](const auto&) {
     thread::MutexLock lock(&state->issue_mu);
     --state->issued;
   });

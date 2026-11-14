@@ -235,6 +235,24 @@ TEST(AsyncNodeTest, SerializesAndStreamsObjects) {
   EXPECT_FALSE(node->NextObject<nlohmann::json>().Await()->has_value());
 }
 
+TEST(AsyncNodeTest, RawAndLogicalReadsHaveIndependentPositions) {
+  auto store = *stores::LocalChunkStore::Create("independent-readers");
+  auto node = *AsyncNode::Create(store);
+  ASSERT_TRUE(node->PutChunk(data::Chunk{.data = "value"}, std::nullopt, true)
+                  .Await()
+                  .ok());
+
+  auto logical = node->NextLogicalFragment().Await();
+  auto raw = node->NextFragmentRaw().Await();
+  ASSERT_TRUE(logical.ok()) << logical.status();
+  ASSERT_TRUE(raw.ok()) << raw.status();
+  ASSERT_TRUE(logical->has_value());
+  ASSERT_TRUE(raw->has_value());
+  EXPECT_EQ(std::get<data::Chunk>((*logical)->data).data, "value");
+  EXPECT_EQ(std::get<data::Chunk>((*raw)->data).data, "value");
+  EXPECT_TRUE(node->LogicalSawFinal());
+}
+
 TEST(AsyncNodeTest, FinalizeWritesTheLastValueAndCloses) {
   auto map = *NodeMap::Create();
   auto node = *map->Get("unary");

@@ -235,6 +235,24 @@ TEST(ChunkStoreWriterTest, BatchesAndClosesStore) {
   EXPECT_TRUE(writer->GetStatus()->ok());
 }
 
+TEST(ChunkStoreWriterTest, AdmissionWaitsOnlyWhenBufferIsFull) {
+  auto store = *LocalChunkStore::Create("writer-admission");
+  auto writer = *ChunkStoreWriter::Create(
+      store, ChunkStoreWriterOptions{.num_chunks_to_buffer = 1});
+  auto first = writer->EnqueueChunk(data::Chunk{.data = "a"}, std::nullopt,
+                                    false, false);
+  auto second =
+      writer->EnqueueChunk(data::Chunk{.data = "b"}, std::nullopt, true, false);
+  EXPECT_TRUE(first.admitted.IsReady());
+  EXPECT_FALSE(second.admitted.IsReady());
+
+  writer->Flush();
+  EXPECT_TRUE(second.admitted.Await(absl::Now() + absl::Seconds(5)).ok());
+  EXPECT_EQ(*first.confirmation.Await(), 0);
+  EXPECT_EQ(*second.confirmation.Await(), 1);
+  EXPECT_TRUE(writer->DrainAndClose().Await().ok());
+}
+
 TEST(ChunkStoreWriterTest, OffsetAssignsExplicitSequences) {
   auto store = *LocalChunkStore::Create("writer-offset");
   auto writer =

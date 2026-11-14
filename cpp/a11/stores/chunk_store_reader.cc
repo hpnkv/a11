@@ -93,8 +93,7 @@ struct ChunkStoreReader::State
       : store(std::move(chunk_store)),
         options(reader_options),
         position(reader_options.offset),
-        next_fetch_position(reader_options.offset),
-        done(done_promise.future()) {}
+        next_fetch_position(reader_options.offset) {}
 
   static a11::internal::CallbackScheduler& Scheduler() {
     static absl::NoDestructor<a11::internal::CallbackScheduler> scheduler;
@@ -477,17 +476,30 @@ struct ChunkStoreReader::State
   }
 
   void MaybeCompleteDone() {
-    bool complete = false;
+    a11::Promise<a11::Unit>* promise = nullptr;
     {
       thread::MutexLock lock(&mu);
       if (status.has_value() && !done_completed) {
         done_completed = true;
-        complete = true;
+        if (done_promise.has_value()) {
+          promise = &*done_promise;
+        }
       }
     }
-    if (complete) {
-      done_promise.SetValue(a11::Unit{}).IgnoreError();
+    if (promise != nullptr) {
+      promise->SetValue(a11::Unit{}).IgnoreError();
     }
+  }
+
+  a11::Task Done() {
+    thread::MutexLock lock(&mu);
+    if (!done_promise.has_value()) {
+      if (done_completed) {
+        return a11::ReadyTask();
+      }
+      done_promise.emplace();
+    }
+    return done_promise->future();
   }
 
   /**
@@ -690,8 +702,7 @@ struct ChunkStoreReader::State
       ABSL_GUARDED_BY(mu);
   std::vector<a11::Future<data::NodeFragment>> active_fetches
       ABSL_GUARDED_BY(mu);
-  a11::Promise<a11::Unit> done_promise;
-  const a11::Task done;
+  std::optional<a11::Promise<a11::Unit>> done_promise ABSL_GUARDED_BY(mu);
   bool done_completed ABSL_GUARDED_BY(mu) = false;
 };
 
@@ -738,7 +749,7 @@ absl::Status ChunkStoreReader::GetStatus() const {
 }
 
 a11::Task ChunkStoreReader::Done() const {
-  return state_->done;
+  return state_->Done();
 }
 
 a11::Future<std::optional<data::NodeFragment>> ChunkStoreReader::Next(

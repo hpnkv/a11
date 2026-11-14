@@ -119,6 +119,66 @@ TEST(ActionTest, NestedActionsDoNotForwardAuthorizationReferences) {
   EXPECT_EQ(*child->GetHeader("x-a11-auth-ref"), std::nullopt);
 }
 
+TEST(ActionTest, StandaloneNestedActionsShareTheRootLimiter) {
+  auto parent = *Action::Create(EmptySchema("parent"), "parent", {}, nullptr,
+                                nullptr, nullptr, nullptr, 1);
+  auto gate = std::make_shared<a11::Promise<a11::Unit>>();
+  std::atomic<int> second_starts{0};
+  auto first = *parent->MakeNested(EmptySchema("first"));
+  auto second = *parent->MakeNested(EmptySchema("second"));
+  ASSERT_TRUE(first
+                  ->BindHandler([gate](std::shared_ptr<Action>) {
+                    return gate->future();
+                  })
+                  .ok());
+  ASSERT_TRUE(second
+                  ->BindHandler([&second_starts](std::shared_ptr<Action>) {
+                    ++second_starts;
+                    return a11::ReadyTask();
+                  })
+                  .ok());
+
+  ASSERT_TRUE(first->Run().ok());
+  ASSERT_TRUE(second->Run().ok());
+  EXPECT_EQ(second_starts.load(), 0);
+  ASSERT_TRUE(gate->SetValue(a11::Unit{}).ok());
+  EXPECT_TRUE(first->Wait(absl::Seconds(5)).Await().ok());
+  EXPECT_TRUE(second->Wait(absl::Seconds(5)).Await().ok());
+  EXPECT_EQ(second_starts.load(), 1);
+}
+
+TEST(ActionTest, PortIdsUseDefaultsUntilExplicitlyRemapped) {
+  auto action = *Action::Create(EchoSchema(), "original");
+  data::ActionMessage message = action->GetActionMessage();
+  ASSERT_EQ(message.inputs.size(), 1);
+  ASSERT_EQ(message.outputs.size(), 1);
+  EXPECT_EQ(message.inputs.front().id, "original#input");
+  EXPECT_EQ(message.outputs.front().id, "original#output");
+  EXPECT_EQ(
+      *(*action->GetOutput(std::string(kActionLogOutput), false))->GetId(),
+      "original#__log__");
+
+  message.inputs.front().id = "remote-input";
+  message.outputs.front().id = "remote-output";
+  ASSERT_TRUE(action->MapPortsFromMessage(message).ok());
+  EXPECT_EQ(action->GetActionMessage().inputs.front().id, "remote-input");
+  EXPECT_EQ(*(*action->GetInput("input", false))->GetId(), "remote-input");
+  EXPECT_EQ(*(*action->GetOutput("output", false))->GetId(), "remote-output");
+
+  ASSERT_TRUE(action->SetId("renamed").ok());
+  EXPECT_EQ(action->GetActionMessage().inputs.front().id, "renamed#input");
+  EXPECT_EQ(action->GetActionMessage().outputs.front().id, "renamed#output");
+}
+
+TEST(ActionTest, FailedCallCanRetry) {
+  auto action = *Action::Create(EmptySchema("caller"));
+  EXPECT_EQ(action->Call({}).Await().status().code(),
+            absl::StatusCode::kFailedPrecondition);
+  EXPECT_FALSE(action->GetDispatchStatus().has_value());
+  EXPECT_EQ(action->Call({}).Await().status().code(),
+            absl::StatusCode::kFailedPrecondition);
+}
+
 TEST(ActionTest, UncontendedSessionHandlerStartsWithoutAFiber) {
   (void)thread::Fiber::Current();
   auto session = SessionWithOneActionSlot();

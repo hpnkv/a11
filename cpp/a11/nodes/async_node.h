@@ -611,7 +611,8 @@ class AsyncNode : public std::enable_shared_from_this<AsyncNode> {
       stores::ChunkStoreReaderOptions options) const;
 
  private:
-  absl::StatusOr<std::shared_ptr<stores::ChunkStoreReader>> logical_reader();
+  absl::StatusOr<std::shared_ptr<stores::LogicalChunkStoreReader>>
+  logical_reader();
 
   AsyncNode(std::shared_ptr<stores::ChunkStore> store,
             std::shared_ptr<data::SerializationRegistry> registry,
@@ -629,7 +630,7 @@ class AsyncNode : public std::enable_shared_from_this<AsyncNode> {
   stores::ChunkStoreReaderOptions reader_options_ ABSL_GUARDED_BY(mu_);
   stores::ChunkStoreWriterOptions writer_options_ ABSL_GUARDED_BY(mu_);
   std::shared_ptr<stores::ChunkStoreReader> reader_ ABSL_GUARDED_BY(mu_);
-  std::shared_ptr<stores::ChunkStoreReader> logical_reader_
+  std::shared_ptr<stores::LogicalChunkStoreReader> logical_reader_
       ABSL_GUARDED_BY(mu_);
   std::shared_ptr<stores::ChunkStoreWriter> writer_ ABSL_GUARDED_BY(mu_);
   std::weak_ptr<NodeMap> owner_ ABSL_GUARDED_BY(mu_);

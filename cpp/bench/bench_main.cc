@@ -266,7 +266,7 @@ void DataSuite(Recorder& recorder, double scale) {
 void StoresSuite(Recorder& recorder, double scale) {
   const std::string payload(256, 'x');
 
-  {
+  if (Wanted("put")) {
     auto store = *stores::LocalChunkStore::Create("bench-put");
     const std::int64_t iterations = Scaled(200000, scale, 1000);
     recorder.Add({.suite = "stores",
@@ -285,6 +285,9 @@ void StoresSuite(Recorder& recorder, double scale) {
   }
 
   for (const std::int64_t batch : {8, 64, 256}) {
+    if (!Wanted("put_many")) {
+      break;
+    }
     auto store =
         *stores::LocalChunkStore::Create(absl::StrCat("bench-many-", batch));
     const std::int64_t calls = Scaled(40000 / batch, scale, 20);
@@ -348,7 +351,7 @@ void StoresSuite(Recorder& recorder, double scale) {
     return store;
   };
 
-  {
+  if (Wanted("get_by_seq")) {
     auto store = fill("bench-get");
     recorder.Add({.suite = "stores",
                   .name = "get_by_seq",
@@ -365,7 +368,45 @@ void StoresSuite(Recorder& recorder, double scale) {
                   .params = {{"backend", "local"}}});
   }
 
+  if (Wanted("get_by_arrival_order") || Wanted("get_seq_for_arrival_order")) {
+    auto store = fill("bench-arrival");
+    if (Wanted("get_by_arrival_order")) {
+      recorder.Add({.suite = "stores",
+                    .name = "get_by_arrival_order",
+                    .metrics = Latency(
+                        [&](std::int64_t index) {
+                          auto fragment =
+                              store
+                                  ->GetByArrivalOrder(
+                                      static_cast<std::uint64_t>(index % count),
+                                      Deadline())
+                                  .Await(Deadline());
+                          (void)fragment;
+                        },
+                        count, count / 10),
+                    .params = {{"backend", "local"}}});
+    }
+    if (Wanted("get_seq_for_arrival_order")) {
+      recorder.Add({.suite = "stores",
+                    .name = "get_seq_for_arrival_order",
+                    .metrics = Latency(
+                        [&](std::int64_t index) {
+                          auto seq =
+                              store
+                                  ->GetSeqForArrivalOrder(
+                                      static_cast<std::uint64_t>(index % count))
+                                  .Await(Deadline());
+                          (void)seq;
+                        },
+                        count, count / 10),
+                    .params = {{"backend", "local"}}});
+    }
+  }
+
   for (const std::int64_t limit : {1, 64}) {
+    if (!Wanted(limit == 1 ? "read_one_at_a_time" : "read_batched")) {
+      continue;
+    }
     auto store = fill(absl::StrCat("bench-drain-", limit));
     std::int64_t drained = 0;
     const auto metrics = Throughput(
@@ -391,7 +432,7 @@ void StoresSuite(Recorder& recorder, double scale) {
                   .note = absl::StrCat(drained, " fragments drained")});
   }
 
-  {
+  if (Wanted("empty_store")) {
     std::vector<std::shared_ptr<stores::LocalChunkStore>> held;
     std::string trail;
     std::int64_t made = 0;
@@ -414,7 +455,7 @@ void StoresSuite(Recorder& recorder, double scale) {
                   .note = trail});
   }
 
-  {
+  if (Wanted("stored_fragment")) {
     auto store = *stores::LocalChunkStore::Create("bench-resident");
     std::uint32_t written = 0;
     std::string trail;

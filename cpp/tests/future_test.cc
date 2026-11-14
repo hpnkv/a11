@@ -14,6 +14,9 @@
 
 #include <atomic>
 #include <cstddef>
+#include <memory>
+#include <optional>
+#include <thread>
 #include <vector>
 
 #include <absl/time/clock.h>
@@ -39,6 +42,67 @@ TEST(FutureTest, PropagatesStatus) {
       []() -> absl::StatusOr<int> { return absl::DataLossError("bad data"); });
   EXPECT_EQ(value.Await(absl::Now() + absl::Seconds(5)).status().code(),
             absl::StatusCode::kDataLoss);
+}
+
+TEST(FutureTest, PendingWaitersWakeOnCompletionAndAbandonment) {
+  for (const bool abandon : {false, true}) {
+    auto producer = std::make_unique<Promise<int>>();
+    Future<int> pending = producer->future();
+    std::atomic<int> entered{0};
+    std::optional<absl::StatusOr<int>> thread_result;
+    const absl::Time deadline = absl::Now() + absl::Seconds(5);
+    std::thread external([&] {
+      ++entered;
+      thread_result = pending.Await(deadline);
+    });
+    Future<int> fiber =
+        Submit<int>([pending, &entered, deadline]() -> absl::StatusOr<int> {
+          ++entered;
+          return pending.Await(deadline);
+        });
+
+    while (entered.load() != 2 && absl::Now() < deadline) {
+      thread::SleepFor(absl::Milliseconds(1));
+    }
+    if (abandon) {
+      producer.reset();
+    } else {
+      EXPECT_TRUE(producer->SetValue(42).ok());
+    }
+    const absl::StatusOr<int> fiber_result = fiber.Await(deadline);
+    external.join();
+    ASSERT_TRUE(thread_result.has_value());
+    if (abandon) {
+      EXPECT_EQ(fiber_result.status().code(), absl::StatusCode::kCancelled);
+      EXPECT_EQ(thread_result->status().code(), absl::StatusCode::kCancelled);
+    } else {
+      ASSERT_TRUE(fiber_result.ok()) << fiber_result.status();
+      ASSERT_TRUE(thread_result->ok()) << thread_result->status();
+      EXPECT_EQ(*fiber_result, 42);
+      EXPECT_EQ(**thread_result, 42);
+    }
+  }
+}
+
+TEST(FutureTest, CancellingFiberWaitDoesNotCompleteProducer) {
+  Promise<Unit> producer;
+  Future<Unit> pending = producer.future();
+  std::atomic<bool> entered{false};
+  Task waiter = Submit<Unit>([pending, &entered]() -> absl::StatusOr<Unit> {
+    entered = true;
+    return pending.Await(absl::Now() + absl::Seconds(5));
+  });
+  const absl::Time deadline = absl::Now() + absl::Seconds(5);
+  while (!entered && absl::Now() < deadline) {
+    thread::SleepFor(absl::Milliseconds(1));
+  }
+  EXPECT_TRUE(entered);
+  ASSERT_TRUE(waiter.Cancel().ok());
+  EXPECT_EQ(waiter.Await(deadline).status().code(),
+            absl::StatusCode::kCancelled);
+  EXPECT_FALSE(pending.IsReady());
+  EXPECT_TRUE(producer.SetValue(Unit{}).ok());
+  EXPECT_TRUE(pending.Await(deadline).ok());
 }
 
 TEST(FutureTest, CancelSafelyOwnsRootFiberUntilCompletion) {

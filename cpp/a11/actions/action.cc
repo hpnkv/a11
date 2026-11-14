@@ -203,6 +203,10 @@ absl::StatusOr<std::shared_ptr<Action>> Action::Create(
     std::shared_ptr<ActionRegistry> registry,
     size_t max_concurrent_nested_actions) {
   ABSL_RETURN_IF_ERROR(schema.Validate());
+  if (max_concurrent_nested_actions == 0) {
+    return absl::InvalidArgumentError(
+        "Action concurrency limit must be positive");
+  }
   if (action_id.empty()) {
     action_id = NewActionId(session);
   }
@@ -213,8 +217,6 @@ absl::StatusOr<std::shared_ptr<Action>> Action::Create(
   if (node_map == nullptr) {
     ABSL_ASSIGN_OR_RETURN(node_map, nodes::NodeMap::Create());
   }
-  ABSL_ASSIGN_OR_RETURN(std::shared_ptr<ActionLimiter> limiter,
-                        ActionLimiter::Create(max_concurrent_nested_actions));
 
   struct MakeSharedEnabler final : Action {
     MakeSharedEnabler(ActionSchema schema, std::string action_id,
@@ -223,16 +225,16 @@ absl::StatusOr<std::shared_ptr<Action>> Action::Create(
                       std::shared_ptr<net::WireStream> stream,
                       const std::shared_ptr<service::Session>& session,
                       std::shared_ptr<ActionRegistry> registry,
-                      std::shared_ptr<ActionLimiter> nested_limiter)
+                      size_t max_concurrent_nested_actions)
         : Action(std::move(schema), std::move(action_id), std::move(handler),
                  std::move(node_map), std::move(stream), session,
-                 std::move(registry), std::move(nested_limiter)) {}
+                 std::move(registry), max_concurrent_nested_actions) {}
   };
 
   auto action = std::make_shared<MakeSharedEnabler>(
       std::move(schema), std::move(action_id), std::move(handler),
       std::move(node_map), std::move(stream), std::move(session),
-      std::move(registry), std::move(limiter));
+      std::move(registry), max_concurrent_nested_actions);
   {
     thread::MutexLock lock(&action->mu_);
     ABSL_RETURN_IF_ERROR(action->RemapDefaultPorts());
@@ -245,7 +247,7 @@ Action::Action(ActionSchema schema, std::string id, ActionHandler handler,
                std::shared_ptr<net::WireStream> stream,
                const std::shared_ptr<service::Session>& session,
                std::shared_ptr<ActionRegistry> registry,
-               std::shared_ptr<ActionLimiter> nested_limiter)
+               size_t max_concurrent_nested_actions)
     : schema_(std::move(schema)),
       handler_(internal::GuardHandler(std::move(handler))),
       id_(std::move(id)),
@@ -255,9 +257,7 @@ Action::Action(ActionSchema schema, std::string id, ActionHandler handler,
       registry_(std::move(registry)),
       done_promise_(std::make_shared<a11::Promise<a11::Unit>>()),
       done_future_(done_promise_->future()),
-      dispatch_promise_(std::make_shared<a11::Promise<a11::Unit>>()),
-      dispatch_future_(dispatch_promise_->future()),
-      nested_limiter_(std::move(nested_limiter)) {
+      max_concurrent_nested_actions_(max_concurrent_nested_actions) {
   for (const auto& [name, header] : schema_.headers) {
     if (header.default_value.has_value()) {
       headers_.emplace(absl::AsciiStrToLower(name), *header.default_value);
@@ -540,12 +540,11 @@ absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> Action::GetInput(
   bool bind = false;
   {
     thread::MutexLock lock(&mu_);
-    const auto found = input_ids_.find(name);
-    if (found == input_ids_.end()) {
+    if (schema_.inputs.find(name) == schema_.inputs.end()) {
       return absl::NotFoundError(
           absl::StrCat("Action input '", name, "' is not mapped"));
     }
-    node_id = found->second;
+    node_id = InputIdLocked(name);
     bind = bind_stream.value_or(
         settings_.bind_streams_on_inputs_by_default.value_or(mode_ !=
                                                              Mode::kRun));
@@ -567,12 +566,11 @@ absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> Action::GetOutput(
   bool bind = false;
   {
     thread::MutexLock lock(&mu_);
-    const auto found = output_ids_.find(name);
-    if (found == output_ids_.end()) {
+    if (!IsOutputPortLocked(name)) {
       return absl::NotFoundError(
           absl::StrCat("Action output '", name, "' is not mapped"));
     }
-    node_id = found->second;
+    node_id = OutputIdLocked(name);
     bind = bind_stream.value_or(
         settings_.bind_streams_on_outputs_by_default.value_or(mode_ ==
                                                               Mode::kRun));
@@ -617,8 +615,8 @@ absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> Action::GetPort(
   bool output = false;
   {
     thread::MutexLock lock(&mu_);
-    input = input_ids_.find(name) != input_ids_.end();
-    output = output_ids_.find(name) != output_ids_.end();
+    input = schema_.inputs.find(name) != schema_.inputs.end();
+    output = IsOutputPortLocked(name);
   }
   if (input && output) {
     return absl::FailedPreconditionError(
@@ -635,8 +633,8 @@ absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> Action::GetPort(
 
 bool Action::ContainsPort(std::string_view name) const {
   thread::MutexLock lock(&mu_);
-  return input_ids_.find(name) != input_ids_.end() ||
-         output_ids_.find(name) != output_ids_.end();
+  return schema_.inputs.find(name) != schema_.inputs.end() ||
+         IsOutputPortLocked(name);
 }
 
 absl::Status Action::Log(data::Chunk chunk, const LogOptions& options) {
@@ -715,10 +713,7 @@ absl::Status Action::WriteLog(data::Chunk chunk, const LogOptions& options) {
     // Avoid buffering an unclaimed local log port. Peers mirror the node and
     // therefore count as readers.
     readable = claimed || stream_ != nullptr || !session_.expired();
-    if (const auto found = output_ids_.find(std::string(kActionLogOutput));
-        found != output_ids_.end()) {
-      node_id = found->second;
-    }
+    node_id = OutputIdLocked(kActionLogOutput);
   }
   if (!claimed && parent != nullptr) {
     if (chunk.metadata->attributes.find(kLogChildActionAttribute) ==
@@ -784,11 +779,11 @@ data::ActionMessage Action::GetActionMessage() const {
   result.outputs.reserve(schema_.outputs.size());
   for (const auto& name : schema_.inputs | std::views::keys) {
     result.inputs.push_back(
-        data::Port{.name = name, .id = input_ids_.at(name)});
+        data::Port{.name = name, .id = InputIdLocked(name)});
   }
   for (const auto& name : schema_.outputs | std::views::keys) {
     result.outputs.push_back(
-        data::Port{.name = name, .id = output_ids_.at(name)});
+        data::Port{.name = name, .id = OutputIdLocked(name)});
   }
   return result;
 }
@@ -805,10 +800,22 @@ absl::Status Action::MapPortsFromMessage(const data::ActionMessage& message) {
   ABSL_RETURN_IF_ERROR(
       ValidateMessagePorts(message.outputs, schema_.outputs, "output"));
   for (const data::Port& port : message.inputs) {
-    input_ids_[port.name] = port.id;
+    if (port.id == absl::StrCat(id_, "#", port.name)) {
+      if (port_overrides_ != nullptr) {
+        port_overrides_->inputs.erase(port.name);
+      }
+    } else {
+      EnsurePortOverridesLocked().inputs.insert_or_assign(port.name, port.id);
+    }
   }
   for (const data::Port& port : message.outputs) {
-    output_ids_[port.name] = port.id;
+    if (port.id == absl::StrCat(id_, "#", port.name)) {
+      if (port_overrides_ != nullptr) {
+        port_overrides_->outputs.erase(port.name);
+      }
+    } else {
+      EnsurePortOverridesLocked().outputs.insert_or_assign(port.name, port.id);
+    }
   }
   return absl::OkStatus();
 }
@@ -893,8 +900,17 @@ absl::StatusOr<std::shared_ptr<Action>> Action::MakeNested(
     stream = propagate_io ? stream_ : nullptr;
     session = propagate_io ? bound_session : nullptr;
     registry = registry_;
-    limiter = bound_session != nullptr ? bound_session->GetActionLimiter(true)
-                                       : nested_limiter_;
+    if (bound_session != nullptr) {
+      limiter = bound_session->GetActionLimiter(true);
+    } else {
+      if (nested_limiter_ == nullptr) {
+        ABSL_ASSIGN_OR_RETURN(
+            std::shared_ptr<ActionLimiter> created,
+            ActionLimiter::Create(max_concurrent_nested_actions_));
+        nested_limiter_ = std::move(created);
+      }
+      limiter = nested_limiter_;
+    }
     verified_authorization = propagate_io ? verified_authorization_ : nullptr;
   }
   ABSL_ASSIGN_OR_RETURN(
@@ -1063,6 +1079,15 @@ void Action::ReleaseAcquiredLimiter() {
 }
 
 a11::Future<std::shared_ptr<Action>> Action::Call(data::ByteMap wire_headers) {
+  const auto fail_call = [this](absl::Status status) {
+    std::unique_ptr<DispatchState> dispatch;
+    {
+      thread::MutexLock lock(&mu_);
+      mode_ = Mode::kNone;
+      dispatch = std::move(dispatch_);
+    }
+    return a11::FailedFuture<std::shared_ptr<Action>>(std::move(status));
+  };
   absl::StatusOr<data::ByteMap> headers =
       net::NormalizeWireHeaders(std::move(wire_headers));
   if (!headers.ok()) {
@@ -1074,9 +1099,7 @@ a11::Future<std::shared_ptr<Action>> Action::Call(data::ByteMap wire_headers) {
   }
   if (const absl::Status span_status = StartActionSpan(Mode::kCall);
       !span_status.ok()) {
-    thread::MutexLock lock(&mu_);
-    mode_ = Mode::kNone;
-    return a11::FailedFuture<std::shared_ptr<Action>>(span_status);
+    return fail_call(span_status);
   }
   {
     // Propagate this call's span context to the callee through the action's
@@ -1096,9 +1119,7 @@ a11::Future<std::shared_ptr<Action>> Action::Call(data::ByteMap wire_headers) {
   if (session != nullptr) {
     status = TrackInSession(session);
     if (!status.ok()) {
-      thread::MutexLock lock(&mu_);
-      mode_ = Mode::kNone;
-      return a11::FailedFuture<std::shared_ptr<Action>>(status);
+      return fail_call(status);
     }
   }
   data::WireMessage wire{.node_fragments = CollectAutofillFragments(),
@@ -1116,9 +1137,7 @@ a11::Future<std::shared_ptr<Action>> Action::Call(data::ByteMap wire_headers) {
 
   if (!status.ok()) {
     UntrackFromSession();
-    thread::MutexLock lock(&mu_);
-    mode_ = Mode::kNone;
-    return a11::FailedFuture<std::shared_ptr<Action>>(status);
+    return fail_call(status);
   }
 
   return a11::ReadyFuture(shared_from_this());
@@ -1136,7 +1155,7 @@ a11::Future<absl::Status> Action::WaitForDispatch(absl::Duration timeout) {
       return a11::FailedFuture<absl::Status>(absl::FailedPreconditionError(
           "Only a called Action has a dispatch status"));
     }
-    dispatched = dispatch_future_;
+    dispatched = dispatch_->future;
   }
 
   std::shared_ptr<Action> self = shared_from_this();
@@ -1153,17 +1172,18 @@ a11::Future<absl::Status> Action::WaitForDispatch(absl::Duration timeout) {
           return result;
         }
         thread::MutexLock lock(&self->mu_);
-        if (!self->dispatch_status_.has_value()) {
+        if (self->dispatch_ == nullptr ||
+            !self->dispatch_->status.has_value()) {
           result.AssignStatus(
               absl::InternalError("Dispatch completed without a status"));
           return result;
         }
-        if (!self->dispatch_status_->ok()) {
-          result.AssignStatus(*self->dispatch_status_);
+        if (!self->dispatch_->status->ok()) {
+          result.AssignStatus(*self->dispatch_->status);
           return result;
         }
         return absl::StatusOr<absl::Status>(std::in_place,
-                                            *self->dispatch_status_);
+                                            *self->dispatch_->status);
       });
 }
 
@@ -1292,7 +1312,7 @@ absl::Status Action::GetStatus() const {
 
 std::optional<absl::Status> Action::GetDispatchStatus() const {
   thread::MutexLock lock(&mu_);
-  return dispatch_status_;
+  return dispatch_ != nullptr ? dispatch_->status : std::nullopt;
 }
 
 absl::Status Action::Begin(Mode mode) {
@@ -1308,18 +1328,20 @@ absl::Status Action::Begin(Mode mode) {
     ABSL_RETURN_IF_ERROR(data::ValidateName(stream_scope->second));
     streams_enabled_ = true;
     if (mode == Mode::kRun && parent_.expired()) {
-      output_ids_.insert_or_assign(std::string(kActionStreamsOutput),
-                                   stream_scope->second);
+      EnsurePortOverridesLocked().outputs.insert_or_assign(
+          std::string(kActionStreamsOutput), stream_scope->second);
     }
+  }
+  if (mode == Mode::kCall) {
+    dispatch_ = std::make_unique<DispatchState>();
   }
   mode_ = mode;
   if (mode == Mode::kCall &&
       (streams_enabled_ ||
        headers_.find(std::string(kStreamScopeHeader)) != headers_.end())) {
     streams_enabled_ = true;
-    headers_.insert_or_assign(
-        std::string(kStreamScopeHeader),
-        output_ids_.at(std::string(kActionStreamsOutput)));
+    headers_.insert_or_assign(std::string(kStreamScopeHeader),
+                              OutputIdLocked(kActionStreamsOutput));
   }
   return absl::OkStatus();
 }
@@ -1446,23 +1468,61 @@ void Action::EndActionSpan(const absl::Status& status) {
 }
 
 absl::Status Action::RemapDefaultPorts() {
-  input_ids_.clear();
-  output_ids_.clear();
   for (const auto& name : schema_.inputs | std::views::keys) {
-    ABSL_ASSIGN_OR_RETURN(std::string id, MakeNodeId(id_, name));
-    input_ids_.emplace(name, std::move(id));
+    ABSL_RETURN_IF_ERROR(MakeNodeId(id_, name).status());
   }
   for (const auto& name : schema_.outputs | std::views::keys) {
-    ABSL_ASSIGN_OR_RETURN(std::string id, MakeNodeId(id_, name));
-    output_ids_.emplace(name, std::move(id));
+    ABSL_RETURN_IF_ERROR(MakeNodeId(id_, name).status());
   }
   for (const std::string_view name :
        {kActionStatusOutput, kActionDispatchStatusOutput, kActionLogOutput,
         kActionStreamsOutput}) {
-    ABSL_ASSIGN_OR_RETURN(std::string id, MakeNodeId(id_, name));
-    output_ids_.emplace(std::string(name), std::move(id));
+    ABSL_RETURN_IF_ERROR(MakeNodeId(id_, name).status());
   }
+  port_overrides_.reset();
   return absl::OkStatus();
+}
+
+bool Action::IsOutputPortLocked(std::string_view name) const {
+  if (schema_.outputs.find(name) != schema_.outputs.end()) {
+    return true;
+  }
+  return name == kActionStatusOutput || name == kActionDispatchStatusOutput ||
+         name == kActionLogOutput || name == kActionStreamsOutput;
+}
+
+std::string Action::InputIdLocked(std::string_view name) const {
+  if (port_overrides_ != nullptr) {
+    const auto found = port_overrides_->inputs.find(name);
+    if (found != port_overrides_->inputs.end()) {
+      return found->second;
+    }
+  }
+  return absl::StrCat(id_, "#", name);
+}
+
+std::string Action::OutputIdLocked(std::string_view name) const {
+  if (port_overrides_ != nullptr) {
+    const auto found = port_overrides_->outputs.find(name);
+    if (found != port_overrides_->outputs.end()) {
+      return found->second;
+    }
+  }
+  return absl::StrCat(id_, "#", name);
+}
+
+Action::PortOverrides& Action::EnsurePortOverridesLocked() {
+  if (port_overrides_ == nullptr) {
+    port_overrides_ = std::make_unique<PortOverrides>();
+  }
+  return *port_overrides_;
+}
+
+Action::StreamState& Action::EnsureStreamStateLocked() {
+  if (stream_state_ == nullptr) {
+    stream_state_ = std::make_unique<StreamState>();
+  }
+  return *stream_state_;
 }
 
 std::shared_ptr<ReferenceMirrorRegistry> Action::MirrorRegistry() {
@@ -1588,11 +1648,7 @@ absl::Status Action::ApplyInputAutofills() {
       if (port.autofills.empty()) {
         continue;
       }
-      const auto found = input_ids_.find(name);
-      if (found == input_ids_.end()) {
-        continue;
-      }
-      work.emplace_back(found->second, port.autofills);
+      work.emplace_back(InputIdLocked(name), port.autofills);
     }
   }
   if (work.empty()) {
@@ -1677,11 +1733,7 @@ std::vector<data::NodeFragment> Action::CollectAutofillFragments() const {
     if (port.autofills.empty()) {
       continue;
     }
-    const auto found = input_ids_.find(name);
-    if (found == input_ids_.end()) {
-      continue;
-    }
-    const std::string& node_id = found->second;
+    const std::string node_id = InputIdLocked(name);
     const size_t start = fragments.size();
     for (const std::optional<data::NodeFragment>& autofill : port.autofills) {
       data::NodeFragment fragment;
@@ -1814,22 +1866,27 @@ absl::Status Action::FinishOutputNodes(const absl::Status& status) {
     node_map = node_map_;
     remote = stream_ != nullptr || !session_.expired();
     remote_stream_scope = mode_ == Mode::kRun && parent_.expired();
-    direct_stream_ids = direct_stream_ids_;
+    if (stream_state_ != nullptr) {
+      direct_stream_ids = stream_state_->direct_ids;
+      ids.insert(stream_state_->owned_ids.begin(),
+                 stream_state_->owned_ids.end());
+    }
     // Publishing the terminal state and snapshotting the nodes to close under
     // one hold of mu_ is what makes the lazy path safe.
     outputs_finished_ = true;
     outputs_final_status_ = status;
-    ids.insert(owned_stream_ids_.begin(), owned_stream_ids_.end());
-    for (const auto& [name, id] : output_ids_) {
+    for (const auto& name : schema_.outputs | std::views::keys) {
       if (name == kActionStreamsOutput && !streams_enabled_) {
         continue;
       }
       if (name != kActionStatusOutput && name != kActionDispatchStatusOutput) {
-        ids.insert(id);
+        ids.insert(OutputIdLocked(name));
       }
-      if (name == kActionLogOutput) {
-        log_id = id;
-      }
+    }
+    log_id = OutputIdLocked(kActionLogOutput);
+    ids.insert(log_id);
+    if (streams_enabled_) {
+      ids.insert(OutputIdLocked(kActionStreamsOutput));
     }
     for (const auto& node : output_nodes_) {
       absl::StatusOr<std::string> id = node->GetId();
@@ -1914,7 +1971,7 @@ absl::Status Action::CommunicateStatus(const absl::Status& status) {
   std::shared_ptr<net::WireStream> stream;
   {
     thread::MutexLock lock(&mu_);
-    node_id = output_ids_.at(std::string(kActionStatusOutput));
+    node_id = OutputIdLocked(kActionStatusOutput);
     node_map = node_map_;
     stream = stream_;
   }
@@ -1961,8 +2018,8 @@ absl::Status Action::AbortInputs(const absl::Status& status) {
   {
     thread::MutexLock lock(&mu_);
     node_map = node_map_;
-    for (const auto& id : input_ids_ | std::views::values) {
-      ids.insert(id);
+    for (const auto& name : schema_.inputs | std::views::keys) {
+      ids.insert(InputIdLocked(name));
     }
     nodes = input_nodes_;
   }
@@ -2040,11 +2097,16 @@ absl::Status Action::ReleaseNodesAfterRun() {
     node_map = node_map_;
     clear_inputs = settings_.clear_inputs_after_run;
     clear_outputs = settings_.clear_outputs_after_run;
-    for (const auto& id : input_ids_ | std::views::values) {
-      inputs.push_back(id);
+    for (const auto& name : schema_.inputs | std::views::keys) {
+      inputs.push_back(InputIdLocked(name));
     }
-    for (const auto& id : output_ids_ | std::views::values) {
-      outputs.push_back(id);
+    for (const auto& name : schema_.outputs | std::views::keys) {
+      outputs.push_back(OutputIdLocked(name));
+    }
+    for (const std::string_view name :
+         {kActionStatusOutput, kActionDispatchStatusOutput, kActionLogOutput,
+          kActionStreamsOutput}) {
+      outputs.push_back(OutputIdLocked(name));
     }
     input_nodes_.clear();
     output_nodes_.clear();
@@ -2162,14 +2224,19 @@ void Action::AbortLocalCallOutputs(const absl::Status& status) {
       outputs_finished_ = true;
       outputs_final_status_ = status;
     }
-    for (const auto& reference : stream_references_ | std::views::values) {
-      ids.insert(reference.node.id);
-    }
-    for (const auto& [name, id] : output_ids_) {
-      if (name != kActionStatusOutput && name != kActionDispatchStatusOutput) {
-        ids.insert(id);
+    if (stream_state_ != nullptr) {
+      for (const auto& reference :
+           stream_state_->references | std::views::values) {
+        ids.insert(reference->node.id);
       }
     }
+    for (const auto& name : schema_.outputs | std::views::keys) {
+      if (name != kActionStatusOutput && name != kActionDispatchStatusOutput) {
+        ids.insert(OutputIdLocked(name));
+      }
+    }
+    ids.insert(OutputIdLocked(kActionLogOutput));
+    ids.insert(OutputIdLocked(kActionStreamsOutput));
   }
   if (node_map == nullptr) {
     return;
@@ -2241,11 +2308,12 @@ void Action::SetDispatchStatus(absl::Status status) {
   std::shared_ptr<a11::Promise<a11::Unit>> promise;
   {
     thread::MutexLock lock(&mu_);
-    if (mode_ != Mode::kCall || dispatch_status_.has_value()) {
+    if (mode_ != Mode::kCall || dispatch_ == nullptr ||
+        dispatch_->status.has_value()) {
       return;
     }
-    dispatch_status_ = std::move(status);
-    promise = dispatch_promise_;
+    dispatch_->status = std::move(status);
+    promise = dispatch_->promise;
   }
   promise->SetValue(a11::Unit{}).IgnoreError();
 }
@@ -2259,11 +2327,11 @@ void Action::SetCompletionStatus(const absl::Status& status) {
     if (mode_ != Mode::kCall) {
       return;
     }
-    if (!dispatch_status_.has_value()) {
+    if (dispatch_ != nullptr && !dispatch_->status.has_value()) {
       // A completion that arrives with nothing yet said about the dispatch
       // answers for the dispatch too, and it must not answer OK for a failure.
-      dispatch_status_ = status.ok() ? absl::OkStatus() : status;
-      dispatch = dispatch_promise_;
+      dispatch_->status = status.ok() ? absl::OkStatus() : status;
+      dispatch = dispatch_->promise;
     }
     if (completion_status_.has_value()) {
       late_after_cancellation = cancel_requested_;

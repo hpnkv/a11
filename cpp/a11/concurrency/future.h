@@ -67,11 +67,10 @@ namespace internal {
 template <typename T>
 struct FutureState {
   mutable thread::Mutex mu;
-  thread::CondVar cv;
-  bool ready ABSL_GUARDED_BY(mu) = false;
+  std::unique_ptr<thread::CondVar> cv ABSL_GUARDED_BY(mu);
   std::optional<absl::StatusOr<T>> result ABSL_GUARDED_BY(mu);
   std::function<void()> cancel ABSL_GUARDED_BY(mu);
-  thread::PermanentEvent event;
+  std::unique_ptr<thread::PermanentEvent> event ABSL_GUARDED_BY(mu);
   std::vector<absl::AnyInvocable<void(const absl::StatusOr<T>&)>> callbacks
       ABSL_GUARDED_BY(mu);
 };
@@ -136,7 +135,7 @@ class Future {
       return false;
     }
     thread::MutexLock lock(&state_->mu);
-    return state_->ready;
+    return state_->result.has_value();
   }
 
   /**
@@ -151,7 +150,7 @@ class Future {
     std::function<void()> cancel;
     {
       thread::MutexLock lock(&state_->mu);
-      if (state_->ready) {
+      if (state_->result.has_value()) {
         return absl::OkStatus();
       }
       cancel = state_->cancel;
@@ -177,7 +176,7 @@ class Future {
     }
     {
       thread::MutexLock lock(&state_->mu);
-      if (state_->ready) {
+      if (state_->result.has_value()) {
         return *state_->result;
       }
     }
@@ -186,8 +185,19 @@ class Future {
     // external threads use a cv variable and do not need a fiber
     // scheduler installed merely to wait for an A11 operation.
     if (thread::GetPerThreadFiberPtr() != nullptr) {
-      const int selected = thread::SelectUntil(
-          deadline, {thread::OnCancel(), state_->event.OnEvent()});
+      thread::PermanentEvent* event;
+      {
+        thread::MutexLock lock(&state_->mu);
+        if (state_->result.has_value()) {
+          return *state_->result;
+        }
+        if (state_->event == nullptr) {
+          state_->event = std::make_unique<thread::PermanentEvent>();
+        }
+        event = state_->event.get();
+      }
+      const int selected =
+          thread::SelectUntil(deadline, {thread::OnCancel(), event->OnEvent()});
       if (selected == 0) {
         return absl::CancelledError("Future wait cancelled");
       }
@@ -197,9 +207,12 @@ class Future {
       }
     } else {
       thread::MutexLock lock(&state_->mu);
-      while (!state_->ready) {
-        if (state_->cv.WaitWithDeadline(&state_->mu, deadline) &&
-            !state_->ready) {
+      while (!state_->result.has_value()) {
+        if (state_->cv == nullptr) {
+          state_->cv = std::make_unique<thread::CondVar>();
+        }
+        if (state_->cv->WaitWithDeadline(&state_->mu, deadline) &&
+            !state_->result.has_value()) {
           return absl::DeadlineExceededError(
               "Future was not ready before deadline");
         }
@@ -208,7 +221,7 @@ class Future {
     }
 
     thread::MutexLock lock(&state_->mu);
-    if (!state_->ready) {
+    if (!state_->result.has_value()) {
       return absl::InternalError("Future wake-up did not publish a result");
     }
     return *state_->result;
@@ -234,7 +247,7 @@ class Future {
     const absl::StatusOr<T>* absl_nullable ready_result = nullptr;
     {
       thread::MutexLock lock(&state_->mu);
-      if (!state_->ready) {
+      if (!state_->result.has_value()) {
         state_->callbacks.push_back(std::move(callback));
         return;
       }
@@ -249,7 +262,7 @@ class Future {
       return;
     }
     thread::MutexLock lock(&state_->mu);
-    if (!state_->ready) {
+    if (!state_->result.has_value()) {
       state_->cancel = std::move(cancel);
     }
   }
@@ -309,7 +322,7 @@ class Promise {
       return absl::FailedPreconditionError("Promise is not valid");
     }
     thread::MutexLock lock(&state_->mu);
-    if (state_->ready) {
+    if (state_->result.has_value()) {
       return absl::FailedPreconditionError("Promise is already complete");
     }
     state_->cancel = std::move(cancel);
@@ -339,19 +352,26 @@ class Promise {
     }
     std::vector<absl::AnyInvocable<void(const absl::StatusOr<T>&)>> callbacks;
     const absl::StatusOr<T>* absl_nullable published = nullptr;
+    thread::PermanentEvent* event = nullptr;
+    thread::CondVar* cv = nullptr;
     {
       thread::MutexLock lock(&state_->mu);
-      if (state_->ready) {
+      if (state_->result.has_value()) {
         return absl::AlreadyExistsError("Promise has already been completed");
       }
       state_->result.emplace(std::move(result));
-      state_->ready = true;
       state_->cancel = {};
       published = &*state_->result;
+      event = state_->event.get();
+      cv = state_->cv.get();
       callbacks.swap(state_->callbacks);
     }
-    state_->event.Notify();
-    state_->cv.SignalAll();
+    if (event != nullptr) {
+      event->Notify();
+    }
+    if (cv != nullptr) {
+      cv->SignalAll();
+    }
     for (auto& callback : callbacks) {
       internal::InvokeFutureCallback<T>(std::move(callback), *published);
     }
@@ -363,13 +383,13 @@ class Promise {
     if (state_ == nullptr) {
       return;
     }
-    bool ready = false;
+    bool complete = false;
     {
       thread::MutexLock lock(&state_->mu);
-      ready = state_->ready;
+      complete = state_->result.has_value();
     }
     // Never release the last state owner while its embedded mutex is locked.
-    if (ready) {
+    if (complete) {
       state_.reset();
       return;
     }
@@ -412,7 +432,8 @@ using Task = Future<Unit>;
 
 /// Return an already-successful Task.
 inline Task ReadyTask() {
-  return ReadyFuture(Unit{});
+  static const Task ready = ReadyFuture(Unit{});
+  return ready;
 }
 
 /// Return an already-failed Task.

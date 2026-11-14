@@ -165,6 +165,17 @@ TEST(ChunkStoreReaderTest, CancelInterruptsPendingStoreRead) {
   EXPECT_TRUE(absl::IsAborted(reader->GetStatus()));
 }
 
+TEST(ChunkStoreReaderTest, DoneWaitsWhenObservedBeforeCompletion) {
+  auto store = *LocalChunkStore::Create("reader-done");
+  auto reader = *ChunkStoreReader::Create(store);
+  auto done = reader->Done();
+  EXPECT_FALSE(done.IsReady());
+
+  reader->Cancel();
+  EXPECT_TRUE(done.Await(absl::Now() + absl::Seconds(5)).ok());
+  EXPECT_TRUE(reader->Done().IsReady());
+}
+
 TEST(ChunkStoreReaderTest, CancellingOneNextFutureDoesNotPoisonReader) {
   auto store = *LocalChunkStore::Create("reader-request-cancel");
   auto reader = *ChunkStoreReader::Create(store);
@@ -294,8 +305,8 @@ TEST(ChunkStoreReaderTest, UnorderedReaderDoesNotExpandStickyMimetype) {
                   .Await()
                   .ok());
   auto reader = *ChunkStoreReader::Create(
-      store, ChunkStoreReaderOptions{.ordered = false,
-                                     .max_chunks_to_read = 2,
+      store, ChunkStoreReaderOptions{.max_chunks_to_read = 2,
+                                     .ordered = false,
                                      .sticky_mimetype = true,
                                      .follow_node_refs = false});
 

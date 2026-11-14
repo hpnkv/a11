@@ -24,6 +24,7 @@
 #include <utility>
 #include <vector>
 
+#include <absl/base/no_destructor.h>
 #include <absl/log/log.h>
 #include <absl/status/status.h>
 #include <absl/status/status_macros.h>
@@ -173,8 +174,11 @@ struct CompletionWatch : std::enable_shared_from_this<CompletionWatch> {
 };
 
 std::shared_ptr<data::SerializationRegistry> GlobalRegistryPointer() {
-  return {&data::GlobalSerializationRegistry(),
-          [](data::SerializationRegistry*) {}};
+  static const absl::NoDestructor<std::shared_ptr<data::SerializationRegistry>>
+      registry(std::shared_ptr<data::SerializationRegistry>(
+          &data::GlobalSerializationRegistry(),
+          [](data::SerializationRegistry*) {}));
+  return *registry;
 }
 
 /// The terminator Finalize() writes when the producer has no last value.
@@ -337,12 +341,12 @@ class NodeMapReferenceResolver final : public stores::ReferenceResolver {
 };
 }  // namespace
 
-absl::StatusOr<std::shared_ptr<stores::ChunkStoreReader>>
+absl::StatusOr<std::shared_ptr<stores::LogicalChunkStoreReader>>
 AsyncNode::logical_reader() {
   thread::MutexLock lock(&mu_);
   if (logical_reader_ == nullptr) {
     ABSL_RETURN_IF_ERROR(reader_options_.Validate());
-    auto created = stores::ChunkStoreReader::Create(
+    auto created = stores::LogicalChunkStoreReader::Create(
         store_, reader_options_,
         std::make_shared<NodeMapReferenceResolver>(owner_));
     if (!created.ok()) {
@@ -405,7 +409,7 @@ absl::Status AsyncNode::ResetReader(
     ABSL_RETURN_IF_ERROR(options->Validate());
   }
   std::shared_ptr<stores::ChunkStoreReader> reader;
-  std::shared_ptr<stores::ChunkStoreReader> logical;
+  std::shared_ptr<stores::LogicalChunkStoreReader> logical;
   {
     thread::MutexLock lock(&mu_);
     reader = std::move(reader_);
@@ -442,7 +446,7 @@ absl::Status AsyncNode::SetWriterOptions(
 
 absl::Status AsyncNode::GetReaderStatus() const {
   std::shared_ptr<stores::ChunkStoreReader> reader;
-  std::shared_ptr<stores::ChunkStoreReader> logical;
+  std::shared_ptr<stores::LogicalChunkStoreReader> logical;
   {
     thread::MutexLock lock(&mu_);
     reader = reader_;
@@ -641,7 +645,7 @@ a11::Future<std::optional<data::NodeFragment>> AsyncNode::NextLogicalFragment(
   if (!input.ok()) {
     return a11::FailedFuture<std::optional<data::NodeFragment>>(input.status());
   }
-  return (*input)->NextLogical(timeout);
+  return (*input)->Next(timeout);
 }
 
 a11::Future<std::vector<std::optional<data::NodeFragment>>>
@@ -651,16 +655,16 @@ AsyncNode::NextLogicalFragments(size_t limit, absl::Duration timeout) {
   if (!input.ok()) {
     return a11::FailedFuture<Batch>(input.status());
   }
-  return (*input)->NextLogicalMany(limit, timeout);
+  return (*input)->NextMany(limit, timeout);
 }
 
 bool AsyncNode::LogicalSawFinal() const {
-  std::shared_ptr<stores::ChunkStoreReader> logical;
+  std::shared_ptr<stores::LogicalChunkStoreReader> logical;
   {
     thread::MutexLock lock(&mu_);
     logical = logical_reader_;
   }
-  return logical != nullptr && logical->LogicalSawFinal();
+  return logical != nullptr && logical->SawFinal();
 }
 
 a11::Future<std::optional<data::NodeFragment>> AsyncNode::NextFragment(
@@ -756,7 +760,7 @@ absl::Status AsyncNode::DetachStream(
 
 void AsyncNode::CancelReader() {
   std::shared_ptr<stores::ChunkStoreReader> reader;
-  std::shared_ptr<stores::ChunkStoreReader> logical;
+  std::shared_ptr<stores::LogicalChunkStoreReader> logical;
   {
     thread::MutexLock lock(&mu_);
     reader = reader_;

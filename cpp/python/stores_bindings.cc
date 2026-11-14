@@ -243,19 +243,19 @@ void BindStores(py::module_& module) {
                  std::uint32_t max_ref_depth, std::uint32_t max_ref_breadth) {
                 constexpr std::uint64_t kMaximum = std::uint64_t{1} << 32U;
                 stores::ChunkStoreReaderOptions options{
-                    .ordered = ordered,
-                    .pop_chunks = pop_chunks,
                     .num_chunks_to_buffer = UnsignedOption(
                         num_chunks_to_buffer, kMaximum, "num_chunks_to_buffer"),
+                    .max_chunks_to_read = OptionalUnsignedOption(
+                        max_chunks_to_read, kMaximum, "max_chunks_to_read"),
                     .offset = static_cast<std::uint32_t>(UnsignedOption(
                         offset, std::numeric_limits<std::uint32_t>::max(),
                         "offset")),
-                    .max_chunks_to_read = OptionalUnsignedOption(
-                        max_chunks_to_read, kMaximum, "max_chunks_to_read"),
-                    .sticky_mimetype = sticky_mimetype,
-                    .follow_node_refs = follow_node_refs,
                     .max_ref_depth = max_ref_depth,
-                    .max_ref_breadth = max_ref_breadth};
+                    .max_ref_breadth = max_ref_breadth,
+                    .ordered = ordered,
+                    .pop_chunks = pop_chunks,
+                    .sticky_mimetype = sticky_mimetype,
+                    .follow_node_refs = follow_node_refs};
                 ValidateReaderOptions(options);
                 return options;
               }),
@@ -304,14 +304,14 @@ void BindStores(py::module_& module) {
                  bool sticky_mimetype) {
                 constexpr std::uint64_t kMaximum = std::uint64_t{1} << 32U;
                 stores::ChunkStoreWriterOptions options{
-                    .offset = static_cast<std::uint32_t>(UnsignedOption(
-                        offset, std::numeric_limits<std::uint32_t>::max(),
-                        "offset")),
+                    .num_chunks_to_buffer = OptionalUnsignedOption(
+                        num_chunks_to_buffer, kMaximum, "num_chunks_to_buffer"),
                     .max_chunks_to_write_at_once =
                         UnsignedOption(max_chunks_to_write_at_once, kMaximum,
                                        "max_chunks_to_write_at_once"),
-                    .num_chunks_to_buffer = OptionalUnsignedOption(
-                        num_chunks_to_buffer, kMaximum, "num_chunks_to_buffer"),
+                    .offset = static_cast<std::uint32_t>(UnsignedOption(
+                        offset, std::numeric_limits<std::uint32_t>::max(),
+                        "offset")),
                     .sticky_mimetype = sticky_mimetype};
                 ValidateWriterOptions(options);
                 return options;

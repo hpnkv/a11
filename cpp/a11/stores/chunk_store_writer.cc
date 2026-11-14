@@ -822,8 +822,8 @@ ChunkStoreWrite ChunkStoreWriter::EnqueuePayload(
     return failed_write(validation);
   }
 
-  const auto admission = std::make_shared<a11::Promise<a11::Unit>>();
-  a11::Task admitted = admission->future();
+  std::shared_ptr<a11::Promise<a11::Unit>> admission;
+  a11::Task admitted;
   a11::Promise<std::uint32_t> promise;
   a11::Future<std::uint32_t> confirmation = promise.future();
   bool admitted_immediately = false;
@@ -859,19 +859,24 @@ ChunkStoreWrite ChunkStoreWriter::EnqueuePayload(
               ? static_cast<std::uint64_t>(*requested_seq) + 1
               : state_->next_sticky_seq + 1;
     }
+    admitted_immediately =
+        !state_->options.num_chunks_to_buffer.has_value() ||
+        state_->outstanding < *state_->options.num_chunks_to_buffer;
+    if (!admitted_immediately) {
+      admission = std::make_shared<a11::Promise<a11::Unit>>();
+      admitted = admission->future();
+    }
     State::Element element(std::move(payload), seq, !final, admission,
                            std::move(promise));
-    if (!state_->options.num_chunks_to_buffer.has_value() ||
-        state_->outstanding < *state_->options.num_chunks_to_buffer) {
+    if (admitted_immediately) {
       state_->queue.push_back(std::move(element));
       ++state_->outstanding;
-      admitted_immediately = true;
     } else {
       state_->pending_queue.push_back(std::move(element));
     }
   }
   if (admitted_immediately) {
-    CompleteTask(admission, absl::OkStatus());
+    admitted = a11::ReadyTask();
     if (ensure_started) {
       state_->Wake();
     }

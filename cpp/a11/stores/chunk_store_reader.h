@@ -24,10 +24,13 @@
 #ifndef A11_STORES_CHUNK_STORE_READER_H_
 #define A11_STORES_CHUNK_STORE_READER_H_
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <utility>
+#include <vector>
 
 #include <absl/status/status.h>
 #include <absl/status/statusor.h>
@@ -39,6 +42,7 @@
 
 namespace a11::stores {
 class ReferenceResolver;
+class LogicalChunkStoreReader;
 
 struct ResolvedReference {
   std::shared_ptr<ChunkStore> store;
@@ -63,24 +67,24 @@ class ReferenceResolver {
  * number read, and whether ordered reads expand sticky mimetypes.
  */
 struct ChunkStoreReaderOptions {
-  /// Whether fragments are delivered strictly in sequence order.
-  bool ordered = true;
-  /// Whether fragments are removed from the store as they are read.
-  bool pop_chunks = false;
   /// Maximum number of fragments to prefetch into the buffer.
   std::uint64_t num_chunks_to_buffer = 32;
-  /// Sequence number at which reading begins.
-  std::uint32_t offset = 0;
   /// Optional cap on the total number of fragments to read.
   std::optional<std::uint64_t> max_chunks_to_read = {};
-  /// Whether ordered reads inherit the last explicitly set chunk mimetype.
-  bool sticky_mimetype = false;
-  /// Expand references in logical chunk and value reads.
-  bool follow_node_refs = true;
+  /// Sequence number at which reading begins.
+  std::uint32_t offset = 0;
   /// Maximum active reference edges.
   std::uint32_t max_ref_depth = 8;
   /// Maximum sibling followers prefetched at one level.
   std::uint32_t max_ref_breadth = 2;
+  /// Whether fragments are delivered strictly in sequence order.
+  bool ordered = true;
+  /// Whether fragments are removed from the store as they are read.
+  bool pop_chunks = false;
+  /// Whether ordered reads inherit the last explicitly set chunk mimetype.
+  bool sticky_mimetype = false;
+  /// Expand references in logical chunk and value reads.
+  bool follow_node_refs = true;
 
   /** @brief
    *    Validate that the options are internally consistent.
@@ -119,7 +123,7 @@ class ChunkStoreReader {
       std::shared_ptr<ChunkStore> store, ChunkStoreReaderOptions options = {},
       std::shared_ptr<ReferenceResolver> resolver = nullptr);
 
-  ~ChunkStoreReader() = default;
+  ~ChunkStoreReader();
 
   /** @brief
    *    Start the background read pump if it is not already running.
@@ -209,9 +213,12 @@ class ChunkStoreReader {
   [[nodiscard]] size_t buffer_size() const;
 
  private:
+  friend class LogicalChunkStoreReader;
   struct State;
   struct LogicalState;
-  absl::StatusOr<std::shared_ptr<LogicalState>> GetLogical();
+  struct LogicalHolder;
+  absl::StatusOr<std::shared_ptr<LogicalChunkStoreReader>> GetLogical();
+  LogicalHolder* GetLogicalHolder();
   void CancelLogical();
   absl::Status GetLogicalStatus() const;
   std::optional<data::NodeFragment> TryTakeSimpleBuffered();
@@ -221,8 +228,30 @@ class ChunkStoreReader {
 
   std::shared_ptr<State> state_;
   std::shared_ptr<ReferenceResolver> resolver_;
-  mutable thread::Mutex logical_mu_;
-  std::shared_ptr<LogicalState> logical_ ABSL_GUARDED_BY(logical_mu_);
+  std::atomic<LogicalHolder*> logical_holder_ = nullptr;
+};
+
+/// Logical read cursor backed by one raw reader and a reference traversal.
+class LogicalChunkStoreReader {
+ public:
+  static absl::StatusOr<std::shared_ptr<LogicalChunkStoreReader>> Create(
+      std::shared_ptr<ChunkStore> store, ChunkStoreReaderOptions options,
+      std::shared_ptr<ReferenceResolver> resolver = nullptr);
+
+  void Cancel();
+  absl::Status GetStatus() const;
+  bool SawFinal() const;
+  a11::Future<std::optional<data::NodeFragment>> Next(
+      absl::Duration timeout = absl::InfiniteDuration());
+  a11::Future<std::vector<std::optional<data::NodeFragment>>> NextMany(
+      size_t limit, absl::Duration timeout = absl::InfiniteDuration());
+
+ private:
+  explicit LogicalChunkStoreReader(
+      std::shared_ptr<ChunkStoreReader::LogicalState> state)
+      : state_(std::move(state)) {}
+
+  std::shared_ptr<ChunkStoreReader::LogicalState> state_;
 };
 
 }  // namespace a11::stores

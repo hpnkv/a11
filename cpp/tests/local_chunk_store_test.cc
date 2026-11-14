@@ -64,6 +64,29 @@ TEST(LocalChunkStoreTest, PreservesSequenceAndArrivalOrder) {
   EXPECT_FALSE(end->front().has_value());
 }
 
+TEST(LocalChunkStoreTest, ArrivalOrderSpansBatches) {
+  auto store = *LocalChunkStore::Create("arrival-batches");
+  ASSERT_TRUE(store
+                  ->PutMany({Fragment(9), Fragment(3), Fragment(8), Fragment(0),
+                             Fragment(7)})
+                  .Await()
+                  .ok());
+  ASSERT_TRUE(store
+                  ->PutMany({Fragment(1), Fragment(2), Fragment(4), Fragment(5),
+                             Fragment(6)})
+                  .Await()
+                  .ok());
+  const std::vector<std::uint32_t> expected{9, 3, 8, 0, 7, 1, 2, 4, 5, 6};
+  for (size_t index = 0; index < expected.size(); ++index) {
+    EXPECT_EQ(*store->GetSeqForArrivalOrder(index).Await(), expected[index]);
+    auto fragment = store->GetByArrivalOrder(index).Await();
+    ASSERT_TRUE(fragment.ok()) << fragment.status();
+    EXPECT_EQ(fragment->seq, expected[index]);
+  }
+  EXPECT_TRUE(
+      absl::IsNotFound(store->GetSeqForArrivalOrder(10).Await().status()));
+}
+
 TEST(LocalChunkStoreTest, CloseWakesBlockedRead) {
   auto created = LocalChunkStore::Create("test");
   ASSERT_TRUE(created.ok());
@@ -72,6 +95,43 @@ TEST(LocalChunkStoreTest, CloseWakesBlockedRead) {
   auto closed = store->CloseWritesWithStatus(absl::DataLossError("failed"));
   ASSERT_TRUE(closed.Await().ok());
   EXPECT_EQ(pending.Await().status().code(), absl::StatusCode::kDataLoss);
+}
+
+TEST(LocalChunkStoreTest, NextWakesAfterWriteAndClose) {
+  auto store = *LocalChunkStore::Create("next-wakeup");
+  auto first = store->Next(absl::Now() + absl::Seconds(5), 1);
+  EXPECT_FALSE(first.IsReady());
+  thread::SleepFor(absl::Milliseconds(1));
+  ASSERT_TRUE(store->Put(Fragment(0)).Await().ok());
+  auto read = first.Await(absl::Now() + absl::Seconds(5));
+  ASSERT_TRUE(read.ok()) << read.status();
+  ASSERT_EQ(read->size(), 1);
+  ASSERT_TRUE(read->front().has_value());
+  EXPECT_EQ(read->front()->seq, 0);
+
+  auto second = store->Next(absl::Now() + absl::Seconds(5), 1);
+  EXPECT_FALSE(second.IsReady());
+  thread::SleepFor(absl::Milliseconds(1));
+  ASSERT_TRUE(store->CloseWritesWithStatus(absl::OkStatus()).Await().ok());
+  auto end = second.Await(absl::Now() + absl::Seconds(5));
+  ASSERT_TRUE(end.ok()) << end.status();
+  ASSERT_EQ(end->size(), 1);
+  EXPECT_FALSE(end->front().has_value());
+}
+
+TEST(LocalChunkStoreTest, NextWakesAfterEarlierWaitTimesOut) {
+  auto store = *LocalChunkStore::Create("next-after-timeout");
+  auto expired = store->Next(absl::Now() + absl::Milliseconds(1), 1)
+                     .Await(absl::Now() + absl::Seconds(5));
+  EXPECT_TRUE(absl::IsDeadlineExceeded(expired.status()));
+
+  auto pending = store->Next(absl::Now() + absl::Seconds(5), 1);
+  ASSERT_TRUE(store->Put(Fragment(0, true)).Await().ok());
+  auto read = pending.Await(absl::Now() + absl::Seconds(5));
+  ASSERT_TRUE(read.ok()) << read.status();
+  ASSERT_FALSE(read->empty());
+  ASSERT_TRUE(read->front().has_value());
+  EXPECT_EQ(read->front()->seq, 0);
 }
 
 TEST(LocalChunkStoreTest, CancellationWakesBlockedReadAndStoreRemainsUsable) {

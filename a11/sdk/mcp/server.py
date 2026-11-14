@@ -12,14 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Serving an ActionRegistry to MCP clients.
+"""Serve an ActionRegistry as MCP tools.
 
-The other direction from [a11.sdk.mcp.client][a11.sdk.mcp.client]: instead of
-reading a server's tools as actions, this publishes actions as tools. Point it
-at a registry and every action it holds a handler for becomes a tool an MCP
-client can list and call -- so a Claude Desktop, an editor, or any other MCP
-host reaches the same actions a model reaches through `interact_with_llm` and a
-peer reaches over A11's own wire.
+Actions with registered handlers become tools that MCP clients can list and
+call. Full-match patterns limit the published actions. Reserved actions and
+schema-only entries are excluded.
 
 ```python
 import a11
@@ -34,28 +31,9 @@ async def summarise(document: str) -> str:
 await mcp.serve_stdio(REGISTRY, name="my-tools")
 ```
 
-The only module of the serving half that imports the MCP SDK, and it imports it
-lazily through [load_mcp][a11.sdk.mcp.client.load_mcp], so
-[a11.sdk.mcp.tools][a11.sdk.mcp.tools] and
-[a11.sdk.mcp.calls][a11.sdk.mcp.calls] stay importable and testable wherever
-A11 runs.
-
-**Which actions.** Everything the registry holds a handler for, narrowed by
-full-match patterns in the same shape as `x-a11-allowed-llm-actions`. A11's own
-reserved actions are protocol operations rather than tools and are never
-served; neither is an action registered for its schema alone, which lives on
-some further peer.
-
-**What a client may set.** A `tools/call` carries `_meta`, and
-[headers_from_meta][a11.sdk.mcp.calls.headers_from_meta] reads the headers it
-asks for. Only the headers the action itself declares are applied, plus
-whatever `accept_headers` admits: a client of an MCP server is not the process
-owner, and a header it did not declare an interest in is one it should not be
-able to set. The deadline is the server's.
-
-**The event loop.** The MCP SDK runs on anyio and A11's Python runtime on
-asyncio, which is one loop under the asyncio backend that both `serve_stdio`
-and uvicorn use.
+The server accepts declared action headers and headers admitted by
+`accept_headers`; it sets the deadline. The MCP SDK is loaded lazily. Its anyio
+asyncio backend shares A11's event loop under `serve_stdio` and uvicorn.
 """
 
 from __future__ import annotations

@@ -14,27 +14,12 @@
 
 /**
  * @file
- * @brief
- *   A11's native benchmarks: the same operations the Python suite measures,
- *   with the Python taken out.
+ * @brief Native benchmarks with row names shared by the Python suite.
  *
- * The Python suite established that A11's dominant cost is the boundary rather
- * than the core -- one `await` costs ~20us, and a pure-TypeScript client beats
- * the native-backed Python runtime by 20-50x on in-memory work. That is an
- * inference from two data points, and inferences are a poor basis for deciding
- * where to spend a quarter. This binary supplies the third: what the C++ costs
- * on its own.
- *
- * Read a number here as the *ceiling*. If a native operation runs at 3M/s and
- * the Python binding delivers 40k/s, the binding is the work. If the native
- * operation is itself slow, no amount of binding work will help and the fix is
- * underneath. Every benchmark here is named to match its Python counterpart so
- * the two tables line up.
- *
- *   a11_bench                       # everything
+ *   a11_bench                       # every suite
  *   a11_bench --suite stores        # one suite
- *   a11_bench --scale 0.1           # a tenth of the iterations
- *   a11_bench --json native.json    # records the Python runner can diff
+ *   a11_bench --scale 0.1           # fewer iterations
+ *   a11_bench --json native.json    # machine-readable results
  */
 
 #include <atomic>
@@ -120,11 +105,7 @@ bool Wanted(std::string_view name) {
   return g_only.empty() || absl::StrContains(name, g_only);
 }
 
-/// An environment knob as an integer, or nullopt when unset or not a number.
-///
-/// Every tuning variable in this file goes through here rather than through
-/// `std::atoi`, which reads a typo as zero -- and a benchmark quietly run with
-/// a knob at zero is a measurement of the wrong thing.
+/// Parses an environment knob as an integer, or returns nullopt if invalid.
 std::optional<int> EnvironmentInt(const char* name) {
   const char* setting = std::getenv(name);
   int value = 0;
@@ -155,18 +136,10 @@ std::string Human(std::int64_t size) {
 }
 
 // ---------------------------------------------------------------------------
-// data: the codec floor
+// Data codecs
 // ---------------------------------------------------------------------------
 
-/**
- * Chunk codec and envelope codec, native.
- *
- * The Python numbers said `to_chunk` spends 8.4us of its 8.6us resolving a
- * registration, and that `WireMessage.from_msgpack` decodes 16x slower than it
- * encodes. Both claims are about code that lives here, so both are checkable
- * here -- and if the C++ registry shows the same shape, the fix is in C++ and
- * not in the binding.
- */
+/** Measures native chunk and wire-message codec costs. */
 void DataSuite(Recorder& recorder, double scale) {
   data::SerializationRegistry& registry = data::GlobalSerializationRegistry();
 
@@ -470,19 +443,10 @@ void StoresSuite(Recorder& recorder, double scale) {
 }
 
 // ---------------------------------------------------------------------------
-// nodes: the reader and writer above the store
+// Node readers and writers
 // ---------------------------------------------------------------------------
 
-/**
- * The node layer, native.
- *
- * This is the one that settles the largest open question. The Python suite
- * measured `AsyncNode.next_fragment` at 11.9k/s against `ChunkStore.next(
- * limit=64)` at 1.02M/s and concluded a batched node read was worth 86x. That
- * conclusion assumed the node reader itself is cheap and only the per-await
- * boundary is dear. Measuring both here, with no boundary at all, says whether
- * that is true.
- */
+/** Measures native node reads against direct chunk-store reads. */
 void NodesSuite(Recorder& recorder, double scale) {
   const data::Chunk token{
       .metadata = data::ChunkMetadata{.mimetype = "application/json"},
@@ -584,9 +548,7 @@ void NodesSuite(Recorder& recorder, double scale) {
   }
 
   {
-    // The node's batched read, which had no native row -- so the only figure
-    // for it came through the binding, and there was no way to tell the
-    // reader's own per-fragment cost from the crossing's.
+    // Measure batched node reads without Python binding overhead.
     const std::int64_t count = Scaled(100000, scale, 1000);
     auto store = *stores::LocalChunkStore::Create("bench-read-batched");
     auto node = *nodes::AsyncNode::Create(store);
@@ -681,11 +643,10 @@ double ProcessCpuSeconds() {
 }
 
 // ---------------------------------------------------------------------------
-// actions: the unit A11 is counted in
+// Actions
 // ---------------------------------------------------------------------------
 
-// Short enough that a wedged call stage reports promptly rather than consuming
-// the whole run's budget. File scope so the driver lambdas can read it.
+// Stage timeout shared by benchmark driver lambdas.
 constexpr absl::Duration kStageTimeout = absl::Seconds(5);
 
 actions::ActionSchema EchoSchema() {
@@ -740,17 +701,7 @@ actions::ActionSchema PortlessSchema() {
   return actions::ActionSchema{.name = "portless"};
 }
 
-// A schema with `width` inputs and `width` outputs, none of which the handler
-// touches.
-/// A schema with `width` inputs and `width` outputs, none of which the handler
-/// touches.
-///
-/// This is the shape that prices the Action's *teardown*, which is the only
-/// place the width of a schema is paid in full: a handler that writes nothing
-/// still leaves every output to be closed and every input to be finalised, and
-/// those were once one pool handoff each in series. A caller that reads one
-/// output of many is the normal case, not a pathological one -- see the note in
-/// Action::CloseUnwrittenOutputs about not materialising untouched outputs.
+/// Builds a `width`-port schema for measuring action teardown costs.
 actions::ActionSchema WideSchema(int width) {
   actions::ActionSchema schema{.name = absl::StrCat("wide-", width)};
   for (int index = 0; index < width; ++index) {
@@ -782,17 +733,8 @@ actions::ActionHandler InlineNoopHandler() {
   };
 }
 
-/**
- * A whole local action, native, broken down the way the Python probe was.
- *
- * The Python suite put a 1-in/1-out local action at ~500us against 155us here,
- * and the question that split does not answer is how much of the 155us is the
- * binding's absence and how much is the action design. So this measures the
- * same ladder: construction, construction plus run, the whole call with no
- * ports at all, and the same data movement with no action wrapped around it.
- * Read `fiber_round_trip` first -- it is to this suite what
- * `runtime/event_loop_turn` is to the Python one.
- */
+/** Measures local action construction, execution, and data movement.
+ * `fiber_round_trip` supplies the scheduling baseline for these rows. */
 void ActionsSuite(Recorder& recorder, double scale) {
   const actions::ActionSchema schema = EchoSchema();
   const actions::ActionHandler handler = EchoHandler();
@@ -974,19 +916,10 @@ void ActionsSuite(Recorder& recorder, double scale) {
 }
 
 // ---------------------------------------------------------------------------
-// scheduling: what A11 pays to move work between contexts
+// Scheduling
 // ---------------------------------------------------------------------------
 
-/**
- * The layers between "switch a fiber" and "Submit and Await".
- *
- * Boost documents a context switch at tens of nanoseconds, and a Submit round
- * trip measures around 8us, so nearly all of it is somewhere other than the
- * switch. This prices each layer in between so the next optimisation aims at
- * the right one: a yield between two fibers already on this thread, a fiber
- * created and joined on this thread, a bare handoff to the worker pool, and the
- * full Submit.
- */
+/** Measures fiber yields, joins, worker handoffs, and Submit round trips. */
 void SchedulingSuite(Recorder& recorder, double scale) {
   const std::int64_t iterations = Scaled(20000, scale, 500);
 
@@ -1169,16 +1102,8 @@ void SchedulingSuite(Recorder& recorder, double scale) {
 // wire: the transport
 // ---------------------------------------------------------------------------
 
-/**
- * A message round trip, per transport.
- *
- * The same echo over each transport A11 speaks, so they can be put beside each
- * other: in-process, WebSocket, SSE, and a WebRTC data channel. Two reference
- * rows bracket them -- a bare TCP ping-pong for what the kernel costs, and the
- * in-process pair for what A11 costs with no socket under it -- because without
- * both it is guesswork whether a transport's number is its own overhead or the
- * loopback it is sitting on.
- */
+/** Measures echo round trips across transports, with TCP and in-process
+ * baselines for socket and A11 overhead. */
 namespace {
 
 // A client endpoint whose peer is already accepting, plus how to shut both
@@ -1186,8 +1111,7 @@ namespace {
 struct BenchPair {
   std::shared_ptr<net::WireStream> client;
   std::function<void()> close;
-  // Run after Start() has resolved on both ends, for anything that needs a live
-  // connection rather than a configured one.
+  // Runs after both endpoints start and the connection is live.
   std::function<void()> after_start = {};
 };
 
@@ -1196,7 +1120,7 @@ struct BenchPair {
 using PairFactory = std::function<std::optional<BenchPair>(
     std::weak_ptr<net::WireStream>*, net::OnMessage, net::OnDone)>;
 
-// Counted arrivals, shared with the callback rather than captured by reference.
+// Arrival count shared with the callback.
 struct Arrivals {
   thread::Mutex mu;
   thread::CondVar cv;
@@ -1217,9 +1141,7 @@ struct EchoSetup {
   std::shared_ptr<std::weak_ptr<net::WireStream>> peer;
 };
 
-// Builds an echoing pair and starts the client. `what` names the measurement in
-// the skip line, since a transport that cannot start should abandon its row
-// rather than hang the suite.
+// Starts an echo pair. `what` labels the row if the transport cannot start.
 EchoSetup StartEchoPair(const std::string& transport, const std::string& what,
                         const PairFactory& make_pair) {
   EchoSetup setup;
@@ -1366,24 +1288,9 @@ void MeasureRoundTrip(Recorder& recorder, double scale,
   pair->close();
 }
 
-/**
- * How many messages a transport carries per second with a pipeline open.
- *
- * The round-trip row divided by its payload is *not* this number. It prices one
- * message at a time, so it reports size/latency -- a figure in which every
- * scheduling cost is charged to the payload and no cost is ever overlapped.
- * Throughput is a different question, and the one a "5 Gbit/s at 64 KiB" target
- * is actually about: with more than one message in flight, the encode of the
- * next can overlap the write of the last, several can merge into one frame, and
- * the loop crossing amortises across the window.
- *
- * The window is what makes it a pipeline and also what keeps it safe: Send has
- * no admission signal, so an unpaced flood aborts the connection rather than
- * pushing back (FINDINGS.md item 7). The peer's one-byte echo per message is
- * the credit that lets the next one go -- cheap enough on the wire (~80 bytes
- * against 64 KiB) that the reverse direction does not distort the rate, and it
- * doubles as the completion signal.
- */
+/** Measures pipelined message throughput with `window` messages in flight.
+ * One-byte echoes provide send credit and completion without flooding Send.
+ * The serial round-trip row measures latency without overlapping writes. */
 void MeasureStreamThroughput(Recorder& recorder, double scale,
                              const std::string& transport, std::int64_t size,
                              std::int64_t window,
@@ -1493,16 +1400,12 @@ std::optional<BenchPair> WebSocketPair(
   options.path = "/bench";
   options.bind_address = "127.0.0.1";
   options.port = 0;
-  // A11 packetises a message before the channel frames it, and the default
-  // split (64 KiB) is just below a 64 KiB payload plus its envelope -- so the
-  // target message size is exactly the size that turns one message into two.
+  // Framing splits the target 64 KiB payload and its envelope into two parts.
   if (const std::optional<int> ws_split = EnvironmentInt("A11_BENCH_WS_SPLIT");
       ws_split.has_value()) {
     options.framing.split_size = static_cast<size_t>(std::max(1024, *ws_split));
   }
-  // HTTP/1.1 on both sides. What this row should price is WebSocket framing,
-  // not ALPN, and offering h2 to a listener that does not serve it costs the
-  // connection rather than just the negotiation.
+  // Use HTTP/1.1 on both ends to measure WebSocket framing.
   options.http2_options.enable_h2 = false;
   options.http2_options.enable_h2c = false;
 
@@ -1554,9 +1457,7 @@ std::optional<BenchPair> WebSocketPair(
                    }};
 }
 
-// Server-Sent Events: the transport a browser can always reach, and the only
-// one whose two directions are different mechanisms -- an SSE response stream
-// inbound, and outbound either one HTTP POST per message or a single.
+// SSE receives on a response stream and sends through POST or a request stream.
 std::optional<BenchPair> HttpSseVariantPair(
     net::SseOutboundDelivery outbound,
     std::weak_ptr<net::WireStream>* peer_slot, net::OnMessage on_server,
@@ -2054,16 +1955,13 @@ void MeasureLoopbackThroughput(Recorder& recorder, double scale,
   echo.join();
 }
 
-// The reference row the WebRTC diagnosis has been missing: a bare
-// libdatachannel data channel with no A11 in it at all.
+// Raw libdatachannel reference row without A11 framing.
 void MeasureRawWebRtc(Recorder& recorder, double scale, std::int64_t size,
                       bool pipelined, std::int64_t window) {
   rtc::Configuration configuration;
   // Loopback only: a STUN round trip would price the internet, not the stack.
   configuration.maxMessageSize = 4 * 1024 * 1024;
-  // The three knobs that decide how a message becomes packets, swept here
-  // rather than on the A11 row because this row has no A11 in it: whatever they
-  // are worth here is what they are worth at all.
+  // Sweep packetization settings in the raw data-channel row.
   const auto env_size = [](const char* name) -> std::optional<size_t> {
     const std::optional<int> parsed = EnvironmentInt(name);
     return parsed.value_or(0) > 0
@@ -2558,7 +2456,7 @@ void ServerSuite(Recorder& recorder, double scale) {
           },
           thread::TreeOptions{.stack_size = 512 * 1024}));
     }
-    // Reported, not discarded -- for the third time in this suite's short life.
+    // Preserve driver errors in the benchmark result.
     std::vector<std::string> driver_errors;
     for (const a11::Task& driver : drivers) {
       if (const absl::Status result = driver.Await(Deadline()).status();
@@ -2618,23 +2516,12 @@ void ServerSuite(Recorder& recorder, double scale) {
 }
 
 // ---------------------------------------------------------------------------
-// flow: the language's runtime, with no host bridge in the way
+// Flow runtime with the native host bridge
 // ---------------------------------------------------------------------------
 
-/**
- * The same flows `bench/suites/flow.py` runs, with the Python taken out.
- *
- * The Python suite can say what a flow costs and not what the *runtime* costs:
- * every value crossing a stage is read and written through the [HostBridge],
- * which on that path is an interpreter call under the GIL. This suite runs the
- * identical sources against the native bridge, so the difference between the
- * two tables is the bridge and everything left is the runtime.
- *
- * Names match the Python suite's on purpose (`flow_run`, `pipe_values`), and
- * the rows the Python suite does not have -- per-stage cost, a chain of pipes,
- * a loop with a call per pass -- are the ones that answer whether a pipeline
- * paces itself or runs item by item.
- */
+/** Runs the Python Flow suite's sources with the native host bridge.
+ * Shared row names support bridge-cost comparisons; extra rows measure
+ * stages, pipe chains, and loops. */
 /// `echo`, as the Python flow suite declares it: one unary input, one output.
 actions::ActionSchema FlowEchoSchema() {
   return actions::ActionSchema{
@@ -2802,9 +2689,7 @@ FlowRun RunOneFlow(
     }
     outputs[port] = *node;
   }
-  // Either the flow starts and is then fed value by value -- a live producer,
-  // which is what every other row measures -- or it is handed a stream that is
-  // already there: a node an earlier step filled, a stored conversation.
+  // Feed values while the flow runs, or provide a completed input stream.
   const auto feed = [&]() -> absl::Status {
     for (const auto& [port, unused] : schema->inputs) {
       ABSL_ASSIGN_OR_RETURN(const std::shared_ptr<nodes::AsyncNode> node,
@@ -2996,14 +2881,7 @@ std::string ChainSource(int steps) {
   return source;
 }
 
-/// `stages` chained per-value stages in one pipeline.
-///
-/// The question is whether stage *n* costs what stage 1 costs. Each stage is
-/// its own ref in the plan, which the runtime gives its own producer and its
-/// own bounded queue, so a pipeline should pace itself: the second value can be
-/// in stage 1 while the first is in stage 2. If the per-stage cost is flat, it
-/// does; if the whole pipeline costs one stage times the number of stages, it
-/// does not.
+/// Builds a pipeline of `stages` per-value stages to measure scaling.
 std::string StageSource(int stages) {
   std::string source = absl::StrCat("flow staged", stages, " {\n",
                                     "  in items: string stream required\n",
@@ -3915,7 +3793,7 @@ int main(int argc, char** argv) {
     std::printf("=== %s ===\n", name.c_str());
     std::fflush(stdout);
     run(recorder, scale);
-    // Report each suite as it finishes rather than everything at the end.
+    // Print each suite after it completes.
     recorder.PrintTable(name);
     std::fflush(stdout);
     if (!json_path.empty() && !recorder.WriteJson(json_path)) {

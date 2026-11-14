@@ -12,44 +12,30 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""``a11 flow``: read, check and describe Flow programs from the command line.
+"""Read, check, format, and run Flow programs with ``a11 flow``.
 
 Subcommands:
 
-* ``check FILE...`` -- compile each file and report what is wrong with it.
-  Exits 1 if anything is an error, so it works in a pre-commit hook or a CI job.
+* ``check FILE...`` -- compile each file and report errors; exits 1 on error.
 * ``fmt FILE...`` -- format a flow: ``-i`` to rewrite it, ``--check`` for CI.
-* ``parse FILE`` -- the syntax tree, and everything the parser could not read.
-* ``describe FILE`` -- the resolved plan: ports, headers, steps, node maps.
-* ``highlight FILE`` -- what each token means, for a syntax highlighter.
-* ``complete FILE`` -- what may be written at a position in it.
-* ``run FILE`` -- run it. A file with a
-* ``flow { ... }`` is a **program**: it runs
-  through the interpreter, with `argv`, a policy, standard streams and an exit
-  code. A file of named flows only runs one of them here and prints its ports.
+* ``parse FILE`` -- show the syntax tree and parser diagnostics.
+* ``describe FILE`` -- show the resolved plan: ports, headers, steps, node maps.
+* ``highlight FILE`` -- classify each token for syntax highlighting.
+* ``complete FILE`` -- show proposals at a source position.
+* ``run FILE`` -- run an unnamed ``flow { ... }`` program with arguments,
+  standard streams, and an exit code, or run one named flow.
 * ``serve`` -- answer language requests on standard input, one per line.
-* ``syntax`` -- generate the editor definitions, or check they are current.
-* ``codes`` -- every diagnostic code the language publishes, and what it means.
+* ``syntax`` -- generate editor definitions or check the generated files.
+* ``codes`` -- list published diagnostic codes.
 
-Every subcommand takes ``--format``. ``text`` is human-readable, ``json`` uses
-the versioned envelope documented in
-[a11.flow.diagnostics][a11.flow.diagnostics], and ``sarif`` is accepted by
-code-scanning services and CI annotators. A file of ``-`` is standard input.
+Every subcommand accepts ``--format``. ``text`` is human-readable, ``json`` uses
+a versioned envelope, and ``sarif`` serves code-scanning tools. A file of ``-``
+is standard input.
 
-All subcommands use the native implementation in `cpp/a11/flow/` through
-`a11._native.flow`. The standalone `a11-flow` binary uses the same library
-without Python and returns the same envelopes. `testdata/flow/codes.json` and
-this module's tests define those formats.
-
-Running is the one place the two frontends genuinely differ, and it is why this
-one exists. ``a11 flow run`` on a *program* calls
-[a11.flow.run_program][a11.flow.run_program], which is the same interpreter the
-standalone ``a11-flow-run`` is -- but run from *this* process, so a program may
-also call the actions this process has. ``--allow-llm`` is that: it offers
-`interact_with_llm`, which no standalone binary can provide because the provider
-SDKs and the credentials live in Python. Running a *named* flow stays on the
-Python runtime `a11/flow/runtime.py` walks.
-"""
+The commands use the native Flow implementation through ``a11._native.flow``.
+``a11 flow run`` uses actions registered in this Python process;
+``--allow-llm`` adds ``interact_with_llm``. The standalone ``a11-flow`` binary
+uses the same language library."""
 
 from __future__ import annotations
 
@@ -182,8 +168,7 @@ async def _run_describe(args: argparse.Namespace) -> int:
     errors = [one for one in found if one.severity is diag.Severity.ERROR]
 
     if args.format in ("json", "sarif"):
-        # A plan is not a set of findings, so SARIF has nothing to say about it:
-        # both machine formats give the plan envelope.
+        # Both machine formats emit the plan envelope.
         _emit({**payload, "source": name})
         return 1 if errors else 0
 
@@ -242,8 +227,7 @@ def _outline(node: Any, depth: int = 0) -> None:
         f"  {at.get('line', 1):4}:{at.get('column', 1):<4}"
         f" {'  ' * depth}{label}"
     )
-    # In reading order rather than the envelope's -- the JSON is sorted by key,
-    # which puts a flow's body in front of its ports.
+    # Show ports before the body, regardless of JSON key order.
     order = (
         "ports",
         "headers",
@@ -1130,9 +1114,7 @@ def _configure(parser: argparse.ArgumentParser) -> None:
             " `a11-flow-run --timeout` takes."
         ),
     )
-    # What a *program* may do. Nothing by default, exactly as `a11-flow-run` has
-    # nothing by default: a capability a file can grant itself is not a
-    # capability anybody granted, so these are flags and never syntax.
+    # Runtime capabilities require CLI flags; source files cannot grant them.
     run.add_argument(
         "--root",
         action="append",

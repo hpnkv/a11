@@ -12,19 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The three native HTTP Actions, and how to register them.
+"""Register A11's native HTTP actions.
 
-* ``make_http_request`` is HTTP with nothing hidden. Every concern the protocol
-  keeps separate gets a port of its own -- the status, the header fields, the
-  body, the trailer section, the redirect chain, the responses the server
-  pushed, and how the connection was carried -- so a caller can act on the
-  status while the body is still arriving, or hand the body to one consumer and
-  the trailers to another.
-* ``web-fetch`` is the same machinery with the protocol turned down: a status, a
-  header map, and the body as text, as JSON, as bytes, or decoded into a stream
-  of items.
-* ``web-render`` loads a page in the platform WebKit engine and returns its
-  post-script HTML and an optional bounded PNG.
+``make_http_request`` exposes protocol details on separate output ports;
+``web-fetch`` provides a simpler result; ``web-render`` returns WebKit HTML
+and an optional PNG.
 
 Install them on a registry with [`register`][a11.sdk.http.actions.register]:
 
@@ -44,23 +36,15 @@ from a11.sdk.http.actions import WEB_FETCH, WEB_FETCH_HANDLER, WEB_FETCH_SCHEMA
 registry.register(WEB_FETCH, WEB_FETCH_SCHEMA, WEB_FETCH_HANDLER)
 ```
 
-The handlers are `NativeActionHandler` handles rather than Python callables:
-pass one wherever a handler is accepted and the C++ implementation runs
-directly.
+The exported handlers are native handles accepted by `ActionRegistry.register`.
 
-For driving them from Python without wiring ports by hand, see
-[a11.sdk.http.client][a11.sdk.http.client], whose `request` and `fetch` do the
-draining and hand back an object.
+For managed port access, use [a11.sdk.http.client][a11.sdk.http.client].
 
 ## Headers
 
-An action header that does not begin with ``x-a11-`` is sent as an HTTP request
-header, verbatim. That makes Flow's ``with "accept": "application/json"`` and
-``forward headers "authorization"`` HTTP header syntax already, and keeps A11's
-own framework headers -- a deadline, a trace -- out of the request. Anything
-that cannot be spelled as an A11 header name (or a literal ``x-a11-`` header a
-peer genuinely wants) goes in ``options.headers`` instead, which also wins over
-an inherited value of the same name.
+Action headers outside ``x-a11-*`` become HTTP request headers. Use
+``options.headers`` for names A11 headers cannot express or for literal
+``x-a11-*`` HTTP headers. Explicit options override inherited values.
 """
 
 from __future__ import annotations

@@ -87,7 +87,7 @@ def _architectures(target: str, host_arch: str) -> tuple[str, ...]:
 
 
 def _rosetta_available() -> bool:
-    """True when x86_64 binaries can run on this host (native or via Rosetta)."""
+    """Whether this host can run x86_64 binaries, directly or via Rosetta."""
     if _host_arch() == "x86_64":
         return True
     if sys.platform != "darwin":
@@ -195,8 +195,7 @@ def main() -> None:
     output = (root / args.output_dir).resolve()
     output.mkdir(parents=True, exist_ok=True)
 
-    # Preflight every target once, before any lengthy dependency bootstrap, so
-    # missing prerequisites surface immediately rather than mid-build.
+    # Check prerequisites before bootstrapping dependencies.
     macos_skip = ""
     for target in targets:
         if target == "linux":
@@ -227,13 +226,8 @@ def main() -> None:
 
     for target in targets:
         for arch in _architectures(target, host_arch):
-            # One deps-prefix convention. macOS builds on the host, so they use
-            # the same persistent per-arch cache as editable/preset builds
-            # (BUILDING.md) -- the native-arch wheel then reuses the Boost/
-            # OpenSSL the dev prefix already compiled instead of rebuilding
-            # them. Linux builds run inside the manylinux container, where that
-            # host cache is not mounted, so they use an internal container path
-            # the user never types.
+            # macOS wheels reuse the host's per-arch dependency cache.
+            # Linux wheels use a path inside the manylinux container.
             if target == "linux":
                 prefix = f"/opt/a11-deps-{arch}"
             else:

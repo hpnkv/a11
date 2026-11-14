@@ -12,23 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Interactive chat loop for ``a11 chat``.
+"""Present the interactive ``a11 chat`` client.
 
-`ChatUI` is presentation and nothing else. The processing -- the LLM call, tool
-dispatch, conversation persistence -- happens on a *gateway*: either one the
-user is already running, or one started inside this process and reached over an
-in-memory stream pair. Either way the turn is driven by
-[run_turn][a11.client.turn.run_turn], the same loop every A11 client uses, and
-rendered from the [PresentationBlock][a11.sdk.presentation.PresentationBlock]s
-that loop produces.
-
-So what is left here: read a line with `prompt_toolkit` (async-native, no
-opinion on how we hold state), draw blocks with `rich`, handle the slash
-commands, and splice speech into the prompt. Conversation history is still just
-a flat ``list[Interaction]``.
-
-Coding tools, workspace access, policy, and sandboxing live on the gateway.
-This module discovers that agent and remains a presentation/input client.
+`ChatUI` reads input with `prompt_toolkit`, renders
+[PresentationBlock][a11.sdk.presentation.PresentationBlock] values with
+`rich`, and handles slash commands and speech.
+[run_turn][a11.client.turn.run_turn] drives turns against an existing or local
+gateway. The gateway owns model calls, tool dispatch, persistence and coding
+policy.
 """
 
 from __future__ import annotations

@@ -451,11 +451,7 @@ class Completer {
     return depth;
   }
 
-  /// The action a `run`/`call` on this line names, or empty.
-  ///
-  /// Read off the tokens rather than the resolved plan on purpose: the
-  /// statement the caret is in is usually half-written, and the word after
-  /// `run` is there long before the step it belongs to resolves to anything.
+  /// Reads a `run` or `call` action name from the current token line.
   [[nodiscard]] std::string CalledAction() const {
     for (size_t at = 0; at + 1 < line_.size(); ++at) {
       const Token& word = tokens_[line_[at]];

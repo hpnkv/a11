@@ -949,9 +949,7 @@ async def interact_with_claude_code(action: a11.Action):
                         session_id,
                         {"parent_tool_use_id": message.parent_tool_use_id},
                     )
-                    # What the tools said to the user, kept beside their
-                    # results rather than in them: metadata is the one part of
-                    # an interaction no backend turns into provider content.
+                    # Keep tool logs in metadata, outside model content.
                     | _tool_log_metadata(logs),
                 )
                 previous_interaction_id = interaction.id

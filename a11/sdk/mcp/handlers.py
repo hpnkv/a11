@@ -12,39 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The other half of an MCP tool: the handler that actually calls it.
+"""Call discovered MCP tools through A11 action handlers.
 
-One handler per discovered tool, built by
-[make_handler][a11.sdk.mcp.handlers.make_handler] from the
-[McpTool][a11.sdk.mcp.schemas.McpTool] the translation produced. It reads the
-action's ports and headers back into a `tools/call`, waits for the result, and
-streams it onto the action's outputs -- the same job
-[a11.gateway.tool_bridge][a11.gateway.tool_bridge]'s proxy does for a remote A11
-peer, against a protocol that is not A11's.
+[make_handler][a11.sdk.mcp.handlers.make_handler] reads action ports and
+headers, calls the tool, and writes its result to output ports. Its async call
+can be supplied by `client.py` or another MCP client.
 
-It takes the call as a plain async callable rather than an MCP session, so
-nothing here imports the MCP SDK: the SDK's shapes are read by attribute, which
-is also what makes the whole path testable against a stub. `client.py` supplies
-the real one.
-
-Three translations are worth knowing about, because they are what a caller
-observes:
-
-* **The action's deadline is the tool's read timeout.** `x-a11-deadline` bounds
-  every port read here and then becomes the MCP call's own timeout, so one
-  policy governs the whole nested call rather than each layer inventing its own.
-* **Progress notifications become log lines.** MCP's progress notifications are
-  narration for whoever is watching, so they go to
-  [Action.log][a11.actions.action.Action.log] -- the one output a model can
-  never see, because it is not a declared port.
-* **A failing tool fails the action.** MCP reports a tool's own failure inside a
-  successful response (`isError`) so that a model can self-correct; A11 says the
-  same thing with a non-OK status, which is what the LLM tool runner turns back
-  into the failure text the model reads
-  ([ExecutedActions.error_message][a11.sdk.llm_tools.runner.ExecutedActions.error_message]).
-  A call that fails is a call that failed, and reporting it as a successful
-  action with sad-looking text in it would hide it from everything but the
-  model.
+The action deadline bounds port reads and the MCP call. Progress notifications
+become action log entries. An MCP `isError` result becomes a non-OK action
+status.
 """
 
 from __future__ import annotations
@@ -124,11 +100,9 @@ def _block_document(block: Any) -> Any:
 
 
 def _status_of(error: BaseException, tool_name: str) -> Status:
-    """The status an MCP failure means, however it reached us.
+    """Map an MCP failure to a status by its JSON-RPC code and message.
 
-    An MCP error is duck-typed rather than caught by class, so this module stays
-    free of the SDK: what makes an exception an MCP error is that it carries a
-    JSON-RPC `code` and a `message`.
+    Accepts SDK exceptions without importing their classes.
     """
     if isinstance(error, StatusException):
         return error.status
@@ -221,9 +195,7 @@ async def _read_arguments(
 ) -> dict[str, Any] | None:
     """The `arguments` object for the call, read off the action's inputs.
 
-    An input nobody wrote is left out of the object rather than sent as null: a
-    server validates the arguments against its own schema, where an absent
-    optional property and an explicit null are rarely the same thing.
+    Omit unwritten optional properties; an explicit null remains a value.
     """
     if tool.whole_arguments is not None:
         supplied, value = await _read_port(
@@ -241,12 +213,7 @@ async def _read_arguments(
             ).to_exception()
         return value
 
-    # Every port is read concurrently, for the reason
-    # [a11.gateway.tool_bridge][a11.gateway.tool_bridge]'s proxy pumps its ports
-    # concurrently: a caller writes them in whatever order it likes, and on a
-    # transport that applies backpressure, draining one port to the end before
-    # starting the next stalls a caller that is busy filling one this side has
-    # not begun reading.
+    # Read ports concurrently to avoid backpressure between input streams.
     read = await asyncio.gather(
         *[
             _read_port(action[argument.port], argument.unary, timeout())
@@ -352,8 +319,7 @@ async def _write_described(
 
     for port in action.get_schema().outputs:
         if port not in written:
-            # Nothing was written for it: closed rather than finalized, so a
-            # whole-value read gets an ended stream rather than a null.
+            # Close unwritten ports so whole-value reads end without a null.
             await action[port].close()
 
 
@@ -418,8 +384,7 @@ def make_handler(tool: McpTool, call: McpCall) -> ActionHandler:
             try:
                 await action.log(f"`{tool_name}`: {text}")
             except Exception:
-                # Narration is worth nothing next to the result, and the action
-                # may already be finishing when a late notification lands.
+                # A late progress notification must not fail the tool result.
                 logging.debug("could not log MCP progress", exc_info=True)
 
         try:
@@ -442,9 +407,7 @@ def make_handler(tool: McpTool, call: McpCall) -> ActionHandler:
         others = [block for block in blocks if _block_type(block) != "text"]
 
         if getattr(result, "is_error", False):
-            # Raised before anything is written: the failure is the result, and
-            # the runtime propagates it onto every output port, so a reader
-            # learns why rather than reading an empty stream.
+            # Raise before writing; the runtime propagates the failure to ports.
             detail = "".join(texts).strip() or "the server gave no detail"
             raise Status(
                 code=StatusCode.INTERNAL,
@@ -462,9 +425,7 @@ def make_handler(tool: McpTool, call: McpCall) -> ActionHandler:
             if tool.structured_output is not None:
                 structured = getattr(result, "structured_content", None)
                 node = action[tool.structured_output]
-                # Closed rather than finalized when the server sent nothing: a
-                # null terminator would be a value to anything reading the port
-                # whole.
+                # Close absent results so whole-value reads end without a null.
                 if structured is None:
                     await node.close()
                 else:

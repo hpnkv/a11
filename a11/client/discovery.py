@@ -12,18 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Asking a peer what it can do, and taking it at its word.
+"""Discover a peer's actions and install their schemas locally.
 
-Every A11 peer answers `__list_actions__` and `__get_schema__` -- they are
-builtins, not registrations, so there is nothing to install and nothing to
-announce (see `a11/actions/builtins.h`). This is the client half: call them, and
-turn the answer into schemas a local registry can resolve.
-
-`install_schemas` registers what came back **without handlers**, which is not a
-shortcut but the contract Flow already reads: a name registered for its schema
-alone means "this action lives on the peer, say `call` rather than `run`". It is
-what makes `a11 flow run --peer` work, and the reason discovery had to exist
-before that could.
+Peers answer the built-in `__list_actions__` and `__get_schema__` calls (see
+`a11/actions/builtins.h`). `install_schemas` registers results without local
+handlers. Flow treats these names as peer calls.
 """
 
 from __future__ import annotations
@@ -48,10 +41,8 @@ async def _consume_or_explain(
 ) -> dict:
     """The document on ``port``, or the reason the call could not produce one.
 
-    A failed call writes nothing to its output, so the read first reports
-    "AsyncNode is empty" instead of the peer's status. The terminal wait carries
-    the peer's status and is checked after an empty read. The read error is
-    re-raised only when the call completed successfully.
+    An empty output may accompany a failed call. Wait for its terminal status
+    before propagating the read error.
     """
     try:
         return await call[port].consume(dict)

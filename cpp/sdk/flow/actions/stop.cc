@@ -58,9 +58,7 @@ absl::StatusOr<absl::Time> DeadlineFromAction(
   return ParseDeadlineHeader(*raw);
 }
 
-/// Whether a control command asked the action to stop. Both `"stop"` and
-/// `{"command": "stop"}` read, because a flow writes the second and a test
-/// writes the first.
+/// Accepts `"stop"` or `{"command": "stop"}` on the control port.
 bool IsStopCommand(const nlohmann::json& command) {
   if (command.is_string()) {
     return command.get<std::string>() == "stop";
@@ -126,9 +124,7 @@ absl::StatusOr<std::shared_ptr<StopSignal>> StopSignal::Create(
         return absl::OkStatus();
       }));
 
-  // A deadline nobody watches only fires when the action next asks, which for
-  // an action parked in a read is never. The timer exists exactly when there is
-  // a deadline to watch, and Join() disarms it.
+  // Arm a timer so deadlines wake actions parked in reads. Join() disarms it.
   if (signal->has_deadline()) {
     ABSL_RETURN_IF_ERROR(signal->ArmDeadlineTimer());
   }
@@ -156,8 +152,7 @@ absl::StatusOr<std::shared_ptr<StopSignal>> StopSignal::Create(
               return absl::OkStatus();
             }
             if (on_command == nullptr) {
-              // An instruction that cannot be carried out. Dropping it
-              // silently would leave the caller believing it was.
+              // Reject control commands without a handler.
               shared->Stop(StopReason::kControl);
               return absl::InvalidArgumentError(absl::StrCat(
                   "this action takes no control command but was sent ",
@@ -201,9 +196,7 @@ absl::Status StopSignal::ArmDeadlineTimer() {
             timer->on<uvw::timer_event>(
                 [shared](const uvw::timer_event&, uvw::timer_handle& handle) {
                   shared->Stop(StopReason::kDeadline);
-                  // One-shot, so it is done: closing here rather than leaving
-                  // it for Join() means an action whose deadline passed stops
-                  // holding a loop handle at the moment it stops mattering.
+                  // Release the one-shot loop handle when the deadline fires.
                   handle.close();
                 });
             // Zero repeat: a deadline happens once.
@@ -315,9 +308,7 @@ void StopSignal::Join() {
   if (joined_.exchange(true, std::memory_order_acq_rel)) {
     return;
   }
-  // Finish rather than Stop: a handler that completed its own work reaches here
-  // first, and its reason() has to keep saying kRunning or every successful run
-  // would report having been stopped.
+  // Finish leaves the stop reason unchanged for completed actions.
   shared_->Finish();
   if (control_ != nullptr) {
     control_->CancelReader();

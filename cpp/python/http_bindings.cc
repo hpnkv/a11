@@ -201,13 +201,8 @@ struct HttpActionEntry {
 };
 
 /**
- * The HTTP Actions, with Python types attached to the ports C++ cannot
- * name.
- *
- * Every port here carries JSON, bytes, or a scalar, so the mapping is to
- * Python builtins rather than to bound native classes -- an HTTP header map
- * really is a dict and a body really is bytes, which is also why none of this
- * needed a new serialization tag.
+ * Attach Python builtin types to HTTP action ports carrying JSON, bytes or
+ * scalar values.
  */
 std::vector<HttpActionEntry> HttpActionEntries() {
   const auto type_for = [](std::string_view port_type) -> PyObject* {
@@ -280,11 +275,8 @@ void RegisterHttpActionsPy(
 /**
  * Wraps a Python progress callable for a fetch or download.
  *
- * The callback runs on the pooled fiber doing the transfer, not on the asyncio
- * loop, so it has to take the GIL itself. A callback that raises is reported
- * and dropped rather than propagated: a broken progress bar is not a reason to
- * fail a download that is otherwise succeeding, and letting the exception
- * cross the fiber boundary would surface as an unrelated Unknown status.
+ * Runs on a pooled transfer fiber and acquires the GIL. Callback failures are
+ * logged without failing the transfer.
  */
 net::OnFetchProgress ProgressFromPython(const py::object& on_progress) {
   if (on_progress.is_none()) {

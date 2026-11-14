@@ -12,17 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""A single long-lived ``bash`` process A11 can run commands in.
+"""Run commands in a persistent Bash process with streamed output.
 
-``BashShell`` owns one ``bash`` subprocess and exposes an async, streaming
-:meth:`BashShell.execute`. It is the centralized location that manages how
-the shell process is launched and signalled, so a future kernel-level sandbox
-can wrap :meth:`BashShell._spawn` (the one call that starts the process) without
-touching the streaming/termination protocol layered on top -- mirroring the
-process-plus-async-IO shape of ``bao.utils.secure_subprocess``.
-
-The execution protocol keeps a persistent shell reusable across commands while
-still allowing a single command to be terminated on its own:
+``BashShell`` owns process launch and signalling through its async
+:meth:`BashShell.execute` protocol:
 
 * Commands run in the shell foreground, so exported variables, the working
   directory, and shell functions persist into the next command.

@@ -43,14 +43,11 @@ namespace {
 using ::a11::actions::ActionHandler;
 using ::a11::actions::ActionSchema;
 
-/// An interval below this would spend more time waking a fiber than waiting,
-/// and a flow that wants one wants a stream rather than a clock.
+/// Smallest supported ticker interval, limiting scheduler wake frequency.
 constexpr absl::Duration kMinimumInterval = absl::Milliseconds(1);
 constexpr absl::Duration kDefaultInterval = absl::Seconds(1);
 
-/// What one tick looks like on the wire. An object rather than a bare instant
-/// because a tick's *number* is what a flow usually branches on, and deriving
-/// it from a count of values it has seen is work a source can just do.
+/// One tick's number and timing data as a JSON object.
 nlohmann::json TickValue(std::int64_t number, absl::Time fired,
                          absl::Time scheduled, absl::Duration late) {
   return nlohmann::json{
@@ -127,8 +124,7 @@ absl::Status RunTicker(const std::shared_ptr<actions::Action>& action) {
   std::int64_t skipped = 0;
   absl::Status status = absl::OkStatus();
 
-  // Scheduled against `started` rather than against the last tick, so a slow
-  // reader cannot make the interval creep.
+  // Schedule against `started` to keep the interval stable for slow readers.
   for (std::int64_t index = settings.immediate ? 0 : 1;; ++index) {
     const absl::Time scheduled = started + settings.interval * index;
     if (scheduled > until) {
@@ -140,8 +136,7 @@ absl::Status RunTicker(const std::shared_ptr<actions::Action>& action) {
     const absl::Time fired = absl::Now();
     const absl::Duration late = fired - scheduled;
     if (!settings.catch_up && late >= settings.interval) {
-      // A tick delivered this late would be a claim about a moment that has
-      // passed. Counted instead, so a flow can see it happened.
+      // Count missed ticks for a slow reader.
       ++skipped;
       continue;
     }
@@ -158,8 +153,7 @@ absl::Status RunTicker(const std::shared_ptr<actions::Action>& action) {
     status = stop->ExitStatus();
   }
   if (!status.ok()) {
-    // Whatever went wrong, a reader of `ticks` has to learn that the stream
-    // stopped early rather than that the clock simply ran out.
+    // Propagate early failure to readers of `ticks`.
     outputs.Abort(status).IgnoreError();
     return status;
   }

@@ -12,31 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The compiled program a Flow file becomes, as Python holds it.
+"""Inspect, register, and run compiled Flow programs from Python.
 
-The language is implemented once, in C++ (`cpp/a11/flow/`), and this is the
-Python frontend onto it: [Program][a11.flow.plan.Program] and
-[FlowPlan][a11.flow.plan.FlowPlan] *are* the classes the native extension
-exports, with the conveniences a Python caller expects attached onto them --
-mapping access, registration, and running one. There is no shadow model here and
-no second resolver: a flow's ports, steps and diagnostics all come from the one
-implementation, so what `a11 flow check` says and what `flow.loads` raises
-cannot disagree.
+[Program][a11.flow.plan.Program] and [FlowPlan][a11.flow.plan.FlowPlan] are
+native classes with Python mapping and runtime methods. Use
+[FlowPlan.describe][a11.flow.plan.FlowPlan.describe] to read the
+``flow.plan/v1`` shape printed by ``a11 flow describe``.
 
-Two rules make the compiled graph predictable:
-
-* **Steps run concurrently.** Order comes from the data, not from the order the
-  statements were written in. A call is dispatched at once and its inputs stream
-  in while it works. Where an order is genuinely needed, `after`, `wait` and
-  `close` say so.
-* **A stream read inside a loop or branch is materialised.** The runtime
-  buffers it once, in the scope that owns it, and replays the buffer to each
-  reader. Each loop pass sees the same outer value; this is the one case where
-  the language buffers a stream for repeatable reads.
-
-A flow's *shape* is readable as plain data with
-[FlowPlan.describe][a11.flow.plan.FlowPlan.describe], which is the same
-``flow.plan/v1`` payload `a11 flow describe` prints.
+Steps run concurrently. Use ``after``, ``wait``, or ``close`` to order them.
+The runtime buffers an outer stream read inside a loop or branch once and
+replays it for each reader.
 """
 
 from __future__ import annotations
@@ -52,11 +37,7 @@ from a11.flow.diagnostics import FlowSyntaxError
 from a11._native.flow import FlowPlan, Program
 
 if TYPE_CHECKING:
-    # What the protocols below say they hand back. The names are the native
-    # ones, which is also how they read in the generated stub; importing them
-    # for real here would be a cycle -- `a11.actions.action` is what builds the
-    # schema a flow presents -- so the methods that need a class at runtime
-    # still import it where they use it.
+    # Runtime imports of these types form a cycle through the action schema.
     from a11._native import (
         ActionHandler,
         ActionHeaderSchema,
@@ -67,14 +48,7 @@ if TYPE_CHECKING:
     )
     from a11.actions.action import Action
 
-#: Friendly type names, and the Python type each gives a port. The type drives
-#: the JSON schema A11 shows an LLM, so a flow's ports describe themselves as
-#: well as a hand-written action's do.
-#:
-#: The *host's* half of the table, which is why it is here: the language knows
-#: the names (`cpp/a11/flow/vocabulary.cc`) and what each one is called in an
-#: action schema (`FlowSchema` in `cpp/a11/flow/runtime.cc`); only Python knows
-#: which Python type that is.
+#: Python types used for Flow port schemas and JSON Schema output.
 TYPE_NAMES: dict[str, type | str] = {
     "string": str,
     "text": str,

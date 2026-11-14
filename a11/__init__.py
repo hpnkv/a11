@@ -18,18 +18,8 @@ _T = TypeVar("_T")
 
 from . import logging as logging
 
-# Native destructors can run on A11's own worker threads, and a destructor that
-# acquires the GIL there races interpreter finalization: CPython answers a
-# post-finalization `PyGILState_Ensure` by terminating the calling thread with
-# `pthread_exit`, whose forced unwind crosses A11 frames compiled
-# `-fno-exceptions` and aborts the process. It needs a population to show up --
-# a process holding ~188 sessions did it 3-4 times in 5 -- because the last
-# reference to a session's state is usually held by a worker rather than by
-# Python.
-#
-# So those references are queued instead of released, and drained here: an
-# `atexit` handler runs on the main thread, with the GIL, *before* finalization
-# begins, which is the one moment that is provably safe.
+# Drain deferred native Python references under the GIL before finalization.
+# Native worker destructors may otherwise release them after Python shuts down.
 import atexit as _atexit
 
 from . import _native as _native_for_shutdown

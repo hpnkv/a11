@@ -12,38 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Use mimalloc for A11's native code in a Python process.
+"""Preload mimalloc for native A11 work in a Python process.
 
-Benchmarks show about 25% higher native-server throughput than the C library's
-``malloc``; see ``bench/PERF_PLAN.md``.
-The native executables get it by linking mimalloc directly. The Python extension
-cannot replace the allocator after the interpreter starts:
+The extension loads after Python has allocated memory, so it cannot replace
+its process allocator at import time. Native executables link mimalloc directly.
+See ``bench/PERF_PLAN.md`` for throughput measurements.
 
-``_native`` is a shared object that an interpreter ``dlopen``\\ s *after* that
-interpreter has already allocated memory through the C library. A module that
-replaced ``free`` for the whole process at that point could receive a pointer
-allocated earlier by libc. A11 therefore does not replace the allocator from an
-imported extension.
-
-Replacing the allocator *before* the process starts allocating has none of that
-problem, and is what this module is for. It is a property of how the process was
-launched, which is why it cannot be switched on from inside one.
-
-Automatic setup
----------------
-
-The ``a11`` command re-executes itself once with the allocator preloaded, so
-commands run through the CLI use mimalloc without additional configuration.
-CPython 3.14 and newer on macOS keep the interpreter's allocator instead.
-:func:`is_active` reports whether mimalloc is active.
-
-What you must do yourself
--------------------------
-
-If you embed A11 in your own process -- your own ``python myserver.py``, a
-notebook, uvicorn, a test runner -- then only you can launch that process, so
-only you can preload. One line, printed ready to paste by
-``python -m a11.allocator``:
+The ``a11`` command re-executes with mimalloc preloaded. For your own Python
+script, notebook, uvicorn or test runner, preload when launching the process.
+``python -m a11.allocator`` prints a command for the current platform:
 
 .. code-block:: shell
 
@@ -52,9 +29,9 @@ only you can preload. One line, printed ready to paste by
                                   print(a.library_path())')
    python myserver.py
 
-   # macOS -- same, with DYLD_INSERT_LIBRARIES instead of LD_PRELOAD.
+   # macOS: use DYLD_INSERT_LIBRARIES in place of LD_PRELOAD.
 
-Or let this module build the environment for you when spawning a worker::
+Or prepare a worker's environment in Python::
 
     import subprocess, a11.allocator
     subprocess.run(
@@ -62,16 +39,10 @@ Or let this module build the environment for you when spawning a worker::
         env=a11.allocator.environ_with_preload(),
     )
 
-Measurement considerations
---------------------------
-
-* On macOS, System Integrity Protection strips ``DYLD_INSERT_LIBRARIES`` from
-  signed interpreters. A Homebrew or ``uv``-managed Python usually keeps it; the
-  system ``/usr/bin/python3`` will not. :func:`is_active` is how you tell,
-  instead of assuming.
-* The win is a *native-throughput* win. A workload dominated by Python-level
-  work will see little of it, because CPython's own object allocator is not what
-  is being replaced.
+On macOS, System Integrity Protection strips ``DYLD_INSERT_LIBRARIES`` from
+signed interpreters. CPython 3.14 and newer keeps its own allocator there.
+Check :func:`is_active` after launch. The throughput effect applies to native
+work; Python objects still use CPython's allocator.
 """
 
 from __future__ import annotations

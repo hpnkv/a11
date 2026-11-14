@@ -12,14 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The canonical cross-language serialization tags.
+"""Define the wire type tags shared across A11 languages.
 
-A serialized A11 value names its type with a *tag*: the ``type`` parameter of
-the chunk's MIME type (``application/json;type=a11.Chunk``). That is the only
-place a type is ever named. Nothing inside the payload repeats it -- a declared
-model's fields say what they hold, and schemaless data is just data. A value
-the format already describes (an object, an array, a string) carries no tag at
-all, so a bare ``application/json`` is a complete description.
+A type tag appears in a chunk's MIME ``type`` parameter, such as
+``application/json;type=a11.Chunk``. Payloads carry no type name. JSON-native
+shapes need no tag; bare ``application/json`` describes them completely.
 
 Peers match the same class tag in every language. This Python table and the C++,
 TypeScript, and Kotlin tables are checked against `testdata/serial_tags.json`.
@@ -28,9 +25,8 @@ Conventions:
 
   * ``a11.<Class>`` for the runtime's own data and status types.
   * ``a11.sdk.<Class>`` for the model-interaction SDK, with subpackages omitted
-    and names chosen for what the type *is* rather than where it lives — a
-    provider's request-config model is ``a11.sdk.InteractWith<Provider>Config``
-    whatever its class happens to be called in that language.
+    and names chosen for the value rather than its module. A provider request
+    config uses ``a11.sdk.InteractWith<Provider>Config``.
   * JSON-native values keep their language-neutral tags (``object``, ``array``,
     ``string``, ...); they are not listed here.
 
@@ -44,8 +40,7 @@ class Interaction(BaseModel):
 Native (pybind11) classes cannot carry one, so
 `a11.data.serialization.SerializationRegistry` pins theirs from `CORE_TAGS`.
 
-Renaming a tag is a wire-format change: a peer that has not been rebuilt will
-fail to resolve the new name rather than silently mis-read it.
+Renaming a tag changes the wire format. Keep legacy aliases for old names.
 """
 
 from __future__ import annotations

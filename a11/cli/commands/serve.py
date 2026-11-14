@@ -12,90 +12,38 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""``a11 serve``: expose an Action registry from a module over one or more
-transports.
+"""Serve an ActionRegistry or Service over A11 and MCP transports.
 
 ```sh
-a11 serve mypkg.actions                      # REGISTRY, WebSocket, defaults
-a11 serve mypkg.actions:TOOLS --ws --sse     # a named registry, two endpoints
-a11 serve ./examples/demo/main.py            # a file, nothing installed
+a11 serve mypkg.actions                      # REGISTRY over WebSocket
+a11 serve mypkg.actions:TOOLS --ws --sse     # named registry, two listeners
+a11 serve ./examples/demo/main.py            # load a Python file
 ```
 
-The target names a module either way -- as an import path
-(``pkg.subpkg.module``) or as a path to a ``.py`` file -- with an optional
-``:SYMBOL`` that defaults to ``REGISTRY``. The module is loaded and the symbol
-read; it has to be an
-[`ActionRegistry`][a11.actions.registry.ActionRegistry]. Writing one is the
-[annotated][a11.actions.annotated] shape:
+The target is an import path or a ``.py`` file, optionally followed by
+``:SYMBOL``. The default symbol is ``REGISTRY``. It must be an
+[`ActionRegistry`][a11.actions.registry.ActionRegistry] or a
+[`Service`][a11.service.service.Service]. A file loads under its stem and its
+directory joins ``sys.path``, so sibling imports work without running its
+``if __name__ == "__main__"`` block.
 
-```python
-REGISTRY = ActionRegistry()
-
-@REGISTRY.action
-async def summarise(document: str) -> str:
-    ...
-```
-
-## Or a whole Service
-
-The symbol may also be a [`Service`][a11.service.service.Service], which is how
-a backend that needs more than a registry gets served by this command rather
-than by a loop of its own. What "more" means in practice is an ``on_connection``
-hook: a registry copy per connection, a reverse-dispatch bridge onto it, and a
-session where the caller's actions are registered. The
-``a11.demos.web_demos_server`` module uses these features. A `Service` arrives
-with its listeners still unbound, so every transport and `--hosted` below works
-on it unchanged.
-
-## One service, however many endpoints
-
-Each ``--ws`` / ``--sse`` / ``--webrtc`` group adds a *listener*, and every
-listener is bound to the same [`Service`][a11.service.service.Service] -- so an
-action's state, its registry and its concurrency limits are shared no matter
-which endpoint a caller arrived on. That is
-[`serving`][a11.service.serving.serving]'s doing, which also stops the listeners
-before draining the service, so nothing new arrives while it is finishing.
-
-One endpoint per group: this is a command, not a load balancer.
-
-## Or as MCP tools
-
-``--mcp`` and ``--mcp-stdio`` publish the same registry to a host that speaks
-Model Context Protocol rather than A11 -- Claude Desktop, an editor, another
-agent runtime -- alongside whatever A11 transports are bound. Each action
-becomes one tool, and ``--mcp-allow`` narrows which:
+Each ``--ws``, ``--sse`` or ``--webrtc`` group adds a listener to the same
+Service. State, registry and concurrency limits are shared across listeners.
+[`serving`][a11.service.serving.serving] stops listeners before draining the
+Service. ``--mcp`` and ``--mcp-stdio`` publish registered actions as MCP tools;
+``--mcp-allow`` filters them. The stdio variant writes its summary to stderr
+and exits when the MCP client disconnects.
 
 ```sh
-a11 serve mypkg.actions --mcp                     # Streamable HTTP on 8013
-a11 serve mypkg.actions --mcp-stdio               # launched by an MCP host
+a11 serve mypkg.actions --mcp
+a11 serve mypkg.actions --mcp-stdio
 a11 serve mypkg.actions --ws --mcp --mcp-allow 'shell_.*'
 ```
 
-``--mcp-stdio`` gives the protocol this process's stdout, so the command prints
-its summary to stderr instead and ends when the client hangs up. The MCP serving
-guide documents the server API.
-
-## A file, or an import path
-
-Which one was meant is read off the target: a ``.py`` suffix, a path separator,
-a leading ``.``/``~``, or a file that is simply there, and it is a path.
-Otherwise it is imported the ordinary way. A file is loaded under its own stem
-rather than as ``__main__``, so a ``if __name__ == "__main__":`` block stays
-asleep and the module's own entry point does not run; and its directory goes on
-``sys.path`` the way it would for ``python thatfile.py``, so imports of its
-siblings resolve.
-
-## HTTP protocol and TLS
-
-`--h11` (the default), `--h2c` and `--h2` are mutually exclusive and apply to
-every HTTP-based endpoint, as do `--cert`/`--privkey`. HTTP/1.1 is the default
-for compatibility with RFC 6455 WebSocket clients, allowing browsers and
-`a11.client` to use the same port.
-
-SSE runs on HTTP/1.1 too, at the cost of a second connection: a connection
-carries one request and the event stream has it, so the outbound direction gets
-one of its own. See
-[`HttpSseWireStream`][a11.net.http_sse_wire_stream.HttpSseWireStream].
+`--h11` (default), `--h2c` and `--h2` select one HTTP protocol for all HTTP
+listeners. `--cert` and `--privkey` configure TLS. HTTP/1.1 supports RFC 6455
+WebSocket clients. SSE uses a second connection to send requests while its
+event stream remains open.
 """
 
 from __future__ import annotations
@@ -591,15 +539,9 @@ def configure(
 def http2_options(args: argparse.Namespace) -> net.Http2Options:
     """Transport options shared by every HTTP-based endpoint.
 
-    Each protocol is set explicitly rather than left at its default, because
-    `Http2Options` enables all three and "HTTP/1.1" has to mean *only* that --
-    otherwise a request that could be upgraded silently is, and the endpoint no
-    longer speaks what it was asked to.
-
-    HTTP/1.1 is the default for both transports. WebSocket needs it for RFC
-    6455; SSE runs over it by giving its outbound direction a connection of its
-    own, since an HTTP/1.1 connection carries one request and the event stream
-    has it. See
+    Sets the selected protocol explicitly because `Http2Options` enables all
+    three by default. HTTP/1.1 supports RFC 6455 WebSockets; SSE uses a second
+    connection for outbound messages. See
     [`HttpSseWireStream`][a11.net.http_sse_wire_stream.HttpSseWireStream].
 
     Raises:
@@ -791,10 +733,8 @@ def _endpoint_urls(
 ) -> dict[str, str]:
     """How to reach each live listener, with the port it actually bound.
 
-    Read back from the listener rather than from the options, so ``--ws-port 0``
-    reports the port it was given instead of the zero that was asked for -- and,
-    for a hosted endpoint, the identity it was *granted* rather than the one
-    asked for, which may have been "any".
+    Reads bound ports and granted identities from listeners. This reports the
+    assigned port for ``--ws-port 0`` and the actual hosted identity.
     """
     urls: dict[str, str] = {}
     if "ws" in live:
@@ -1029,12 +969,10 @@ async def serve(args: argparse.Namespace) -> int:
 def _enable_logging(level: str | None) -> None:
     """Turn A11's logging on at ``level``, or leave it off.
 
-    `enable` rather than `set_level`: the CLI is not an absl app, so nothing has
-    installed a handler or the native bridge, and setting a level alone would
-    leave every entry -- Python and C++ -- with nowhere to go.
+    `enable` installs a handler and native bridge for the CLI.
 
     Raises:
-        ServeError: For a level nobody can read, named so the fix is obvious.
+        ServeError: If the level is invalid.
     """
     if level is None:
         return

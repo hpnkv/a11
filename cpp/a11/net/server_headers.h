@@ -16,20 +16,10 @@
 
 /**
  * @file
- * @brief The response headers every A11 HTTP server sends, in one place.
+ * @brief Common response headers for A11 HTTP servers.
  *
- * **Why this exists.** The headers a server owes its clients were decided per
- * endpoint: CORS lived on ::a11::net::HttpSseOptions as four loose strings that
- * only the SSE routes consulted, the WebSocket server's HTTP surface sent none
- * at all, and nothing sent a `Server` header or told a cache what to do with a
- * reply. None of that is per-endpoint policy -- it is what an A11 server is --
- * so it is stated once here and applied by whichever transport holds the port.
- *
- * Everything here is a hint or a policy, not behaviour: no header changes what
- * a response *contains*. What they change is whether a browser will read it,
- * and whether an intermediary will cache, buffer or sniff it -- and the
- * defaults below are what makes a browser client work without anybody
- * configuring one.
+ * CORS and cache policies apply across HTTP transports. They control browser
+ * access and intermediary handling without changing response content.
  */
 
 #ifndef A11_NET_SERVER_HEADERS_H_
@@ -50,14 +40,9 @@ inline constexpr std::string_view kServerHeaderValue = "a11";
 /**
  * @brief Cross-origin policy for an A11 HTTP surface.
  *
- * **Permissive by default.** A11's browser clients are a primary
- * use case because pages cannot open raw sockets. Configure @c allow_origin
- * for a narrower policy, or clear @c enabled to disable cross-origin access.
- *
- * This is not a security boundary and must not be read as one. CORS governs
- * what *a browser* will let a page read; it says nothing to anything else. An
- * A11 server that should not be reachable is one that is not listening
- * publicly.
+ * The default admits any browser origin. Set @c allow_origin to narrow it or
+ * clear @c enabled to omit CORS headers. CORS governs browser access; server
+ * reachability is controlled by the listener configuration.
  */
 struct CorsOptions {
   /// Whether cross-origin headers are sent at all.
@@ -72,15 +57,10 @@ struct CorsOptions {
   /**
    * `Access-Control-Expose-Headers`: what a page may read off the response.
    *
-   * A11's own response headers, by default, because the SSE transport does not
-   * work without them: a browser client reads its stream id and the outbound
-   * modes the server offers off the connect response, and a header a page may
-   * not read is one it did not receive. This defaulting to empty is why every
-   * page-facing deployment had to discover and set it.
+   * Exposes the stream ID and outbound modes required by browser SSE clients.
    */
   std::string expose_headers = "x-a11-stream-id, x-a11-outbound";
-  /// `Access-Control-Max-Age` in seconds; 0 omits it. A preflight per request
-  /// is a round trip per request, and these routes' policy does not change.
+  /// `Access-Control-Max-Age` in seconds; 0 omits it.
   int max_age_seconds = 600;
 
   /** @return OK if no value would inject a header break. */
@@ -90,10 +70,8 @@ struct CorsOptions {
 /**
  * @brief How a response may be cached, which differs by what it is.
  *
- * A stream must never be cached or buffered; a document that changes when a
- * registry changes must be revalidated rather than kept. Stating which of the
- * two a route is, rather than spelling headers at each one, is what keeps a new
- * route from quietly getting the wrong answer.
+ * Live streams use no-store and disable intermediary buffering. Mutable
+ * documents use no-cache so clients revalidate them.
  */
 enum class CachePolicy {
   /// A live stream. `no-store`, and a hint to intermediaries not to buffer.
@@ -124,8 +102,7 @@ struct ServerHeaderOptions {
 /**
  * @brief Adds the headers every response from an A11 server carries.
  *
- * Idempotent, and never replaces a header already set: a route that has said
- * something specific -- a content type, its own cache policy -- keeps it.
+ * Idempotent. Existing route headers take precedence.
  *
  * @param options The surface's policy.
  * @param cache What kind of response this is.
@@ -137,8 +114,7 @@ void ApplyServerHeaders(const ServerHeaderOptions& options, CachePolicy cache,
 /**
  * @brief The cross-origin headers for @p options, and nothing else.
  *
- * For a route that builds its headers from scratch and wants the CORS half.
- * ApplyServerHeaders adds these too.
+ * ApplyServerHeaders also adds these headers.
  */
 [[nodiscard]] HttpHeaders CorsHeaders(const CorsOptions& options);
 

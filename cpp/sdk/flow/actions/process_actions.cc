@@ -67,26 +67,18 @@ using ::a11::actions::ActionHandler;
 using ::a11::actions::ActionSchema;
 using ::a11::nodes::AsyncNode;
 
-/// How long to wait between polls while a child is running. Short enough that a
-/// cancellation is acted on promptly, long enough that a silent child costs
-/// twenty wakeups a second rather than twenty thousand.
+/// Poll interval for child output and cancellation: 50 ms.
 constexpr int kPollMilliseconds = 50;
 constexpr std::size_t kPipeChunkBytes = 64 * 1024;
 
-// Writing to the stdin of a child that has exited raises SIGPIPE, whose default
-// action is to kill *this* process -- so a flow feeding a program that stops
-// reading would take the gateway down with it.
-/// Writing to the stdin of a child that has exited raises SIGPIPE, whose
-/// default action is to kill *this* process -- so a flow feeding a program that
-/// stops reading would take the gateway down with it. Ignored once, on first
-/// use, and the write then fails with EPIPE like any other error.
+/// Ignore SIGPIPE on first use so closed child stdin writes return EPIPE.
 void IgnoreSigpipeOnce() {
   static const bool ignored = []() {
     // sigemptyset is a macro on some platforms, so it is called unqualified.
     struct sigaction previous{};
     if (::sigaction(SIGPIPE, nullptr, &previous) == 0 &&
         previous.sa_handler != SIG_DFL) {
-      return true;  // somebody already had an opinion about it; leave it alone
+      return true;  // Preserve an existing signal handler.
     }
     struct sigaction action{};
     action.sa_handler = SIG_IGN;
@@ -114,11 +106,7 @@ absl::Status ErrnoStatus(int code, std::string_view what) {
   }
 }
 
-/// The signals a control command may name.
-///
-/// A closed set on purpose. A flow that can send an arbitrary signal number can
-/// send one whose meaning differs between platforms, and none of the signals
-/// anybody actually sends are missing here.
+/// Portable signal names accepted by a control command.
 std::optional<int> SignalNamed(std::string_view name) {
   const std::string upper = absl::AsciiStrToUpper(
       absl::StartsWith(name, "SIG") ? name.substr(3) : name);
@@ -215,14 +203,7 @@ class Pipe {
 
   [[nodiscard]] int write_end() const { return write_end_; }
 
-  // Hands the write end to somebody else, who must close it. Ownership moves
-  // rather than being shared.
-  /// Hands the write end to somebody else, who must close it.
-  ///
-  /// The child's standard input has to be closed by whoever finishes writing to
-  /// it, and nobody else: a program that reads to EOF -- `cat`, `sort`, `wc` --
-  /// waits for that close, so closing it late deadlocks and closing it twice
-  /// races. Ownership moves rather than being shared.
+  /// Transfers the write descriptor to its caller, which closes it after use.
   int ReleaseWrite() {
     const int fd = write_end_;
     write_end_ = -1;
@@ -341,14 +322,8 @@ absl::StatusOr<std::vector<std::string>> ReadArguments(
 // ---------------------------------------------------------------------------
 
 /**
- * Everything the child needs, laid out before the fork.
- *
- * This class exists because of what may happen between fork() and exec(): the
- * child of a multi-threaded process holds whatever locks the other threads
- * held at the moment of the fork, so allocating there -- which takes the
- * allocator's lock -- deadlocks the child, occasionally, on a busy machine.
- * Every string and pointer array is therefore built here, in the parent, and
- * the child calls nothing but dup2, chdir, setpgid, execvp and _exit.
+ * Builds child strings and pointer arrays before fork. The fork-to-exec path
+ * uses only operations safe without other threads or allocator locks.
  */
 class ChildPlan {
  public:
@@ -442,10 +417,7 @@ class ChildPlan {
 /**
  * Forks and execs, and reports why it could not.
  *
- * The failure a child cannot return through a status is returned through a
- * pipe: the child writes its errno and `_exit`s, so a program that does not
- * exist arrives here as `not_found` rather than as an exit code of 127 the
- * caller is expected to know how to read.
+ * The child writes errno to @p report before exiting when exec fails.
  */
 absl::StatusOr<pid_t> Spawn(const ChildPlan& plan, const Sandbox& sandbox,
                             int stdin_fd, int stdout_fd, int stderr_fd,
@@ -495,21 +467,9 @@ absl::StatusOr<pid_t> Spawn(const ChildPlan& plan, const Sandbox& sandbox,
 }
 
 /**
- * Signals the child, whichever group it has managed to join.
- *
- * The child puts itself in its own process group so that signalling it does not
- * signal this process and so its own children go with it. But `setpgid` in the
- * child and `killpg` in the parent race: until the child has run it, its group
- * is *this* process's group, and `killpg(child_pid, ...)` then finds no group
- * of that id and fails with ESRCH. The signal is silently not delivered, and a
- * cancelled `sleep 120` carries on sleeping -- which is how a cancellation that
- * looked instantaneous on an idle machine took ten seconds on a loaded one.
- *
- * Two halves close it: the parent sets the child's group as well (whichever
- * runs first wins, and the loser gets EACCES because the child has already
- * exec'd, which is fine), and a group signal that finds no group falls back to
- * the process. Never `killpg` on this process's own group -- that would be a
- * flow cancelling itself and everything else running here.
+ * Signals the child's process group, falling back to its PID while group
+ * creation races with cancellation. The parent also sets the child's group;
+ * never signal the parent's process group.
  */
 void SignalChild(pid_t pid, int signal_number) {
   if (::killpg(pid, signal_number) == 0) {
@@ -916,8 +876,7 @@ absl::Status RunSpawnProcess(const std::shared_ptr<Action>& action,
   const int code =
       signalled ? 128 + WTERMSIG(wait_status) : WEXITSTATUS(wait_status);
   ABSL_RETURN_IF_ERROR(outputs["exit_code"].PutOnly(nlohmann::json(code)));
-  // Said rather than encoded: "exit code 143" is a thing no caller should have
-  // to decode into "it was terminated".
+  // Report signal termination separately from the exit code.
   ABSL_RETURN_IF_ERROR(outputs["signal"].PutOnly(
       signalled ? nlohmann::json(SignalName(WTERMSIG(wait_status)))
                 : nlohmann::json()));
@@ -931,15 +890,12 @@ absl::Status RunSpawnProcess(const std::shared_ptr<Action>& action,
       {"max_rss_bytes", static_cast<std::int64_t>(usage.ru_maxrss)},
       {"output_bytes", produced}}));
 
-  // The terminal values are written even when the run is about to be reported
-  // as a failure: a caller diagnosing a deadline wants to know what the program
-  // managed to do first.
+  // Publish terminal values before reporting a deadline or cancellation.
   absl::Status ended = outputs.Finish();
   if (const absl::Status stopped = stop->Check(); !stopped.ok()) {
     return stopped;
   }
-  // A non-zero exit is not a failure of this action. The program ran, and this
-  // is what it said -- exactly as a 404 is a response rather than an error.
+  // Nonzero program exit remains an action result.
   return ended;
 }
 

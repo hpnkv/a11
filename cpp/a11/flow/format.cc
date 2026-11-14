@@ -42,26 +42,17 @@ namespace {
 
 size_t Columns(std::string_view text);
 
-/// A declaration, split into the columns a run of them lines up by.
-///
-/// Ports, headers and a shape's fields alike: `in`/`out name: type mods "why"`,
-/// `header "x-name" as alias default v "why"` and `name: type mods "why"` are
-/// the same four columns wearing different words, and a file reads best when
-/// each run of them lines up.
+/// Columns used to align runs of port, header and shape declarations.
 struct PortColumns {
-  /// `in`, `out` or `header`, as written -- a shouted `IN` stays shouted. Empty
-  /// for a field, which is the one of the three that opens with its name.
+  /// `in`, `out` or `header` as written; empty for a shape field.
   std::string direction;
-  /// The name and its colon, which travel together because they always do.
+  /// The declaration name and its colon.
   std::string name;
   /// The type and what follows it: `string required`, `list[a11.Chunk] stream`.
   std::string type;
   /// The description, quoted exactly as it was written.
   std::string description;
-  /// Whether this is a `struct` field. Told apart from a port by more than its
-  /// empty direction, because a run has to be all one kind and "is the
-  /// direction
-  /// empty" is a fact about this line rather than about what it is.
+  /// Whether this line declares a `struct` field.
   bool field = false;
 };
 
@@ -116,15 +107,8 @@ bool ExpectsOperand(const Token& token) {
          word == "and" || word == "or" || word == "in";
 }
 
-/// Whether `word(` reads as something being called.
-///
-/// One decision, and it is about the space: `web-fetch(`, `len(` and `node()`
-/// hug
-/// their parentheses because the word and the brackets are one thing, while
-/// `not (`, `if (` and `in (` are a word and then a bracketed expression. So
-/// every
-/// word the grammar gives meaning to takes its space -- except `node`, which is
-/// the one keyword in the language that is *constructed*.
+/// Whether a word takes call syntax without a space before `(`.
+/// `node()` is a constructor; grammar words such as `if` keep a space.
 bool IsCalled(std::string_view text) {
   const std::string word = vocabulary::Canonical(text);
   // `node()` is the one keyword that is constructed, and several builtins are
@@ -471,13 +455,8 @@ class Formatter {
     }
   }
 
-  /// Whether the line starting at `index` continues the statement above it.
-  ///
-  /// The grammar's own rule, because it has to be: a line beginning with `|` or
-  /// `->` is a continuation, a modifier word is one unless what follows makes
-  /// it a
-  /// statement of its own, and a bare `then`/`where` is one when it has an
-  /// operand.
+  /// Whether the line at `index` continues the preceding statement.
+  /// Pipes, arrows and modifier tails follow the grammar's continuation rules.
   [[nodiscard]] bool ContinuesStatement(size_t index) const {
     const Token& token = code_[index];
     if (statement_starts_.contains(token.start)) {
@@ -543,11 +522,7 @@ class Formatter {
     }
   }
 
-  /// Whether the line at `index` is a lone string: a declaration's description,
-  /// written under what it describes.
-  ///
-  /// The grammar's own test -- a string with nothing after it on its line -- so
-  /// the formatter and the parser agree about it by construction.
+  /// Whether `index` starts a standalone declaration description string.
   [[nodiscard]] bool IsDescriptionLine(size_t index) const {
     if (code_[index].kind != TokenKind::kString) {
       return false;
@@ -560,21 +535,12 @@ class Formatter {
            breaks_[index + 1] > 0;
   }
 
-  /// The tail of a list the line above began: the previous line ended in a `,`.
-  ///
-  /// Two levels for the same reason a modifier tail gets two: it is *part of*
-  /// the line above rather than the next thing after it. `| scan 0 as total,`
-  /// and its expression on the next line is one stage, and one level would put
-  /// the expression exactly where the next `|` goes.
+  /// Whether a trailing comma makes this line part of the preceding stage.
   [[nodiscard]] bool IsArgumentTail(size_t index) const {
     return index > 0 && code_[index - 1].kind == TokenKind::kComma;
   }
 
-  /// A modifier tail gets two levels rather than one.
-  ///
-  /// `with "x": y` under a call is not the next step of a pipeline; it is part
-  /// of
-  /// the call above it, and indenting it further is what says so at a glance.
+  /// Whether this modifier belongs under the preceding call at two levels.
   [[nodiscard]] bool IsModifierTail(size_t index) const {
     const Token& token = code_[index];
     return token.IsWord() && vocabulary::ModifierWords().contains(
@@ -615,13 +581,7 @@ class Formatter {
     return indent;
   }
 
-  /// Where a comment line goes: with the line under it.
-  ///
-  /// A comment explains what follows, so it takes that line's indent --
-  /// including
-  /// when what follows is a continuation, which is how a note about one stage
-  /// of a
-  /// pipeline stays with the stage.
+  /// Indent a comment with the following line, including continuations.
   [[nodiscard]] int IndentForComment(size_t index) const {
     if (!brackets_.empty()) {
       return brackets_.back().indent + options_.indent;
@@ -926,9 +886,7 @@ class Formatter {
 
   /// A `header` declaration as its columns, or `index` unchanged.
   ///
-  /// Everything after the name is one column: `as alias`, `default 3`, both, or
-  /// neither. There is nothing to be gained from splitting it further -- what a
-  /// reader is looking down is the list of names.
+  /// Keep modifiers after the header name in one column.
   size_t EmitHeader(size_t index) {
     const Token& first = code_[index];
     if (!first.IsWord() || vocabulary::Canonical(first.text) != "header") {
@@ -1106,11 +1064,7 @@ class Formatter {
 
   /// A `struct` field as its columns, or `index` unchanged if this is not one.
   ///
-  /// The same three columns a port has, minus the direction: a field opens with
-  /// its own name. Everything after the type is one column, as a header's tail
-  /// is, because what a reader scans down a shape is the list of names and
-  /// their
-  /// types -- not which of them happens to carry a pattern.
+  /// Align field names and types; keep modifiers after the type together.
   size_t EmitField(size_t index) {
     if (!code_[index].IsWord()) {
       return index;

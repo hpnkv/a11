@@ -12,48 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""One A11 action, declared as an MCP tool.
+"""Translate an A11 action declaration into an MCP tool.
 
-The mirror of [a11.sdk.mcp.schemas][a11.sdk.mcp.schemas], and like it a pure
-translation: no transport, no session, no `mcp` import. It reads the
-`a11.actions/v1` document a registry describes itself with and writes the
-`tools/list` entry an MCP client reads, so a declaration can be derived and
-tested wherever A11 runs.
-
-Deriving from the *document* rather than from the live `ActionSchema` is what
-keeps three views of one action identical: what a model is offered through
-[definition_from_schema][a11.sdk.llm_tools.runner.definition_from_schema], what
-a peer is told by [a11.actions.describe][a11.actions.describe], and what an MCP
-client discovers here. It also means a peer's action -- registered for its
-schema alone, with no Python type anywhere in this process -- declares as well
-as a local one.
-
-The rules:
-
-* **An input port becomes a property of `inputSchema`.** The whole document
-  comes from `definition_from_schema`, which already skips autofilled inputs,
-  carries each port's own `json_schema`, and gives a streaming port an array of
-  its item schema.
-* **The declared outputs become `outputSchema`**, through
-  [output_definition_from_schema][a11.sdk.llm_tools.runner.output_definition_from_schema],
-  and only when what they describe is a JSON object: MCP's `structuredContent`
-  is an object, so an action whose whole result is a string declares no output
-  schema and answers in text.
-* **A port carrying pictures or sound is left out of `outputSchema`**, because
-  MCP has content blocks for those and a base64 string inside a JSON document
-  is not one. See [media_outputs][a11.sdk.mcp.tools.media_outputs].
-* **The action's own entry rides `_meta`**, under
-  [McpMeta.ACTION][a11.sdk.mcp.schemas.McpMeta.ACTION]. Any client may ignore
-  it; an A11 client reads it and rebuilds the real `ActionSchema` -- port
-  names, streaming ports, header schemas -- rather than re-deriving an
-  approximation from JSON Schema.
-
-An MCP tool name has no character restrictions to satisfy, so an A11 action
-name travels verbatim and `sanitise_name` is a no-op on the way back.
-
-Behaviour hints (`readOnlyHint` and the rest) are not declared. An
-`ActionSchema` states nothing about whether an action modifies its
-environment; an absent hint is what a client reads as unknown.
+The translation reads `a11.actions/v1` documents. Input ports become
+`inputSchema` properties, and object-shaped outputs become `outputSchema`.
+Image and audio ports become content blocks. The original action entry travels
+in `_meta` so an A11 client can recover its full schema. Action names remain
+unchanged. Behaviour hints are omitted because ActionSchema does not define
+them. This module does not import the MCP SDK.
 """
 
 from __future__ import annotations

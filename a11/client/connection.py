@@ -12,20 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Connecting to a gateway, and deciding which gateway to connect to.
+"""Connect to an explicit gateway or discover the local default.
 
-A client has three situations to tell apart, and the difference matters:
-
-* it was given an explicit endpoint, which must work or the command must fail;
-* it was given nothing and a gateway is already running, which it should join;
-* it was given nothing and there is none, in which case it starts a local
-  WebSocket gateway on the default endpoint.
-
-The middle case needs a *probe*, not a connect. Anything at all can be listening
-on 8011, and a TCP handshake with something that is not an A11 gateway succeeds
-just as readily as one with a gateway -- after which the first real call hangs
-until its deadline. So the probe completes a ``__ping`` round trip, which proves
-both liveness and that the peer speaks A11.
+An explicit endpoint must connect successfully. With no endpoint, a ``__ping``
+round trip checks whether an A11 gateway occupies the default address; the
+client starts a local WebSocket gateway when none answers.
 """
 
 from __future__ import annotations
@@ -56,22 +47,11 @@ CONNECT_TIMEOUT = timing.Duration.seconds(10)
 def websocket_client_options(
     handshake_deadline: "timing.Time",
 ) -> "net.WebSocketClientOptions":
-    """How this client speaks WebSocket: RFC 6455 over HTTP/1.1, always.
+    """Use RFC 6455 over HTTP/1.1 with a handshake-only deadline.
 
-    Two decisions live here, both of which have cost real debugging time.
-
-    **The protocol.** A gateway serves RFC 6455 over HTTP/1.1 and turns HTTP/2
-    off, and a reverse proxy in front of one cannot carry a WebSocket over
-    HTTP/2 at all -- nginx does not implement RFC 8441's extended CONNECT, so
-    it answers the handshake with a bare `400` before any credential is read,
-    which presents as a rejected token. `client_preference` is what decides
-    this; clearing `enable_h2`/`enable_h2c` is not sufficient on its own, as a
-    `wss://` connection kept offering h2 with both false.
-
-    **The deadline.** It bounds the handshake and must not land on
-    `http2_options.deadline`, which aborts the whole stream: a WebSocket is one
-    long-lived HTTP request, so a deadline there hangs the session up
-    mid-conversation rather than timing out a connect.
+    ``client_preference`` selects HTTP/1.1 even for ``wss://``. The deadline
+    applies to the handshake; an HTTP request deadline would end the active
+    WebSocket session.
     """
     options = net.WebSocketClientOptions()
     options.http2_options.client_preference = net.HttpProtocolPreference.HTTP11
@@ -150,11 +130,7 @@ class GatewayConnection:
             TimeoutError: When it does not answer in time.
         """
         bound = (timeout or PROBE_CALL_TIMEOUT).float_seconds()
-        # The *whole* round trip is bounded, not just the terminal wait. A peer
-        # that accepts the connection and then says nothing -- which is what
-        # something-that-is-not-a-gateway looks like -- leaves the read of
-        # `output` pending forever, and a deadline on the call does not surface
-        # until that read returns.
+        # Bound the full ping, including the output read from a silent peer.
         await asyncio.wait_for(self._ping(), timeout=bound)
 
     async def _ping(self) -> None:
@@ -165,31 +141,11 @@ class GatewayConnection:
         await call.wait(PROBE_CALL_TIMEOUT)
 
     async def aclose(self) -> None:
-        """Finish sending, let the queue go out, then close the transport.
+        """Half-close, drain queued messages, then close the transport.
 
-        Half-close, then drain, then abort, and the order is forced at each
-        step. `drain_outgoing_messages` answers FAILED_PRECONDITION before a
-        half-close, because there is otherwise no point at which the outgoing
-        queue is final; and the abort has to come after the drain or it
-        discards what was queued.
-
-        The abort is what actually closes the socket. A half-close says only "I
-        have finished sending" -- the connection stays up, and a peer has no
-        way to tell that from a caller still waiting for an answer. Against the
-        exchange relay that means a session per call which nothing ever ends,
-        each holding a WebRTC leg to the agent, until the agent is swamped and
-        answers nobody.
-
-        CANCELLED, because `abort` refuses an OK status: an abort is the
-        ungraceful ending by definition, and there is no such thing as
-        aborting successfully. What says "this went well" is the half-close
-        above, which has already gone. The code a peer reads is therefore the
-        caller withdrawing rather than a call that failed, and the relay ends
-        the session on it instead of holding one for an answer nobody will
-        read.
-
-        Every step is best effort. A peer that has already disconnected needs
-        no additional shutdown error.
+        Draining requires a half-close; aborting before the drain discards
+        queued messages. The final ``CANCELLED`` abort closes the socket and
+        tells a relay to release the session. Each step is best effort.
         """
         with contextlib.suppress(Exception):
             self.stream.half_close()
@@ -206,8 +162,7 @@ class GatewayConnection:
     def action(self, name: str, schema: a11.ActionSchema | None = None):
         """Build a call on this connection's session and stream.
 
-        The one way to address the peer: bound to this session's node map so its
-        replies route back, and to this stream so the call goes out on it.
+        Binds the call to this session's node map and outgoing stream.
         """
         resolved = (
             schema if schema is not None else self._registry.get_schema(name)
@@ -233,9 +188,8 @@ async def open_gateway(
 
     Args:
         url: An explicit endpoint. When given it is the *only* candidate: if it
-            cannot be reached the error propagates, because an endpoint the user
-            named turning silently into a local process is the worst outcome
-            available -- their tools would run somewhere they did not choose.
+            cannot be reached, its error propagates without starting a local
+            gateway.
         registry: Registry the gateway's reverse-dispatched tool calls run
             against.
         allow_embedded: Whether to start a local WebSocket gateway when
@@ -330,9 +284,7 @@ async def _probe_default(
     try:
         await connection.probe()
     except Exception as exc:  # noqa: BLE001 - anything can hold the port
-        # Something is listening but it is not an A11 gateway (or not a healthy
-        # one). Treat it as absent rather than failing the command: the user did
-        # not ask for *this* endpoint specifically.
+        # An unresponsive default endpoint does not prevent another connection.
         logging.info(
             "something is listening on %s but did not answer a ping: %s",
             DEFAULT_GATEWAY_URL,

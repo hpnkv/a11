@@ -35,28 +35,11 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * What *this project* declares that a flow may call.
+ * Supplies project action declarations to Flow editor requests.
  *
- * **The gap this closes.** The language ships a snapshot of what the SDK
- * registers, so hovering `interact_with_llm` has always said something useful.
- * An action somebody wrote this afternoon in a file two directories away was in
- * no snapshot: hovering its name said "action name", completing its ports
- * offered nothing, and there was nowhere for Ctrl+B to go. That is the common
- * case for anybody composing their own actions, and it was the case the editor
- * knew least about.
- *
- * **How.** `a11-flow` reads the project's own `.py`, `.cc` and `.ts` for
- * `ActionSchema` declarations and answers a catalogue in which every entry
- * carries the file and line it was written at. This hands that to [FlowEngine],
- * which sends it with every hover, completion and go-to-declaration afterwards.
- * No language knowledge here and no second scanner: the reading is the same
- * code
- * `a11 flow scan` and CI run, and this is the wiring.
- *
- * **When.** Once when the project opens, and again a moment after a source file
- * is saved. Debounced, because a save-all over twenty files is one interesting
- * event, and off the UI thread, because walking a tree is not something to do
- * on it.
+ * `a11-flow` scans source for `ActionSchema` declarations and returns a
+ * catalogue with file locations. The scan runs on a pooled thread when the
+ * project opens and after relevant source changes, with a short debounce.
  */
 @Service(Service.Level.PROJECT)
 class FlowCatalogueService(private val project: Project) : Disposable {
@@ -66,11 +49,7 @@ class FlowCatalogueService(private val project: Project) : Disposable {
     private var connection: MessageBusConnection? = null
 
     /**
-     * Start watching, and read the project once.
-     *
-     * Nothing happens at all without a tool for this platform: the editor is
-     * already saying so once through [FlowEngine], and a second complaint about
-     * the same missing binary is worse than one.
+     * Starts watching source changes and scans the project when a tool exists.
      */
     fun start() {
         if (!FlowEngine.instance().available) return
@@ -88,12 +67,7 @@ class FlowCatalogueService(private val project: Project) : Disposable {
     }
 
     /**
-     * Whether one filesystem event could have changed what this project
-     * declares.
-     *
-     * Only the three languages a scan reads, and only the events that change
-     * what is in a file. Everything else -- a `.flow` saved, a build directory
-     * rewritten, a file opened -- is not a reason to walk the tree again.
+     * Whether an event changes a scannable source file.
      */
     private fun interesting(event: VFileEvent): Boolean {
         val path = event.path
@@ -111,11 +85,7 @@ class FlowCatalogueService(private val project: Project) : Disposable {
     }
 
     /**
-     * Read the project again, shortly.
-     *
-     * The delay is what makes a save-all one scan rather than twenty, and the
-     * generation counter is what makes a scan that started before the newest
-     * request throw its answer away rather than overwrite a fresher one.
+     * Schedules a debounced scan; newer requests supersede older results.
      */
     fun rescan() {
         generation.incrementAndGet()
@@ -154,8 +124,7 @@ class FlowCatalogueService(private val project: Project) : Disposable {
         @Suppress("UNCHECKED_CAST")
         val scanned = answer["scanned"] as? Map<String, Any?>
         if (scanned?.get("reached_file_limit") == true) {
-            // Said rather than silently applied: a half-read project otherwise
-            // looks exactly like a project with two actions in it.
+            // Report incomplete scans with their file limit.
             LOG.warn(
                 "a11-flow stopped after ${scanned["files_read"]} files;" +
                     " some of $roots was not read"
@@ -172,8 +141,7 @@ class FlowCatalogueService(private val project: Project) : Disposable {
     }
 
     /**
-     * This project's key in the engine,
-     * which is one process for the whole IDE.
+     * This project's key in the shared engine process.
      */
     private fun key(): String = project.basePath ?: project.name
 
@@ -194,8 +162,7 @@ class FlowCatalogueService(private val project: Project) : Disposable {
             listOf(".py", ".pyi", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".ts", ".tsx", ".mts", ".js", ".mjs", ".jsx")
 
         /**
-         * Directories a scan does not descend
-         * into, so an event in one is not news.
+         * Directory names excluded from scans and change events.
          */
         private val SKIPPED =
             listOf(

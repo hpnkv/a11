@@ -270,10 +270,7 @@ std::string TrimNumber(double value) {
   return FormatDouble(value);
 }
 
-/// How many code points a string holds.
-///
-/// `len` counts characters, not bytes: the Python reference counted them and a
-/// flow trimming a model's answer to a length means the length a person sees.
+/// Counts UTF-8 code points for Flow string lengths.
 size_t Utf8Length(std::string_view text) {
   size_t count = 0;
   for (const char letter : text) {
@@ -2773,12 +2770,7 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
 
 namespace {
 
-/// The items `...value` contributes to a list literal.
-///
-/// A list gives its items. Anything else gives itself, one item -- spreading a
-/// value that is not a list is not a mistake worth ending a flow over, and
-/// treating it as one thing is what a reader would expect from `[...a, b]`
-/// where `a` turned out to be a single record.
+/// Expands a list for `...value`; other values contribute one item.
 std::vector<Value> SpreadItems(const Value& value) {
   if (value.kind() == Value::Kind::kList) {
     return value.items();

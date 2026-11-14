@@ -37,12 +37,9 @@ namespace {
 
 namespace fs = std::filesystem;
 
-/// A size limit on a read nobody has thought about. Large enough for the files
-/// a composition actually reads, small enough that a flow pointed at a disk
-/// image fails instead of filling memory.
+/// Default maximum file read size: 256 MiB.
 constexpr std::uint64_t kDefaultMaxReadBytes = 256 * 1024 * 1024;
-/// A directory listing nobody bounded. A tree walk that reaches this has
-/// almost certainly been pointed at the wrong root.
+/// Default maximum directory listing size: one million entries.
 constexpr std::uint64_t kDefaultMaxEntries = 1000000;
 
 /** Existing platform scratch locations a confined child may write. */
@@ -134,8 +131,7 @@ absl::Status RegisterFlowActions(actions::ActionRegistry& registry,
   const FilesystemPolicy& filesystem = capabilities->filesystem;
   if (filesystem.writable && filesystem.roots.empty() &&
       !filesystem.unrestricted) {
-    // A policy that contradicts itself, and the only chance to say so is here:
-    // at the first call it would look like an ordinary permission_denied.
+    // Report contradictory policies at registration.
     return absl::InvalidArgumentError(
         "a writable filesystem policy with no roots allows nothing; set roots, "
         "or set unrestricted if the whole filesystem was meant");

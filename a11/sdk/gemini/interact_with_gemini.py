@@ -420,11 +420,8 @@ class Conversation:
         role, steps, server_id = self._interpret(interaction)
 
         if role == llm.Role.ASSISTANT:
-            # Commit the input we just sent plus the model's produced steps into
-            # the transcript. Only a Gemini turn leaves resumable server-side
-            # state; a foreign assistant turn (server_id is None) invalidates
-            # the last id so the next turn replays the transcript in full
-            # rather than resuming from a point that predates it.
+            # Keep the sent input and response. A foreign assistant turn clears
+            # the resumable id so the next turn replays the full transcript.
             self._history.extend(self._pending)
             self._pending = []
             self._history.extend(steps)
@@ -988,9 +985,7 @@ async def interact_with_gemini(action: a11.Action):
                 action_outputs=executed.outputs,
                 backend_specific_metadata={
                     llm.BACKEND_METADATA_KEY: str(llm.Backend.GEMINI).encode(),
-                    # What the tools said to the user, kept beside their
-                    # results rather than in them: metadata is the one part of
-                    # an interaction no backend turns into provider content.
+                    # Keep tool logs in metadata, outside model content.
                     **executed.log_metadata(),
                 },
                 content=[

@@ -30,42 +30,14 @@
 
 namespace a11::flow {
 
-/// What the language knows about the world it runs in.
-///
-/// **Why this exists.** The tools know the *language* exhaustively and the
-/// world
-/// it runs in not at all: `run make_http_request(` offers no ports, hovering an
-/// action name says "identifier", and a flow that names `a11.sdk.AudioBuffer`
-/// gets no more help than one that names `a11.sdk.Typo`. The tools cannot fix
-/// that by importing a registry, because `a11::flow_lang` links nothing but
-/// Abseil and nlohmann on purpose -- so what the world contains arrives as
-/// *data*.
-///
-/// **Where the data comes from.** A snapshot generated from the live registries
-/// (`scripts/generate_flow_catalogue.py` -> `testdata/flow/catalogue.json`) is
-/// embedded, so the standalone `a11-flow` is useful with nothing configured. A
-/// frontend that has a *live* registry -- `a11 flow serve` running inside a
-/// process that imported the SDK, an IDE that knows which registry an inline
-/// flow is attached to -- passes its own with each request or once per session,
-/// and that is merged over the snapshot. Neither is privileged: the snapshot is
-/// a default, and a name given twice takes the later description.
+/// Action and type metadata supplied to Flow tooling.
+/// An embedded registry snapshot provides defaults. Host catalogues merge over
+/// it, with later entries taking precedence.
 namespace catalogue {
 
-/// Where an entry was declared, for an entry that was found by reading source.
-///
-/// Absent for everything that arrived from a live registry or from the embedded
-/// snapshot: a registry knows what it holds and not where the text that put it
-/// there was written. Present for what `discover::Discover` read out of a
-/// project, which is what lets "go to symbol" leave the flow and land on the
-/// `ActionSchema` itself.
-///
-/// 1-based line and column, the convention every other position in these
-/// formats uses.
+/// Source location of a discovered entry, with 1-based line and column.
 struct Origin {
-  /// The path as the host gave it to the scanner: absolute if the root was,
-  /// relative if it was. Passed through rather than normalised, because the
-  /// host
-  /// has to open the answer in the terms it asked in.
+  /// Path supplied to the scanner, retaining its absolute or relative form.
   std::string file;
   int line = 1;
   int column = 1;
@@ -107,13 +79,7 @@ struct ActionInfo {
       syntax::PortDirection direction) const;
 };
 
-/// One type the host knows, by the tag a flow writes it as.
-///
-/// A [DtoPlan] rather than a shape of its own: a `struct` and a registered type
-/// are
-/// the same idea to everything that consumes this -- completion of its fields,
-/// a hover that lists them, a schema made from it -- and one shape means the
-/// tools have one code path rather than two.
+/// A registered type, identified by its Flow tag and described as a [DtoPlan].
 struct TypeInfo {
   std::string tag;
   DtoPlan shape;
@@ -128,12 +94,7 @@ class Catalogue {
   /// configured.
   static const Catalogue& Builtin();
 
-  /// The catalogue these entries make.
-  ///
-  /// For a producer that has the entries as values rather than as JSON, which
-  /// is what `discover::Discover` is: it reads source and builds
-  /// `ActionInfo`s, and routing them out through JSON and back would be a
-  /// round trip that could only lose things.
+  /// Builds a catalogue from action and type entries.
   static Catalogue Of(
       std::vector<ActionInfo> actions, std::vector<TypeInfo> types = {},
       absl::flat_hash_map<std::string, std::string> intrinsics = {});

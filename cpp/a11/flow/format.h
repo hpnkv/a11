@@ -40,46 +40,20 @@ struct FormatOptions {
   size_t line_width = 80;
 };
 
-/// The formatted text, and what it took to get there.
+/// Formatted source, edits, and diagnostics.
 struct FormatResult {
-  /// The whole file as it should be. Equal to the input when nothing changed --
-  /// and equal to the input, unchanged, when the file does not parse.
+  /// Complete source; equals the input when parsing fails or no edit is needed.
   std::string formatted;
   bool changed = false;
-  /// One edit that turns the input into `formatted`, trimmed to the part that
-  /// actually differs, so an editor applying it does not move the cursor or
-  /// lose a selection over a file that only changed at the bottom. Empty when
-  /// nothing changed.
+  /// Minimal edits producing `formatted`; empty when unchanged.
   std::vector<Edit> edits;
-  /// Why the file was left alone, where it was.
+  /// Diagnostics that prevented formatting.
   std::vector<Diagnostic> diagnostics;
 };
 
-/// Format Flow source.
-///
-/// **What it decides:** indentation, the spaces between tokens, how far a
-/// continued line is indented, how many blank lines are allowed and where, the
-/// columns of a run of port declarations, trailing whitespace, and the newline
-/// at
-/// the end of the file.
-///
-/// Equivalent whitespace has one layout, preserving parsed statement boundaries.
-/// Groups stay compact when they fit, or expand with indented contents and
-/// dedented closers. Trailing commas request expanded item lists. Module bodies
-/// have no extra indentation. Declaration modifiers follow canonical order.
-/// Ordinary strings split into adjacent literals at spaces or between complete
-/// characters, preserving escapes. Triple-quoted strings and comments remain
-/// intact.
-///
-/// **It refuses a file it cannot read.** With an error diagnostic, `formatted`
-/// is the input and `diagnostics` says why: half-formatting a file somebody is
-/// in the middle of typing is how a formatter loses somebody's work.
-///
-/// Two invariants, both tested over every flow in the repository:
-///
-/// * **Idempotent.** Formatting formatted text changes nothing.
-/// * **Meaning-preserving.** Syntax stays equivalent, including literal values.
-///   Declaration modifiers may move; comment text remains.
+/// Formats Flow source with stable whitespace and equivalent syntax.
+/// Parse errors leave the source unchanged and appear in `diagnostics`.
+/// Formatting is idempotent; comments and literal values are preserved.
 FormatResult Format(std::string_view source, FormatOptions options = {},
                     CompilationLimits limits = {},
                     CompilationBudget* absl_nullable budget = nullptr);

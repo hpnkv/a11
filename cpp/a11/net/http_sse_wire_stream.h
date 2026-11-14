@@ -18,25 +18,11 @@
  * @file
  * @brief WireStream transport over HTTP Server-Sent Events.
  *
- * An HttpSseWireStream carries A11 WireMessage traffic over an HTTP channel:
- * the server streams messages back as Server-Sent Events while the client
- * posts outgoing messages to a companion endpoint. Pick this transport when
- * only ordinary HTTP is available -- it is a firewall- and proxy-friendly
- * alternative to WebSockets. HttpSseClientWireStream dials out,
- * HttpSseServerWireStream is the accepted counterpart, and HttpSseServer hosts
- * them. Delivery carries no global ordering guarantee but is synchronised on
- * closure -- a reader observes every delivered message before the stream
- * completes.
- *
- * ## HTTP/2 and HTTP/1.1
- *
- * Over HTTP/2 the event stream and the outbound direction are streams on one
- * connection. HTTP/1.1 has no multiplexing and an A11 client connection carries
- * a single request, so the outbound direction needs a connection of its own:
- * either one for all of it (a streamed request body, which a non-multiplexed
- * connection prefers whenever the server advertises it) or one per message
- * (POST delivery, the interop fallback). Nothing about the protocol changes --
- * only how many sockets it takes.
+ * The server sends WireMessages as Server-Sent Events; the client sends them
+ * through a companion HTTP request. HTTP/2 carries both directions on one
+ * connection. HTTP/1.1 uses a second connection with a streamed request body
+ * or one POST per message. Readers receive delivered messages before closure;
+ * separate streams have no global ordering guarantee.
  */
 
 #ifndef A11_NET_HTTP_SSE_WIRE_STREAM_H_
@@ -69,9 +55,8 @@ inline constexpr std::string_view kSseStreamIdHeader = "x-a11-stream-id";
 inline constexpr std::string_view kSseHttpHeaderPrefix = "x-a11-http-";
 /**
  * Response header on the connect response listing the outbound delivery modes
- * the server accepts, comma-separated -- `post`, `stream`. A server that omits
- * it is understood to accept `post` only, which is what every deployed SSE
- * server did before streamed delivery existed.
+ * the server accepts, comma-separated -- `post`, `stream`. Omission means
+ * `post` only.
  */
 inline constexpr std::string_view kSseOutboundModesHeader = "x-a11-outbound";
 /** Token for one-POST-per-message outbound delivery. */
@@ -83,11 +68,8 @@ inline constexpr std::string_view kSseOutboundStreamToken = "stream";
  *
  * The body is a sequence of frames, each a four-byte little-endian payload
  * length followed by that many bytes of the JSON WireMessage encoding the POST
- * route carries one of. HTTP/2 sends it as DATA frames and HTTP/1.1 as a
- * chunked
- * body; neither framing is a message boundary, which is why the length prefix
- * is
- * there.
+ * route carries one of. The length prefix supplies message boundaries across
+ * HTTP/2 DATA frames and HTTP/1.1 chunked bodies.
  */
 inline constexpr std::string_view kSseWireStreamContentType =
     "application/vnd.a11.wire-stream+json";

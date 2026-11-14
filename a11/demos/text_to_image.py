@@ -244,8 +244,7 @@ async def text_to_image(action: a11.Action) -> None:
         )
         pipeline = await _pipeline()
 
-        # The diffusers callback runs on the worker thread, so it hands the
-        # fragment to the loop rather than awaiting a put itself.
+        # Send progress from the worker thread through the event loop.
         loop = asyncio.get_running_loop()
 
         def on_step(_pipeline, step: int, _timestep: int, kwargs: dict) -> dict:
@@ -295,9 +294,7 @@ async def text_to_image(action: a11.Action) -> None:
             "Finished a %d-byte PNG.", len(png), channel="result"
         )
     finally:
-        # A caller reading either port must see it end, however this went.
-        # Closed rather than finalized: `progress` has no last event worth
-        # marking, and `image_out` marked its own above -- or failed before it
-        # had anything to mark.
+        # Close both ports after success or failure; `image_out` marks its
+        # final value above when one exists.
         await progress.close()
         await image_out.close()

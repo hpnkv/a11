@@ -16,61 +16,16 @@
 
 /**
  * @file
- * @brief The three ways an action is asked to stop, as one object.
+ * @brief Cancellation, deadlines and control commands for an action.
  *
- * A long-lived action is asked to stop by three different things:
+ * StopSignal watches caller cancellation, `x-a11-deadline` and the control
+ * port's `{"command": "stop"}`. Sources use ExitStatus(): control stops and
+ * deadlines end their streams normally. Finite operations use Check() to
+ * report an early stop as an error. Cancellation always reports `cancelled`.
  *
- *   * the caller **cancelling** it, which arrives on a foreign thread;
- *   * its **deadline** running out, which arrives from a clock nobody is
- *     watching unless somebody watches it;
- *   * a `{"command": "stop"}` on its **control port**, which arrives as data
- *     and only if something is reading that port.
- *
- * An action that honours one of them and not the others stops in some
- * circumstances and hangs in the rest, which is the worst of the available
- * behaviours because it looks like it works. So it is written once, here.
- *
- * ### Graceful, and not
- *
- * The distinction this file exists to keep straight is between an action being
- * *asked to finish* and an action being *torn down*, because they end the run
- * differently and neither answer is right for both:
- *
- *   * A **source** -- `ticker`, `watch_path`, `listen_tcp` -- is asked to
- *     finish. Its stream has simply ended: ports close normally, the run
- *     returns OK, and a flow reading it sees the end of a stream rather than a
- *     failure. StopSignal::ExitStatus() is that answer.
- *   * An action with **one answer to give** -- `read_file`, `sqlite_query` --
- *     cannot finish early, because half a file is not a shorter file. Its
- *     deadline is a failure and so is its cancellation. StopSignal::Check() is
- *     that answer, and a handler calls it where a partial result would
- *     otherwise be written.
- *
- * Cancellation is never graceful in either: a cancelled action returns
- * `cancelled` and aborts its unfinished ports, so a reader learns the stream
- * stopped early rather than being told it ended.
- *
- * ### What it costs
- *
- * stopped() is one atomic load, so a streaming loop can ask per value -- which
- * is the point, since a loop that only asks between blocking calls stops when
- * the next value arrives rather than when it was asked to. The watchers exist
- * only when there is something to watch: no deadline header means no timer, and
- * no control port means no control fiber.
- *
- * The deadline is a `uvw::timer_handle` on A11's one libuv loop rather than a
- * fiber in a timed Select. A sleeping fiber costs a stack and a scheduler slot
- * for the whole life of the action, and the loop is already running; a timer
- * costs an entry in its heap. Cancellation is a callback the framework already
- * delivers, so the control port is the only thing left that genuinely needs a
- * fiber -- it has to be parked in a read.
- *
- * ### The obligation
- *
- * Join() before returning from the handler. It stops the watchers and waits for
- * them, which is what keeps a fiber from reading a port the framework is about
- * to take apart. Every handler in this library reaches it on every path, and
- * the destructor reaches it for the paths nobody thought of.
+ * stopped() is an atomic load suitable for streaming loops. A deadline uses a
+ * libuv timer; a control port uses a reader fiber. Join() stops the watchers
+ * before the handler releases its ports.
  */
 
 #ifndef A11_SDK_FLOW_ACTIONS_STOP_H_
@@ -111,8 +66,7 @@ enum class StopReason {
 /**
  * @brief A command that arrived on a control port and was not `stop`.
  *
- * Returning an error fails the action, which is what a control command that
- * cannot be carried out should do -- it was an instruction, not a hint.
+ * Returning an error fails the action.
  */
 using OnControlCommand = std::function<absl::Status(const nlohmann::json&)>;
 
@@ -135,12 +89,9 @@ class StopSignal {
    * @param control_port An input port carrying commands, or empty for an action
    *        that declares none. A `{"command": "stop"}` there stops the action;
    *        anything else goes to @p on_command.
-   * @param on_command Handles the commands that are not `stop`. When empty, one
-   *        of those fails the action, because silently ignoring an instruction
-   *        is worse than refusing it.
-   * @return The signal, or an error when the deadline header is malformed --
-   *         worth failing on rather than treating as no deadline, since a
-   *         caller who wrote one meant to bound the work.
+   * @param on_command Handles commands other than `stop`. Without a handler,
+   *        such commands fail the action.
+   * @return The signal, or an error for a malformed deadline header.
    */
   static absl::StatusOr<std::shared_ptr<StopSignal>> Create(
       const std::shared_ptr<actions::Action>& action,
@@ -158,25 +109,21 @@ class StopSignal {
   /**
    * @brief OK while the action may carry on producing a single answer.
    *
-   * For the action that cannot finish early: a deadline is `deadline_exceeded`
-   * and a cancellation is `cancelled`, because handing back a partial result as
-   * a success is the one outcome a caller cannot detect.
+   * A deadline returns `deadline_exceeded`; cancellation returns `cancelled`.
+   * Use for operations whose partial result cannot be returned as complete.
    */
   [[nodiscard]] absl::Status Check() const;
 
   /**
    * @brief How a source's run ends, given what stopped it.
    *
-   * OK for a stop command and for a deadline -- both asked it to finish, and it
-   * did -- and `cancelled` for a cancellation.
+   * Returns OK for a stop command or deadline, and `cancelled` when cancelled.
    */
   [[nodiscard]] absl::Status ExitStatus() const;
 
   /**
    * @brief Sleeps up to @p duration, waking the moment a stop is asked for.
-   * @return Whether it should stop. The interval a `ticker` waits and the
-   *         backoff a retry waits both go through here, so neither outlives
-   *         being cancelled by more than the time it takes to wake a fiber.
+   * @return Whether a stop was requested during the wait.
    */
   bool WaitFor(absl::Duration duration);
   /** @brief Sleeps until @p deadline, waking early on a stop. */
@@ -190,26 +137,15 @@ class StopSignal {
   /**
    * @brief Asks the action to stop, if nothing has already.
    *
-   * Idempotent and safe on any thread: the first reason wins, so a deadline
-   * that fires while a cancellation is being applied does not overwrite it.
-   * Called by the watchers, and callable by a handler that has its own reason
-   * to wind down.
+   * Idempotent and thread-safe. The first stop reason wins.
    */
   void Stop(StopReason reason);
 
   /**
    * @brief Stops the watchers and waits for them to finish.
    *
-   * **Call this before returning from the handler, on every path.** A watcher
-   * fiber still reading a control port while the framework releases that port
-   * is a use-after-free waiting for a slow enough machine.
-   *
-   * Idempotent, and does *not* count as a stop: a handler that finished its own
-   * work reaches Join() first, and its reason() must still say kRunning
-   * afterwards or every successful run would report having been stopped.
-   *
-   * Reports nothing: a watcher's own failure has already been turned into a
-   * stop, and the run's status is the handler's to give.
+   * Call before returning from the handler so watcher fibers stop using its
+   * ports. Idempotent. Join() does not change the stop reason or run status.
    */
   void Join();
 
@@ -225,10 +161,8 @@ class StopSignal {
   /**
    * The part the watcher fibers share.
    *
-   * Separate from StopSignal on purpose. A watcher holding the StopSignal alive
-   * would mean the last reference is dropped *by a watcher*, so the destructor
-   * would run on the watcher's own fiber and Join() would wait for the fiber it
-   * is running on. Watchers therefore capture this and never the handle.
+   * Watchers capture Shared without retaining StopSignal. This prevents its
+   * destructor from joining the watcher fiber that runs it.
    */
   struct Shared {
     std::atomic<int> reason{static_cast<int>(StopReason::kRunning)};
@@ -246,24 +180,15 @@ class StopSignal {
   StopSignal() = default;
 
   /**
-   * Arms the deadline watcher on A11's one libuv loop. Called only when there
-   * is a deadline to watch.
-   *
-   * A timer rather than a fiber parked in a timed Select, because a fiber
-   * costs a stack and a scheduler slot for the whole life of the action while
-   * doing nothing but sleeping, and the loop already exists. The callback runs
-   * on the loop thread and so must not block: it is a compare-exchange and a
-   * notify, which is exactly what the cancellation callback already does from a
-   * foreign thread.
+   * Arms a libuv timer when the action has a deadline. The loop callback only
+   * updates the stop reason and notifies waiters; it must not block.
    */
   absl::Status ArmDeadlineTimer();
 
   /**
    * Closes it, on the loop thread, and waits for that to have happened.
    *
-   * Waiting is the point: a timer still armed after Join() would give a run
-   * that had already finished a reason it never had, so reason() would start
-   * saying kDeadline about a successful run.
+   * Waits for closure so the timer cannot update the reason after Join().
    */
   void DisarmDeadlineTimer();
 

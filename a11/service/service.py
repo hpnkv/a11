@@ -12,17 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Native services: an action registry, its sessions, and their lifecycle.
+"""Serve actions through transport connections or in-process streams.
 
-A `Service` is what a peer can call, decoupled from where it listens. Hand
-`Service.accept` to any transport server and that server's connections become
-sessions on this service; hand it an in-process stream and there is no server at
-all.
-
-A `Service` coordinates active sessions and dispatches actions without
-managing socket lifecycles directly. The application owns its listeners and decides when
-to stop -- see [a11.service.serving][a11.service.serving] for the helper
-that binds the two together.
+Pass `Service.accept` to a transport server to create a session for each
+connection. A `Service` dispatches actions and manages sessions. The
+application manages listeners and shutdown; see
+[a11.service.serving][a11.service.serving].
 
 Examples:
     One service, two transports, one lifecycle:
@@ -41,10 +36,8 @@ from collections.abc import Awaitable, Callable
 from a11.net.wire_stream import WireStream
 from a11.service._native_service import Service, ServiceOptions
 
-#: Async callback run once per connection, after its session exists and before
-#: it starts pumping. The window in which a connection can be specialised --
-#: swapping in a registry copy, binding a reverse-dispatch bridge -- without
-#: racing its first message. Raising rejects the connection.
+#: Runs once per connection after session creation and before message pumping.
+#: It may customize the session; raising rejects the connection.
 OnServiceConnection = Callable[["Session", WireStream], Awaitable[None]]
 
 Service.__module__ = __name__

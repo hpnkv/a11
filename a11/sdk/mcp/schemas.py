@@ -12,48 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""One MCP tool, read as an A11 `ActionSchema`.
+"""Derive an A11 `ActionSchema` from an MCP tool definition.
 
-The translation, and nothing else: no transport, no session, no `mcp` import.
-It works on the wire shapes -- the `tools/list` entries, whether they arrive as
-SDK models or as plain JSON -- so a schema can be derived, tested and shipped to
-a peer without the MCP SDK installed anywhere.
+The conversion accepts SDK models or plain `tools/list` JSON without an MCP
+session. Top-level input properties become ports with their JSON Schemas.
+Homogeneous arrays become streaming item ports; positional tuples stay unary.
+Object-level composition keeps the complete argument object on one port.
+Array constraints beyond `items` and `minItems: 1` cannot be represented on a
+streaming port.
 
-The shape of the answer is decided by what happens to it afterwards. An Action
-derived here is registered like any other, so it is offered to a model by
-[definition_from_schema][a11.sdk.llm_tools.runner.definition_from_schema],
-called through
-[ActionCallAdapter][a11.sdk.llm.ActionCallAdapter], and described to a peer by
-[a11.actions.describe][a11.actions.describe]. Each of those reads an
-`ActionSchema` in a particular way, and the rules below are what make the round
-trip MCP tool -> Action -> tool definition come back out looking like the tool
-the server declared:
-
-* **A tool's arguments become ports, one per top-level property.** A single
-  `arguments` port would show every MCP tool to a model as an object with one
-  opaque field; ports are A11's argument surface, and one per property is what
-  lets a flow wire a single argument and a model see the tool's real signature.
-  Each port carries the property's own JSON Schema, made self-contained, so the
-  types survive even though no Python type ever existed to derive them from.
-* **A homogeneous array becomes a streaming port carrying its item schema.**
-  Not cosmetic: `ActionCallAdapter.get_action_inputs` writes a list argument as
-  one fragment per element, so only a non-unary port can tell "the argument is
-  a list of one" from "the argument is that one value". A positional tuple
-  (`prefixItems`) is a value rather than a stream and stays unary.
-* **A result becomes three ports**, because an MCP result is three things: text
-  blocks, other content blocks, and -- when the tool declares an output schema
-  -- one structured document. The structured document is then mapped to the
-  whole JSON result, which is MCP's own rule that a client should prefer
-  `structuredContent` where a tool declares a schema for it.
-* **What is not an argument becomes a header**: which tool, which server, and
-  MCP's per-request `_meta`. See [McpHeaders][a11.sdk.mcp.schemas.McpHeaders].
-
-What cannot survive is named where it is dropped: object-level composition
-(`anyOf` and friends *around* the properties) cannot be split into ports at all,
-so such a tool keeps its whole argument object on one port; and the array
-keywords other than `items` (`maxItems`, `uniqueItems`, a `minItems` above one)
-have nowhere to live on a streaming port, though `minItems: 1` is carried by the
-port being required.
+Results use `text`, `content`, and, when declared, `structured_content` ports.
+The tool name, server, and per-request `_meta` travel in headers.
 """
 
 from __future__ import annotations
@@ -110,15 +79,11 @@ _OBJECT_COMPOSITION_KEYWORDS = (
     "unevaluatedProperties",
 )
 
-# Array keywords that make a schema a positional tuple rather than a sequence of
-# like values. A tuple is one value, so it stays on a unary port with its whole
-# schema intact.
+# Positional tuple schemas stay intact on one unary port.
 _TUPLE_KEYWORDS = ("prefixItems", "additionalItems")
 
-# Keywords by which an input schema says something about what arguments a tool
-# takes. A schema with nothing to say -- `{}`, `{"type": "object"}`, or the
-# `{"properties": {}}` that a no-argument tool actually gets from a server built
-# on pydantic -- describes a tool that takes nothing, and gets no input ports.
+# Schemas without argument constraints produce no input ports, including empty
+# objects and objects with empty `properties`.
 _ARGUMENT_KEYWORDS = (
     "properties",
     "required",
@@ -132,22 +97,11 @@ _TEXT_MIMETYPE = "text/plain"
 
 
 class McpHeaders(enum.StrEnum):
-    """MCP context that is not an argument, and so travels as a header.
+    """Per-call MCP context carried through A11 action headers."""
 
-    Headers describe one call and flow into nested actions, which is what makes
-    them the right home for this: the tool being called and the server it lives
-    on are properties of the call rather than data the model supplies, and
-    `_meta` is MCP's own per-request bag.
-    """
-
-    #: Name of the MCP tool to call. Defaults, on a derived schema, to the
-    #: tool's verbatim name -- so an action renamed to satisfy A11's identifier
-    #: rules still reaches the right tool, and the mapping is visible to anyone
-    #: reading the schema rather than buried in a handler.
+    #: Original MCP tool name, retained if the A11 action name was changed.
     TOOL = "x-a11-mcp-tool"
-    #: The MCP server these handlers are bound to. Defaults to the target the
-    #: tools were discovered from; a call naming a different one is refused
-    #: rather than quietly sent somewhere else.
+    #: Discovered server; a call naming another server is refused.
     SERVER = "x-a11-mcp-server"
     #: A JSON object merged into the request's `_meta`. MCP reserves the
     #: `io.modelcontextprotocol/*` keys for the SDK, so this is for a caller's
@@ -156,17 +110,10 @@ class McpHeaders(enum.StrEnum):
 
 
 class McpMeta(enum.StrEnum):
-    """Keys A11 reserves in MCP's `_meta`, on a tool and on a call.
+    """Optional A11 keys in a tool, call or result's MCP `_meta`."""
 
-    MCP's `_meta` is an open map whose keys are namespaced by a reverse-DNS
-    prefix, and `io.modelcontextprotocol/*` belongs to the SDK. These two are
-    A11's, and both are optional: a client or server that ignores them sees an
-    ordinary MCP tool.
-    """
-
-    #: On a `tools/list` entry: the action's whole `a11.actions/v1` document.
-    #: An A11 client reads it and rebuilds the action's real schema instead of
-    #: deriving an approximation from the tool's JSON Schema.
+    #: On `tools/list`, the full `a11.actions/v1` document used to restore the
+    #: action schema.
     ACTION = "to.a11/action"
     #: On a `tools/call`: an object of header name to value, applied to the
     #: action the server runs. See
@@ -203,13 +150,7 @@ class McpArgument:
 
 @dataclasses.dataclass(frozen=True)
 class McpTool:
-    """One MCP tool as an A11 Action: the schema, and how to feed it.
-
-    The schema is the public half -- register it, describe it, show it to a
-    model. The rest is what a handler needs to turn ports back into a
-    `tools/call` and its result back into ports, and is why the translation
-    returns an object rather than a bare `ActionSchema`.
-    """
+    """An action schema and the port mapping for one MCP tool."""
 
     #: The tool's name as the server spells it.
     tool_name: str
@@ -229,9 +170,8 @@ class McpTool:
     #: Port carrying `structuredContent`, when the tool declares a schema for
     #: it.
     structured_output: str | None = None
-    #: The `a11.actions/v1` entry an A11 server declared this tool with, when
-    #: it declared one. Its presence is what makes the result go back onto the
-    #: action's own ports rather than onto `text` and `structured_content`.
+    #: The server's `a11.actions/v1` entry, if any. Results then use the
+    #: action's declared ports.
     described: dict[str, Any] | None = None
     #: For a described action, one `(result field, port)` pair per output the
     #: structured result carries.
@@ -261,8 +201,7 @@ def sanitise_name(name: str, *, fallback: str = "tool") -> str:
             character.isascii() and character.isalnum()
         )
         kept.append(character if allowed else "_")
-    # Hyphens and `#` are middle-only, so a name that starts or ends with one
-    # loses it rather than being rejected.
+    # Hyphens and `#` are allowed only inside a name.
     sanitised = "".join(kept).strip("-#")[:255]
     bare = sanitised.lstrip("_")
     if not bare:
@@ -330,11 +269,8 @@ def tool_document(tool: Any) -> dict[str, Any]:
 def _annotation_hints(annotations: Mapping[str, Any]) -> str:
     """The tool's behaviour hints as one sentence, or ``""``.
 
-    Only what the server actually stated. These are hints rather than
-    guarantees -- MCP says so, and says a client should not make tool-use
-    decisions on them for an untrusted server -- but they are exactly what
-    somebody choosing whether to call a tool wants to know, and an
-    `ActionSchema` has nowhere but its description to put them.
+    Includes only hints supplied by the server. They describe behavior in the
+    action description; untrusted server hints do not guarantee behavior.
     """
     read_only = _field(annotations, "readOnlyHint", "read_only_hint")
     destructive = _field(annotations, "destructiveHint", "destructive_hint")
@@ -442,10 +378,8 @@ def array_item_schema(schema: Mapping[str, Any]) -> dict[str, Any] | None:
 def _port_mimetype(schema: Mapping[str, Any]) -> str:
     """The media type a port declares for values of this schema.
 
-    Descriptive rather than enforced -- a port reads whatever media type the
-    chunk actually carries -- but `text/plain` for a string is what the rest of
-    the SDK declares (`SHELL_EXECUTE_SCHEMA`'s `command` port), and it is what
-    tells a reader whether a value on the port is a document or a line of text.
+    Declares `text/plain` for strings and JSON for other shapes. The chunk's
+    media type remains authoritative when reading a value.
     """
     branches = _branches(schema)
     if branches and all(
@@ -588,10 +522,8 @@ def _result_ports(
 ) -> tuple[dict[str, a11.ActionPortSchema], str, str, str | None]:
     """The output ports for a tool result, avoiding the names already used.
 
-    An input and an output sharing a name would share one node, which
-    `ActionSchema::Validate` refuses, and a tool with a `text` argument is
-    perfectly ordinary -- so the argument keeps the name it was given and the
-    result port moves.
+    Input names take precedence when a result port has the same name, because
+    ActionSchema requires distinct input and output node names.
     """
     reserved = {*taken, *RESERVED_PORT_NAMES}
     text = _unique(TEXT_OUTPUT, reserved)

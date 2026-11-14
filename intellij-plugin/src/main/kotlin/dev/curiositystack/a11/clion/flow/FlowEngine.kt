@@ -69,11 +69,7 @@ class FlowEngine : Disposable {
     val available: Boolean get() = executable() != null
 
     /**
-     * Everything wrong with this text: `flow.diagnostics/v1`, or `null`.
-     *
-     * Both passes of the compiler, every problem rather than the first, each
-     * with the fixes the language itself worked out -- which is why the quick
-     * fixes here are edits to apply rather than repairs to invent.
+     * Returns `flow.diagnostics/v1` with diagnostic edits, or `null`.
      */
     fun check(text: String, sourceContext: FlowSourceContext = FlowSourceContext()): Map<String, Any?>? =
         ask("check", text, sourceContext)

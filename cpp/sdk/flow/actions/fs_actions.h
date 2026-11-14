@@ -16,15 +16,9 @@
 
 /**
  * @file
- * @brief The filesystem as Actions: streaming in, streaming out.
+ * @brief Read and write local files through Flow actions.
  *
- * These actions let Flow programs read and write local files through explicit
- * streaming ports.
- *
- * ### Why streaming is the point rather than a detail
- *
- * `read_file` writes its bytes as it reads them and `write_file` takes its
- * content as a *stream*, so
+ * `read_file` emits bytes as it reads; `write_file` consumes a byte stream.
  *
  * @code{.a11flow}
  *   src = run read_file(path: from)
@@ -32,47 +26,35 @@
  *   dst = run write_file(path: to)
  * @endcode
  *
- * moves a file larger than memory at bounded cost. A port write is the
- * backpressure point -- it does not return until the store has taken the chunk
- * -- so the reader is held behind the writer without either of them saying
- * anything about it. A `read_file` that handed back one value could not do this
- * at all, and neither could a `write_file` that took one.
+ * Port writes wait for the store to accept each chunk. The pipeline uses
+ * bounded memory for files allowed by the host policy.
  *
- * `read_file` also writes `info` **before** any bytes, for the same reason
- * `make_http_request` writes `status_code` before the body: it lets a flow
- * decide something while the reading is still going on.
+ * `read_file` emits `info` before any bytes, so a flow can inspect metadata
+ * while the content is still streaming.
  *
  * @code{.a11flow}
  *   f = run read_file(path: path)
  *   if f.info.size > 100000000 { fail resource_exhausted "too large" }
  * @endcode
  *
- * ### What happens when a run does not finish
+ * ### Incomplete writes
  *
- * A cancelled `write_file` must not leave a half file behind, so it writes to a
- * temporary beside the destination and renames it into place at the end --
- * atomically, so a reader sees either the old contents or the new ones and
- * never a prefix. The temporary is removed on every failing path. `append` is
- * the exception and says so: appending atomically is not a thing a filesystem
- * offers, so an append that fails part-way leaves what it had written, and the
- * schema says as much rather than pretending otherwise.
+ * `write_file` writes to a temporary beside the destination and renames it on
+ * success. Failure removes the temporary. An interrupted `append` retains the
+ * bytes already appended.
  *
- * Everything reading a stream checks its StopSignal per chunk, not per file, so
- * cancelling a read of a large file takes about as long as one chunk.
+ * Stream readers check their StopSignal after each chunk.
  *
- * ### The port-name trap
+ * ### Port names
  *
- * `write_file` takes `path` and reports `resolved`, not `path`, because a port
- * name means one node whichever direction it faces -- an action with an input
- * and an output both called `path` has one port that is both, and a flow
- * writing to it would be reading its own value back.
+ * `write_file` accepts `path` and reports the destination as `resolved`.
+ * Input and output ports with the same name share one node.
  *
  * ### Policy
  *
- * Every path goes through ResolvePath() before anything opens it, so a root the
- * host did not name is `permission_denied` however the path was spelled --
- * through `..`, through a symlink, or through both. The handlers here take the
- * policy at registration and there is no option that widens it.
+ * Every path passes through ResolvePath() before opening. Paths outside the
+ * configured roots return `permission_denied`, including symlink traversals.
+ * Handlers capture the policy at registration.
  */
 
 #ifndef A11_SDK_FLOW_ACTIONS_FS_ACTIONS_H_
@@ -130,8 +112,7 @@ actions::ActionSchema MakeTempSchema();
 /**
  * @brief Handlers, each closed over the policy it was registered with.
  *
- * The policy is a constructor argument rather than an option because a caller
- * that could pass one would be a caller that could widen it.
+ * The handler captures its policy at registration.
  */
 actions::ActionHandler ReadFileHandler(CapabilitiesPtr capabilities);
 actions::ActionHandler WriteFileHandler(CapabilitiesPtr capabilities);
@@ -146,10 +127,7 @@ actions::ActionHandler MakeTempHandler(CapabilitiesPtr capabilities);
 /**
  * @brief Registers the reading actions on @p registry.
  *
- * `read_file`, `list_directory` and `stat_path`. Separate from the writing half
- * because that is the line a host most often wants to draw, and drawing it by
- * choosing which function to call is harder to get wrong than drawing it with a
- * flag.
+ * Registers `read_file`, `list_directory` and `stat_path`.
  */
 absl::Status RegisterFilesystemReadActions(actions::ActionRegistry& registry,
                                            CapabilitiesPtr capabilities);
@@ -157,10 +135,8 @@ absl::Status RegisterFilesystemReadActions(actions::ActionRegistry& registry,
 /**
  * @brief Registers the writing actions on @p registry.
  *
- * `write_file`, `make_directory`, `remove_path`, `move_path`, `copy_path` and
- * `make_temp`. Fails when the policy is not writable, rather than registering
- * six actions that all refuse: a host that called this meant to allow writing,
- * and a policy that does not is a mistake worth reporting at startup.
+ * Registers `write_file`, `make_directory`, `remove_path`, `move_path`,
+ * `copy_path` and `make_temp`. A read-only policy returns an error.
  */
 absl::Status RegisterFilesystemWriteActions(actions::ActionRegistry& registry,
                                             CapabilitiesPtr capabilities);

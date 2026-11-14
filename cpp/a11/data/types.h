@@ -92,15 +92,9 @@ struct ChunkMetadata {
   /**
    * @brief Append this record's fields to an already-open @p writer.
    *
-   * What ToMsgpack() is built from, and what a parent record calls through
-   * MsgpackWriter::PackRecord so that nesting costs no buffer of its own. Both
-   * produce the same bytes; this one avoids the intermediate string.
-   *
-   * **Assumes the record is already valid.** Validate() recurses through nested
-   * records, so validating here as well would re-check every nested id once per
-   * ancestor level. ToMsgpack() validates the whole tree once and then calls
-   * this; a caller reaching for this directly should do the same, and any
-   * caller that got its record from FromMsgpack() already has.
+   * Writes the same bytes as ToMsgpack() without an intermediate string.
+   * The caller must validate the full record first. ToMsgpack() does so;
+   * FromMsgpack() returns a validated record.
    */
   absl::Status ToMsgpackInto(MsgpackWriter* absl_nonnull writer) const;
   /** @brief Decodes MessagePack @p bytes into a ChunkMetadata. */

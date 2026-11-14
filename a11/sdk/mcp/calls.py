@@ -12,41 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""One `tools/call`, answered by running an action.
+"""Answer an MCP `tools/call` by running an A11 action.
 
-The mirror of [a11.sdk.mcp.handlers][a11.sdk.mcp.handlers], and like it free of
-the MCP SDK: arguments arrive as the plain mapping the wire carried, and the
-result goes back as the `CallToolResult` document
-[a11.sdk.mcp.server][a11.sdk.mcp.server] validates into the SDK's model. That
-keeps the whole path testable without a server, and lets the same translation
-answer a call that arrived some other way.
-
-Each half of the crossing reuses what the LLM tool runner already does with a
-model's tool call, because it is the same crossing:
-
-* **Arguments become input fragments** through
-  [ActionCallAdapter][a11.sdk.llm.ActionCallAdapter], which validates them
-  against the schema -- an argument the action does not declare, a required one
-  that is missing, an autofilled input a caller may not write -- and encodes a
-  list argument as one fragment per element, which is what a streaming port
-  reads back as a sequence.
-* **Outputs become the result** through
-  [collect_action_outputs][a11.sdk.llm_tools.runner.collect_action_outputs] and
-  [decode_action_output_fragments][a11.sdk.llm.decode_action_output_fragments],
-  so what an MCP client reads and what a model reads through
-  `interact_with_llm` are the same rendition of the same run.
-
-Three translations are what a caller observes:
-
-* **Narration becomes progress.** What an action writes to
-  [Action.log][a11.actions.action.Action.log] is relayed as it happens, which
-  MCP carries as `notifications/progress` with a message, and comes back whole
-  on the result's `_meta` for a client that asked for no notifications.
-* **MCP's `_meta` becomes headers.** See
-  [headers_from_meta][a11.sdk.mcp.calls.headers_from_meta].
-* **A failing action fails the tool.** A non-OK status becomes `isError` with
-  the failure text, which is what MCP gives a model to correct itself with, and
-  the inverse of what `handlers` does with `isError` coming the other way.
+[ActionCallAdapter][a11.sdk.llm.ActionCallAdapter] validates arguments and
+feeds input fragments. Action outputs become MCP result content and structured
+data. Action log entries become progress notifications and result metadata;
+request `_meta` becomes action headers. A non-OK action status sets `isError`
+with the failure text. This module accepts plain mappings and does not import
+the MCP SDK.
 """
 
 from __future__ import annotations
@@ -232,8 +205,7 @@ async def _relay_narration(
         try:
             await on_progress(text)
         except Exception:
-            # Narration is worth nothing next to the result, and the request
-            # may already be finishing when a late line lands.
+            # A late progress callback must not fail the tool result.
             logging.debug("could not report MCP progress", exc_info=True)
 
 
@@ -309,9 +281,7 @@ async def call_action(
     a11.set_deadline_header(action, until)
     for name, value in (headers or {}).items():
         action.set_header(name, value.encode())
-    # Claimed before the run, for the reason the tool runner claims it: the
-    # first line a handler writes has to arrive here rather than on the process
-    # sink.
+    # Claim the log port before the run so handler logs reach this call.
     log_node = action.get_log_node()
 
     failure: Status | None = None

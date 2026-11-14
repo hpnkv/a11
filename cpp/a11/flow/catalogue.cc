@@ -91,12 +91,7 @@ nlohmann::json PortToJson(const PortInfo& port) {
   return value;
 }
 
-/// Where an entry was declared, or `nullopt` where nothing said.
-///
-/// A file is what makes an origin worth having, so an entry naming a line and
-/// no
-/// file is read as saying nothing rather than as pointing at line 12 of
-/// somewhere.
+/// Reads an entry origin, or `nullopt` when its file is absent.
 std::optional<Origin> OriginFromJson(const nlohmann::json& value) {
   const auto found = value.find("origin");
   if (found == value.end() || !found->is_object()) {

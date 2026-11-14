@@ -25,8 +25,7 @@ from a11.sdk.interact_with_llm_schema import INTERACT_WITH_LLM_SCHEMA
 from a11.sdk.llm import Interaction
 from a11.sdk.usage import parse_update
 
-#: Ports are terminated by the time they are read, so this only bounds a
-#: pathology: 30s of a stuck port instead of a turn that never records.
+#: Maximum wait while harvesting a turn's input ports.
 _HARVEST_TIMEOUT = timing.Duration(30_000_000_000)
 
 GET_CONVERSATIONS_SCHEMA = actions.ActionSchema(
@@ -89,7 +88,7 @@ async def get_conversation(
 
     conversation_id = cast(str, await action["id"].consume(str))
 
-    # An unknown id yields an empty conversation rather than an error.
+    # Unknown ids produce empty streams.
     interactions_out = action["interactions"]
     for interaction in await store.read(conversation_id):
         await interactions_out.put(interaction)
@@ -101,13 +100,8 @@ async def _persist(
     new_interactions_port: AsyncNode,
     store: conversations.ConversationStore | None = None,
 ) -> None:
-    # Both ports are terminated by the time the handler returns -- it read the
-    # conversation to the end and closed what it produced -- so this only reads
-    # what is already there. The read is still bounded rather than checked
-    # against the writers: an input port's local writer closes when the caller
-    # drains its end (the closure marker crosses the wire), but a caller that
-    # simply stops writing without draining leaves it open, and a port that has
-    # not ended should cost a timeout rather than a stuck turn.
+    # Bound reads because an input port may remain open if its caller stops
+    # writing before draining the end marker.
     base_interactions = await conversations.read_interactions(
         base_interactions_port.get_chunk_store(), _HARVEST_TIMEOUT
     )
@@ -115,10 +109,7 @@ async def _persist(
         new_interactions_port.get_chunk_store(), _HARVEST_TIMEOUT
     )
 
-    # Tool run logs need nothing done here: a backend records them in the
-    # metadata of the interaction that carries the tool results (see
-    # `a11.sdk.llm.TOOL_LOGS_METADATA_KEY`), so they are already part of what
-    # crossed these ports and are stored with the rest of the turn.
+    # Tool logs already travel in interaction metadata with the turn.
     store = store or conversations.get_conversation_store()
     await store.record([*base_interactions, *new_interactions])
 
@@ -148,9 +139,7 @@ async def interact_with_llm_and_persist(
 
     await interact_with_llm(action, event_observer=record_event)
 
-    # Only a turn that got this far is recorded, which matches the client:
-    # it appends to its own history on success only, so a failed turn is
-    # replayed in full next time and recorded then.
+    # Record successful turns; the client replays failed turns on its next call.
     try:
         await _persist(base_interactions_port, new_interactions_port, store)
     except Exception:

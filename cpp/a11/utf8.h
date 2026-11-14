@@ -18,10 +18,8 @@
  * @file
  * @brief UTF-8 byte-level primitives, as inline functions over a string_view.
  *
- * Header-only and dependency-free on purpose: `a11::flow_lang` links nothing
- * but
- * Abseil and nlohmann, so the lexer, the diagnostic index and the offset table
- * can only share these if sharing costs no link dependency.
+ * Inline functions let `a11::flow_lang` share UTF-8 rules without a link
+ * dependency.
  */
 
 #ifndef A11_UTF8_H_
@@ -41,9 +39,8 @@ inline bool IsContinuation(char byte) {
 /**
  * @brief Bytes in the sequence @p lead starts, from the lead byte alone.
  *
- * 1 for ASCII *and* for a malformed lead, so that walking a document that is
- * not quite UTF-8 advances rather than stalling or running off the end. A
- * caller that must reject malformed input wants IsValid instead.
+ * Returns a width from the lead byte's range. ASCII and continuation bytes
+ * have width 1. Use IsValid() to reject malformed input.
  */
 inline size_t SequenceWidth(char lead) {
   const auto byte = static_cast<unsigned char>(lead);
@@ -68,11 +65,7 @@ inline size_t Utf16Units(char lead) {
 /**
  * @brief Whether @p text is well-formed UTF-8.
  *
- * Strict: overlong encodings, surrogate halves and anything above U+10FFFF are
- * rejected, which is the definition Python's `bytes.decode("utf-8")`, Kotlin's
- * `String(bytes)` and JavaScript's `TextDecoder` with `fatal` all enforce. See
- * a11::IsValidUtf8 in `a11/json_codec.h` for why A11 refuses such bytes on the
- * way out rather than letting a peer fail on them.
+ * Rejects overlong encodings, surrogate code points and values above U+10FFFF.
  */
 inline bool IsValid(std::string_view text) {
   // The smallest code point each width may encode; anything smaller is an

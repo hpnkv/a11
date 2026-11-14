@@ -48,12 +48,7 @@
 namespace a11::flow::tool {
 namespace {
 
-// One open document, and the version the client last told us about. TextIndex
-// converts between UTF-8 byte offsets and the protocol's UTF-16 positions.
-/// One open document, and the version the client last told us about.
-///
-/// TextIndex converts between UTF-8 byte offsets and the protocol's UTF-16
-/// positions.
+/// Open source text and its client version, indexed by UTF-16 position.
 class Document : public TextIndex {
  public:
   Document() = default;
@@ -70,8 +65,7 @@ class Document : public TextIndex {
 
 // --- Semantic tokens ---------------------------------------------------------
 
-/// The legend, in the standard names, so a client with no A11-specific theme
-/// still colours a flow sensibly.
+/// Standard semantic-token names advertised to LSP clients.
 constexpr std::array kTokenTypes = {
     std::string_view("comment"),
     std::string_view("string"),
@@ -89,9 +83,7 @@ constexpr std::array kTokenTypes = {
     std::string_view("stringEscape"),
 };
 
-/// Which legend entry a meaning maps to, or `-1` for the ones a semantic
-/// highlighter leaves alone -- punctuation is the lexer's business and every
-/// client already draws it.
+/// Maps a semantic kind to the legend, or `-1` when it has no LSP token.
 int TokenTypeOf(SemanticKind kind) {
   switch (kind) {
     case SemanticKind::kComment:
@@ -142,9 +134,7 @@ int TokenTypeOf(SemanticKind kind) {
   return -1;
 }
 
-/// The delta-encoded token data the protocol asks for.
-///
-/// Splits multiline tokens at line boundaries as required by the protocol.
+/// Delta-encoded semantic tokens, split at line boundaries.
 nlohmann::json SemanticTokenData(const Document& document) {
   const LexResult lexed =
       Lex(document.Text(), LexOptions{.keep_comments = true});
@@ -188,7 +178,7 @@ nlohmann::json SemanticTokenData(const Document& document) {
 
 // --- Completions -------------------------------------------------------------
 
-/// The protocol's item kinds, by number, for the kinds this language has.
+/// LSP completion item kind for a Flow proposal.
 int CompletionItemKind(ProposalKind kind) {
   switch (kind) {
     case ProposalKind::kStatement:
@@ -225,7 +215,7 @@ int CompletionItemKind(ProposalKind kind) {
   return 1;
 }
 
-/// Snippet text with the caret where the proposal wants it.
+/// Escaped LSP snippet with `$0` at the proposal's caret.
 std::string Snippet(const Proposal& proposal) {
   std::string out;
   const std::string& insert = proposal.insert;
@@ -262,8 +252,6 @@ class Server {
     std::string body;
     while (Read(body)) {
       nlohmann::json message;
-      // A client that sent something unreadable is a client with a bug, and
-      // there is nobody to tell: no id, no method, nothing to answer.
       message = nlohmann::json::parse(body, nullptr, false);
       if (message.is_discarded()) {
         continue;
@@ -273,7 +261,6 @@ class Server {
         return 0;
       }
     }
-    // The stream ended. A client that meant to stop said `shutdown` first.
     return shutdown_ ? 0 : 1;
   }
 
@@ -391,18 +378,12 @@ class Server {
     return document->value("uri", std::string());
   }
 
-  /// A filesystem path as a `file://` URI.
-  ///
-  /// Percent-encodes everything outside the unreserved set, which is what a
-  /// path
-  /// with a space in it needs. The separators stay separators: a URI whose
-  /// slashes were escaped would name one file called `a/b`.
+  /// Converts a path to a `file://` URI, preserving path separators.
+  /// Other bytes outside the unreserved set are percent-encoded.
   static std::string FileUri(std::string_view path) {
     std::string out = "file://";
     if (!path.empty() && path.front() != '/') {
-      // A relative path is relative to wherever the tool was started, which is
-      // the project root for every host that starts one. Making it absolute
-      // here would guess at a directory this process may not be in.
+      // Relative paths resolve against the process working directory.
       std::error_code error;
       const std::filesystem::path absolute =
           std::filesystem::absolute(std::filesystem::path(path), error);
@@ -423,14 +404,8 @@ class Server {
     return out;
   }
 
-  /// A zero-width range at a 1-based line and column, as the protocol counts
-  /// them: 0-based, and a column in UTF-16 units.
-  ///
-  /// The column is used as given rather than converted, because converting it
-  /// would mean reading a file this process was never asked to open. A caret
-  /// one
-  /// unit out on a line with prose before the declaration is a smaller wrong
-  /// than opening the wrong file, and every host scrolls to the line.
+  /// Converts a 1-based source position to a zero-width LSP range.
+  /// The column is used without UTF-16 conversion when source text is absent.
   static nlohmann::json PositionAt(int line, int column) {
     const int zero_line = line > 0 ? line - 1 : 0;
     const int zero_column = column > 0 ? column - 1 : 0;
@@ -460,12 +435,7 @@ class Server {
                           {"newText", edit.text}};
   }
 
-  /// The diagnostics of one document, in the protocol's shape.
-  ///
-  /// `data` carries the fixes back with the diagnostic, so `codeAction` needs
-  /// no
-  /// second analysis of the document to know what Alt+Enter offers: the fix was
-  /// worked out where the problem was found.
+  /// Publishes document diagnostics with fixes in their `data` fields.
   void Publish(const std::string& uri, const Document& document) {
     const nlohmann::json answer =
         HostHandle(nlohmann::json{{"method", "check"},
@@ -562,7 +532,7 @@ class Server {
     }
   }
 
-  /// The protocol's severities, which are the language's four in its three.
+  /// Maps Flow severities to LSP severity numbers.
   static int Severity(flow::Severity severity) {
     switch (severity) {
       case flow::Severity::kError:
@@ -615,7 +585,7 @@ class Server {
     }
     if (method == "textDocument/didChange") {
       const std::string uri = Uri(params);
-      // Full sync only, which is what the capabilities ask for:
+      // The advertised synchronization mode sends complete document text.
       const auto changes = params.find("contentChanges");
       if (changes != params.end() && changes->is_array() && !changes->empty()) {
         const nlohmann::json& last = changes->back();
@@ -714,17 +684,12 @@ class Server {
     if (method == "textDocument/definition" ||
         method == "textDocument/declaration" ||
         method == "textDocument/typeDefinition") {
-      // All three ask the same question of a language this size: where was this
-      // name bound. Answering them alike is what makes every one of an editor's
-      // three navigation gestures land somewhere useful.
+      // Definition, declaration, and type definition share name resolution.
       Definition(message, params);
       return;
     }
     if (method == "a11flow/setContext") {
       SetContext(params);
-      // A notification: no `id`, so no answer, and the documents already open
-      // are re-checked because what the world contains may change what is wrong
-      // with them.
       for (const auto& [uri, document] : documents_) {
         Publish(uri, document);
       }
@@ -735,14 +700,10 @@ class Server {
       return;
     }
     if (method == "a11flow/relay") {
-      // The JSON service, reached through the LSP connection: `{"method":
-      // "check", "source": ".."}` answered exactly as `serve --protocol json`
-      // answers it.
       nlohmann::json relayed =
           params.is_object() ? params : nlohmann::json::object();
       if (!relayed.contains("context") && !known_.Empty()) {
-        // What this session knows, so a fragment is checked against the same
-        // world its file's `.flow` siblings are.
+        // Include this session's action and type catalogue.
         nlohmann::json context = known_.ToJson();
         context["replace"] = true;
         relayed["context"] = std::move(context);
@@ -750,9 +711,6 @@ class Server {
       Answer(message, HostHandle(relayed));
       return;
     }
-    // Anything else: an unknown request still needs an answer, or a client
-    // waits
-    // for one for ever.
     if (message.contains("id")) {
       Answer(message, nlohmann::json());
     }
@@ -776,13 +734,11 @@ class Server {
       return;
     }
     const size_t offset = OffsetIn(*document, params);
-    // Complete against the catalogue associated with this session.
     Analysis analysis(*document, Uri(params), offset, Sources(), source_roots_,
                       known_, limits_);
     const CompleteResult completed =
         CompleteAt(document->Text(), offset, analysis.known, limits_,
                    &analysis.budget, &analysis.linked);
-    // What taking a proposal replaces: the partial word, and nothing else.
     Range replaced;
     replaced.start.offset = std::min(completed.prefix_start, offset);
     replaced.end.offset = offset;
@@ -799,21 +755,16 @@ class Server {
           {"insertTextFormat", 2},  // Snippet: the caret goes where `$0` is.
           {"filterText",
            proposal.filter.empty() ? proposal.name : proposal.filter},
-          // The order the language proposes them in is the order they should be
-          // offered in, so every item sorts by its position in the list rather
-          // than alphabetically.
+          // Preserve proposal order in the client's completion list.
           {"sortText", absl::StrCat(SortKey(items.size()))},
       };
-      // The type beside the name, and what the thing is *for* after it.
       std::string detail = proposal.type;
       if (label_details_) {
         if (!proposal.tail.empty()) {
           item["labelDetails"] = nlohmann::json{{"detail", proposal.tail}};
         }
       } else if (!proposal.tail.empty()) {
-        // The tail already opens with the space that separates it from whatever
-        // it follows, so nothing is added here; with no type in front of it
-        // that space would be a leading one, and is taken off.
+        // Remove the tail's leading space when no type precedes it.
         absl::StrAppend(&detail, proposal.tail);
         if (!detail.empty() && detail.front() == ' ') {
           detail.erase(0, 1);
@@ -822,8 +773,6 @@ class Server {
       if (!detail.empty()) {
         item["detail"] = detail;
       }
-      // The reference text beside the list, which is the same text a hover over
-      // the finished word gives.
       if (!proposal.documentation.empty()) {
         item["documentation"] = nlohmann::json{
             {"kind", "markdown"}, {"value", proposal.documentation}};
@@ -833,8 +782,7 @@ class Server {
     Answer(message, nlohmann::json{{"isIncomplete", false}, {"items", items}});
   }
 
-  /// A sort key that keeps the language's order: zero-padded, so `10` follows
-  /// `9` rather than `1`.
+  /// Zero-padded sort key preserving proposal order.
   static std::string SortKey(size_t index) {
     std::string key = std::to_string(index);
     return std::string(4 - std::min<size_t>(4, key.size()), '0') + key;
@@ -854,9 +802,7 @@ class Server {
       const auto diagnostics = context->find("diagnostics");
       if (diagnostics != context->end() && diagnostics->is_array()) {
         for (const nlohmann::json& diagnostic : *diagnostics) {
-          // The fixes travelled with the diagnostic, so this is a translation
-          // rather than another analysis -- and a fix an editor applies is
-          // exactly the edits the language wrote down.
+          // Apply the edits carried by each diagnostic fix.
           const auto data = diagnostic.find("data");
           if (data == diagnostic.end() || !data->is_object()) {
             continue;
@@ -889,9 +835,6 @@ class Server {
       Answer(message, nlohmann::json());
       return;
     }
-    // The language decides what is under the caret -- it is name resolution,
-    // and this adapter has no business doing it a second time. All that happens
-    // here is the translation into what the protocol calls a hover.
     const auto offset = OffsetIn(*document, params);
     Analysis analysis(*document, Uri(params), offset, Sources(), source_roots_,
                       known_, limits_);
@@ -940,8 +883,7 @@ class Server {
                             {"range", RangeOf(*document, about.definition)}});
       return;
     }
-    // A name this document did not declare may still have somewhere to go: an
-    // action declared in a project file that something scanned.
+    // Project actions may resolve to declarations outside this document.
     if (about.origin.has_value()) {
       auto range = PositionAt(about.origin->line, about.origin->column);
       const auto identity = FileModuleIdentity(about.origin->file);
@@ -961,9 +903,6 @@ class Server {
                                      {"range", range}});
       return;
     }
-    // A word that is not a name at all -- a stage, a keyword -- has no
-    // location. Null rather than an empty list, which is what a client reads as
-    // "nowhere to go".
     Answer(message, nlohmann::json());
   }
 
@@ -1044,18 +983,8 @@ class Server {
     label_details_ = item->value("labelDetailsSupport", false);
   }
 
-  /// `a11flow/scan`: read the project's own source for the actions it declares,
-  /// and fold what is found into the world these documents are read against.
-  ///
-  /// A *request* rather than a notification, unlike `setContext`, because a
-  /// client wants to know what was found: how many actions, and whether a cap
-  /// stopped the walk. It behaves like a `setContext` besides -- the result is
-  /// merged over what is already known, and every open document is re-checked,
-  /// since an action that exists now may make a flow that named it correct.
-  ///
-  /// Merged rather than replacing, so a host may scan *and* send a live
-  /// registry
-  /// and get both.
+  /// Scans project action declarations and merges them into session context.
+  /// Returns scan counts and limit flags, then republishes open diagnostics.
   void Scan(const nlohmann::json& message, const nlohmann::json& params) {
     std::vector<std::string> roots;
     if (params.is_object()) {
@@ -1089,12 +1018,7 @@ class Server {
     }
   }
 
-  /// `a11flow/setContext`: what the world outside these documents contains.
-  ///
-  /// Stateful. A client that knows which action registry an inline flow is
-  /// attached to says it once, and every completion and hover for the rest of
-  /// the session sees it -- rather than repeating a catalogue of a hundred
-  /// actions on every keystroke.
+  /// Sets the action and type catalogue for subsequent session requests.
   void SetContext(const nlohmann::json& params) {
     if (!params.is_object()) {
       return;
@@ -1129,9 +1053,7 @@ class Server {
              {"completionProvider",
               nlohmann::json{
                   {"triggerCharacters",
-                   // `(` and `,` are what open an argument list and what
-                   // separate one argument from the next, so both are positions
-                   // where the answer is "these ports".
+                   // Argument delimiters trigger port completions.
                    nlohmann::json::array({".", "|", ":", ">", " ", "(", ","})},
                   {"resolveProvider", false}}},
              {"semanticTokensProvider",
@@ -1151,19 +1073,12 @@ class Server {
   CompilationLimits limits_;
   absl::flat_hash_map<std::string, Document> documents_;
   absl::flat_hash_map<std::string, nlohmann::json> publications_;
-  /// What the world outside these documents contains, for as long as this
-  /// session lasts: see [SetContext].
+  /// Action and type metadata retained for this session.
   catalogue::Catalogue known_ = catalogue::Catalogue::Builtin();
   bool shutdown_ = false;
   bool exited_ = false;
-  /// Whether the client said it renders `labelDetails`.
-  ///
-  /// It is an opt-in capability, and a client that did not ask for it is
-  /// entitled
-  /// to ignore the field -- which would drop a port's description out of the
-  /// row
-  /// and leave the list saying only the port's name. So where it is absent the
-  /// same text goes in `detail`, which every client has always shown.
+  /// Whether completion rows support `labelDetails`.
+  /// Without it, descriptions appear in the standard `detail` field.
   bool label_details_ = false;
 };
 

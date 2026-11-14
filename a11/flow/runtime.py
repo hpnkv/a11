@@ -314,35 +314,20 @@ async def invoke(
     frame_budget_bytes: int | None = None,
     **keyword_inputs: Any,
 ) -> dict[str, Any]:
-    """Run ``flow`` once, here, and return its outputs collected.
+    """Run ``flow`` and return its output values keyed by port name.
 
-    The convenience path for tests, scripts, and tool calls: it runs the flow to
-    completion and returns every output port keyed by name -- one value for a
-    `one` port, a list for a `many` one. Inputs may be keywords or a mapping
-    (which is what a port whose name collides with one of the options needs).
+    A `one` port returns one value; a `many` port returns a list. Inputs may
+    be keyword arguments or a mapping for names that collide with options.
     ``registry``, ``session`` and ``node_map`` place the flow in an existing
-    runtime, so its calls resolve and dispatch exactly as they would inside a
-    server.
-
-    Collecting is the convenience, not the mechanism: a flow's outputs are
-    nodes, and [start][a11.flow.runtime.start] hands them over live for a
-    caller that would rather read them as they fill.
+    runtime. Use [start][a11.flow.runtime.start] to read live output nodes.
 
     ``frame_cache_bytes`` and ``frame_budget_bytes`` configure frame storage as
     described by [start][a11.flow.runtime.start].
 
-    The two stream arguments are different questions, and a caller wants exactly
-    one of them:
-
-    * ``stream`` runs the flow **as though a peer had dispatched it** over that
-      stream. The flow's own ports are mirrored to the peer, which is what a
-      server's caller is waiting for.
-    * ``dispatch_stream`` runs the flow **as the client's own**, and gives the
-      stream only to the calls that go to the peer. The flow's ports stay here.
-      This is what a client with a session of its own wants: an action that is
-      run locally *and* holds a stream ends that stream when it finishes, after
-      which the session can dispatch nothing -- so a client passing ``stream``
-      would find its second flow unable to reach the peer at all.
+    Use one stream argument: ``stream`` mirrors the flow's own ports to a peer
+    for server dispatch; ``dispatch_stream`` sends only the flow's peer calls
+    while keeping its ports local. A client with its own session uses
+    ``dispatch_stream`` so completing the flow leaves the session stream open.
     """
     running = await start(
         flow,

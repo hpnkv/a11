@@ -12,18 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Reaching an MCP server, and turning what it serves into an ActionRegistry.
+"""Discover MCP tools and register them as A11 actions.
 
-The only module here that imports the MCP SDK, and it imports it lazily, the way
-[a11.sdk.interact_with_llm][a11.sdk.interact_with_llm] imports a provider's --
-so `a11.sdk.mcp` can be imported, and a schema translated, wherever A11 runs.
-
-Discovery is the same shape as asking an A11 peer what it serves
-([a11.client.discovery][a11.client.discovery]): list, translate, register a
-schema and a handler per answer. What differs is that MCP has no equivalent of
-A11's `__list_actions__` answer -- there is no `ActionSchema` on the wire, only
-a JSON Schema per tool -- which is what
-[a11.sdk.mcp.schemas][a11.sdk.mcp.schemas] exists to bridge.
+Discovery lists tools, derives an action schema for each, and registers its
+handler. The MCP SDK loads when a connection is opened.
 
 ```python
 from a11.sdk import mcp
@@ -32,22 +24,11 @@ async with mcp.connect("https://example.com/mcp") as toolset:
     result = await toolset.action("search").run()["text"].consume(str)
 ```
 
-The registry `toolset.registry` holds every tool as an ordinary Action, so it
-can be handed to `interact_with_llm` as the tools a model may call, served to a
-peer, or called from a flow -- nothing downstream knows MCP is involved.
-
-**Lifetime.** `connect` is an async context manager because the MCP SDK's client
-is one: its transport, its session and its receive loop live for the duration of
-a `with`, and entering and leaving in the same task is what keeps the SDK's
-cancel scopes intact. A long-lived host should hold the `with` open in the task
-that owns it (an `AsyncExitStack` at startup, say) rather than try to enter and
-exit it from different places. A caller that already manages its own
-`mcp.Client` builds an [McpToolset][a11.sdk.mcp.client.McpToolset] on it
-directly.
-
-**HTTP headers and authorization** belong to the connection rather than to a
-call, so they are the SDK's business, not A11's: build the transport with an
-HTTP client that carries them and hand that to `connect`.
+`toolset.registry` can be used by a model, a peer, or a Flow program. Keep the
+`connect` context open in its owning task so the MCP SDK's cancel scopes remain
+valid. A caller managing an `mcp.Client` can build an
+[McpToolset][a11.sdk.mcp.client.McpToolset] directly. Supply connection headers
+through the MCP transport:
 
 ```python
 import httpx2

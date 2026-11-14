@@ -39,12 +39,8 @@ import black
 from pybind11_stubgen import main as stubgen_main
 
 ROOT = Path(__file__).resolve().parents[1]
-#: The checked-in stub *package*: ``__init__.pyi`` for ``a11._native`` and one
-#: file per submodule it exports, which is what pybind11-stubgen writes and what
-#: a type checker or an IDE needs to resolve ``a11._native.flow`` as a module.
-#: A directory of ``.pyi`` files beside ``_native.cpython-*.so`` does not shadow
-#: the extension: it is only a namespace-package candidate, and a real module
-#: wins.
+#: Checked-in package with ``__init__.pyi`` and exported submodule stubs.
+#: A sibling stub directory does not shadow the native extension.
 STUB = ROOT / "a11" / "_native"
 
 _LICENSE_HEADER = """# Copyright 2026 The A11 Authors
@@ -128,9 +124,7 @@ def _expose_bound_classes_in_native_module() -> None:
     for module in _native_namespaces():
         for value in vars(module).values():
             if isinstance(value, type) and value.__module__.startswith("a11"):
-                # A protocol attached from `a11.flow.plan` renames the class it
-                # was attached to; stubgen would then emit an import of that
-                # module instead of the class it is generating.
+                # Restore the native module so stubgen emits a class definition.
                 value.__module__ = module.__name__
 
 
@@ -156,8 +150,7 @@ def _normalise_protocol_methods(
     """Correct stubgen's treatment of dynamically attached Python methods."""
 
     output: list[str] = []
-    # (indent, name) per enclosing class, so a nested class is attributed to
-    # itself rather than to the class it is written in.
+    # Track nested class names by indentation.
     enclosing: list[tuple[int, str]] = []
     for line in stub.splitlines():
         stripped = line.lstrip()
@@ -186,10 +179,8 @@ def _normalise_protocol_methods(
     return "\n".join(output) + "\n"
 
 
-# Readers whose result is decided by ``obj_type``. Their runtime annotation
-# spells out every possibility; the stub narrows it to ``T | None`` and lets
-# ``T`` default to ``Any``, so ``next(obj_type=Reading)`` is ``Reading | None``
-# and a bare ``next()`` is ``Any | None``.
+# Reader stubs return ``T | None``, where ``T`` follows ``obj_type`` and
+# defaults to ``Any``.
 _OBJ_TYPE_READERS = ("consume", "next", "next_object")
 
 _OBJ_TYPE_SIGNATURE = re.compile(
@@ -406,11 +397,7 @@ def _normalise_annotations(stub: str, submodule: str | None = None) -> str:
         "_ActionDoneEvent": "_DoneEvent",
         "_SessionDoneEvent": "_DoneEvent",
         "StatusExceptionCasters": "a11.status.StatusExceptionCasters",
-        # Raw C++ return/parameter types the bindings expose by name. The
-        # ``registry: ...`` rule is broad on purpose: it resolves the named
-        # ``registry`` parameter wherever it appears (Action.__init__,
-        # bind_registry, set_action_registry) and, as a tail match, the
-        # ``action_registry: ...`` constructor parameters too.
+        # Resolve registry parameters in constructors and binding methods.
         "registry: ...": "registry: ActionRegistry | None",
         "get_registry(self) -> ...": "get_registry(self) -> ActionRegistry",
         "expected: ... = None) -> ...": (
@@ -526,11 +513,7 @@ def _normalise_annotations(stub: str, submodule: str | None = None) -> str:
         stub,
         flags=re.MULTILINE,
     )
-    # A comparison answers for *any* value rather than raising, which is what
-    # `object` says and what typeshed spells both dunders with. A membership
-    # test is not swept up with them: several of these take a `std::string` and
-    # do raise, and only the attached Python ones promise more (see
-    # [_ProtocolMethod]).
+    # Comparisons accept any object; membership methods keep their bound types.
     stub = re.sub(
         r"def (__eq__|__ne__)\(self, (\w+): [^)]+\) -> bool:",
         r"def \1(self, \2: object) -> bool:",

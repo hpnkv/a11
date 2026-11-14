@@ -18,20 +18,12 @@
  * @file
  * @brief Type-and-mimetype indexed serialization of values to/from Chunks.
  *
- * a11::data::SerializationRegistry maps a C++ type together with a media type
- * (its representation) to a serializer/deserializer pair, so arbitrary values
- * can be converted to and from ::a11::data::Chunk.
- *
- * A chunk's metadata is the only thing that says how to read its bytes. The
- * media type gives the representation, and when the value is not one the
- * format already describes, a @c type parameter names it
- * (@c "application/json;type=a11.sdk.Interaction"). Nothing inside the payload
- * repeats that. A bare @c "application/json" is therefore a complete
- * description: it reads back as a @c nlohmann::json. Asking FromChunk for a
- * particular @c T is a request the registry makes a best effort to satisfy,
- * reporting the codec's own error when the data will not fit.
- *
- * JSON and MessagePack codecs are available as defaults.
+ * SerializationRegistry maps a C++ type and media type to codecs. Chunk
+ * metadata names the representation and, for non-native shapes, a @c type
+ * parameter such as @c "application/json;type=a11.sdk.Interaction". Payloads
+ * carry no type name. Bare JSON decodes to nlohmann::json; FromChunk<T>()
+ * attempts the requested type and returns codec errors. JSON and MessagePack
+ * codecs are registered by default.
  */
 
 #ifndef A11_DATA_SERIALIZATION_H_

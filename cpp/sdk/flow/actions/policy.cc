@@ -41,14 +41,11 @@
 namespace a11::sdk::flow {
 namespace {
 
-/// Every std::filesystem call here takes an error_code: the throwing overloads
-/// are the default, and this library is compiled without exceptions.
+/// Filesystem operations use error_code overloads without exceptions.
 absl::StatusOr<std::filesystem::path> Canonical(
     const std::filesystem::path& path) {
   std::error_code error;
-  // Weakly, because a path being written to does not exist yet. It resolves
-  // symlinks and `..` across the part that does exist, which is where an escape
-  // out of a root would be hiding.
+  // Resolve existing symlinks and `..`, including for writes.
   std::filesystem::path resolved =
       std::filesystem::weakly_canonical(path, error);
   if (error) {
@@ -60,8 +57,7 @@ absl::StatusOr<std::filesystem::path> Canonical(
 
 /// Whether @p path is @p root or below it, on resolved paths only.
 ///
-/// Compared component by component rather than by string prefix, because
-/// `/srv/data-2` starts with `/srv/data` and is not inside it.
+/// Compare components so `/srv/data-2` is outside `/srv/data`.
 bool IsWithin(const std::filesystem::path& path,
               const std::filesystem::path& root) {
   auto path_part = path.begin();

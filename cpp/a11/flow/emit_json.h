@@ -32,11 +32,7 @@
 
 namespace a11::flow {
 
-/// The `format` field of each envelope: what a reader checks before parsing.
-///
-/// A version is bumped when a field changes meaning or disappears. Adding a
-/// field is not a version change, so a consumer must ignore fields it does not
-/// know -- which is the contract these strings stand for.
+/// Envelope format identifiers. Readers ignore unknown fields in a version.
 inline constexpr std::string_view kDiagnosticsFormat = "flow.diagnostics/v1";
 inline constexpr std::string_view kCodesFormat = "flow.codes/v1";
 inline constexpr std::string_view kSyntaxFormat = "flow.syntax/v1";
@@ -47,19 +43,10 @@ inline constexpr std::string_view kFormatFormat = "flow.format/v1";
 /// One diagnostic, as it appears in the envelope.
 nlohmann::json DiagnosticToJsonValue(const Diagnostic& diagnostic);
 
-/// A diagnostic read back from its JSON, for frontends that consume the
-/// envelope rather than the library -- the IntelliJ plugin, a CI script.
-///
-/// Unknown fields are ignored and missing ones take their defaults, so a newer
-/// producer never breaks an older reader.
+/// Reads a diagnostic, ignoring unknown fields and defaulting missing ones.
 Diagnostic DiagnosticFromJsonValue(const nlohmann::json& value);
 
-/// The full `flow.diagnostics/v1` envelope.
-///
-/// `source` is whatever names the input -- a path, `-` for standard input --
-/// and is echoed so a batch of these can be concatenated and still say what
-/// each was about. `counts` is there so a gate can be written without walking
-/// the list.
+/// The `flow.diagnostics/v1` envelope, with source and severity counts.
 nlohmann::json DiagnosticsToJsonValue(std::string_view source,
                                       absl::Span<const Diagnostic> diagnostics);
 
@@ -70,23 +57,10 @@ std::string DiagnosticsToJson(std::string_view source,
 /// The published code table, as `flow.codes/v1`.
 nlohmann::json CodesToJsonValue();
 
-/// Every word set the language gives meaning to, as `flow.vocabulary/v1`.
-///
-/// What anything generating a static grammar file reads instead of keeping a
-/// list
-/// of its own, and what `a11 flow syntax` holds an editor definition to. One
-/// producer, so the table the Python API sees and the table the standalone tool
-/// prints cannot differ.
+/// The language word sets as `flow.vocabulary/v1`.
 nlohmann::json VocabularyToJsonValue();
 
-/// A SARIF 2.1.0 log for one file's diagnostics.
-///
-/// SARIF is what code-scanning services and CI annotators already read, so
-/// emitting it means a flow's problems show up in a pull request without
-/// anybody
-/// writing a converter. The rule metadata comes from [KnownCodes], so every
-/// rule
-/// in the log is documented by construction.
+/// A SARIF 2.1.0 log for one file, with rule metadata from [KnownCodes].
 nlohmann::json DiagnosticsToSarifValue(
     std::string_view source, absl::Span<const Diagnostic> diagnostics);
 
@@ -94,40 +68,22 @@ nlohmann::json DiagnosticsToSarifValue(
 std::string DiagnosticsToSarif(std::string_view source,
                                absl::Span<const Diagnostic> diagnostics);
 
-/// One syntax node, and everything under it.
-///
-/// The field names are the ones `a11/flow/syntax.py` gives them, so the tree
-/// the two implementations produce can be compared field for field while the
-/// Python one is still the reference. Every node carries `kind` and its
-/// location; the rest is what that kind holds. A duration is `{"$duration":
-/// seconds}` rather than a bare number, so a reader can tell one from a count,
-/// and the position lives under `at` rather than beside those fields, because
-/// a `repeat` has a `start` of its own.
+/// A syntax node and its subtree. Every node carries `kind` and `at`.
+/// Durations use `{"$duration": seconds}`.
 nlohmann::json NodeToJsonValue(const syntax::Node& node);
 
 /// A constant as the syntax format writes it.
 nlohmann::json ConstantToJsonValue(const syntax::Constant& constant);
 
-/// The full `flow.syntax/v1` envelope: the flows a file declares, and what is
-/// wrong with it. Both, always: a tree with a mistake in it is still a tree,
-/// and preserving the partial tree produced by the recovering parser.
+/// The `flow.syntax/v1` envelope, including partial trees and diagnostics.
 nlohmann::json SyntaxToJsonValue(std::string_view source,
                                  const ParseResult& result);
 
 /// The envelope, serialised with a trailing newline and two-space indent.
 std::string SyntaxToJson(std::string_view source, const ParseResult& result);
 
-/// The `flow.tokens/v1` envelope: every token, and what it means where it is.
-///
-/// Lexes and classifies in one pass, so the two halves of a token -- what it
-/// *is*
-/// (`word`, `->`) and what it *means* (`stage`, `type`) -- cannot disagree
-/// about
-/// its extent. A client colouring a document needs the second; one driving a
-/// lexer of its own -- an IDE that insists on tokenising every character --
-/// needs
-/// the first, and the offsets tile the source so the gaps between them are
-/// whitespace by construction.
+/// The `flow.tokens/v1` envelope, with token kinds and semantic classes.
+/// Token offsets cover the source; unclassified spans are whitespace.
 nlohmann::json TokensToJsonValue(std::string_view source_name,
                                  std::string_view source);
 
@@ -140,35 +96,20 @@ nlohmann::json FormatToJsonValue(const FormatResult& result);
 /// The `flow.completions/v1` envelope: what may be written at an offset.
 nlohmann::json CompletionsToJsonValue(const CompleteResult& result);
 
-/// The `flow.plan/v1` envelope: what each flow of a file resolved to.
-///
-/// The keys are `a11.flow.plan`'s `describe()`, so the plan a reader diffs to
-/// see
-/// whether a change to a flow changed what it does reads the same whichever
-/// implementation produced it.
+/// The `flow.plan/v1` envelope for resolved flows.
 nlohmann::json PlanToJsonValue(std::string_view source_name,
                                const Program& program);
 
-/// One resolved shape, as the `structs` of a plan writes it.
-///
-/// Exposed on its own because a shape travels without its program: it is what a
-/// JSONSchema is made from, what a tool is handed as a type description, and
-/// what an editor shows on hover.
-///
-/// With a `program`, the shapes this one names travel with it under `nested`,
-/// innermost last -- a shape is not much use to a reader that has to build a
-/// type from it without the types its fields refer to. Self-reference is fine:
-/// a shape naming itself appears once, in `struct`.
+/// A resolved shape. With `program`, referenced shapes appear under `nested`.
+/// A self-reference appears once, in `struct`.
 nlohmann::json DtoToJsonValue(const DtoPlan& dto,
                               const Program* absl_nullable program = nullptr);
 
 /// The envelope, serialised with a trailing newline and two-space indent.
 std::string PlanToJson(std::string_view source_name, const Program& program);
 
-/// One diagnostic on one line, in the shape editors and compilers have used for
-/// decades: `path:line:column: severity: message [code]`.
-///
-/// `source` may be empty, which drops the leading `path:`.
+/// `path:line:column: severity: message [code]` on one line.
+/// An empty `source` omits the path prefix.
 std::string DiagnosticToText(std::string_view source,
                              const Diagnostic& diagnostic);
 

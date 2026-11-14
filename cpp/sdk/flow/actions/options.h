@@ -16,23 +16,10 @@
 
 /**
  * @file
- * @brief Reading an `options` port, and saying what was wrong with it.
+ * @brief Typed access to an action's optional `options` object.
  *
- * Every action here takes its settings as one optional JSON object, the way
- * @c make_http_request does, because a port per setting would be forty ports
- * and because a flow writes `options: {"chunk_bytes": 4096}` more readably than
- * it writes forty assignments.
- *
- * What this file is really for is the error message. A caller who wrote
- * `{"timeout": "quickly"}` gets told which key, what was expected, and what
- * arrived -- from one place, so no action has to remember to say it. That
- * matters more than usual here: a flow may have been written by a model, and
- * "options.timeout must be a duration, got a string" is repairable where
- * "invalid argument" is not.
- *
- * Everything reads with a fallback and nothing throws, which is the same
- * statement twice: nlohmann's `at()` and `get<T>()` raise on a missing key or a
- * wrong type, so this library checks the shape and never relies on being told.
+ * Readers apply defaults and report invalid values with the key, expected
+ * type and received type. Shape checks avoid nlohmann's throwing accessors.
  */
 
 #ifndef A11_SDK_FLOW_ACTIONS_OPTIONS_H_
@@ -79,9 +66,8 @@ class Options {
   /**
    * @brief Reads an integer within @p minimum and @p maximum, or @p fallback.
    *
-   * The bounds are the point rather than a safety net: a `chunk_bytes` of zero
-   * is an infinite loop and one of a gigabyte is an allocation nobody meant, so
-   * both are reported where they were written.
+   * Values outside the bounds return an error naming @p key. For example,
+   * `chunk_bytes` must be positive and small enough to allocate.
    */
   absl::StatusOr<std::int64_t> IntInRange(std::string_view key,
                                           std::int64_t fallback,
@@ -96,8 +82,7 @@ class Options {
   /**
    * @brief Reads a string that has to be one of @p allowed.
    *
-   * The message lists what was allowed, which is the difference between a
-   * caller fixing a typo and a caller guessing.
+   * Errors list the allowed values.
    */
   absl::StatusOr<std::string> Enum(
       std::string_view key, std::string_view fallback,
@@ -108,10 +93,8 @@ class Options {
   /**
    * @brief Reads a duration, as Flow writes one.
    *
-   * `"30s"`, `"1m30s"`, `"250ms"` and a bare number of seconds all read, so a
-   * timeout that arrived from a flow literal, a header or a model's JSON is the
-   * same value. A negative one is refused rather than taken as infinite: this
-   * is a bound on work, and "forever" is spelled by leaving it out.
+   * Accepts `"30s"`, `"1m30s"`, `"250ms"` and numeric seconds. Rejects
+   * negative durations; omit the setting for an unbounded duration.
    */
   absl::StatusOr<absl::Duration> Duration(std::string_view key,
                                           absl::Duration fallback) const;

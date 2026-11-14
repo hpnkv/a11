@@ -36,29 +36,14 @@ struct ParseResult {
   std::vector<syntax::ExportDeclaration> exports;
   std::vector<syntax::Import> imports;
   std::vector<syntax::FlowDeclarationPtr> flows;
-  /// The shapes the file declares, in declaration order.
-  ///
-  /// Beside the flows rather than inside them: a `struct` is a sibling
-  /// declaration,
-  /// and a file may declare one and no flow at all -- a file of types is a
-  /// perfectly good thing to have, and is what `flow.dto_from_schema` writes.
+  /// Top-level shapes in declaration order.
   std::vector<syntax::DtoDeclarationPtr> dtos;
   std::vector<Diagnostic> diagnostics;
 
-  /// The offset of every `{` that opens a *value* rather than a block, sorted.
-  ///
-  /// The one thing about the token stream that cannot be worked out from the
-  /// tokens: `flow research {` and `a11.sdk.Interaction{` are a word followed
-  /// by a brace either way, and only the grammar knows which. The formatter
-  /// needs it to know whether a brace opens a line or a literal, so the parser
-  /// -- which knew at the time -- writes it down.
+  /// Sorted offsets of braces that open values, for formatter spacing.
   std::vector<size_t> value_braces;
 
-  /// The offsets of the value braces that follow a type tag, sorted.
-  ///
-  /// A subset of [value_braces], and the other thing only the grammar knows:
-  /// `a11.sdk.Interaction{...}` is one thing and `| map {...}` is a stage and a
-  /// literal, so the first hugs its brace and the second takes a space.
+  /// Sorted subset of value braces that follow a type tag.
   std::vector<size_t> tagged_braces;
 
   [[nodiscard]] bool HasErrors() const;
@@ -69,17 +54,8 @@ struct ParseResult {
   [[nodiscard]] const Diagnostic* absl_nullable FirstError() const;
 };
 
-/// Parse Flow source.
-///
-/// The grammar is `a11/flow/parser.py`'s, one for one: recursive descent, one
-/// token of lookahead, and no reserved words -- a word means `skip` or `for`
-/// only
-/// where it opens a statement and is not immediately followed by something that
-/// makes it a name.
-///
-/// Never throws and always returns a tree. Problems become diagnostics, and
-/// recovery skips to the statement end or inserts a `syntax::ErrorNode` where
-/// a value was required. This supports partial input in formatters and editors.
+/// Parses Flow source into a recoverable tree and diagnostics.
+/// Recovery skips to statement ends or inserts `syntax::ErrorNode` for values.
 ParseResult Parse(std::string_view source, CompilationLimits limits = {},
                   CompilationBudget* absl_nullable budget = nullptr);
 

@@ -63,19 +63,11 @@ std::string Quoted(std::string_view text) {
 /// The shapes a file declares, by name.
 using DtoNames = absl::flat_hash_set<std::string>;
 
-/// What a written type means, in the one place that decides it.
-///
-/// A port and a `struct` field both name a type, and they have to agree about
-/// what a name means or a field could hold something its port could not carry.
-/// The order is the whole of the rule: a **built-in** name first, so no
-/// declaration can redefine `string`; then a **shape this file declares**,
-/// which is what makes a `struct` outrank the registry; then a dotted
-/// **registry tag** or a mimetype, which only the host can check.
+/// Resolves written types for ports and fields.
+/// Resolution order is built-in, local shape, then registry tag or media type.
 class TypeReader {
  public:
-  /// Where a diagnostic goes. A `std::function` rather than a template because
-  /// the two callers report through different objects and this is called once
-  /// per declaration, not once per value.
+  /// Receives a diagnostic for an invalid type.
   using Reporter = std::function<void(
       std::string_view code, std::string message, const Location& location)>;
 
@@ -813,27 +805,12 @@ struct Ref {
   /// Whether a counted `skip` may take values off the front of it: only a
   /// stream that is genuinely produced somewhere has a front.
   bool has_front = false;
-  /// The graph ref this answer corresponds to, when a graph is being built.
-  ///
-  /// One extra field rather than a second resolver: ~25 sites return one of
-  /// these, and what the runtime needs from them is the *identity* of the
-  /// stream they named. [graph::kNone] on the editor path, and wherever the
-  /// reference did not resolve.
+  /// Graph ref for this result, or [graph::kNone] without a resolved ref.
   graph::RefId node = graph::kNone;
   /// For an outcome: whether a bad one is the flow's business or the subject's.
   /// True where the subject is a `try` call, or a barrier on one.
   bool tolerant = false;
-  /// The shape this stream's values are, where the flow said so: a port typed
-  /// with a `struct`, or what a `map Shape{..}` or an `as Shape` just made.
-  ///
-  /// Not a type system -- the language does not have one and is not getting one
-  /// here. It is one fact carried along a pipeline, and it is carried because
-  /// it answers a question that is otherwise unanswerable until a value
-  /// arrives: whether `| json` has anything to render.
-  ///
-  /// Written `{}` rather than left bare so that the ~25 sites building one of
-  /// these with a braced list -- every one of which stops before this field --
-  /// are not each a -Wmissing-field-initializers warning.
+  /// Declared shape of stream values, retained through compatible stages.
   std::string shape{};
 };
 
@@ -875,11 +852,7 @@ class FlowResolver {
     }
   }
 
-  /// The flow's ports and headers, without resolving its body.
-  ///
-  /// The first of two passes, for the reason `a11/flow/plan.py` gives: a flow's
-  /// ports are what a *sibling* calling it needs, and which flow is written
-  /// first is the author's convenience rather than a dependency order.
+  /// Declares ports and headers before sibling flow bodies are resolved.
   void Declare() {
     FlowPlan& plan = resolved_.plan;
     plan.name = declaration_.name.text;
@@ -1229,9 +1202,7 @@ class FlowResolver {
       Report("flow.name.taken", "The builtin 'std' binding is reserved.",
              symbol.location);
     }
-    // The one place every name in a flow arrives -- a port, a header, a call, a
-    // node, a node map, a barrier, a `value`, a loop variable, a carry -- and so
-    // the one place `_` has to be turned away.
+    // All named flow declarations pass through this binding check.
     if (symbol.name == "std") {
       Report("flow.name.taken", "The implicit std module cannot be rebound.",
              symbol.location);
@@ -3225,17 +3196,8 @@ class FlowResolver {
     }
   }
 
-  // `[try] { ... A block is *not* a guarding scope for the `fail`/`cancel`
-  // rule: its statements run at once like any body's, so a `fail` at the top of
-  // one races them exactly as it would in the flow.
-  /// `[try] { ... }` -- a body run as one step, with an outcome of its own.
-  ///
-  /// The step carries a status the way a call does, which is what lets the
-  /// ordinary bound-statement path hand it to a name: `s = try { .. }` needs
-  /// nothing here beyond the outcome existing. A block is *not* a guarding
-  /// scope for the `fail`/`cancel` rule: its statements run at once like any
-  /// body's, so a `fail` at the top of one races them exactly as it would in
-  /// the flow.
+  /// Resolves a block as one step with its own outcome.
+  /// Statements inside the block run concurrently.
   void ResolveBlock(const syntax::Block* block, Scope& scope,
                     std::vector<StepPlan>& steps) {
     StepPlan step;
@@ -5791,14 +5753,8 @@ class FlowResolver {
 
   // -- expressions -----------------------------------------------------------
 
-  /// Bind the names inside an expression. `allow_it` is what a `where`/`map`
-  /// stage passes, being the only place `it` means anything.
-  ///
-  /// The streams it mentions become the graph's [graph::Expr]: the syntax node
-  /// that named each one, and the ref it named. Keyed on the node rather than
-  /// rewritten into the tree, which is what lets the tree stay immutable and
-  /// shared -- the Python reference replaced each name with a `RefValue`, and a
-  /// tree handed across a language boundary cannot do that.
+  /// Binds expression names to graph refs without changing the syntax tree.
+  /// `allow_it` permits the current stage value in `where` and `map`.
   graph::ExprId ResolveExpression(const Node* expression, Scope& scope,
                                   bool allow_it) {
     if (expression == nullptr) {
@@ -6383,12 +6339,7 @@ class FlowResolver {
     return found;
   }
 
-  /// `x.field` against what `x` is known to hold.
-  ///
-  /// Only where the base is a name or `it`, and only one level deep: a field
-  /// that holds a record of its own says nothing about *its* keys, so
-  /// `src.meta.title` checks `meta` and stops. Conservative on purpose -- the
-  /// value of this check is that it never cries wolf.
+  /// Checks one field of a known name or `it` value.
   void CheckMember(const syntax::Attr* attr, Scope& scope) {
     if (attr->name.empty()) {
       return;

@@ -954,10 +954,7 @@ class _AsyncNodeProtocol:
                 if resolved_type is types.NodeFragment:
                     yield fragment
                     continue
-                # The same rule `_next_value_fragment` applies one at a time: a
-                # null chunk is a marker rather than a value, and a *final* one
-                # ends the stream. Yielding them is how the first version of
-                # this returned a trailing `b''` on every flow output.
+                # A null chunk marks stream closure; a final one ends the read.
                 if fragment.get_chunk().is_null():
                     if not fragment.continued:
                         return

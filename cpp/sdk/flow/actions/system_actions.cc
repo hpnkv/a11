@@ -220,9 +220,7 @@ absl::Status RunReadStdin(const std::shared_ptr<Action>& action) {
 
   const Sink bytes = outputs["bytes"];
   const Sink lines = outputs["lines"];
-  // Written first, because whether this is a terminal decides what a
-  // composition should do about prompting -- and it wants to know before it
-  // starts waiting for input that may never come.
+  // Publish terminal status before waiting for input.
   if (const absl::Status written = outputs["is_tty"].PutOnly(
           nlohmann::json(::isatty(STDIN_FILENO) == 1));
       !written.ok()) {
@@ -401,9 +399,7 @@ absl::Status RunEnvGet(const std::shared_ptr<Action>& action,
     values[name] = std::string(value);
   }
   ABSL_RETURN_IF_ERROR(outputs["values"].PutOnly(values));
-  // Said rather than left to be inferred from an absent key: "unset" and "set
-  // to the empty string" are different, and a flow acting on the difference
-  // should not have to guess which it got.
+  // Distinguish unset variables from variables set to an empty string.
   ABSL_RETURN_IF_ERROR(outputs["missing"].PutOnly(missing));
   return outputs.Finish();
 }
@@ -414,9 +410,7 @@ absl::Status RunEnvGet(const std::shared_ptr<Action>& action,
 
 /// Reads @p count bytes from the system's generator.
 ///
-/// /dev/urandom rather than arc4random or getrandom, because it is the one
-/// spelling both platforms this builds for agree on, and because it is the same
-/// source those two are wrappers around.
+/// Uses /dev/urandom on both supported platforms.
 absl::StatusOr<std::string> SystemRandom(std::size_t count) {
   const int fd = ::open("/dev/urandom", O_RDONLY | O_CLOEXEC);
   if (fd < 0) {
@@ -454,9 +448,8 @@ absl::Status RunRandomBytes(const std::shared_ptr<Action>& action) {
       Options::Parse(raw_options.has_value() ? &*raw_options : nullptr));
   ABSL_ASSIGN_OR_RETURN(const std::int64_t count,
                         options.IntInRange("count", 32, 1, kMaxRandomBytes));
-  // `format`, not `encoding`: every action in this library takes an `encoding`
-  // meaning json-or-msgpack, and two settings of one name on one port would be
-  // a caller writing one and getting the other.
+  // `format` selects the random-byte representation; `encoding` selects the
+  // output chunk codec.
   ABSL_ASSIGN_OR_RETURN(
       const std::string format,
       options.Enum("format", "hex", {"hex", "base64", "base64url", "raw"}));

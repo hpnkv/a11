@@ -55,6 +55,20 @@ flow main { out value: string
   EXPECT_NE(linked.CatalogueAt(0).Type("ImportedReport"), nullptr);
 }
 
+TEST(FlowModule, IncompleteStandardTypeDoesNotAbortLinking) {
+  const std::string source = "flow { out result: std }";
+  auto linked = LinkModules(source, "root");
+  auto resolved = Resolve(linked.source, linked.parsed);
+  EXPECT_TRUE(std::any_of(resolved.diagnostics.begin(),
+                          resolved.diagnostics.end(), [](const auto& problem) {
+                            return problem.code == "flow.form.unknown-type";
+                          }));
+  const auto hover = Handle({{"method", "describe"},
+                             {"source", source},
+                             {"offset", source.find("std")}});
+  ASSERT_TRUE(hover.at("ok").get<bool>()) << hover.dump();
+}
+
 TEST(FlowModule, LocalDeclarationsAndStructsHaveLexicalScope) {
   auto linked = LinkModules(R"(
 flow first {

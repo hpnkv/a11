@@ -16,7 +16,7 @@
 
 /**
  * @file
- * @brief The only place A11 hands text or bytes to nlohmann, or asks for them.
+ * @brief Status-returning JSON and MessagePack codecs.
  *
  * These functions convert untrusted JSON and MessagePack input into status
  * errors. `json_codec.cc` enables exceptions for the nlohmann operations that
@@ -36,7 +36,7 @@
 namespace a11 {
 
 /**
- * @brief Parses JSON text, or explains why it is not JSON.
+ * @brief Parses JSON text, returning a status for invalid input.
  *
  * @param encoded JSON text to parse.
  * @param what Names the document in the error, e.g. "WireMessage JSON".
@@ -49,58 +49,25 @@ absl::StatusOr<nlohmann::ordered_json> ParseOrderedJson(
     std::string_view encoded, std::string_view what);
 
 /**
- * @brief Whether @p text is valid UTF-8.
+ * @brief Whether @p text is valid strict UTF-8.
  *
- * Public because the answer has to be available *before* nlohmann is asked. See
- * DumpJson for why asking nlohmann is not safe.
- *
- * Strict by the definition every other A11 language's string type enforces,
- * which is stricter than "the bytes are shaped like UTF-8": overlong encodings,
- * surrogate halves and anything above U+10FFFF are all rejected. Python's
- * `bytes.decode("utf-8")`, Kotlin's `String(bytes)` and JavaScript's
- * `TextDecoder` with `fatal` all refuse them, so a chunk carrying them is one a
- * peer cannot read -- and a value this side refuses to write is a much better
- * outcome than a session that dies one hop away.
+ * Rejects overlong encodings, surrogate code points and values above U+10FFFF.
  */
 bool IsValidUtf8(std::string_view text);
 
 /**
  * @brief The first string inside @p value that is not valid UTF-8, or nullptr.
  *
- * The strings that come from outside are not only at the top level: a response
- * header's value and a directory entry's name are both fields of a record, and
- * both are exactly where something outside this process can put arbitrary
- * bytes.
- *
- * Iterative, not recursive: this runs on whatever fiber is serializing, and
- * A11's fiber stacks are fixed and small, so the depth of the document must not
- * decide how much stack the check needs.
+ * Traverses nested fields iteratively to bound stack use on fixed fiber stacks.
  */
 const nlohmann::json* FindUnencodableString(const nlohmann::json& value);
 
 /**
  * @brief Serializes @p value, rejecting strings that are not valid UTF-8.
  *
- * Strict on purpose: JSON is defined over text, and a chunk holding arbitrary
- * bytes has to be encoded (base64, as `data/json.cc` does) rather than smuggled
- * into a string field where a peer's parser would reject it. This is the one
- * caller of nlohmann that wants the error rather than a replacement character.
- *
- * ### Why it checks rather than only catching
- *
- * nlohmann turns its `throw` into `std::abort()` in every translation unit
- * compiled `-fno-exceptions`, and most of A11 is. This file is compiled with
- * exceptions on so that the `try` below means something -- but `dump()` is a
- * template, and *whichever instantiation the linker keeps* decides whether a
- * bad string raises or aborts. An aborting one from another TU is a legal
- * choice, and it was the one being made: a `read_file` over a binary file
- * killed the process with no output at all.
- *
- * So the strings are checked here, where the answer depends on the bytes rather
- * than on how something was compiled, and the `try` stays as a second line for
- * everything else `dump()` can object to. A unit test cannot cover the
- * difference: test binaries are built with exceptions on, so the version under
- * test is the one that throws while the shipped library is the one that aborts.
+ * Checks strings before calling nlohmann's templated dump(). A linked
+ * instantiation from a `-fno-exceptions` translation unit may abort on invalid
+ * UTF-8. Other serialization errors are caught in json_codec.cc.
  */
 absl::StatusOr<std::string> DumpJson(const nlohmann::json& value,
                                      std::string_view what);
@@ -112,8 +79,7 @@ absl::StatusOr<std::string> DumpOrderedJson(const nlohmann::ordered_json& value,
 /**
  * @brief Serializes @p value, replacing anything that is not valid UTF-8.
  *
- * For a log line or a span attribute, where a lost byte is better than a lost
- * message and there is no peer to reject it.
+ * Use for logs and span attributes that can accept replacement characters.
  */
 std::string DumpJsonLossy(const nlohmann::json& value);
 

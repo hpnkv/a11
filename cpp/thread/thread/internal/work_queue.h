@@ -43,9 +43,7 @@ class WorkQueue {
   WorkQueue(const WorkQueue&) = delete;
   WorkQueue& operator=(const WorkQueue&) = delete;
 
-  // Appends `value`. Always succeeds: a full ring falls through to the overflow
-  // list rather than refusing, because the callers have nowhere to put a
-  // rejected item and must not block.
+  // Appends `value` without blocking; a full ring uses the overflow list.
   void Push(T value) {
     // Once anything is in the overflow list, everything goes there until it
     // drains, or an item pushed now would come out ahead of one pushed earlier.
@@ -85,9 +83,7 @@ class WorkQueue {
     while (true) {
       cell = &cells_[position & (Capacity - 1)];
       const size_t sequence = cell->sequence.load(std::memory_order_acquire);
-      // A cell is free for position P exactly when its sequence is P. Anything
-      // less means the ring has come all the way round and this cell still
-      // holds an item nobody has taken.
+      // A cell is free for P when its sequence is P; a lower value is occupied.
       const auto lag = static_cast<std::intptr_t>(sequence) -
                        static_cast<std::intptr_t>(position);
       if (lag == 0) {
@@ -102,8 +98,7 @@ class WorkQueue {
       }
     }
     cell->value = std::move(value);
-    // Publishing the sequence is what makes the item visible to a popper, so it
-    // has to be the last thing that happens.
+    // Publish the sequence after storing the value.
     cell->sequence.store(position + 1, std::memory_order_release);
     return true;
   }
@@ -149,8 +144,7 @@ class WorkQueue {
   alignas(kCacheLine) std::atomic<size_t> tail_{0};
   alignas(kCacheLine) Cell cells_[Capacity];
 
-  // Read on every Push and on every Pop that finds the ring empty, and so worth
-  // keeping out of the way of the ends; written only in the rare full case.
+  // Isolate the frequently read overflow count from head and tail writes.
   alignas(kCacheLine) std::atomic<size_t> overflow_size_{0};
   std::mutex overflow_mu_;
   std::deque<T> overflow_;

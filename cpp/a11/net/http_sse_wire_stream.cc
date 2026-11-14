@@ -56,11 +56,7 @@
 namespace a11::net {
 namespace {
 
-/**
- * The SSE base path: the URL's path with any trailing slash removed, so that
- * joining an endpoint onto it never produces a double slash. The query is not
- * part of it -- ParseUrl keeps that separate, and SSE builds its own targets.
- */
+/** Returns the URL path without a trailing slash or query. */
 std::string BasePathOf(const ParsedUrl& url) {
   std::string base_path = url.path;
   while (base_path.size() > 1 && base_path.back() == '/') {
@@ -163,15 +159,8 @@ bool AdvertisesMode(std::string_view list, std::string_view token) {
   return false;
 }
 
-/**
- * The tunneled form of an outbound request's HTTP headers.
- *
- * Framing headers describe the request itself and are not application metadata;
- * every other field is namespaced under kSseHttpHeaderPrefix exactly once, and
- * repeats of one name are joined the way HTTP defines. Shared by the POST route
- * (once per message) and the streamed route (once for the whole stream, which
- * makes the same headers reach every message on it).
- */
+/** Encodes application headers under kSseHttpHeaderPrefix.
+ * Framing headers stay outside the tunnel; repeated fields are joined. */
 absl::StatusOr<absl::flat_hash_map<std::string, std::string>> TunneledHeaders(
     const HttpHeaders& headers) {
   absl::flat_hash_map<std::string, std::string> combined;
@@ -228,12 +217,7 @@ struct HttpSseWireStream::State {
 
 namespace {
 
-/**
- * Whether @p path (already stripped of its query) is a connect endpoint.
- *
- * The exact endpoint is matched as it always was; a prefix matches anything
- * strictly beneath it, which is how one port serves many streams.
- */
+/** Matches a query-free path against the exact endpoint or its descendants. */
 bool MatchesConnectEndpoint(std::string_view path,
                             const HttpSseOptions& options) {
   if (path == options.connect_endpoint) {
@@ -864,14 +848,10 @@ absl::Status HttpSseClientWireStream::OpenOutboundStream(
     {
       thread::MutexLock lock(&self->client_state_->mu);
       finished = self->client_state_->upload_finished;
-      // Owned only when the upload needed a connection of its own; closing it
-      // here rather than at half-close is what keeps the terminating chunk and
-      // the close in the right order.
+      // Close the separate upload connection after its terminating chunk.
       held_upload_client = std::move(self->client_state_->upload_client);
     }
-    // A stream this side already ended is expected to come apart; only a
-    // failure
-    // that arrives while messages could still be going out is news.
+    // Report upload failures only while the stream is active.
     if (!status.ok() && !finished) {
       self->FailTransport(status);
     }
@@ -882,15 +862,8 @@ absl::Status HttpSseClientWireStream::OpenOutboundStream(
   return absl::OkStatus();
 }
 
-/**
- * Hands one outbound message to the transport.
- *
- * Runs on the internal bridge's sender fiber, one message at a time, and is the
- * only place the two delivery methods differ. Neither method awaits an ordinary
- * message because A11 WireMessages have no global order. POST requests overlap;
- * streamed writes are posted to the loop like other socket writes. Terminal and
- * abort messages apply the ordering described below.
- */
+/** Sends one message from the bridge's sender fiber.
+ * Ordinary POSTs overlap; terminal messages wait for prior POSTs. */
 absl::Status HttpSseClientWireStream::Transmit(data::WireMessage message) {
   const bool terminal = IsTerminal(message);
   const bool abort = IsAbort(message);
@@ -904,15 +877,11 @@ absl::Status HttpSseClientWireStream::Transmit(data::WireMessage message) {
     return TransmitOnStream(payload, terminal);
   }
   if (abort) {
-    // At the earliest possibility, ahead of whatever is still in flight. The
-    // peer treats an abort as final and discards the rest, so overtaking data
-    // POSTs is the intent rather than a hazard.
+    // Send aborts immediately; the peer discards any later data.
     return TransmitAsPost(std::move(payload));
   }
   if (terminal) {
-    // A half-close says "nothing more follows", and the peer enforces it, so
-    // everything handed over already has to land first. HTTP/2 gives no
-    // ordering across streams; this barrier is where that ordering comes from.
+    // HTTP/2 does not order streams, so drain data POSTs before half-close.
     ABSL_RETURN_IF_ERROR(AwaitPostsDelivered());
     return TransmitAsPost(std::move(payload));
   }
@@ -924,9 +893,7 @@ absl::Status HttpSseClientWireStream::Transmit(data::WireMessage message) {
         const absl::Status sent = self->TransmitAsPost(std::move(payload));
         self->ReleasePostSlot();
         if (!sent.ok()) {
-          // Nothing is waiting on this POST's return, so a failure reaches the
-          // application the same way a failed socket write does: through the
-          // stream's lifecycle.
+          // Report asynchronous POST failures through the stream lifecycle.
           self->FailTransport(sent);
         }
       });

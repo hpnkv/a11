@@ -448,9 +448,7 @@ async def interact_with_claude(action: a11.Action):
                 action_outputs=executed.outputs,
                 backend_specific_metadata={
                     llm.BACKEND_METADATA_KEY: str(llm.Backend.CLAUDE).encode(),
-                    # What the tools said to the user, kept beside their
-                    # results rather than in them: metadata is the one part of
-                    # an interaction no backend turns into provider content.
+                    # Keep tool logs in metadata, outside model content.
                     **executed.log_metadata(),
                 },
                 content=[

@@ -87,15 +87,8 @@ constexpr std::string_view kOctetStream = "application/octet-stream";
 // ---------------------------------------------------------------------------
 // Small chunk helpers.
 
-/// A JSON chunk, or the reason the value will not fit JSON.
-///
-/// StatusOr rather than a plain Chunk, and `DumpJson` rather than `dump()`,
-/// because everything this encodes came off a socket: a response header's value
-/// is opaque octets on the wire, and a server is entitled to send one that is
-/// not UTF-8. `dump()` answers that with `std::abort()` in every
-/// `-fno-exceptions` translation unit -- which is most of A11 -- so a remote
-/// peer could end this process with no output at all by sending a header. The
-/// check lives in `DumpJson`; this only has to ask it and pass the answer on.
+/// Encodes HTTP output as JSON, returning a status for invalid UTF-8.
+/// DumpJson validates opaque header bytes before nlohmann serialization.
 absl::StatusOr<data::Chunk> JsonChunk(const nlohmann::json& value) {
   ABSL_ASSIGN_OR_RETURN(std::string encoded,
                         DumpJson(value, "an HTTP action's JSON output"));
@@ -151,14 +144,8 @@ absl::StatusOr<std::optional<std::string>> ReadText(
 // Outputs
 // ---------------------------------------------------------------------------
 
-/**
- * The action's output ports, resolved once and closed exactly once.
- *
- * Every port an action declares has to be ended, whether or not it was used:
- * a reader waiting on a port nothing was ever written to would wait forever. So
- * ports named in `options.omit` are closed up front, and the rest are closed by
- * Finish() on the way out however the run ended.
- */
+/** The action's output ports. Omitted ports close immediately; Finish() closes
+ * every remaining port, including those left open by a failed run. */
 class Outputs {
  public:
   static absl::StatusOr<Outputs> Open(const std::shared_ptr<Action>& action,
@@ -171,8 +158,7 @@ class Outputs {
       const bool omit =
           std::find(omitted.begin(), omitted.end(), name) != omitted.end();
       if (omit) {
-        // Nothing will be written here, and saying so now is what lets a caller
-        // ask for three of eight ports without draining the other five.
+        // Close omitted ports before the action runs so readers can finish.
         ABSL_RETURN_IF_ERROR(node->Finalize({.wait = true}).Await().status());
         continue;
       }
@@ -223,11 +209,6 @@ class Outputs {
   }
 
   /// Writes one JSON value to a port and leaves it open.
-  ///
-  /// The pairing for PutOnly, and the reason both exist rather than every
-  /// caller
-  /// spelling out the encode: JsonChunk can fail, and a caller that has to
-  /// unpack a StatusOr before it can write tends to write `dump()` instead.
   absl::Status PutJson(std::string_view name, const nlohmann::json& value) {
     ABSL_ASSIGN_OR_RETURN(data::Chunk chunk, JsonChunk(value));
     return Put(name, std::move(chunk), /*final=*/false);
@@ -241,9 +222,7 @@ class Outputs {
     }
     const std::shared_ptr<AsyncNode> node = std::move(found->second);
     nodes_.erase(found);
-    // A port whose last value was already marked final has its end established;
-    // a null terminator on top of that would claim a second, different one, and
-    // the store rejects that rather than guess which was meant.
+    // A final chunk already closed the port; it needs no null terminator.
     const bool terminated = final_.contains(name);
     return CloseNode(node, terminated);
   }
@@ -489,15 +468,9 @@ absl::StatusOr<RequestOptions> ParseOptions(const nlohmann::json& object) {
 // Headers
 // ---------------------------------------------------------------------------
 
-/**
- * The request headers, from the action's own headers plus `options.headers`.
- *
- * An action header that is not one of A11's own is an HTTP request header: that
- * is the mapping, and it is what makes Flow's `with "accept": ...` and
- * `forward headers "authorization"` mean what they look like. `options.headers`
- * comes last so a computed value beats an inherited one, and so a caller can
- * send a literal `x-a11-...` header that would otherwise be filtered.
- */
+/** Builds HTTP headers from action headers and `options.headers`.
+ * Non-framework action headers pass through. Options override them, including
+ * when an option explicitly names an `x-a11-...` header. */
 HttpHeaders RequestHeadersFor(const std::shared_ptr<Action>& action,
                               const RequestOptions& options) {
   HttpHeaders headers;
@@ -508,8 +481,7 @@ HttpHeaders RequestHeadersFor(const std::shared_ptr<Action>& action,
     }
     inherited.emplace_back(name, value);
   }
-  // A ByteMap is unordered; sorting keeps the request byte-for-byte the same
-  // from one run to the next, which matters for caches and for tests.
+  // Sort the unordered ByteMap for stable request bytes.
   std::sort(inherited.begin(), inherited.end());
   for (auto& field : inherited) {
     headers.push_back(std::move(field));
@@ -528,14 +500,8 @@ HttpHeaders RequestHeadersFor(const std::shared_ptr<Action>& action,
   return headers;
 }
 
-/**
- * Header fields as one JSON object, for a caller that wants to look one up.
- *
- * Repeated fields are joined, which is what every high-level HTTP API does and
- * is lossy in exactly one place: `set-cookie`, whose values contain commas, so
- * it is joined with newlines instead. The `fields` port is there for anyone who
- * needs the wire truth.
- */
+/** Returns headers as a JSON object. Repeated fields are joined; `set-cookie`
+ * values use newlines because they may contain commas. */
 nlohmann::json HeaderObject(const HttpHeaders& headers) {
   std::vector<std::pair<std::string, std::string>> merged;
   for (const auto& [name, value] : headers) {
@@ -762,17 +728,8 @@ absl::Status PumpRequestBody(const std::shared_ptr<AsyncNode>& body,
   return upload->Finish();
 }
 
-/**
- * Reads pushed responses off @p response until there are no more.
- *
- * A push carries a head *and* a body, and one port cannot interleave several
- * bodies without inventing a framing for them. A11 already has the right
- * answer:
- * each pushed body gets a node of its own, and the record on the `pushes` port
- * carries that node's id. A reader attaches to it -- `node(rec.body)` in Flow
- * --
- * exactly as it would to any other stream.
- */
+/** Reads pushed responses. Each push record carries its body node ID, which
+ * Flow readers can open with `node(rec.body)`. */
 absl::Status PumpPushes(const std::shared_ptr<Action>& action,
                         const std::shared_ptr<Http2ResponseStream>& response,
                         const std::shared_ptr<AsyncNode>& pushes,
@@ -1060,14 +1017,7 @@ ItemFraming FramingFor(const HttpHeaders& headers) {
   return ItemFraming::kNone;
 }
 
-/**
- * Decodes a text/event-stream incrementally.
- *
- * The wire format is a handful of `field: value` lines terminated by a blank
- * one. Kept here rather than reached for from the SSE wire stream because that
- * one is a WireStream carrying A11 frames, and this is a decoder over arbitrary
- * bytes -- the same syntax, a different job.
- */
+/** Decodes a text/event-stream incrementally from arbitrary bytes. */
 class EventStreamDecoder {
  public:
   /// Feeds bytes, appending each completed event to @p events.

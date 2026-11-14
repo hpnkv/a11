@@ -12,12 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Rendering `PresentationBlock`s with `rich`, for the terminal clients.
+"""Render live and replayed `PresentationBlock`s with `rich`.
 
-The whole terminal-specific half of presentation: a `match` over `BlockKind` and
-nothing else. Because the blocks come from
-[a11.sdk.presentation][a11.sdk.presentation], the same function draws a live
-turn and a replayed one, and `a11 chat` gets tool-call rendering it never had.
+Blocks come from [a11.sdk.presentation][a11.sdk.presentation].
 """
 
 from __future__ import annotations

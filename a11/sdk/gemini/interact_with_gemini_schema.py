@@ -22,17 +22,9 @@ from a11.sdk.llm import Interaction, InteractionAdapter, LlmHeaders, Role
 from a11.sdk.llm_context.config import LLM_CONTEXT_HEADERS
 from a11.status import Status, StatusCode
 
-# How the handler carries conversation state across turns of the (stateful)
-# Interactions API.
-#   * "last-id"      — only ever send the newest input plus a
-#                      `previous_interaction_id`; rely on the server-stored
-#                      transcript. Cheapest, but breaks if the server does not
-#                      retain the interaction (e.g. storage disabled).
-#   * "full-history" — never chain by id; replay the entire conversation as a
-#                      list of steps on every turn. Robust but larger requests.
-#   * "auto"         — try "last-id" and, if the id cannot be resolved, fall
-#                      back to "full-history" for the rest of the session
-#                      (logged, no confirmation required).
+# Conversation state modes for the Interactions API:
+# "last-id" chains by server-stored id; "full-history" replays every step;
+# "auto" falls back to full history when an id cannot be resolved.
 StateMode = Literal["full-history", "last-id", "auto"]
 
 

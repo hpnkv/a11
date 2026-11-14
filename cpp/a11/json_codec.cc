@@ -409,9 +409,7 @@ const JsonValue* FindUnencodableStringImpl(const JsonValue& value) {
 template <typename JsonValue>
 absl::StatusOr<std::string> DumpJsonImpl(const JsonValue& value,
                                          std::string_view what) {
-  // Checked before nlohmann is asked, because nlohmann's answer to this one is
-  // `std::abort()` in every `-fno-exceptions` TU and the linker picks which
-  // instantiation of `dump()` survives. See the header for the whole story.
+  // Validate UTF-8 before a linked no-exceptions dump() can abort on it.
   if (FindUnencodableStringImpl(value) != nullptr) {
     return absl::InvalidArgumentError(absl::StrCat(
         "Failed to serialize ", what,

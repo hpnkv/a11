@@ -25,17 +25,9 @@
 
 namespace a11::flow::tool {
 
-/// Speak the Language Server Protocol over two streams until the client stops.
-///
-/// The thin half of the tool: it owns the open documents, converts between the
-/// protocol's line-and-UTF-16-character positions and the byte offsets the
-/// language works in, and turns each request into one of the service's methods.
-/// Nothing about the language is decided here -- what is a problem, what may be
-/// written at a caret and what a token means are answered once, in
-/// `a11_flow_lang`, and this is the shape an editor wants them in.
-///
-/// Returns the process's exit code: 0 for a clean `shutdown`/`exit`, 1 when the
-/// stream ended without one.
+/// Serves Language Server Protocol requests over `in` and `out`.
+/// Converts UTF-16 positions to source byte offsets and tracks open documents.
+/// Returns 0 after `shutdown`/`exit`, or 1 if the input ends first.
 int RunLsp(std::istream& in, std::ostream& out,
            std::vector<std::string> source_roots = {},
            CompilationLimits limits = {});

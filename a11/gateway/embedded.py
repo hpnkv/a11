@@ -12,15 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""A gateway inside this process, reached over an in-memory stream pair.
+"""Run a gateway in this process over an in-memory stream pair.
 
-What `a11 chat` falls back to when no gateway is running. The point is that it is
-not a *different* code path: the same `A11Gateway`, the same per-connection
-session and tool bridge, the same `interact_with_llm` handler that persists
-conversations -- only the transport changes, from a WebSocket to
-`create_in_process_wire_stream_pair`. So a chat against an embedded gateway
-exercises the same machinery as one against a remote gateway, which is why there
-is only one turn loop left to maintain.
+``a11 chat`` uses this gateway when no remote gateway is available. It uses the
+same gateway, session, tool bridge, and LLM handler as a remote connection.
 """
 
 from __future__ import annotations
@@ -38,12 +33,7 @@ from a11.gateway import app
 from a11.gateway.config import GatewayConfig
 from a11.service.session import Session
 
-#: How long to let the server side notice the client is gone before cancelling
-#: it. Short on purpose: by the time we get here the turn has completed and the
-#: gateway has already recorded it (persistence happens inside the
-#: ``interact_with_llm`` call, which `run_turn` awaits), so what remains is a
-#: session waiting to see whether its peer says anything else. Waiting seconds
-#: for that would just make `a11 chat` slow to exit.
+#: Grace period for the server task to stop after the client connection closes.
 SHUTDOWN_GRACE = timing.Duration.milliseconds(500)
 
 
@@ -78,9 +68,7 @@ async def embedded_gateway(
         yield connection
     finally:
         await connection.aclose()
-        # The server side ends when its stream does. Bound the wait so a wedged
-        # handler cannot hang the CLI's exit, and cancel rather than leaving a
-        # pending task for asyncio to complain about at shutdown.
+        # Bound server shutdown after the client stream closes.
         try:
             await asyncio.wait_for(
                 asyncio.shield(serving),

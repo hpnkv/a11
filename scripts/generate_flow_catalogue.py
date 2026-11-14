@@ -13,27 +13,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Generate the catalogue the Flow tools know the world by.
+"""Generate the default Flow catalogue from the live registries.
 
-The language tools know the *language* exhaustively and the world it runs in not
-at all, because `a11::flow_lang` links nothing but Abseil and nlohmann on
-purpose. So what the world contains has to reach them as data, and this is where
-that data comes from: the live action registry and the live serialization
-registry, read once and written down.
-
-Two outputs, both checked in:
+`a11::flow_lang` receives action and type data through this catalogue without
+linking the runtime. The generator writes two checked-in files:
 
 * ``testdata/flow/catalogue.json`` -- the snapshot itself, readable by anything.
 * ``cpp/a11/flow/catalogue_data.h`` -- the same bytes as a C string, so the
   standalone ``a11-flow`` is useful with nothing configured.
 
-``--check`` reports whether the checked-in files are what this would write and
-exits non-zero if they are not, which is what a CI job runs. That is the same
-contract the generated editor definitions have: the table lives in one place and
-the copy is proved to match it.
-
-A frontend with a *live* registry does not need any of this -- it passes its own
-catalogue with the request. The snapshot is the default, not the truth.
+``--check`` exits nonzero when either file differs from generated output.
+Frontends with live registries can supply their own catalogue per request.
 """
 
 from __future__ import annotations

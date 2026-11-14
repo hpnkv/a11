@@ -12,27 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""HTTP as A11 Actions: one protocol-faithful, one shaped like `fetch()`.
+"""Register or call A11's native HTTP actions.
 
-Three HTTP Actions in C++:
-
-* ``make_http_request`` -- HTTP with nothing hidden. Every concern the protocol
-  keeps separate gets a port of its own: the status, the header fields, the
-  body, the trailer section, the redirect chain, the responses the server
-  pushed, and how the connection was carried.
-* ``web-fetch`` -- the same machinery with the protocol turned down: a status, a
-  header map, and the body as text, as JSON, as bytes, or decoded into a stream
-  of items.
-* ``web-render`` -- a platform WebKit load returning post-script HTML and an
-  optional bounded PNG.
-
-Why an Action rather than a function. An ordinary HTTP client hands back one
-`Response` object because its language gives it nothing better to hand back:
-headers, body and trailers are one value that is only complete at the end. An
-A11 port is a stream, and there is no reason for these to share one -- so they
-do not. A caller can branch on the status while the body is still arriving, give
-the body to a parser and the trailers to a checksum verifier, and read pushed
-responses off a port that a `fetch()`-shaped API has no way to express.
+``make_http_request`` exposes status, headers, body, trailers, redirects,
+pushed responses and transport details on separate ports. Callers can read
+status while the body streams. ``web-fetch`` returns a simpler status, header
+map and body representation. ``web-render`` returns WebKit HTML and an optional
+bounded PNG.
 
 Register them on a registry:
 
@@ -55,9 +41,8 @@ async with await http.fetch("https://example.com/data.json") as response:
         ...
 ```
 
-Connections are shared while they are in use and closed the moment they are not:
-a request to a peer another request is already talking to joins that connection
-(HTTP/2 multiplexes), and nothing is kept open with no work on it. See
+Active requests to the same peer share a connection through HTTP/2 multiplexing.
+Idle connections close. See
 [a11.sdk.http.actions][a11.sdk.http.actions] for the schemas and
 [a11.sdk.http.client][a11.sdk.http.client] for the Python-shaped surface.
 """

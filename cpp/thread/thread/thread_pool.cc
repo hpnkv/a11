@@ -74,8 +74,7 @@
 #include "thread/internal/work_queue.h"
 #include "thread/introspect.h"
 
-// CPU affinity. Linux is the only platform here that has it: see the affinity
-// block below for what macOS offers instead, which is nothing.
+// Linux provides the worker CPU affinity used below.
 #if defined(__linux__)
 #include <cerrno>
 #include <cstring>
@@ -230,14 +229,7 @@ void Fiber::DestroyBoostState() {
 
 namespace {
 
-// An environment override read as an integer, or nullopt when it is unset or is
-// not one.
-/// An environment override read as an integer, or nullopt when it is unset or
-/// is not one.
-///
-/// `std::atoi` cannot tell "0" from "not a number", which for a tuning knob
-/// means a typo silently turns the knob down to zero instead of leaving the
-/// default in place.
+/// Reads an integer override, distinguishing zero from invalid text.
 std::optional<int> EnvironmentInt(const char* name) {
   const char* setting = std::getenv(name);
   if (setting == nullptr) {
@@ -288,9 +280,7 @@ constexpr bool IsIncludedPowerOfTwo(size_t value) {
 constexpr size_t kDefaultStackSize = THREAD_DEFAULT_FIBER_STACK_SIZE;
 constexpr bool kDefaultIsIncluded = IsIncludedPowerOfTwo(kDefaultStackSize);
 
-// Every included power of two gets a 4 MiB pool; whichever size matches
-// THREAD_DEFAULT_FIBER_STACK_SIZE gets a budget scaled to keep the *count* of
-// cached stacks the same, since it's the size nearly every fiber requests.
+// The default stack size caches 256 stacks; other sizes receive 4 MiB each.
 constexpr size_t kDefaultPoolStacks = 256;
 template <size_t StackSize>
 constexpr size_t kPoolBudgetBytes =
@@ -299,9 +289,7 @@ constexpr size_t kPoolBudgetBytes =
 template <size_t StackSize>
 constexpr size_t kPoolCapacity = kPoolBudgetBytes<StackSize> / StackSize;
 
-// Lock-free pool of stacks of exactly StackSize bytes. Each slot is an
-// independent atomic pointer rather than a linked free list, so reuse can
-// never hit the classic Treiber-stack ABA hazard.
+// Independent atomic slots avoid ABA during stack reuse.
 template <size_t StackSize, size_t Capacity>
 std::array<std::atomic<void*>, Capacity>& StackPool() {
   static absl::NoDestructor<std::array<std::atomic<void*>, Capacity>> slots;
@@ -605,9 +593,7 @@ bool AffinitySpecIsAll(absl::string_view spec) {
          lowered == "true" || lowered == "all";
 }
 
-// Pins the calling thread to exactly `cpu`. Called from the worker's own
-// thread,
-// which is the only thread whose affinity a worker has any business setting.
+// Pins a worker to `cpu` from its own thread.
 bool SetThisThreadCpu(int cpu) {
 #if defined(__linux__)
   cpu_set_t set;
@@ -630,17 +616,13 @@ bool SetThisThreadCpu(int cpu) {
 
 namespace internal {
 
-// Read from the *process* mask rather than assumed to be 0..nproc-1, which is
-// what makes this correct under `taskset`, a cgroup cpuset and a container with
-// fewer CPUs than the host: a pool that pinned to a CPU outside.
+// Read the process mask to respect taskset, cgroup and container CPU limits.
 std::vector<int> ProcessAllowedCpus() {
 #if defined(__linux__)
   cpu_set_t set;
   CPU_ZERO(&set);
   if (sched_getaffinity(0, sizeof(set), &set) != 0) {
-    // Happens on a host with more than CPU_SETSIZE (1024) CPUs, where a fixed
-    // cpu_set_t is too small. Reporting nothing is right: the pool then
-    // declines to pin rather than pinning against a mask it could not read.
+    // An unreadable mask disables pinning, including above CPU_SETSIZE.
     return {};
   }
   std::vector<int> cpus;
@@ -709,8 +691,7 @@ int ThisWorkerAffinityCpu() {
 
 namespace {
 
-// Apple arm64 cores have 128-byte cache lines, and x86-64 prefetches in
-// 128-byte pairs, so that is the separation worth paying for.
+// Separate slots at the 128-byte line/prefetch granularity used here.
 constexpr size_t kCacheLine = 128;
 
 // How much work a slot holds before it spills into its queue's overflow list.
@@ -770,8 +751,7 @@ struct alignas(kCacheLine) WorkerSlot {
   std::thread thread;
 };
 
-// At most 64 workers, so "is anybody parked, and who" is a single atomic load
-// and a count-trailing-zeros rather than a scan.
+// A 64-bit mask identifies parked workers with one atomic load.
 constexpr size_t kMaxWorkers = 64;
 
 // How long a worker looks for work before parking.
@@ -798,8 +778,6 @@ constexpr int kSpinRoundsPerScan = 8;
 // nothing, and the factor it stretches by.
 constexpr absl::Duration kMaxIdlePark = absl::Seconds(1);
 constexpr int kParkBackoffFactor = 2;
-
-// One second, and not longer, for a measured reason rather than caution.
 
 class PoolState {
  public:
@@ -852,8 +830,7 @@ class PoolState {
     return NextVictim();
   }
 
-  // "This push has to wake somebody, whatever the economy thinks." True only
-  // for a push from outside the pool into a pool that had nothing to do.
+  // External work entering an idle pool requires a wake.
   bool MustWake() const {
     return ThisWorkerIndex() < 0 && !AnyWork(std::memory_order_relaxed);
   }
@@ -945,8 +922,7 @@ class PoolState {
     return false;
   }
 
-  // Wakes an OS thread only if one is actually needed. Measured: this is what
-  // the deferred fiber reap exposed.
+  // Wake a parked OS thread when queued work needs one.
   void WakeSomeone(size_t preferred, bool force = false) {
     // Diagnostic: A11_POOL_ALWAYS_WAKE=1 disables the economy entirely, so a
     // push always signals somebody.
@@ -1004,12 +980,9 @@ class PoolState {
   // just became the earliest one, and wakes nobody at all if one already will
   // be.
   void CoverDeadline(std::int64_t deadline_ns) {
-    // Acquire rather than seq_cst, unlike the wake economy: this decides how
-    // *soon* a worker wakes and not whether one does at all, and every way it
-    // can be wrong is bounded.
+    // Acquire suffices: this load affects wake timing, not wake correctness.
     const std::uint64_t idle = idle_mask_.load(std::memory_order_acquire);
-    // Nobody is parked. An awake worker collects due timers on every pass round
-    // its loop, so there is nothing to arrange.
+    // Awake workers collect due timers on each loop pass.
     if (idle == 0) {
       return;
     }
@@ -1048,9 +1021,7 @@ class PoolState {
     return spinning_.load(std::memory_order_relaxed) < max_spinners_;
   }
 
-  // The diagnostic counters, which are off unless A11_POOL_STATS asked for
-  // them: `stats_` is written once during Start() and only read afterwards, so
-  // this costs a well-predicted branch on a shared line rather than a write.
+  // Counters update only when A11_POOL_STATS enables them at startup.
   void Count(std::atomic<std::uint64_t>& counter) const {
     if (stats_) {
       counter.fetch_add(1, std::memory_order_relaxed);
@@ -1157,8 +1128,7 @@ class PoolState {
   // Which CPU each worker is pinned to, indexed by worker modulo its size.
   std::vector<int> affinity_cpus_;
 
-  // Written on every park and unpark, read on every wake decision: worth a
-  // line of their own, away from the slots.
+  // Keep frequently updated wake counters away from worker slots.
   alignas(kCacheLine) std::atomic<std::uint32_t> spinning_{0};
   std::atomic<std::uint64_t> idle_mask_{0};
   std::atomic<std::uint32_t> next_victim_{0};
@@ -1393,15 +1363,12 @@ void PoolState::Start(size_t num_threads) {
     }
   }
 
-  // A11_POOL_STATS=1 prints how the work actually landed, which is how the two
-  // policies in this file are checked rather than assumed.
+  // A11_POOL_STATS=1 reports the distribution of work across workers.
   const std::optional<int> stats = EnvironmentInt("A11_POOL_STATS");
   stats_ = stats.value_or(0) != 0;
   if (stats_) {
     static PoolState* reporting = this;
-    // stderr rather than LOG: this runs at exit, where the Abseil sink may be
-    // bridged into Python logging and touching it would mean taking the GIL
-    // during interpreter teardown, which can abort the process.
+    // Exit reporting uses stderr; an Abseil sink may require Python's GIL.
     std::atexit([] {
       std::string line;
       std::uint64_t total = 0;
@@ -1480,9 +1447,7 @@ void WorkerThreadPool::Start(size_t num_threads) {
 }
 
 void WorkerThreadPool::RunWorker(size_t index) {
-  // Before the scheduler, on purpose: this worker's dispatcher context, its
-  // remote-ready queue and the first fiber stacks it takes out of the pooled
-  // allocators are all first touched below, and a page's first touch is what.
+  // Set affinity before first-touch allocation of dispatcher and fiber pages.
   if (const int cpu = state_.cpu_for(index); cpu >= 0) {
     if (SetThisThreadCpu(cpu)) {
       ThisWorkerCpu() = cpu;
@@ -1510,8 +1475,7 @@ void WorkerThreadPool::RunWorker(size_t index) {
       break;
     }
 
-    // Reaping rides along on the workers rather than owning a fiber of its own:
-    // see ReapWhenFinished().
+    // Workers reap finished fibers during their regular passes.
     if (++passes_since_reap >= kReapEveryPasses ||
         PendingReapCount() >= kReapBacklog) {
       passes_since_reap = 0;
@@ -1533,9 +1497,7 @@ void WorkerThreadPool::RunWorker(size_t index) {
       }
     }
 
-    // Hand the thread to the fiber scheduler: this is where contexts pushed to
-    // (or stolen into) this worker actually run. It returns once no fiber is
-    // ready, having cost two context switches -- nanoseconds, not a wake.
+    // Run ready fiber contexts on this worker.
     boost::this_fiber::yield();
 
     // Relaxed: a false negative here only means dropping into the spin, which
@@ -1547,9 +1509,7 @@ void WorkerThreadPool::RunWorker(size_t index) {
 
     // Nothing anywhere.
     if (state_.MaySpin()) {
-      // Being counted as spinning is what lets producers skip their wake
-      // entirely, so the counter goes up before the first look and comes down
-      // only after the last one.
+      // Publish the spinner before scanning so producers can skip a wake.
       state_.BeginSpinning();
       const absl::Time spin_until = absl::Now() + SpinBudget();
       bool found = false;
@@ -1581,9 +1541,7 @@ void WorkerThreadPool::RunWorker(size_t index) {
       }
     }
 
-    // About to sleep, so reap now regardless of the throttle above. Here the
-    // worker has nothing better to do and the queue is usually empty, in which
-    // case this touches no lock at all.
+    // Reap finished fibers before this worker sleeps.
     ReapFinishedFibers();
     passes_since_reap = 0;
 
@@ -1600,9 +1558,7 @@ void WorkerThreadPool::RunWorker(size_t index) {
         // honoured to the same precision as before.
         const absl::Time deadline =
             std::min(absl::Now() + idle_park, state_.EarliestTimer());
-        // Published before the wait and withdrawn after it, so that a timer
-        // registered while this worker is parked can tell whether this park
-        // already covers it. See PoolState::CoverDeadline.
+        // Publish the park deadline for PoolState::CoverDeadline.
         self.park_deadline_ns.store(absl::ToUnixNanos(deadline),
                                     std::memory_order_release);
         state_.Count(self.parks);
@@ -1732,9 +1688,7 @@ void Fiber::Start() {
 
   diagnostics_.context = GetBoostState()->context.get();
 
-  // From a pool worker this is a push onto that worker's own slot -- its own
-  // dispatcher runs the new fiber at the next suspension point, for the price
-  // of a context switch rather than a thread wake.
+  // A pool worker schedules onto its own slot for the next suspension point.
   WorkerThreadPool::Instance().Schedule(GetBoostState()->context);
 }
 

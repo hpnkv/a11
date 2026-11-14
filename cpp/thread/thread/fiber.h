@@ -240,22 +240,16 @@ inline void Detach(std::unique_ptr<Fiber> fiber) {
 }
 
 /**
- * @brief Hand a started fiber to the pool for eventual joining and destruction.
+ * @brief Transfer a started fiber to the pool for joining and destruction.
  *
- * For the caller who needs the fiber *pointer* to stay valid -- `Cancel()`
- * walks
- * the fiber tree and locks each node, so it cannot be given a fiber that might
- * delete itself -- but has nobody to `Join()` it. `Submit` is exactly that
- * case:
- * it hands back a Future rather than a joinable handle, so no caller ever
- * joins.
+ * The fiber pointer remains valid until the completion callback clears the
+ * caller's handle. `Submit` uses this for fibers represented by a Future.
  *
  * @param fiber
  *   A started fiber. Ownership passes here.
  * @param on_finished
- *   Run after the join and before destruction, under the lock guarding the
- *   caller's pointer. A racing Cancel() therefore sees either a live fiber or a
- *   cleared handle. Must not block for long or join the fiber.
+ *   Runs after joining and before destruction under the caller's pointer lock.
+ *   Must not block for long or join the fiber.
  */
 void ReapWhenFinished(std::unique_ptr<Fiber> fiber,
                       absl::AnyInvocable<void() &&> on_finished);

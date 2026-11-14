@@ -45,10 +45,7 @@ class WireStream;
 
 namespace a11::flow {
 
-/// How many values a pipe may run ahead of its reader.
-///
-/// Small on purpose: A11's own stores are the buffer, and a flow should not
-/// become a second one.
+/// Maximum values a pipe may hold ahead of its reader.
 inline constexpr size_t kQueueDepth = 8;
 
 struct RuntimeLayouts;

@@ -43,12 +43,7 @@ using syntax::Node;
 using syntax::NodePtr;
 using syntax::Word;
 
-/// A piece of text as a message quotes it.
-///
-/// Single quotes, the way the Python reference's `repr` writes them, so the
-/// sentences the two implementations produce read alike. Control characters are
-/// escaped, because a message that spans two lines is a message a build log
-/// mangles.
+/// Quotes text for diagnostics, escaping control characters.
 std::string Quoted(std::string_view text) {
   std::string quoted;
   quoted.reserve(text.size() + 2);
@@ -2688,19 +2683,8 @@ class ParserImpl {
   /// ending here.
   bool StageArgumentFollows() { return OptionalArgument(); }
 
-  /// `fold LITERAL as NAME, EXPRESSION`, and `scan` the same.
-  ///
-  /// The start is a literal rather than an expression on purpose: `0 as total`
-  /// read as an expression is a cast of `0` to a type called `total`, and the
-  /// language would have to decide which of the two was meant. A literal cannot
-  /// be a cast, so this is unambiguous by construction.
-  ///
-  /// A record literal is a start too, and has to be: `scan` is how a state
-  /// machine is written, and a state worth carrying is rarely one number. `{
-  /// .. } as name` is not ambiguous the way `0 as name` is -- a record literal
-  /// is read by its braces before `as` is looked at -- so the reason for the
-  /// restriction does not apply to it. It must still fold to a constant, which
-  /// is what keeps it a *starting* value and not a first pass.
+  /// Parses the constant start and carried name of `fold` or `scan`.
+  /// Record literals are accepted as constant starts.
   void ParseFoldArgument(syntax::Stage& stage) {
     const std::string spelled(stage.name);
     if (At(TokenKind::kLeftBrace)) {

@@ -51,13 +51,8 @@ class _NativeFuture(asyncio.Future[Any]):
     def __init__(self, loop, on_cancel: Callable[[], None]) -> None:
         super().__init__(loop=loop)
         self._on_cancel: Callable[[], None] | None = on_cancel
-        #: Runs once, when somebody first awaits this future and it is not
-        #: already resolved. Work that the awaiting thread could do itself
-        #: belongs here rather than at the call that created the future: a chunk
-        #: store writer flushes here, so awaiting a confirmation performs the
-        #: store write on this thread and resolves without an event-loop turn,
-        #: while a producer that awaits only admission leaves the write to the
-        #: writer's pump.
+        #: Runs once on the first await of an unresolved future. A writer can
+        #: flush on the awaiting thread; admission-only writes use its pump.
         self._on_await: Callable[[], None] | None = None
 
     def cancel(self, msg: Any = None) -> bool:

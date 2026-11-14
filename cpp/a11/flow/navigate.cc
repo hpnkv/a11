@@ -1019,29 +1019,7 @@ std::string_view SymbolClassName(SymbolClass kind) {
   return "external";
 }
 
-/// The whole construct a declaration opens: its first token through the `}`
-/// that closes its block.
-///
-/// **Why this is worked out here.** The parser records where a node *started*
-/// -- the token it began at, which is what `flow.syntax/v1` documents `at` as
-/// -- and that is the wrong extent for a symbol. A `flow`'s name is the token
-/// *after* the keyword, so a range of the keyword alone does not contain the
-/// name, and a document symbol whose selection is outside its range is a
-/// protocol violation: LSP refuses the whole answer with "selectionRange must
-/// be contained in fullRange", so one bad entry cost the document its entire
-/// outline.
-///
-/// It is also what the format promises: `range` is the whole construct, so
-/// "select symbol" takes the block.
-/// `range`, widened to hold `selection`.
-///
-/// The invariant every document symbol has to satisfy, applied where a
-/// construct
-/// has no block to match braces around: a port, a field, a bound step. Their
-/// range
-/// and selection are usually the same token, and this is what makes "usually"
-/// into
-/// "always".
+/// Expands a symbol range to include its selection.
 Range Widened(const LineIndex& lines, const Range& range,
               const Range& selection) {
   return lines.Between(std::min(range.start.offset, selection.start.offset),

@@ -49,28 +49,12 @@ namespace a11::python {
 namespace py = pybind11;
 
 /**
- * @brief Whether the interpreter is going away and must not be entered.
+ * @brief Whether Python has begun finalization or is uninitialized.
  *
- * **`Py_IsInitialized()` is not this test**: it stays true through most of
- * finalization. `PyGILState_Ensure()` called after finalization has begun
- * does not fail or return an error -- CPython *exits the calling thread* with
- * `pthread_exit()` ("a thread tried to acquire the GIL after finalization").
- * The forced unwind that follows walks up through A11 frames compiled
- * `-fno-exceptions`, finds no landing pad, and calls `std::terminate`.
- *
- * Reference counting makes this timing-dependent: Python drops a session, but
- * the last
- * `shared_ptr` to its state is usually held by a pool worker, so the destructor
- * that releases the Python callback runs on a worker thread, and that is the
- * thread CPython kills.
- *
- * A destructor that sees this true must **leak** its Python reference rather
- * than release it. That is correct rather than sloppy: the interpreter is being
- * torn down, its heap is about to go back to the operating system, and the only
- * thing releasing the reference can still achieve is killing the process.
- *
- * `_Py_IsFinalizing` rather than 3.13's public `Py_IsFinalizing`, because the
- * wheels target 3.12 where only the underscored form exists.
+ * Py_IsInitialized() remains true during finalization. Destructors must leave
+ * Python references unreleased once finalization begins; acquiring the GIL
+ * then can terminate a worker thread. Python 3.12 uses _Py_IsFinalizing();
+ * Python 3.13 and later provide Py_IsFinalizing().
  */
 inline bool InterpreterIsGoingAway() {
   if (Py_IsInitialized() == 0) {
@@ -86,24 +70,11 @@ inline bool InterpreterIsGoingAway() {
 }
 
 /**
- * @brief Hands a Python reference to whoever next holds the GIL, or leaks it.
+ * @brief Defers Python reference release until a thread holds the GIL.
  *
- * **A destructor must not acquire the GIL, and a check is not enough.**
- * Guarding on InterpreterIsGoingAway() is check-then-act: finalization can
- * begin between the test and the `PyGILState_Ensure()`, and with a population
- * of objects being destroyed there are hundreds of chances to lose that race.
- * Measured: adding the check to all twelve destructors that had it wrong left
- * the abort at 9 runs in 12, statistically unchanged.
- *
- * So references are not released in destructors at all. They are queued here
- * and dropped by a thread that already holds the GIL -- any binding entry
- * point, or the `atexit` drain -- which cannot race, because holding the GIL
- * is precisely what proves the interpreter is still alive.
- *
- * Anything still queued when the process exits is **leaked on purpose**: the
- * interpreter's heap is about to go back to the operating system, and the only
- * thing releasing a reference can still achieve at that point is killing the
- * process.
+ * Destructors queue references without acquiring the GIL. Binding entry
+ * points and the atexit handler drain the queue with the GIL held. References
+ * still queued at process exit remain unreleased.
  */
 class DeferredPythonRefs {
  public:
@@ -114,9 +85,7 @@ class DeferredPythonRefs {
     if (object == nullptr) {
       return;
     }
-    // The common case, and the reason the queue does not grow: a destructor
-    // running on the thread that already holds the GIL can just drop the
-    // reference.
+    // Release immediately when the caller already holds the GIL.
     if (Py_IsInitialized() != 0 && PyGILState_Check() != 0) {
       Py_DECREF(object);
       return;
@@ -130,15 +99,9 @@ class DeferredPythonRefs {
                                               std::memory_order_relaxed)) {}
   }
 
-  // Release everything queued.
   /// Release everything queued. **The caller must hold the GIL.**
-  ///
-  /// Called from every Python invocation path (see CallPythonAsync) as well as
-  /// from the `atexit` hook, so a process with any traffic at all empties this
-  /// continuously rather than accumulating until exit.
   static void Drain() {
-    // Lock-free when there is nothing to do, which is the overwhelmingly common
-    // case: this sits on the callback path, which runs per message.
+    // Keep the empty path lock-free; callbacks check it for every message.
     if (Size().load(std::memory_order_relaxed) == 0) {
       return;
     }
@@ -158,8 +121,7 @@ class DeferredPythonRefs {
     return Size().load(std::memory_order_relaxed);
   }
 
-  /// The most that were ever queued at once. This is the number that says
-  /// whether the queue is a buffer or a leak.
+  /// The highest number of queued references, for diagnostics.
   static std::size_t HighWaterCount() {
     return HighWater().load(std::memory_order_relaxed);
   }
@@ -192,10 +154,8 @@ class DeferredPythonRefs {
 /**
  * An `asyncio.Future` resolving to @c T.
  *
- * Bindings that hand a future back to Python return this rather than a bare
- * @c py::object, so the generated stub says @c asyncio.Future[T] instead of
- * @c typing.Any. It carries no behaviour: the object is the one
- * FutureToPythonConverted() built, and @c T only names its result.
+ * Bindings return this annotation so generated stubs say
+ * @c asyncio.Future[T]. FutureToPythonConverted() builds the Python object.
  */
 template <typename T>
 class PyFuture : public py::object {
@@ -206,10 +166,8 @@ class PyFuture : public py::object {
 /**
  * A @c py::object a signature reports as @c T.
  *
- * Naming @c T directly would make pybind convert at the boundary; this only
- * annotates, so the binding still receives whatever the caller passed and
- * applies its own coercion. Use it where a parameter accepts several
- * spellings of one logical type.
+ * Annotates a parameter without pybind conversion. The binding handles
+ * coercion for accepted representations of @c T.
  */
 template <typename T>
 class PyLike : public py::object {
@@ -252,10 +210,6 @@ inline PyHeaderPairs HeaderPairsToPython(
 /**
  * Read header pairs from a mapping or a sequence of pairs.
  *
- * Shared rather than repeated per binding: every handshake in A11 accepts
- * headers the same two ways, and two copies of this loop would eventually
- * accept different things.
- *
  * @return The pairs, or `INVALID_ARGUMENT` when the value is not either shape.
  */
 inline absl::StatusOr<std::vector<std::pair<std::string, std::string>>>
@@ -292,14 +246,8 @@ class PyStatusCode : public py::object {
 /**
  * Runs a blocking native call with the GIL released, and hands back its result.
  *
- * A *synchronous* binding that can block must let Python run while it waits.
- * A11's mutexes and events are fiber-aware (@c thread::Mutex, @c
- * thread::Select), and whoever holds one may itself need the GIL -- a Python
- * action handler, a chunk built through the serialisation registry, a future
- * completed onto an asyncio loop. Waiting with the GIL held closes that cycle:
- * nothing Python can run, so the holder never finishes, so the wait never ends.
- * The GIL is taken again before the result is turned into a Python object, so a
- * converting call (@c ValueOrThrow, @c FutureToPython) belongs outside.
+ * Synchronous waits release the GIL so Python callbacks can complete them.
+ * The GIL is reacquired before converting the result to a Python object.
  */
 template <typename Callable>
 auto WithoutGil(Callable&& call) -> decltype(call()) {
@@ -310,11 +258,7 @@ auto WithoutGil(Callable&& call) -> decltype(call()) {
 /**
  * A JSON object as Python holds it: @c dict[str,Any] in a signature.
  *
- * The payloads A11 hands over as plain data -- a `flow.diagnostics/v1`
- * envelope, an action's headers, a recorded span -- have known keys and values
- * of whatever JSON allows. Returning @c py::dict says only @c dict, which tells
- * a reader of the stub nothing about the keys; this at least says what the keys
- * are and admits that a value is anything.
+ * Used for JSON data with string keys and arbitrary values in generated stubs.
  */
 using PyJsonObject = py::typing::Dict<py::str, py::object>;
 
@@ -361,19 +305,15 @@ class PythonLoop {
   /**
    * The loop to marshal onto, resolved now.
    *
-   * The running loop, else whatever the policy holds -- including a loop it
-   * invents on the spot. For a caller that is *itself* created from async code
-   * (a Session, a server, a transport callback) that is right and cheap: the
-   * loop it was made on is the loop it will be used from.
+   * Uses the running loop or the event loop policy's loop.
    */
   static absl::StatusOr<std::shared_ptr<PythonLoop>> Capture();
 
   /**
    * The loop running on this thread, or null when there is none.
    *
-   * Never fails: "no loop here" is an answer rather than an error, which is
-   * what lets an owner defer the question instead of guessing (see Resolve).
-   * A loop found this way is also remembered process-wide.
+   * Returns null when no loop runs here. Found loops are remembered
+   * process-wide for Resolve().
    */
   static std::shared_ptr<PythonLoop> CaptureRunning();
 
@@ -383,18 +323,9 @@ class PythonLoop {
   /**
    * The loop to marshal onto, resolved as late as possible.
    *
-   * For work whose owner was created before any loop existed -- an action
-   * handler registered at import time is the ordinary case -- and which is now
-   * actually being invoked. Tries, in order: the loop running on this thread;
-   * the last loop A11 was used from, if it is still open; and whatever the
-   * policy already holds. It will not invent a loop: one nobody runs is
-   * indistinguishable from a hang, so an unanswerable question fails here
-   * instead, saying what to do about it.
-   *
-   * A process running several loops is unaffected, because an owner created
-   * inside one captures it there and never reaches this. Only an owner created
-   * outside every loop gets here, and such an owner has no loop it belongs to
-   * for A11 to get wrong.
+   * For owners created before an event loop existed. Tries the current loop,
+   * the last open loop A11 used, then the policy's existing loop. Reports an
+   * error if none is available.
    */
   static absl::StatusOr<std::shared_ptr<PythonLoop>> Resolve();
 
@@ -469,14 +400,8 @@ inline void ThrowIfNotOk(const absl::Status& status) {
 /**
  * @brief Runs a blocking native operation with the GIL released.
  *
- * **Releasing is not an optimisation, it is required.** A call that blocks on
- * the libuv loop (`RunOnUv`/`RunStatusOnUv` -> `Future::Await`) is completed by
- * the uv thread, and completing it means touching Python objects --
- * `FutureToPython` callbacks, `py::object` destructors -- which needs the GIL.
- * A caller that blocked while holding it would deadlock the loop.
- *
- * Any argument conversion that touches Python must therefore happen *before*
- * the call, while the GIL is still held.
+ * Convert Python arguments before this call, while holding the GIL. Native
+ * waits release it so libuv completions can access Python objects.
  */
 template <typename Operation>
 void CallWithoutGil(Operation&& operation) {

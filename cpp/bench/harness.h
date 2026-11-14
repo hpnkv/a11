@@ -16,18 +16,11 @@
 
 /**
  * @file
- * @brief Native benchmark measurement utilities matching `bench/harness.py`.
+ * @brief Native benchmark utilities with Python and TypeScript row names.
  *
- * Native and Python benchmarks use the same three conventions:
- * latency and throughput are measured separately (a `steady_clock` pair around
- * a 40ns operation measures the clock), memory is a slope over a growing
- * population rather than one delta, and a result is a record that goes to JSON
- * rather than a line of text.
- *
- * The records emitted here use the same field names as the Python and
- * TypeScript runners, so `python -m bench --baseline` diffs a native run
- * against a Python one directly. Where a benchmark measures the same operation
- * as its Python counterpart, it carries the same suite and name on purpose.
+ * Latency and throughput are measured separately. Memory uses a slope over
+ * growing populations. JSON rows share suite and name fields with the other
+ * runners for baseline comparisons.
  */
 
 #ifndef A11_BENCH_HARNESS_H_
@@ -77,27 +70,14 @@ class Recorder {
 /** @brief p50/p90/p99/max/mean in microseconds, from nanosecond samples. */
 std::map<std::string, double> Percentiles(std::vector<double> samples_ns);
 
-/**
- * @brief
- *   Time `iterations` calls as one batch and report a rate, not a latency.
- *
- * For anything fast enough that the clock is part of what you would be
- * measuring. `per_op_items` is for an operation that moves more than one thing
- * (a PutMany of 64 is one call and 64 items); `per_op_bytes` turns the same run
- * into a byte rate.
- */
+/** Times `iterations` calls as one batch and reports a rate.
+ * `per_op_items` and `per_op_bytes` scale the rate for batched operations. */
 std::map<std::string, double> Throughput(
     const std::function<void(std::int64_t)>& operation, std::int64_t iterations,
     std::int64_t warmup = 0, std::int64_t per_op_items = 1,
     std::int64_t per_op_bytes = 0);
 
-/**
- * @brief
- *   Time each call separately and report the distribution.
- *
- * For anything above roughly a microsecond: a round trip, a dispatch, a store
- * write.
- */
+/** Times each call separately and reports its latency distribution. */
 std::map<std::string, double> Latency(
     const std::function<void(std::int64_t)>& operation, std::int64_t iterations,
     std::int64_t warmup = 0);
@@ -105,15 +85,9 @@ std::map<std::string, double> Latency(
 /** @brief The process's resident set right now, in bytes. */
 std::uint64_t CurrentRssBytes();
 
-/**
- * @brief
- *   Marginal resident bytes per object, fitted rather than differenced.
- *
- * `make(n)` must produce `n` more objects and keep them alive; the caller owns
- * whatever container it appends to. A single before/after reading is dominated
- * by pages the allocator had already reserved and by fixed costs charged to the
- * first object, so this builds the population in stages and fits a line through
- * (count, RSS). `trail` receives the raw points, for the note.
+/** Fits marginal resident bytes per object across growing populations.
+ * `make(n)` adds and retains `n` objects. `trail` receives the measured
+ * (count, RSS) points.
  */
 double MemorySlope(const std::function<void(std::int64_t)>& make,
                    const std::vector<std::int64_t>& counts, std::string* trail);

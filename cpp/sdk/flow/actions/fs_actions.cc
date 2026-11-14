@@ -62,17 +62,14 @@ using ::a11::actions::ActionSchema;
 
 namespace fs = std::filesystem;
 
-/// Largest single chunk. Above this a "chunk" is an allocation rather than a
-/// unit of streaming, and the value stops behaving like a stream.
+/// Maximum streamed chunk size: 8 MiB.
 constexpr std::int64_t kMaxChunkBytes = 8 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
 
-/// The status an errno deserves. The mapping matters more than it looks: a
-/// flow's `try` reads the code, so ENOENT arriving as `unavailable` would make
-/// "no such file" indistinguishable from "the disk went away".
+/// Maps filesystem errno values to statuses used by Flow `try`.
 absl::Status ErrnoStatus(int code, std::string_view what,
                          std::string_view path) {
   const std::string message =
@@ -108,11 +105,7 @@ absl::Status ErrorCodeStatus(const std::error_code& error,
   return ErrnoStatus(error.value(), what, path);
 }
 
-// A file descriptor that closes itself.
-/// A file descriptor that closes itself. Not RAII for elegance: every early
-/// return in this file is a `return` out of a fiber, and a leaked descriptor
-/// per failed read is a process that stops working after a few thousand of
-/// them.
+/// Closes a file descriptor on every return path, including fiber failures.
 class Fd {
  public:
   Fd() = default;
@@ -236,8 +229,7 @@ absl::StatusOr<Options> ReadOptions(const std::shared_ptr<Action>& action) {
   return Options::Parse(&*raw);
 }
 
-/// Resolves the `path` input against the policy. The first thing every handler
-/// does, and the only place a path enters this file.
+/// Resolves one path input against the filesystem policy.
 absl::StatusOr<fs::path> ResolveInput(const std::shared_ptr<Action>& action,
                                       const FilesystemPolicy& policy,
                                       std::string_view port, bool for_write) {
@@ -248,9 +240,7 @@ absl::StatusOr<fs::path> ResolveInput(const std::shared_ptr<Action>& action,
 
 /// Matches a filename against a `*`/`?` pattern.
 ///
-/// This is not a regular expression: a pattern may have come from a model,
-/// and `*` and `?` cannot be made to backtrack for a second, where a regular
-/// expression can. Iterative rather than recursive for the same reason.
+/// Supports `*` and `?` with iterative, bounded matching.
 bool WildcardMatch(std::string_view name, std::string_view pattern) {
   std::size_t name_at = 0;
   std::size_t pattern_at = 0;
@@ -485,8 +475,7 @@ absl::StatusOr<WriteSettings> ReadWriteSettings(
     settings.max_bytes = policy.max_write_bytes;
   }
   if (settings.append && settings.atomic) {
-    // Not a thing a filesystem offers, and quietly picking one of the two would
-    // mean a caller believing in a guarantee it does not have.
+    // Appending cannot use the rename that makes replacement atomic.
     return absl::InvalidArgumentError(
         "options.append and options.atomic cannot both be set: appending "
         "replaces nothing, so there is no rename that would make it atomic");
@@ -494,9 +483,7 @@ absl::StatusOr<WriteSettings> ReadWriteSettings(
   return settings;
 }
 
-/// The temporary a non-append write goes to. Beside the destination rather than
-/// in a temp directory, because a rename across filesystems is a copy and would
-/// stop being atomic.
+/// Creates a temporary beside the destination for an atomic rename.
 fs::path TemporaryBeside(const fs::path& destination) {
   return destination.parent_path() /
          absl::StrCat(".", destination.filename().string(), ".a11-",
@@ -741,9 +728,7 @@ absl::Status RunListDirectory(const std::shared_ptr<Action>& action,
       if (!*carry_on) {
         break;
       }
-      // The incrementing overload that reports rather than throws: a directory
-      // that cannot be entered mid-walk is ordinary, and abandoning the whole
-      // listing for one of them would be the wrong answer.
+      // Use the error_code overload for directories lost during traversal.
       walk.increment(error);
       if (error) {
         break;
@@ -778,9 +763,7 @@ absl::Status RunListDirectory(const std::shared_ptr<Action>& action,
       !written.ok()) {
     return finish(written);
   }
-  // Said explicitly rather than left for a caller to infer from a count that
-  // happens to equal the limit: a truncated listing that looks complete is how
-  // a flow reports a wrong answer confidently.
+  // Report truncation explicitly when the entry limit ends the listing.
   if (const absl::Status written =
           outputs["truncated"].PutOnly(nlohmann::json(truncated));
       !written.ok()) {
@@ -862,8 +845,7 @@ absl::Status RunRemovePath(const std::shared_ptr<Action>& action,
     return outputs.Finish();
   }
   if (fs::is_directory(path, error) && !recursive) {
-    // Refusing rather than removing: a recursive delete nobody asked for is
-    // the single most expensive way for this library to be convenient.
+    // Directory removal requires explicit recursive permission.
     return absl::FailedPreconditionError(
         absl::StrCat("'", path.string(),
                      "' is a directory; set options.recursive to remove it"));
@@ -1357,8 +1339,7 @@ absl::Status RegisterFilesystemWriteActions(actions::ActionRegistry& registry,
     return absl::InvalidArgumentError("a policy is required");
   }
   if (!capabilities->filesystem.writable) {
-    // Registering six actions that all refuse would be a host believing it
-    // allowed writing. Better to say so where the mistake was made.
+    // Reject an unwritable policy when registering write actions.
     return absl::FailedPreconditionError(
         "the filesystem policy is not writable, so registering the writing "
         "actions would register six actions that all refuse");

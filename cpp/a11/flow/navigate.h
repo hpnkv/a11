@@ -97,8 +97,7 @@ struct Description {
   SymbolClass kind = SymbolClass::kExternal;
   /// One line: what it is. `an action`, `a port of 'search'`.
   std::string summary;
-  /// Everything else worth reading: an action's description and its ports, a
-  /// shape's fields, what a stage takes.
+  /// Details such as action ports, shape fields, or stage arguments.
   std::string detail;
   /// The same as Markdown, which is what an editor's hover wants.
   std::string markdown;

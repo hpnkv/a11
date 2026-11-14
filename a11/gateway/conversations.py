@@ -92,9 +92,7 @@ class ConversationIndex:
             # WAL so a second IDE instance reading the list never blocks the one
             # recording a turn.
             db.execute("PRAGMA journal_mode=WAL")
-            # `project` is unused for now: the conversation list is global.
-            # It is here so scoping the list to a project later is a query
-            # change rather than a migration.
+            # Keep `project` in the schema for future scoped queries.
             db.execute("""
                 CREATE TABLE IF NOT EXISTS conversations (
                     id         TEXT PRIMARY KEY,
@@ -204,9 +202,7 @@ class ConversationStore:
                     conversation_id, chunk_store_factory=self._factory
                 )
                 for interaction in fresh:
-                    # Awaiting the returned future is what waits for the
-                    # store to accept the fragment, rather than merely admit
-                    # it -- so it is durable before `record` returns.
+                    # Await storage completion before `record` returns.
                     await (
                         await node.put(interaction, mimetype="application/json")
                     )

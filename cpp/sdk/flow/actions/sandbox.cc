@@ -42,9 +42,7 @@ namespace {
 
 #if defined(__linux__)
 
-// Declared here rather than included from <linux/landlock.h>. The ABI is stable
-// and versioned by the kernel itself, so it is written out and probed at
-// runtime.
+// Declare the versioned Landlock ABI locally and probe it at runtime.
 
 #ifndef SYS_landlock_create_ruleset
 #if defined(__x86_64__)
@@ -78,8 +76,7 @@ struct LandlockPathBeneathAttr {
   std::int32_t parent_fd;
 } __attribute__((packed));
 
-// The filesystem rights, ABI 1 through 5. Named rather than included for the
-// reason above.
+// Filesystem rights in Landlock ABI versions 1 through 5.
 constexpr std::uint64_t kAccessFsExecute = 1ULL << 0;
 constexpr std::uint64_t kAccessFsWriteFile = 1ULL << 1;
 constexpr std::uint64_t kAccessFsReadFile = 1ULL << 2;
@@ -104,9 +101,8 @@ constexpr int kRuleTypePathBeneath = 1;
 
 /// The rights this library asks the kernel to arbitrate, given @p abi.
 ///
-/// Only handled rights are restricted: anything left out of this mask is
-/// unaffected by the ruleset, so asking for a right the running kernel does not
-/// know about makes the whole call fail. Hence the version gating.
+/// Include only rights supported by the running ABI; unsupported rights fail
+/// ruleset creation.
 std::uint64_t HandledFilesystemRights(int abi) {
   std::uint64_t handled =
       kAccessFsExecute | kAccessFsWriteFile | kAccessFsReadFile |
@@ -128,12 +124,8 @@ std::uint64_t HandledFilesystemRights(int abi) {
 
 /// The rights Landlock accepts on a rule whose target is not a directory.
 ///
-/// A rule carrying a directory-only right -- `READ_DIR`, any of the `MAKE_*` or
-/// `REMOVE_*` -- is refused with EINVAL when its `parent_fd` is a regular file.
-/// Several of the paths a confined child needs to start at all are files
-/// (`/etc/ld.so.cache`, `/dev/null`, the program itself), so the caller's
-/// rights are narrowed to this set for them rather than the call failing and
-/// taking the whole sandbox with it.
+/// Landlock rejects directory rights on regular files. Use this subset for
+/// runtime files such as `/etc/ld.so.cache`, `/dev/null` and the program.
 std::uint64_t FileRights(int abi) {
   std::uint64_t rights =
       kAccessFsExecute | kAccessFsWriteFile | kAccessFsReadFile;
@@ -193,10 +185,7 @@ int ProbeAbiVersion() {
 
 /// Quotes a path for a Seatbelt profile literal.
 ///
-/// The profile is a small Scheme-like language, and a path is a string literal
-/// in it. A path holding a quote or a backslash would otherwise end the literal
-/// early and turn the rest of the path into profile source -- which for a
-/// path a flow chose is an injection into the very thing meant to contain it.
+/// Escapes quotes and backslashes so a path cannot change the profile source.
 std::string QuoteForProfile(std::string_view path) {
   return absl::StrCat(
       "\"", absl::StrReplaceAll(path, {{"\\", "\\\\"}, {"\"", "\\\""}}), "\"");
@@ -257,9 +246,7 @@ absl::StatusOr<std::shared_ptr<Sandbox>> Sandbox::Prepare(
     sandbox->description_ = "not requested";
     return sandbox;
   }
-  // An unrestricted filesystem policy has no roots to confine anything to, and
-  // a sandbox that allows everything is a sandbox in name only. Said plainly
-  // rather than prepared and reported as active.
+  // No filesystem roots are available for an unrestricted policy.
   if (filesystem.unrestricted || filesystem.roots.empty()) {
     if (process.sandbox == SandboxRequest::kRequired) {
       return absl::FailedPreconditionError(
@@ -350,9 +337,7 @@ absl::StatusOr<std::shared_ptr<Sandbox>> Sandbox::Prepare(
   for (const std::string& root : process.write_roots) {
     ABSL_RETURN_IF_ERROR(allow(root, ReadRights(abi) | WriteRights(abi)));
   }
-  // The program itself, and the libraries it needs to start at all. Read and
-  // execute only: a child that cannot read /usr/lib cannot exec anything, and a
-  // sandbox that stops the program from starting is not a useful sandbox.
+  // Permit read and execute access to the program and its runtime libraries.
   for (const std::string_view essential :
        {"/usr", "/lib", "/lib64", "/bin", "/sbin", "/etc/ld.so.cache",
         "/etc/ld.so.preload", "/proc/self", "/dev/null", "/dev/urandom",
@@ -426,10 +411,7 @@ absl::StatusOr<std::shared_ptr<Sandbox>> Sandbox::Prepare(
     lines.push_back(absl::StrCat("(allow file-read* (literal ",
                                  QuoteForProfile(program), "))"));
   }
-  // Apple's bsd.sb base profile is intentionally broad enough for dynamic
-  // runtimes. Put the high-value user-data exclusions back explicitly: build
-  // tools need their installations and caches, never browser sessions, cloud
-  // credentials, private keys, password stores, mail, messages, or histories.
+  // bsd.sb permits dynamic runtimes. Deny sensitive user data explicitly.
   if (const char* home = std::getenv("HOME");
       home != nullptr && *home != '\0') {
     std::vector<std::string> denied;
@@ -478,7 +460,7 @@ absl::StatusOr<std::shared_ptr<Sandbox>> Sandbox::Prepare(
       filesystem.writable ? "writes confined" : "workspace read-only", ", ",
       process.write_roots.size(), " writable scratch roots",
       capabilities.network.enabled ? ", network allowed" : ", network refused",
-      // Said in the description a flow can read, not only in a header comment.
+      // Include the macOS read limitation in the action's description.
       ", general reads not confined; sensitive user data refused (macOS)");
   return sandbox;
 #else

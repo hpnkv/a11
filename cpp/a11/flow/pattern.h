@@ -25,36 +25,10 @@
 
 namespace a11::flow::pattern {
 
-/// The pattern language `match` reads: literal text and named holes.
-///
-/// **Why not a regular expression.** A flow is text somebody writes in the
-/// moment, often a model, and the thing being written is almost always "this
-/// line, with these bits pulled out of it". Regex answers that with
-/// `name.*=.*(?<name>[^ ]+)\s+age.*=.*(?<age>\d+)`, which is unreadable at a
-/// glance and wrong in three ways before it is right. The same intent here is
-/// `name={name} age={age:int}`, and there is nothing to escape.
-///
-/// | In the pattern | Means |
-/// | --- | --- |
-/// | literal text | matches itself |
-/// | a run of whitespace | matches any run of whitespace, at least one |
-/// | `{name}` | captures up to whatever literal follows, as little as it can |
-/// | `{name:int}` | and reads it as an integer |
-/// | `{}` | captures without a name, read as `it[0]`, `it[1]`, ... |
-/// | `{{`, `}}` | a literal brace |
-///
-/// The pattern **searches**: it matches anywhere in the value, so
-/// `match("age={age:int}", line)` works on a longer line without leading and
-/// trailing wildcards. A hole captures at least one character and does not
-/// cross
-/// a line break unless its type says to.
-///
-/// This half knows nothing about [Value]: it compiles a pattern, says what its
-/// holes are called, and hands back the *text* each one took. Reading that text
-/// as a number, an instant or a duration is the value layer's job, and keeping
-/// the split is what lets the resolver ask a pattern for its field names
-/// without
-/// the runtime being linked in.
+/// Literal text and named holes used by `match`, such as `age={age:int}`.
+/// Matches search the input. Holes capture nonempty text and stay on one line
+/// unless their type permits line breaks. Captures retain text for decoding.
+
 /// What a hole reads its text as, and how much of it a hole may take.
 enum class HoleType {
   /// Anything up to the next literal, on one line. The default.

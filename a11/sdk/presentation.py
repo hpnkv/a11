@@ -12,34 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Turn interactions into renderer-independent presentation units.
+"""Turn live and stored interactions into renderable blocks.
 
-This module determines which text an interaction contributes, which tool ran,
-where its log belongs, and which tool-result interactions should not be drawn.
+`PresentationReducer` produces ordered `PresentationBlock` values for terminal
+and web clients. Live port events retain their observed order. Stored
+`Interaction` values replay text, then tool runs in ``action_calls`` order,
+then usage; stored interactions do not include the original event timeline.
 
-The unit is a `PresentationBlock`: a flat, ordered, renderer-agnostic piece of a
-turn. A client's job shrinks to a `match` over `BlockKind`, which is what makes
-a terminal, a webview and a future web UI feel like the same product without
-sharing a line of rendering code.
-
-**One reducer, two feeders.** A live turn arrives as port events (text deltas,
-thought deltas, whole interactions); a reopened conversation arrives as stored
-`Interaction`s. Both go through `PresentationReducer`, so a client draws
-replayed history with the same code that draws a live turn.
-
-**Ordering.** The live feeder sees true interleaving of text, thoughts and tool
-runs, because it is watching them happen. A stored `Interaction` has no
-timeline, so replay is a stable approximation: text, then tool runs in
-``action_calls``
-order, then usage. Live order is authoritative; replay is deterministic but not
-necessarily match the original live order. Exact replay would require per-part
-timestamps on the wire.
-
-These types carry no serial tag on purpose: tags are for values that cross the
-wire ([a11.data.serial_tags][a11.data.serial_tags]), and this derivation runs
-client-side. The cross-language contract is the golden fixture
-``testdata/presentation_events.json``, which pins the field names should a
-future gateway ever want to stream blocks directly.
+The blocks are client-side values without serial tags. The
+``testdata/presentation_events.json`` fixture pins their cross-language fields.
 """
 
 from __future__ import annotations

@@ -12,26 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Schemas for the three Flow Actions, kept separate from the handlers.
+"""Schemas for discovering, checking and running Flow compositions.
 
-Execution is the default; discovery and compile-only checks are optional:
-
-* ``flow_actions`` says what may be composed, and -- the part a tool definition
-  cannot carry -- what each action's *output* ports are called;
-* ``flow_check`` compiles a composition without running it;
-* ``flow_run`` runs one and hands back its outputs.
-
-Each returns its whole result as one JSON value
-([WHOLE_JSON_OUTPUT][a11.sdk.llm_tools.adapter.WHOLE_JSON_OUTPUT]), because
-what a model wants back is the object, not an envelope around it.
-
-``flow_run`` serves a second kind of caller as well, and the difference is only
-in how a port is filled. A model sends an object of values and reads the
-collected ``result``; a client with a session of its own names its ports on
-``input_streams`` and writes them as nodes while the flow runs, reading the
-outputs the same way (see
-[flow_input_node_id][a11.sdk.flow_tools.handlers.flow_input_node_id]). Neither
-mechanism cares how many values a port carries.
+``flow_actions`` lists permitted actions and their output ports. ``flow_check``
+compiles without execution. ``flow_run`` runs a Flow and returns its collected
+outputs as one JSON value. Clients can name live input ports on
+``input_streams`` and access them through
+[flow_input_node_id][a11.sdk.flow_tools.handlers.flow_input_node_id].
 """
 
 from __future__ import annotations

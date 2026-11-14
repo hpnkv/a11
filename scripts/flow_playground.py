@@ -225,9 +225,7 @@ async def run_one_turn(
         called.set_header(name, value.encode())
     await called.call()
 
-    # Subscribed before the source is sent, so nothing produced early is
-    # missed: a node hands a late reader the stream from its beginning anyway,
-    # but there is no reason to rely on that here.
+    # Subscribe before sending the source.
     def published(port: str):
         return session.node_map.get(
             flow_tools.flow_output_node_id(called.get_id(), port)
@@ -235,14 +233,11 @@ async def run_one_turn(
 
     outputs = {port: published(port) for port in described["outputs"]}
 
-    # Every input port, including the ones this call has nothing for: an input
-    # nobody writes and nobody closes is one the handler waits on, and with no
-    # deadline on the call it waits for good.
+    # Close every unused input port so the handler can finish.
     await called["source"].finalize(FLOW_SOURCE)
     await called["inputs"].finalize(inputs_value)
     await called["flow"].finalize()
-    # This flow's history arrives on a node of its own (see `write_history`),
-    # named inside `inputs` rather than as a port left open here.
+    # History uses a separate node named inside `inputs`.
     await called["input_streams"].finalize()
 
     remembered: list[Any] = []
@@ -270,9 +265,7 @@ async def run_one_turn(
     )
     readers = [asyncio.ensure_future(show(port)) for port in outputs]
     try:
-        # The flow finishing is what ends this, and a flow that fails says so
-        # here rather than after a silent wait for a sentence that was never
-        # going to arrive.
+        # The flow reports failure directly while its outputs are being read.
         await asyncio.wait_for(called.wait(), timeout=FLAGS.listen_seconds)
         await asyncio.wait_for(asyncio.gather(*readers), timeout=10)
     except asyncio.TimeoutError:
@@ -327,10 +320,8 @@ async def chat(
                 console,
             )
         except StatusException as error:
-            # One turn failing is not the conversation failing: a provider
-            # hiccup should cost the turn and nothing else, and the history is
-            # this script's, so it survives. Twice in a row is a configuration
-            # problem rather than a blip, and no amount of talking will fix it.
+            # Keep history after one failed turn; stop after two consecutive
+            # failures.
             failures += 1
             console.print(f"\n[red]that turn failed:[/] {error}")
             if failures > 1:
@@ -351,8 +342,7 @@ async def run(console: Console) -> int:
     session, stream = await connect()
     console.print(f"connected to [bold]{FLAGS.gateway}[/]\n")
 
-    # Both of these are the gateway's flow tools answering, and neither one
-    # needs a microphone or a model -- `--check_only` stops here.
+    # `--check_only` exercises gateway Flow tools without audio or a model.
     await show_what_is_composable(session, stream, console)
     described = await check_the_flow(session, stream, console)
     if FLAGS.check_only:

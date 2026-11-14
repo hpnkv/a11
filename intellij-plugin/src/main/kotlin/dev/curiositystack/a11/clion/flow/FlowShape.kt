@@ -23,14 +23,9 @@ import com.intellij.psi.tree.IElementType
 data class FlowShapeToken(val type: IElementType, val start: Int, val end: Int)
 
 /**
- * The shape of a flow, without the language: comments, strings, numbers, words
- * and punctuation, and nothing about which words are keywords.
- *
- * [FlowLexer] falls back to this when there is no `a11-flow` for this platform.
- * [FlowEnterHandler] uses it outright, on purpose, because it runs on the write
- * thread while Enter is being processed, and a subprocess round trip has no
- * place there -- the punctuation is enough to answer "is this line a
- * continuation", and nothing here needs to know what a word means to say that.
+ * Tokenizes Flow punctuation and literals without semantic classification.
+ * [FlowLexer] uses it when `a11-flow` is unavailable. [FlowEnterHandler] uses
+ * the token shapes while handling Enter on the write thread.
  */
 object FlowShape {
 

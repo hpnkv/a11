@@ -74,10 +74,7 @@ namespace {
 
 /// A token as the dict `a11.flow` reads it back from.
 ///
-/// Dicts rather than bound classes on purpose: these cross the boundary in
-/// thousands at a time and are consumed immediately -- by a highlighter, a
-/// formatter, a parity test -- so the cheapest faithful shape wins. The parsed
-/// tree, which callers hold on to, gets real types.
+/// Tokens cross the boundary as dictionaries for highlighters and formatters.
 py::dict TokenToDict(const flow::Token& token) {
   py::dict value;
   value["kind"] = std::string(flow::KindName(token.kind));
@@ -173,9 +170,7 @@ PyJsonObject LexToDict(std::string_view source, bool keep_comments) {
 
 /// A JSON value as the Python objects it stands for.
 ///
-/// Built here rather than handed over as text: the syntax tree is the one
-/// payload big enough for the difference to show, and a caller that got a
-/// string back would parse it again immediately.
+/// Convert directly to Python objects for syntax tree consumers.
 py::object JsonToPython(const nlohmann::json& value) {
   switch (value.type()) {
     case nlohmann::json::value_t::null:
@@ -211,10 +206,7 @@ py::object JsonToPython(const nlohmann::json& value) {
 
 /// A Python object as the JSON value it stands for.
 ///
-/// Only what a request is made of -- the containers, the scalars, and nothing
-/// else -- because that is the whole of what crosses this way. Anything else is
-/// a caller passing something a request cannot hold, and saying so is better
-/// than quietly stringifying it.
+/// Accept request containers and scalars; reject unsupported Python values.
 nlohmann::json PythonToJson(const py::handle& value) {
   if (value.is_none()) {
     return nullptr;
@@ -557,11 +549,8 @@ py::object ValueToPython(const flow::Value& value) {
 
 /// The three questions only the host can answer, answered by the interpreter.
 ///
-/// Every one of these reaches into CPython from a flow's fiber, which is why
-/// the runtime gives its fibers a stack an interpreter frame chain fits in. The
-/// GIL is taken here rather than held across a flow: a flow spends its time
-/// waiting on nodes, and holding the interpreter while it did would serialise
-/// every other Python thread behind it.
+/// Calls into CPython from flow fibers with enough stack for interpreter
+/// frames. Each call acquires the GIL for its duration.
 class PythonBridge : public flow::HostBridge {
  public:
   bool CanPassChunkObject(const data::Chunk& chunk,
@@ -751,20 +740,11 @@ class PythonBridge : public flow::HostBridge {
     return chunks;
   }
 
-  // A value of a `struct` becomes an instance of the pydantic model that shape
-  // describes.
   /// A value of a `struct` becomes an instance of the pydantic model that shape
   /// describes.
   ///
-  /// The record has already been validated against the shape on the C++ side --
-  /// there is one implementation of what a shape means -- so this is about how
-  /// Python would rather *hold* it. Building the model is Python's job because
-  /// that is where a pydantic model can exist at all; the model is cached
-  /// against the shape, so a stream of ten thousand records builds one class.
-  ///
-  /// A host that cannot build the model says so by leaving the record as it is:
-  /// a flow that ran without pydantic installed should still run, with plain
-  /// mappings, rather than fail at the first coercion.
+  /// C++ validates the record against the shape. Python builds and caches the
+  /// model class. Without pydantic, the value remains a plain mapping.
   absl::StatusOr<flow::Value> Adopt(const flow::DtoPlan& shape,
                                     const flow::Program& program,
                                     const flow::Value& value) override {
@@ -816,10 +796,7 @@ std::shared_ptr<flow::HostBridge> HostBridgeForPython() {
 
 /// One flow of a compiled program, as Python holds it.
 ///
-/// A handle rather than a copy: the plan, the graph and the tree it borrows are
-/// the program's, and this keeps the program alive for as long as anything is
-/// holding one of its flows -- which is what makes `program["x"].handler`
-/// outlive the program variable it came from.
+/// Retains the compiled program so borrowed plans remain valid.
 struct BoundFlow {
   std::shared_ptr<const flow::CompiledProgram> program;
   std::string name;
@@ -1890,13 +1867,10 @@ so that matters more here than a richer template language would.
       py::arg("source"), py::arg("keep_comments") = true,
       R"doc(Tokenize Flow source.
 
-Returns a dict of ``tokens`` and ``diagnostics``. Lexing never fails: an
-unterminated string ends at its line, an unknown character is one ``bad`` token,
-and what follows is still read, because an editor is looking at a file somebody is
-in the middle of typing.
+Returns ``tokens`` and ``diagnostics``. An unterminated string ends at its line;
+an unknown character becomes a ``bad`` token. Lexing continues after each error.
 
-With ``keep_comments`` a comment is a token, which is what a highlighter and a
-formatter need; without it the stream is what the parser reads.
+With ``keep_comments``, comments appear as tokens. The parser omits them.
 )doc");
 
   flow.def(
@@ -2049,11 +2023,9 @@ definition that still keeps a copy to it.
       py::arg("source"), py::arg("offset"),
       R"doc(What may be written at ``offset``.
 
-Returns a ``flow.completions/v1`` payload: the proposals in the order they should
-be offered, the partial word at the caret, and where that word starts. After a
-``|`` only a stage; past a port's ``:`` only a type; after ``x.`` only what ``x``
-has. Unfiltered on purpose -- every frontend filters by its own rules, and
-filtering twice drops what a fuzzy matcher would have kept.
+Returns a ``flow.completions/v1`` payload with ordered proposals, the partial
+word at the caret, and its start offset. Grammar and scope determine the
+proposals. Frontends filter them for display.
 )doc");
 
   flow.def(
@@ -2090,11 +2062,9 @@ whole truth would be misled.
         return value;
       },
       py::arg("target") = "sublime",
-      R"doc(An editor definition, generated from the language's own tables.
+R"doc(Generate an editor definition from the Flow vocabulary.
 
-Returns where the file belongs and what should be in it. A static grammar file is a
-copy of the word lists, and a copy falls behind; generating it means a word added to
-the language reaches the editor by running this, and CI notices when nobody has.
+Returns the generated text and its repository path.
 
 ``target`` is ``"sublime"`` for the Sublime/TextMate-family grammar or
 ``"pygments"`` for the lexer that colours a fenced flow in A11's documentation.

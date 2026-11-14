@@ -1079,11 +1079,9 @@ def complete(source: str, offset: typing.SupportsInt) -> dict[str, typing.Any]:
     """
     What may be written at ``offset``.
 
-    Returns a ``flow.completions/v1`` payload: the proposals in the order they should
-    be offered, the partial word at the caret, and where that word starts. After a
-    ``|`` only a stage; past a port's ``:`` only a type; after ``x.`` only what ``x``
-    has. Unfiltered on purpose -- every frontend filters by its own rules, and
-    filtering twice drops what a fuzzy matcher would have kept.
+    Returns a ``flow.completions/v1`` payload with ordered proposals, the partial
+    word at the caret, and its start offset. Grammar and scope determine the
+    proposals. Frontends filter them for display.
     """
 
 def format(source: str) -> dict[str, typing.Any]:
@@ -1263,11 +1261,9 @@ def strformat(
 
 def syntax(target: str = "sublime") -> dict[str, str]:
     """
-    An editor definition, generated from the language's own tables.
+    Generate an editor definition from the Flow vocabulary.
 
-    Returns where the file belongs and what should be in it. A static grammar file is a
-    copy of the word lists, and a copy falls behind; generating it means a word added to
-    the language reaches the editor by running this, and CI notices when nobody has.
+    Returns the generated text and its repository path.
 
     ``target`` is ``"sublime"`` for the Sublime/TextMate-family grammar or
     ``"pygments"`` for the lexer that colours a fenced flow in A11's documentation.
@@ -1287,13 +1283,10 @@ def tokenize(source: str, keep_comments: bool = True) -> dict[str, typing.Any]:
     """
     Tokenize Flow source.
 
-    Returns a dict of ``tokens`` and ``diagnostics``. Lexing never fails: an
-    unterminated string ends at its line, an unknown character is one ``bad`` token,
-    and what follows is still read, because an editor is looking at a file somebody is
-    in the middle of typing.
+    Returns ``tokens`` and ``diagnostics``. An unterminated string ends at its line;
+    an unknown character becomes a ``bad`` token. Lexing continues after each error.
 
-    With ``keep_comments`` a comment is a token, which is what a highlighter and a
-    formatter need; without it the stream is what the parser reads.
+    With ``keep_comments``, comments appear as tokens. The parser omits them.
     """
 
 def vocabulary() -> dict[str, typing.Any]:

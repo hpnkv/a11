@@ -935,19 +935,10 @@ class SerializationRegistry:
         return await asyncio.to_thread(self.to_local_chunk, obj, mimetype)
 
     async def to_chunk_async(self, obj: Any, mimetype: str = "") -> types.Chunk:
-        """`to_chunk`, off the event loop only when it might block it.
+        """Serialize with caller codecs on a worker thread.
 
-        A caller's codec may take as long as it likes, so it goes to a worker
-        thread -- that is a contract, not an optimisation, and
-        `test_object_serialization_and_deserialization_run_in_worker_threads`
-        holds it. The registry's own codecs are a different matter: they are a
-        few microseconds, and `asyncio.to_thread` costs an order of magnitude
-        more than they do, so paying for a thread to run one is pure loss.
-
-        Deciding on the *codec* rather than on the payload's size is what makes
-        this safe. A small value can still have a slow codec -- that is exactly
-        what the test registers -- so size says nothing about whether the loop
-        is about to be blocked.
+        Built-in codecs run inline. Caller codecs may block the event loop,
+        regardless of payload size, so they run through ``asyncio.to_thread``.
         """
         if self._resolves_to_builtin_serializer(obj, mimetype):
             return self.to_chunk(obj, mimetype)
@@ -1565,18 +1556,11 @@ def _nested_models(
 
 
 def _normalize_bytes_validation(model_type: type[pydantic.BaseModel]) -> None:
-    """Teach a model tree to read the base64 its byte fields are written as.
+    """Configure nested pydantic models to read A11's base64 byte fields.
 
-    Bytes go out as base64, and pydantic's default is to read a JSON string
-    into `bytes` as UTF-8 -- which quietly mangles any payload that is not
-    text. Its base64 reader accepts the standard alphabet A11 writes as
-    well as the URL-safe one, so this only has to be turned on. Only *reading*
-    is delegated: pydantic writes URL-safe base64, so A11 keeps writing its
-    own.
-
-    Every nested model needs the same treatment, and needs it first: an outer
-    model compiles its fields' schemas into its own, so rebuilding it before
-    its members would bake in the unfixed ones.
+    A11 writes standard base64. Configure pydantic's reader for base64 while
+    retaining A11's writer. Rebuild inner models before outer models because
+    outer schemas include their fields' compiled schemas.
     """
     if model_type in _NORMALIZED_MODELS:
         return

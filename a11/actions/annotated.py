@@ -14,9 +14,8 @@
 
 """Build an Action's schema and handler from a callable's annotations.
 
-The same trade FastAPI makes for request handlers: write an ordinary function
-whose parameters are the values it actually wants, and let the framework work
-out the wire shape from the annotations and do the marshalling.
+Annotate a function's parameters and return type to declare its ports and
+their values:
 
 ```python
 async def summarise(
@@ -29,12 +28,10 @@ async def summarise(
 schema, handler = action_from_callable(summarise)
 ```
 
-That declares a ``summarise`` Action with a required unary ``document`` input,
-an optional unary ``style`` input, and one unary ``output`` port; the handler
-consumes the inputs, calls the function, and finalises its return value onto
-the output.
-[`ActionRegistry.action`][a11.actions.registry.ActionRegistry.action] is the
-same thing as a decorator that registers the result.
+This declares required ``document``, optional ``style`` and unary ``output``
+ports. The handler reads inputs, calls the function and finalizes its result.
+[`ActionRegistry.action`][a11.actions.registry.ActionRegistry.action] also
+registers the result.
 
 ## How a parameter is read
 
@@ -94,12 +91,8 @@ runner, which closes any output the handler did not write.
 
 ## What a caller owes
 
-A11's client contract already asks a caller to close every input port it
-declares, and a derived handler needs that too: an input port left open with
-nothing in it is indistinguishable from one whose value has not arrived yet, so
-reading it waits. The action's ``x-a11-deadline`` bounds that wait. A caller
-that neither fills nor closes an optional input and sets no deadline waits
-indefinitely.
+Callers must close every input port they declare. Reads of an open, empty port
+wait for a value, closure or the action's ``x-a11-deadline``.
 """
 
 from __future__ import annotations

@@ -12,33 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Distributed tool bridge: run the model's tool calls back on the caller.
+"""Run a gateway model's tool calls on the connected client.
 
-The gateway serves ``interact_with_llm``, but a client often owns tools the
-gateway cannot: an IDE plugin's editor, index and refactorings live in the IDE.
-When the model calls one of those, the tool runner resolves it against this
-connection's registry, where the bridge has registered a *proxy* whose handler
-reverse-dispatches the call over the same stream to the client, forwards the
-tool's inputs and streams its outputs back -- so the real handler runs where the
-tool actually is, while the model sees one ordinary A11 action.
+The gateway discovers client actions through `__list_actions__` and registers a
+proxy for each runnable action. Proxies dispatch calls over the existing stream
+and relay inputs and outputs. Discovery starts when a turn first needs tools;
+`on_connection` runs before the session pumps messages and cannot await a peer
+round trip.
 
-**How the bridge learns what the client has.** It asks. Every A11 peer answers
-`__list_actions__`, so the bridge calls it on the client and builds a proxy per
-answer -- no handshake to implement, no schema to hand-copy, and nothing for the
-client to remember to do. The ask is **lazy**: it happens the first time a turn
-needs tools, not when the connection opens. Two reasons, and both are hard
-requirements rather than tuning. A connection's `on_connection` hook runs before
-its session pumps messages, so an awaited round trip there deadlocks; and a
-connection that never chats should not pay for a round trip it will not use.
-
-Narration -- what a tool did, for the person watching, never part of the model's
-tool result -- rides the reserved log port. A client that logs through its own
-A11 runtime needs nothing from this module: the log port of the action the
-bridge dispatched mirrors back like any other output, and the proxy re-emits it
-through
-:meth:`a11.actions.action.Action.log` on the local action, which is where the
-tool runner reads it. Every action has a log port, so schemas do not nominate a
-declared output for narration.
+A proxied action's reserved log port carries narration back to the gateway.
+The bridge re-emits it through :meth:`a11.actions.action.Action.log`, where the
+tool runner reads it separately from model-visible outputs.
 """
 
 from __future__ import annotations
@@ -262,11 +246,8 @@ class RemoteToolBridge:
                     _pump(remote.get_output(name), nested.get_output(name))
                     for name in tool.schema.outputs
                 ],
-                # Narration onto the local action's log -- which is where the
-                # tool runner reads it, and the only place it can be without
-                # becoming visible to the model. Read for the same backpressure
-                # reason as everything else: a port nobody reads stalls the peer
-                # writing it.
+                # Drain the peer log into the local action log for the tool
+                # runner; unread log ports stall remote writers.
                 _relog(remote.get_log_node(), nested),
             )
 
@@ -297,9 +278,7 @@ async def _relog(src: a11.AsyncNode, action: a11.Action) -> None:
                 level=record["level"],
                 channel=record["channel"] or None,
                 internal=record["internal"],
-                # The peer's location, or none at all -- an empty file rather
-                # than None, so `log` does not helpfully stamp this module's own
-                # line onto somebody else's log.
+                # Preserve the peer's location, including an empty filename.
                 file=record["file"],
                 lineno=record["lineno"],
             )

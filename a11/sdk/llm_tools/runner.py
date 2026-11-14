@@ -92,26 +92,11 @@ def definition_from_schema(entry: dict[str, Any]) -> dict[str, Any]:
 def output_definition_from_schema(
     entry: dict[str, Any],
 ) -> dict[str, Any] | bool:
-    """The JSON Schema of what one action returns, from its entry.
+    """Build an action's output JSON Schema from its written declaration.
 
-    The output half of
-    [definition_from_schema][a11.sdk.llm_tools.runner.definition_from_schema],
-    read the same way -- from the written document, so it holds for a peer's
-    action as well as a local one. A backend that declares what a tool returns
-    (MCP's `outputSchema`, a structured-output request) states this document.
-
-    ``output_to_json_field`` decides the shape, matching what
-    [collect_action_outputs][a11.sdk.llm_tools.runner.collect_action_outputs]
-    actually produces: no mapping describes an object of the declared outputs;
-    a field mapping renames them and drops the ports it does not name; and
-    ``{"port": "$"}`` makes that port's own schema the whole document.
-
-    Two things the input half states are left out here, because an output
-    schema is a claim the result has to satisfy and neither claim holds. A port
-    with no `json_schema` is described as unconstrained rather than as an
-    object, and no field is `required`: a port the handler closed empty carries
-    no value, and a result missing that field is an ordinary outcome rather
-    than a broken promise.
+    ``output_to_json_field`` selects an object of output ports, renamed fields,
+    or one port as the whole result. Ports without `json_schema` are
+    unconstrained. Fields are optional because handlers may close ports empty.
 
     Returns:
         The schema, or ``{}`` when the action declares no outputs.
@@ -602,9 +587,7 @@ async def execute_actions_from_interaction(
                 .bind_handler(registry.get_handler(call.name))
             )
             a11.set_deadline_header(nested_action, deadline)
-            # Claimed before the run, because the log the handler writes on its
-            # first line has to arrive here rather than on the process sink:
-            # this runner is the consumer that shows it to a person.
+            # Claim the log port before the run so its first entry reaches us.
             log_node = nested_action.get_log_node()
             if action.has_been_run() and not action.is_done():
                 await action.log(

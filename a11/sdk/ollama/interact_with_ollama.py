@@ -747,10 +747,7 @@ async def interact_with_ollama(action: a11.Action):
     ollama_tools = _build_tools(tools)
     options = _build_options(config)
 
-    # Tool-call ids must be unique across the whole session, not just within one
-    # round or turn (see `_StreamAccumulator`). The counter advances by the
-    # number of tool calls each round produces. A per-turn prefix prevents the
-    # next user message from colliding with this turn's calls.
+    # Use a per-turn prefix and a running counter for session-unique call ids.
     call_id_prefix = f"call_{uuid.uuid4().hex[:12]}"
     next_tool_call_id = 0
     round_number = 0
@@ -899,9 +896,7 @@ async def interact_with_ollama(action: a11.Action):
                 action_outputs=executed.outputs,
                 backend_specific_metadata={
                     llm.BACKEND_METADATA_KEY: str(llm.Backend.OLLAMA).encode(),
-                    # What the tools said to the user, kept beside their
-                    # results rather than in them: metadata is the one part of
-                    # an interaction no backend turns into provider content.
+                    # Keep tool logs in metadata, outside model content.
                     **executed.log_metadata(),
                 },
                 content=[

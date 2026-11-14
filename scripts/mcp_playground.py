@@ -92,8 +92,7 @@ def _target() -> Any:
     if not _BEARER.value:
         return _SERVER.value
 
-    # Authorization belongs to the connection, so it is carried by the HTTP
-    # client the transport is built with rather than by an action header.
+    # Configure authorization on the HTTP client used by the transport.
     import httpx2
     from mcp.client.streamable_http import streamable_http_client
 

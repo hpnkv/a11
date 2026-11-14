@@ -28,8 +28,7 @@
 namespace a11::flow::pattern {
 namespace {
 
-// absl's predicates take an `unsigned char`; the casts are the conversion the
-// standard library asks for rather than anything about the character.
+// Abseil's character predicates take unsigned bytes.
 bool IsSpace(char letter) {
   return absl::ascii_isspace(static_cast<unsigned char>(letter));
 }
@@ -52,17 +51,8 @@ size_t FlatRun(std::string_view subject, size_t at) {
   return length;
 }
 
-/// Match one literal at `at`, or nothing.
-///
-/// A run of spaces or tabs in the pattern matches any run of them in the
-/// subject,
-/// which is what makes a hand-written pattern survive the two spaces somebody's
-/// log writer used. A **line break in the pattern** matches a line break in the
-/// subject, with horizontal space allowed either side: crossing to the next
-/// line
-/// is something a pattern has to say, or `a={a} b={b}` would quietly match
-/// `a=1`
-/// on one line and `b=2` on the next. Everything else matches itself, exactly.
+/// Matches a literal at `at`, normalizing runs of horizontal whitespace.
+/// A pattern line break also matches surrounding horizontal whitespace.
 std::optional<size_t> MatchLiteral(std::string_view literal,
                                    std::string_view subject, size_t at) {
   size_t index = 0;
@@ -107,9 +97,7 @@ size_t LineEnd(std::string_view subject, size_t at) {
 enum class Shape {
   /// Nothing: bounded by whatever literal follows it.
   kOpen,
-  /// Exactly what its type is. Where that does not fit, the hole does not
-  /// match here at all -- `{n:int}` against `none` is not a number, and taking
-  /// `n` for it would be answering a question nobody asked.
+  /// A complete value of the hole's type.
   kExact,
   /// A run it may give some of back, so `{level:word}` can stop before the `:`
   /// that follows it.
@@ -135,9 +123,7 @@ Shape ShapeOf(HoleType type) {
   return Shape::kOpen;
 }
 
-/// How far a typed hole reaches from `at` on its own, or nothing where its type
-/// says nothing about the shape of the text -- or where it says something the
-/// text at `at` is not.
+/// Returns a typed run's end, or null for an unknown or invalid shape.
 std::optional<size_t> TypedRun(HoleType type, std::string_view subject,
                                size_t at) {
   switch (type) {
@@ -174,8 +160,7 @@ std::optional<size_t> TypedRun(HoleType type, std::string_view subject,
         while (end < subject.size() && IsDigit(subject[end])) {
           ++end;
         }
-        // A trailing point is not part of the number: `1.` in "1. two" is the
-        // number and the full stop, which is what a reader means by it.
+        // A trailing decimal point remains outside the captured number.
         if (end == after) {
           end = point;
         }
@@ -200,22 +185,9 @@ std::optional<size_t> TypedRun(HoleType type, std::string_view subject,
   return std::nullopt;
 }
 
-/// Match the pieces from `piece` onwards, starting at `at`.
-///
-/// Recursive because a hole's end is only known once what follows it has
-/// matched.
-/// Which candidate ends are tried, and in what order, is the whole behaviour of
-/// the language:
-///
-/// * an **exact** hole takes what its type is, and if that is not there the
-/// hole
-///   does not match here;
-/// * a **run** hole takes its whole run and then gives characters back one at a
-///   time, so `{level:word}` stops before the `:` that follows it;
-/// * an **open** hole takes as little as it can, growing until what follows
-/// fits
-/// -- except as the last piece, where there is nothing to bound it and it takes
-///   the rest of its line.
+/// Matches from `piece` at `at`, backtracking over hole boundaries.
+/// Exact holes take their typed length; run holes try longest first.
+/// Open holes try shortest first, or take the rest of the final line.
 bool MatchFrom(const Pattern& pattern, size_t piece, std::string_view subject,
                size_t at, std::vector<Capture>& captures) {
   if (piece >= pattern.pieces.size()) {
@@ -261,13 +233,10 @@ bool MatchFrom(const Pattern& pattern, size_t piece, std::string_view subject,
     return false;
   }
 
-  // Open: bounded by what comes after it, and by the end of the line -- a hole
-  // that swallowed a line break would match half of the next record.
+  // Open holes stay on one line unless their type explicitly permits more.
   const size_t stop = LineEnd(subject, at);
   if (piece + 1 >= pattern.pieces.size()) {
-    // Nothing follows, so there is nothing to grow towards: the rest of the
-    // line
-    // is what "and then the value" means.
+    // A final open hole takes the rest of its line.
     return stop > at && take(stop);
   }
   for (size_t end = at + 1; end <= stop; ++end) {

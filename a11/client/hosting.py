@@ -12,21 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Being hosted: taking a claim, keeping it, and staying registered.
+"""Keep a hosted A11 identity reachable through the exchange.
 
-`a11 serve --hosted <identity>` is three things that all have to keep working
-for as long as the process runs, not just at start-up:
-
-* a **claim**, which expires and must be renewed before it does;
-* a **signalling connection**, which can drop and must be re-made;
-* the **WebRTC listener** bound to it, which has to follow the connection;
-* the **registration** the exchange holds, which an open socket does not
-  guarantee -- see `HostedEndpoint._registration_holds`.
-
-A host that does the first of each and none of the rest works for an hour and
-then quietly stops being reachable, which is the failure this class exists to
-prevent. `HostedEndpoint` owns all four and reports the one thing a caller
-cares about: whether it is currently reachable.
+`HostedEndpoint` renews its claim, reconnects signalling, rebinds the WebRTC
+listener and checks exchange registration. It reports current reachability.
 """
 
 from __future__ import annotations
@@ -347,8 +336,7 @@ class HostedEndpoint:
 
         options = net.signalling.client_options()
         options.deadline = timing.now() + CONNECT_TIMEOUT
-        # The credential travels as a header rather than in the query string,
-        # which is the reason A11's signalling client grew header support.
+        # Send credentials in headers, outside the URL.
         options.headers = {
             "authorization": f"Bearer {self._client.api_key}",
             "x-a11-claim": self.claim.token,
@@ -359,8 +347,7 @@ class HostedEndpoint:
         )
         self._transport = transport
         self._connected.set()
-        # Registration is what was just confirmed, so the next health check is
-        # a full interval away rather than immediate.
+        # Schedule the next health check one interval after registration.
         self._checked_at = time.time()
         logging.info("hosting %s through %s", self.identity, url)
         if self.on_transport is not None:
@@ -370,11 +357,8 @@ class HostedEndpoint:
         """Renew the claim before it lapses; reconnect when the socket goes."""
         backoff = MIN_RECONNECT_BACKOFF
         while not self._stopped.is_set():
-            # Waiting on `_stopped` rather than sleeping serves both endings:
-            # a shutdown does not have to wait out the interval, and a socket
-            # that has just failed is retried at its own backoff instead of at
-            # the renewal poll's, which is a different question asked at a
-            # different rate.
+            # `_stopped` wakes shutdown promptly; disconnected sockets use
+            # their reconnect backoff between attempts.
             await self._wait(
                 backoff if not self.connected else RENEW_POLL_SECONDS
             )
@@ -430,23 +414,11 @@ class HostedEndpoint:
             await asyncio.wait_for(self._stopped.wait(), timeout=seconds)
 
     async def _registration_holds(self) -> bool:
-        """Whether the exchange still agrees that this identity is hosted.
+        """Check whether the exchange still lists this identity as hosted.
 
-        An open socket is not a registration. The exchange withdraws presence
-        when a signalling connection departs, and a host that reconnects has
-        both events in flight at once -- so a reconnect can leave a socket that
-        is open, admitted by nobody, and refused every time it tries to
-        negotiate. Nothing on this side reports that: `connected` is true, the
-        listener is bound, and the log's last word is "hosting".
-
-        Asking the exchange is the only question whose answer distinguishes
-        that from working. A False answer is acted on by reconnecting, which
-        re-runs admission and re-announces presence.
-
-        Failures are treated as True. The exchange being unreachable says
-        nothing about whether the signalling socket is registered, and dropping
-        a working connection over a failed HTTP call would turn a blip into an
-        outage.
+        Reconnection can leave an open socket without an active registration.
+        A negative answer triggers re-registration. Check failures leave the
+        current connection in place.
         """
         now = time.time()
         if now - self._checked_at < HEALTH_CHECK_SECONDS:
@@ -479,27 +451,12 @@ class HostedEndpoint:
         return False
 
     async def _rebind_if_lapsing(self) -> None:
-        """Rebuild the listener before the credentials it holds expire.
+        """Rebind the listener before its TURN credentials expire.
 
-        A renewal mints new relay credentials, but a listener already bound
-        keeps the old ones -- and a TURN credential is checked against the
-        expiry embedded in its username, so once that passes the host can no
-        longer gather a relayed candidate. Nothing fails loudly: signalling
-        stays up, presence stays online, and new connections simply stop
-        completing. It presents as "it worked for a while and then stopped",
-        an hour in, which is the default claim lifetime.
-
-        The whole signalling connection is replaced, not just the listener,
-        because a WebRTC server closes its transport when it stops (see
-        `a11.service.serving.webrtc`) -- so there is no way to hand a fresh
-        configuration to a new server on the *same* transport. The order is
-        therefore: drop the listener, reconnect, let `on_transport` build the
-        replacement against the current claim.
-
-        Deferred until the bound credentials are nearly out rather than done on
-        every renewal, because it costs the peer connections the old listener
-        was carrying. The relay's grace period turns that into latency for a
-        caller, but it is not free, so once an hour beats twice.
+        A renewed claim does not update credentials held by an existing
+        listener. Rebinding drops the listener, reconnects signalling, then
+        lets ``on_transport`` build a listener with the current claim. It runs
+        near expiry because the replacement interrupts existing peers.
         """
         if self.on_drop_listener is None or self._bound_expiry is None:
             return

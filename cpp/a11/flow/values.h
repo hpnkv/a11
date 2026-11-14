@@ -134,15 +134,8 @@ class NodeFragmentObject final : public HostObject {
   data::NodeFragment fragment_;
 };
 
-/// One Flow value.
-///
-/// Immutable and cheap to copy: containers and long text are shared, while
-/// short text and scalars stay inline. An item handed to eight readers keeps
-/// one container allocation.
-/// Integers are kept apart from doubles because the language's own output
-/// depends on it -- `text 3` is `"3"` and `text 3.0` is `"3.0"`, exactly as the
-/// Python reference rendered them -- and because a count of values has to be a
-/// whole number of them.
+/// An immutable Flow value with shared containers and long text.
+/// Integer and floating-point values retain distinct renderings.
 class Value {
  public:
   enum class Kind {
@@ -351,19 +344,8 @@ class HostBridge {
   virtual bool CanPassChunkObject(const data::Chunk& chunk,
                                   std::string_view declared_type) const;
 
-  /// The values a batch of chunks holds, in order, each with its own outcome.
-  ///
-  /// **Why a batch is its own question.** Crossing into a host is not free per
-  /// crossing: the Python bridge takes the GIL, which a flow's fiber competes
-  /// for with the interpreter thread that dispatched it, and that -- not the
-  /// decoding -- is what a value through a stage costs. A pipeline usually has
-  /// several values in hand at once, so it asks once for all of them.
-  ///
-  /// Per-value statuses rather than one for the batch, because the values
-  /// before a bad one are still values: a reader that would have seen three of
-  /// five and then a failure sees exactly that.
-  ///
-  /// The default asks one at a time, so a host need not implement it.
+  /// Reads a batch in order, retaining a separate result for each chunk.
+  /// The default calls `FromChunk` for each item.
   virtual std::vector<absl::StatusOr<Value>> FromChunks(
       absl::Span<const data::Chunk* const> chunks) {
     std::vector<absl::StatusOr<Value>> values;
@@ -389,23 +371,8 @@ class HostBridge {
     return chunks;
   }
 
-  /// How this host would rather hold a value of a shape the *language*
-  /// declared.
-  ///
-  /// Called with a value that has already been validated against `shape` --
-  /// defaults filled, bounds checked, nested shapes coerced -- so this is about
-  /// presentation and nothing else. The default is to hand it back unchanged,
-  /// which is what a host with no opinion wants; the Python bindings build the
-  /// pydantic model the shape describes and wrap an instance of it, so a value
-  /// on a `struct`-typed port arrives in Python as a real model.
-  ///
-  /// Validation stays on this side of the boundary on purpose: there is one
-  /// implementation of what a shape means, and a host that disagreed with it
-  /// would be a second, quieter one.
-  /// `program` is there because a shape is not much use without the shapes it
-  /// names: a host building a type from `shape` needs the ones its fields refer
-  /// to, and looking them up again on the other side of the boundary would be a
-  /// second trip for data this side already has.
+  /// Adopts a validated value of a declared shape for the host.
+  /// `program` supplies referenced shapes. The default returns `value`.
   virtual absl::StatusOr<Value> Adopt(const DtoPlan& shape,
                                       const Program& program,
                                       const Value& value) {
@@ -415,11 +382,7 @@ class HostBridge {
   }
 };
 
-/// A bridge over A11's own C++ serialisation registry.
-///
-/// What the standalone tool and the C++ tests run with. A tag the C++ registry
-/// does not know is an error in the same words the Python reference used, which
-/// reports the type as unavailable because its defining module is not loaded.
+/// A host bridge backed by the C++ serialization registry.
 std::unique_ptr<HostBridge> NativeHostBridge();
 
 // --- Reading values ----------------------------------------------------------
@@ -488,11 +451,7 @@ Value AsJson(const Value& value);
 /// The first `size` of a value: characters, bytes, elements or pairs.
 Value Truncate(const Value& value, std::int64_t size);
 
-/// A value's own JSON text, as `json.dumps(sort_keys=True)` writes it.
-///
-/// The Python reference rendered a container with `json.dumps`, and a flow's
-/// output can be a rendered object, so the spelling is part of the contract:
-/// sorted keys, `", "` and `": "` between things, non-ASCII escaped.
+/// Renders JSON with sorted keys, spaced separators, and escaped non-ASCII.
 std::string JsonText(const Value& value);
 
 // --- Times and durations -----------------------------------------------------

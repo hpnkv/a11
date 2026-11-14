@@ -12,30 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""An `ActionSchema` in JSON, which is how one travels.
+"""Describe action schemas as `a11.actions/v1` documents.
 
-One concept in two representations, and this is the crossing between them. An
-`ActionSchema` is the live object; a port's `typeinfo` is a Python type and an
-input's autofills are receiver-owned values, so neither can go on a wire. The
-`a11.actions/v1` document is the same schema written as text, with `typeinfo`
-replaced by the port's `json_schema` and the autofill values by an `autofilled`
-flag. Its shape lives in `cpp/a11/actions/describe.h`; these are thin wrappers
-over it.
+The document replaces Python `typeinfo` with `json_schema` and autofill values
+with an `autofilled` flag. Its `runnable` field says whether the answering
+registry holds a handler; Flow uses it to choose `run` or `call`.
 
-The one field a document carries that a schema does not is `runnable`, which
-says whether the answering side holds a handler. It is the registry's annotation
-on a schema rather than part of one -- the same schema is runnable here and
-schema-only there, and that difference is what Flow reads to choose `run` over
-`call`.
-
-What Python adds is the one thing C++ cannot do: derive a port's `json_schema`
-from its `typeinfo`, which only a Python runtime can read. That happens at
-**registration**, not when a schema is written out, and that is the whole
-design. A peer asking `__list_actions__` is answered by the native writer, which
-sees only what is on the schema; if the derivation happened in a Python path
-instead, a schema written locally would carry types and the same schema written
-for a peer would not. Deriving once, when the action becomes discoverable, is
-what makes those two answers the same document.
+Python derives each port's `json_schema` from `typeinfo` at registration. The
+native describer then returns the same document to local and peer callers.
+The document format is defined in `cpp/a11/actions/describe.h`.
 """
 
 from __future__ import annotations

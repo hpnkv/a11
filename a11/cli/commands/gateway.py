@@ -12,10 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""``a11 gateway``: run the gateway, or manage one running in the background.
+"""Run and manage an A11 gateway from the command line.
 
-Subcommands, with a bare ``a11 gateway`` still meaning ``run`` so the way it has
-always been invoked keeps working:
+Bare ``a11 gateway`` runs it in the foreground. Subcommands are:
 
 * ``run`` -- serve in the foreground.
 * ``start [--detach]`` -- serve, optionally in the background.
@@ -24,10 +23,8 @@ always been invoked keeps working:
   shell test.
 * ``logs [-n N] [-f]`` -- what a detached gateway has been saying.
 
-Every subcommand's output is scriptable. Tables and colour when someone is
-watching, ``key=value`` lines when stdout is a pipe; see
-[a11.cli.console][a11.cli.console]. Nothing is reachable *only* through the
-decorated form.
+Output uses tables and colour on a terminal, or ``key=value`` lines when
+stdout is piped. See [a11.cli.console][a11.cli.console].
 """
 
 from __future__ import annotations

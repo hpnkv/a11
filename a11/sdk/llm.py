@@ -560,28 +560,14 @@ class InteractionAdapter(metaclass=abc.ABCMeta):
 
 
 # --- Cross-backend interaction normalization ---------------------------------
-#
-# Different LLM backends persist an interaction's `content` in their own native
-# shape (Anthropic message blocks, Gemini interaction steps, ...). When a
-# conversation is handed from one backend to another mid-flight, the receiving
-# backend cannot read the other's native content directly. To bridge them each
-# interaction is tagged (in `backend_specific_metadata`) with the backend that
-# produced it, and each backend contributes a normalizer that turns its own
-# native content into the provider-independent `NormalizedMessage` below. A
-# consumer that meets a foreign interaction calls `normalize_interaction` (which
-# dispatches to the producer's normalizer by tag) and then translates the
-# `NormalizedMessage` into its own native shape.
+# Each backend tags its interactions and normalizes their content to
+# `NormalizedMessage` for another backend to consume.
 
 
 BACKEND_METADATA_KEY = "backend"
 
-#: Where a turn's user-facing tool logs ride, in the
-#: ``backend_specific_metadata`` of the interaction carrying that turn's tool
-#: results: JSON bytes of ``{tool call id: log}``.
-#:
-#: They live there rather than on a port because that is the one part of an
-#: interaction no backend turns into provider content -- the log must never
-#: reach the model, but a conversation replayed from storage is poorer for it.
+#: JSON bytes of ``{tool call id: log}`` in the result interaction's metadata.
+#: Backends do not send this metadata to the model.
 TOOL_LOGS_METADATA_KEY = "tool_logs"
 TOOL_STATUSES_METADATA_KEY = "tool_statuses"
 
@@ -923,11 +909,8 @@ def normalize_interaction(
 
 
 # --- The action-call bridge --------------------------------------------------
-#
-# Everything below is backend-independent: it turns a tool call a model asked
-# for into A11 action inputs, and action outputs back into text a model can
-# read. Each SDK client reconstructs a `ToolCall` from its own streaming shape
-# and then shares all of this.
+# SDK clients build ToolCalls from provider events; this bridge maps them to
+# A11 action inputs and maps action outputs back to model content.
 
 
 #: Valid wire id for an output mapped to ``ActionSchema.WHOLE_JSON``. The
@@ -1118,10 +1101,7 @@ class ActionCallAdapter:
         inputs = list()
         for key, value in self._arguments.items():
             port = self._schema.inputs.get(key)
-            # A JSON array on a unary port is one structured value. Only a
-            # streaming port interprets an array as several values. Treating
-            # `options: [...]` as a stream made consume(list) read the first
-            # option and then reject the second as a fragment after finality.
+            # Arrays on unary ports are one value; streaming ports expand them.
             value_list = (
                 value
                 if (

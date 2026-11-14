@@ -309,24 +309,8 @@ absl::Status Scope::Produce(RefId ref, const Sink& sink) {
   }
 }
 
-// Read several streams in step, as one stream of tuples. A fiber per source
-// would buy nothing and would put three more lifetimes on the run's monitor.
-/// Read several streams in step, as one stream of tuples.
-///
-/// **No fiber of its own per source, and that is not a shortcut.** A tuple is
-/// not complete until every source has answered, so asking them one after
-/// another finishes at exactly the moment asking them at once would -- and
-/// every reader here is an ordinary subscription, which already blocks, already
-/// relays a producer's failure, and already has the buffering the analysis
-/// arranged. A fiber per source would buy nothing and would put three more
-/// lifetimes on the run's monitor.
-///
-/// A source that ends **well** is latched: from then on it contributes a null
-/// to every tuple, which is what lets a short stream be zipped against a long
-/// one without either being padded by its author. A source that ends **badly**
-/// ends the whole thing with its status, because a tuple missing a value for a
-/// reason nobody has been told about is worse than no tuple at all. It stops
-/// when every source has ended.
+/// Reads streams in step, yielding tuples until every source ends.
+/// Ended sources contribute null; a source failure ends the result.
 absl::Status Scope::ProduceZip(RefId ref, const Sink& sink) {
   const graph::Ref& one = graph().refs[ref];
   std::vector<ReaderPtr> readers;
@@ -376,19 +360,8 @@ absl::Status Scope::ProduceZip(RefId ref, const Sink& sink) {
   return absl::OkStatus();
 }
 
-/// Read several streams at once, as one stream of their values.
-///
-/// **A fiber per source, unlike a zip, and for the opposite reason.** A tuple
-/// is not complete until every source has answered, so asking them one after
-/// another finishes when asking them at once would. An interleaved value is
-/// complete as soon as *one* source has answered, so reading them in turn would
-/// make a fast stream wait behind a slow one -- which is the whole thing this
-/// exists to avoid. The fibers are the sources the author named, and they are
-/// what "in the order values arrive" costs.
-///
-/// Publishing takes the bus lock, so concurrent values are ordered by lock
-/// acquisition. A successful source end contributes no value; a failed source
-/// ends the merged stream with its status.
+/// Reads sources concurrently and yields their values in bus-lock order.
+/// A source failure ends the merged stream.
 absl::Status Scope::ProduceMerge(RefId ref, const Sink& sink) {
   const graph::Ref& one = graph().refs[ref];
   std::vector<ReaderPtr> readers;
@@ -597,18 +570,6 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
     }
   };
 
-  /// For a stage that reshapes each value: a batch in, a batch out.
-  ///
-  /// The input batch is only ever what the source *already had*, so nothing is
-  /// held back waiting for company -- a stage handed one value publishes one
-  /// value, and a pipeline still paces itself value by value. What the batch
-  /// saves is the handover: one lock and one broadcast at each end for up to
-  /// `kQueueDepth` values instead of one of each per value, which on a moving
-  /// pipeline was most of what a value cost.
-  ///
-  /// A body that fails publishes what it had produced first, so a reader that
-  /// had seen three of five values sees three values and then the failure --
-  /// the same order the one-at-a-time path gave it.
   /// Route a tolerated failure with its original item and stage position.
   const auto tolerate = [&](const ItemPtr& item, const absl::Status& why,
                             std::int64_t seq) -> absl::Status {

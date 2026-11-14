@@ -1434,19 +1434,8 @@ constexpr std::string_view kVsCodeTemplate = R"JSON({
 }
 )JSON";
 
-/// The injection grammar: the same words, inside a host language's strings.
-///
-/// **Why a separate file.** VSCode injects one grammar into another by
-/// `injectTo` on the injected grammar, not by a rule in the host's, so this is
-/// a grammar of its own. And it answers a different question first: whether a
-/// string is a flow at all. The rule is the one the IntelliJ injector uses --
-/// a string whose first real word is `flow`, followed by a name and a `{` --
-/// so the same fragment is recognised in both editors and prose merely
-/// mentioning a flow is recognised in neither.
-///
-/// Only the multi-line quotes. A flow is at least a `flow x { .. }`, which does
-/// not fit on one line of anybody's string, so injecting into every `"..."` in
-/// every Python file would be a lot of matching for a case that does not arise.
+/// Injects Flow vocabulary into multiline host-language strings.
+/// A fragment starts with `flow`, an optional name, and `{`.
 constexpr std::string_view kVsCodeInjectionTemplate = R"JSON({
   "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
   "name": "A11 Flow in a string",

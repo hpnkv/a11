@@ -37,14 +37,7 @@
 namespace a11::sdk::flow {
 namespace {
 
-/// The units the language writes a duration in, and their spelling.
-///
-/// Local duration parsing keeps this action library independent of
-/// a11::flow_runtime, which calls these actions. The shared behaviour is
-/// limited to this unit table and the loop below.
-///
-/// Tests keep both implementations aligned with the language's accepted
-/// spellings. A third consumer should move this parser into a11::core.
+/// Flow duration units, parsed locally without linking a11::flow_runtime.
 struct Unit {
   std::string_view name;
   double seconds;

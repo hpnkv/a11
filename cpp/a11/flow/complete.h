@@ -29,12 +29,7 @@ namespace a11::flow {
 
 struct LinkedModule;
 
-/// What a proposal *is*, which is what an editor turns into an icon.
-///
-/// Finer than "keyword or not": a reader choosing between a port and a stage is
-/// making a different decision than one choosing between two ports, and the
-/// icons are how an editor says which list they are looking at. These names are
-/// part of the `flow.completions/v1` contract.
+/// Completion categories published by `flow.completions/v1`.
 enum class ProposalKind {
   /// A word that opens a statement: `run`, `wait`, `for`.
   kStatement,
@@ -81,15 +76,11 @@ struct Proposal {
   /// The word, as it would be read back: `truncate`, `x.question`.
   std::string name;
   ProposalKind kind = ProposalKind::kStatement;
-  /// The text to insert, which is `name` unless taking it writes more: a
-  /// function takes its parentheses, an argument takes the colon that has to
-  /// follow it.
+  /// Text inserted for this proposal, including required syntax.
   std::string insert;
   /// Text matched while the visible label includes an invocation verb.
   std::string filter;
-  /// Where the caret lands inside `insert`, in bytes. `-1` is the end of it,
-  /// which is what almost everything wants; a function wants it between the
-  /// parentheses it just wrote.
+  /// Caret byte offset in `insert`; `-1` places it at the end.
   int caret = -1;
   /// Optional document offset overriding the common prefix replacement.
   size_t replace_start = std::string::npos;
@@ -98,60 +89,22 @@ struct Proposal {
   std::string tail;
   /// The type of the thing proposed, where it has one: a port's declared type.
   std::string type;
-  /// The whole of what is known about it, as Markdown, for the popup an editor
-  /// shows beside the list. Empty where the name is its own explanation.
-  ///
-  /// The same text a hover over the finished word gives (see [ActionMarkdown]
-  /// and friends), because a reader choosing `interact_with_llm` from a list
-  /// and a reader hovering it afterwards are asking the same question. The
-  /// `tail` is the one-line version that fits in the list; this is what is
-  /// behind it.
+  /// Markdown documentation shared with hover results; empty when unavailable.
   std::string documentation;
 };
 
 /// What may be written at an offset, and the word already typed there.
 struct CompleteResult {
   std::vector<Proposal> proposals;
-  /// The partial word the caret is in, if any. Not filtered on here: every
-  /// frontend that consumes this filters and sorts by its own rules, and one
-  /// that filtered twice would drop what a fuzzy matcher would have kept.
+  /// Partial word at the caret; proposals remain unfiltered.
   std::string prefix;
-  /// Where that word starts, so an editor knows what a proposal replaces.
-  ///
-  /// **The caret itself when there is no partial word**, which makes
-  /// `[prefix_start, caret)` the range a proposal replaces in every case rather
-  /// than only when something has been typed. It defaulted to zero, and that
-  /// range is the whole document up to the caret: taking a proposal at a
-  /// position
-  /// where nothing had been typed yet deleted everything in front of it.
+  /// Start of the replacement range; equals the caret for an empty prefix.
   size_t prefix_start = 0;
 };
 
-/// What may be written at `offset` in `source`.
-///
-/// **The one implementation of the judgement.** After a `|` only a stage can
-/// follow; past a port's `:` only a type; after a `->` only somewhere writable;
-/// after `x.` only what `x` actually has. Each of those is a fact about the
-/// grammar and the names in scope, and a frontend that worked it out for itself
-/// would be a second, worse copy of the language -- which is what the plugin's
-/// Kotlin completion was.
-///
-/// **It never fails and never throws.** The document is being typed: the
-/// statement the caret is in is usually half-written and the braces are usually
-/// unbalanced. Parsing recovers, resolution recovers, and what cannot be
-/// established simply narrows the list -- an unknown call target offers
-/// `status`
-/// and no ports rather than nothing at all.
-///
-/// A source that declares no flow is completed as though it were a flow body,
-/// which is what an injected fragment in a Python string is.
-///
-/// `known` is what the world outside the document contains -- the actions that
-/// may be called and the types that may be named. It defaults to the snapshot
-/// embedded in the language, so a standalone tool offers `make_http_request`'s
-/// ports without being configured; a frontend that has a live registry passes
-/// its own instead, which is the case an IDE tracking what an inline flow is
-/// attached to wants.
+/// Returns grammar and scope-aware proposals at `offset` in `source`.
+/// Incomplete source produces narrower proposals. Source without a flow is
+/// treated as a flow body. `known` supplies available actions and types.
 CompleteResult CompleteAt(
     std::string_view source, size_t offset,
     const catalogue::Catalogue& known = catalogue::Catalogue::Builtin(),

@@ -12,27 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Handlers for the three Flow Actions.
+"""Run the Flow actions against a caller's registry and runtime.
 
-Each is a thin adapter over [a11.flow][]: read the action's inputs, compile,
-and -- for ``flow_run`` -- invoke the composition in the caller's own runtime,
-so its calls dispatch exactly as a nested action's would.
+Handlers compile submitted source and, for ``flow_run``, execute it as a
+nested action. Before execution, they check every call against the caller's
+``x-a11-allowed-llm-actions`` header and reject calls to the Flow tools. A
+missing allow-list header places no restriction at this layer.
 
-Two rules are enforced here rather than by the language, because they are about
-who is asking rather than about what a flow means:
-
-* **A flow may only call actions the caller may call.** A composition
-  dispatches through the registry, which is under the layer that checks the
-  ``x-a11-allowed-llm-actions`` header, so the check is made again here --
-  against every call in the submitted source, before anything runs. With no
-  header there is no restriction from this layer: a script or a test that
-  invokes these handlers directly is not a model being kept to an allow-list.
-* **A flow may not call the flow tools.** Composing ``flow_run`` into a flow is
-  a way to run something the check above just refused, and a way to recurse.
-
-Each handler narrates its run through :meth:`a11.actions.action.Action.log`.
-The LLM tool runner reads that separately from the action's outputs, so the
-narration cannot reach the model's result. No schema here declares a log port.
+Handlers write narration to :meth:`a11.actions.action.Action.log`. The LLM
+tool runner reads it separately from action outputs.
 """
 
 from __future__ import annotations
@@ -115,24 +103,10 @@ def describe_composable_actions(
 ) -> list[dict[str, Any]]:
     """The actions a flow may name, each with its ports and its verb.
 
-    A thin projection of the written schema
-    ([a11.actions.describe][a11.actions.describe]) into the words a flow uses.
-    The written schema is shared with tool discovery. This projection only
-    translates Flow's ``stream`` and ``action`` terminology from ``unary`` and
-    ``name``.
-
-    Output port names support pipe expressions, but tool definitions only
-    describe inputs.
-
-    ``runnable`` distinguishes actions for `run` from actions for `call`.
-    Actions registered with a handler are runnable; schema-only registrations
-    are callable through the peer.
-
-    Autofilled inputs are omitted because the runtime supplies them before the
-    handler runs. Action logs use
-    :meth:`a11.actions.action.Action.log` and are not schema ports.
-
-    ``names`` selects exact action names within the caller's permitted set.
+    Projects [written schemas][a11.actions.describe] into Flow's action and
+    stream terms, including output port names. ``runnable`` selects `run` for
+    local handlers and `call` for peer schemas. Autofilled inputs and action
+    logs are excluded. ``names`` selects exact permitted action names.
     """
     document = describe.registry_to_json(
         registry, {"names": list(patterns)} if patterns else None
@@ -235,11 +209,8 @@ FLOW_ACTION_SUFFIX = "-flow"
 def flow_output_node_id(call_id: str, port: str) -> str:
     """Where a flow's output port lands, for the caller that dispatched it.
 
-    A flow's outputs are nodes, and `flow_run` mirrors them onto the stream the
-    call arrived on, so a caller does not have to wait for the whole composition
-    to see what it is producing. The id is worked out from the call's own id,
-    which the caller chose, so both ends know it without anything being
-    announced:
+    `flow_run` mirrors live outputs onto the caller's stream. Both ends derive
+    the node ID from the call ID and port name:
 
     ```python
     call = a11.Action(FLOW_RUN_SCHEMA)...
@@ -249,8 +220,7 @@ def flow_output_node_id(call_id: str, port: str) -> str:
         ...
     ```
 
-    The collected `result` still lands at the end, for callers -- a model
-    making a tool call, most of all -- that only want the lot.
+    The collected `result` arrives when the Flow completes.
     """
     return a11.Action.make_node_id(call_id + FLOW_ACTION_SUFFIX, port)
 
@@ -258,14 +228,9 @@ def flow_output_node_id(call_id: str, port: str) -> str:
 def flow_input_node_id(call_id: str, port: str) -> str:
     """Where a caller writes an input port it named on ``input_streams``.
 
-    The mirror image of
-    [flow_output_node_id][a11.sdk.flow_tools.handlers.flow_output_node_id], and
-    the same derivation -- a port's node id does not depend on its direction,
-    so the two functions agree by construction and exist separately to say
-    which one a caller means. This also prevents a flow from declaring an input
-    and output with the same name because they would share one node. Input ports
-    are in the session's node map like its outputs, so the caller fills one by
-    writing to its id -- and keeps writing, for as long as it has values.
+    The input and output helpers derive the same ID for a port name. A Flow
+    cannot declare input and output ports with the same name. Find the input
+    in the session's node map and write values while the Flow runs:
 
     ```python
     call = a11.Action(FLOW_RUN_SCHEMA)...
@@ -277,12 +242,9 @@ def flow_input_node_id(call_id: str, port: str) -> str:
     await words.finalize()          # and this is what ends the port
     ```
 
-    Arity is not a second mechanism: a port declared `stream` takes as many
-    values as the caller has, an ordinary port takes the one it carries, and an
-    empty port is a port that carried none. **The caller owns the close** --
-    nothing else will do it, and a flow reading a port nobody closes waits,
-    bounded only by the call's own `x-a11-deadline` (with no such header, not at
-    all).
+    A `stream` port accepts multiple values; a unary port accepts one. The
+    caller must close every input it owns. Reads of open, empty ports wait
+    until a value, close, or the call deadline arrives.
     """
     return a11.Action.make_node_id(call_id + FLOW_ACTION_SUFFIX, port)
 
@@ -385,12 +347,9 @@ async def _required_source(action: a11.Action, deadline: a11.Time) -> str:
 
 
 def _open_input_ports(named: list | None) -> tuple[str, ...]:
-    """The ports the caller says it will fill itself, checked for shape.
+    """Validate the names of caller-owned input ports.
 
-    Only the shape is checked here, because it is all this end knows: whether
-    the flow declares such a port, and whether it was also given a value, are
-    the runtime's to answer, and it answers them for every caller of
-    [start][a11.flow.runtime.start] rather than only for this one.
+    [start][a11.flow.runtime.start] checks declarations and supplied values.
     """
     if not named:
         return ()

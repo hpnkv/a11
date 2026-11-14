@@ -16,15 +16,7 @@
 
 /**
  * @file
- * @brief
- *   The per-filesystem-root SQLite resources shared by every SQLiteChunkStore
- *   rooted there: connections, schema, blob files, and reader wakeups.
- *
- * This is an implementation detail of `a11::stores`, not public API. It exists
- * so connections, prepared statements, the SQLite worker threads and the commit
- * hooks are owned once per storage root rather than once per store: a process
- * holding a thousand nodes under one root pays for one database, not a
- * thousand.
+ * @brief SQLite connections, schema, blobs, and reader wakeups shared per root.
  */
 
 #ifndef A11_STORES_INTERNAL_SQLITE_DATABASE_H_
@@ -54,12 +46,7 @@ struct sqlite3_stmt;
 
 namespace a11::stores::internal {
 
-/**
- * State the SQLite change hooks write to.
- *
- * Defined in the implementation because the hooks are `extern "C"` free
- * functions and must reach it without being members.
- */
+/** State shared with the `extern "C"` SQLite change hooks. */
 struct SqliteHookState;
 
 /** How much durability the database trades for write throughput. */
@@ -80,24 +67,12 @@ struct SqliteDatabaseOptions {
   /** Durability level applied with `PRAGMA synchronous`. */
   SqliteSynchronous synchronous = SqliteSynchronous::kNormal;
 
-  /**
-   * How often to check `PRAGMA data_version` for commits made by *other
-   * processes*, or zero to disable.
-   *
-   * SQLite's hooks are per-connection, so a writer in another process cannot
-   * wake a reader parked in this one. Zero -- the default -- means in-process
-   * notification only, which is exact and never polls. Set this only when more
-   * than one process writes the same root.
-   */
+  /** Poll interval for other processes' commits, or zero to disable.
+   * SQLite change hooks notify only readers in this process. */
   absl::Duration cross_process_poll_interval = absl::ZeroDuration();
 
-  /**
-   * How long a blob file must go unreferenced before the sweeper may remove it.
-   *
-   * A blob is renamed into place *before* the transaction referencing it
-   * commits, so a fresh blob is legitimately unreferenced for a short window.
-   * The grace period stops the sweeper from deleting one out from under an
-   * in-flight commit in another process.
+  /** Minimum age for sweeping an unreferenced blob. This covers the interval
+   * between writing the blob and committing its reference in another process.
    */
   absl::Duration blob_grace_period = absl::Hours(1);
 
@@ -130,15 +105,8 @@ struct SqliteNodeState {
 
 class SqliteDatabase;
 
-/**
- * @brief A SQLite connection plus the prepared-statement cache belonging to it.
- *
- * Each connection is owned by exactly one worker thread and is never shared, so
- * it needs no lock of its own. Statements are reset when a transaction body
- * finishes: an un-reset statement pins the connection's WAL snapshot, and a
- * reader on a pinned snapshot would keep seeing stale data no matter how many
- * times it was woken.
- */
+/** A SQLite connection and prepared-statement cache owned by one worker.
+ * Reset statements after transactions to release pinned WAL snapshots. */
 class SqliteConnection {
  public:
   SqliteConnection(const SqliteConnection&) = delete;
@@ -180,28 +148,10 @@ class SqliteConnection {
   absl::flat_hash_map<std::string, sqlite3_stmt*> statements_;
 };
 
-/**
- * @brief
- *   Everything one storage root owns: the database file, the blob directory,
- *   the SQLite worker threads and the wakeup state for parked readers.
- *
- * Instances are shared per canonicalized root through Open(), so two factories
- * aimed at the same directory share one connection set and one set of hooks.
- *
- * ## Threading
- *
- * SQLite calls block their OS thread on `pread`/`fsync`. A11's fiber pool has
- * exactly `hardware_concurrency()` OS threads, and those same threads drain
- * every `thread::PostAt` deadline timer -- so running SQLite directly on a
- * fiber risks stalling the whole runtime, including the timers that would
- * otherwise rescue it. Every SQLite call therefore runs on a dedicated worker
- * thread here, and the calling fiber waits on an `a11::Future` in the ordinary
- * way. This is the same foreign-thread-completes-a-Promise boundary the Redis
- * client already uses from its libuv loop.
- *
- * One writer thread owns the single write connection; each reader thread owns
- * its own read connection. No connection is ever touched by two threads, so
- * none of them needs a lock.
+/** SQLite resources shared per canonicalized storage root.
+ * Dedicated workers run blocking SQLite calls outside the fiber pool. One
+ * worker owns the write connection; each reader owns a read connection.
+ * Calling fibers await results through `a11::Future`.
  */
 class SqliteDatabase : public std::enable_shared_from_this<SqliteDatabase> {
  private:
@@ -294,10 +244,8 @@ class SqliteDatabase : public std::enable_shared_from_this<SqliteDatabase> {
   /**
    * @brief Write @p data to a new blob file and return its UUID filename.
    *
-   * Written under a temporary name, fsynced, renamed into place, then the
-   * containing directory is fsynced -- without that last step a crash can leave
-   * a committed row pointing at a blob whose directory entry never reached
-   * disk. Call this *before* committing the referencing row.
+   * Writes a temporary file, fsyncs it, renames it, and fsyncs its directory.
+   * Call before committing the row that references the blob.
    *
    * @param data
    *   The payload bytes to externalize.

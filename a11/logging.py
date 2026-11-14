@@ -12,27 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Logging for A11, wired into the standard library's.
+"""Configure A11 logs through Python's standard logging module.
 
-A11's runtime is C++, but its logs are ordinary ``logging.LogRecord`` values.
-A sink inside the native module hands each Abseil entry to Python, which emits
-it on the ``a11.native`` logger, so the whole of `logging` applies to native
-output: levels, `logging.config.dictConfig`, pytest's ``caplog``, a JSON
-formatter, a file handler. There is no second logging system to configure.
+Native Abseil entries arrive as ``logging.LogRecord`` values on ``a11.native``.
+Standard handlers, formatters and pytest's ``caplog`` can consume them.
 
-Importing `a11` reads the level from the surrounding process rather than
-choosing one, in this order:
+Importing `a11` chooses a level from these sources, in order:
 
 1. **absl-py, if the process configured it** — ``set_verbosity()`` was called,
    ``--verbosity`` was passed, or `absl.logging`'s handler is on the root
    logger.
 2. **The standard library** — the effective level of the ``a11`` logger, which
    inherits `logging.basicConfig` and `dictConfig`.
-3. **``A11_LOG_LEVEL``** — a name (``debug``, ``info``, ...) or an integer, read
-   only when neither of the above says anything.
+3. **``A11_LOG_LEVEL``** — a name (``debug``, ``info``, ...) or an integer, used
+   when neither source above sets a level.
 
-With none of those, the level is `logging.WARNING`, the same default a bare
-interpreter gives you, and ``import a11`` prints nothing.
+The default is `logging.WARNING`.
 
 To take control:
 
@@ -43,10 +38,8 @@ a11.enable_logging("debug")             # or a11.logging.enable(logging.DEBUG)
 a11.logging.get_logger(__name__).info("ready")
 ```
 
-`enable` installs a handler only when the root logger has none, and the one it
-installs is `absl.logging`'s, so the text keeps Abseil's shape. Under an
-application that has already configured logging, A11's records simply flow
-into it.
+`enable` installs Abseil's handler when the root logger has none. Existing
+application logging configuration receives A11 records directly.
 
 ``A11_LOG_BRIDGE=0`` (or ``enable(bridge=False)``) leaves native entries on
 Abseil's own stderr path instead of routing them through Python.

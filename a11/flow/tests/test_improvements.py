@@ -22,6 +22,21 @@ from a11.flow.diagnostics import Diagnostic, FlowSyntaxError
 from a11.status import StatusCode, StatusException
 
 
+def test_partial_standard_type_returns_tooling_diagnostics():
+    source = "flow { out result: std }"
+    hover = flow.request({
+        "method": "describe", "source": source, "offset": source.index("std")
+    })
+    assert hover["ok"]
+    assert hover["result"]["found"]
+    plan = flow.request({"method": "plan", "source": source})
+    assert plan["ok"]
+    assert any(
+        problem["code"] == "flow.form.unknown-type"
+        for problem in plan["result"]["diagnostics"]
+    )
+
+
 @pytest.mark.asyncio
 async def test_anonymous_operations_preserve_streaming_and_scalar_contexts():
     program = flow.loads("""

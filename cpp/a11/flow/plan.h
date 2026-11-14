@@ -117,13 +117,7 @@ struct HeaderPlan {
   syntax::Location location;
 };
 
-/// One resolved statement, as the plan format describes it.
-///
-/// Flat on purpose: this is what `a11 flow describe` prints and what a reader
-/// diffs to see whether a change to a flow changed what it does. The executable
-/// graph -- refs with buffers, steps that can be run -- arrives with the native
-/// runtime and grows out of these, rather than being a second description of
-/// them.
+/// One resolved statement in the `a11 flow describe` plan.
 struct StepPlan {
   bool scope_barrier = false;
   std::string optional_binding;

@@ -130,9 +130,7 @@ class Lexer {
         Report("flow.syntax.unexpected-character",
                "A spread is written '...'; '…' is not one.", start,
                start + kEllipsis.size());
-        // Read as the spread it plainly meant, with the repair travelling on
-        // the diagnostic: the rest of the statement is worth checking, and an
-        // editor can offer the fix.
+        // Retain the spread token and attach its repair to the diagnostic.
         Take(TokenKind::kSpread, start, kEllipsis.size());
         result_.diagnostics.back().fixes.push_back(
             Fix{.label = "Write '...'",

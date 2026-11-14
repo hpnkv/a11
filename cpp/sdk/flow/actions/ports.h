@@ -18,26 +18,9 @@
  * @file
  * @brief Output ports, resolved once and closed exactly once.
  *
- * Every action in the Flow standard library declares more output ports than
- * most callers read, for the reason @c make_http_request does: a port per
- * concern is what lets a caller act on the status while the body is still
- * arriving. That shape has one obligation attached to it -- **every declared
- * port has to be ended, whether or not it was used**, because a reader waiting
- * on a port nothing was ever written to waits forever -- and one optimisation
- * that follows from it: a port named in @c options.omit is closed up front, so
- * asking for three of eight ports does not mean draining the other five.
- *
- * Getting that right per action is a hang when it goes wrong rather than an
- * error, so it is written once here instead. a11::sdk::flow::OutputPorts owns
- * the ports and ends whatever is still open however the run finished;
- * a11::sdk::flow::Sink is a handle to one of them, resolved outside the loop
- * that writes to it.
- *
- * ### Why Sink exists
- *
- * A streaming action writes thousands of chunks to the same port. Looking the
- * port up by name per chunk would put a string hash on the hot path for no
- * reason, so a handler resolves each port once:
+ * OutputPorts resolves the action schema's ports and closes omitted ports at
+ * once. Finish() closes every remaining port, including unused ports, so
+ * readers can observe the end of each stream. Resolve a Sink once per port:
  *
  * @code
  *   ABSL_ASSIGN_OR_RETURN(auto outputs, OutputPorts::Open(action, omit));
@@ -48,34 +31,12 @@
  *   return outputs.Finish();
  * @endcode
  *
- * An omitted port yields an absent Sink whose writes are cheap no-ops, so the
- * loop above needs no test of its own -- and where producing the value is
- * itself expensive, Sink::present() says whether to bother.
- *
- * Open() reads ports from the action schema, avoiding a second port list in the
- * handler.
- *
- * ### What a port's chunks look like, and why the encoding is a choice
- *
- * A structured value uses JSON by default and MessagePack when the caller sets
- * `encoding: "msgpack"`. The encoding determines which byte sequences can be
- * represented:
- *
- * Paths, file lines, and process output may contain invalid UTF-8 and therefore
- * have no JSON representation. Such values return `invalid_argument` with two
- * alternatives: use `encoding: "msgpack"` for arbitrary bytes, or read the
- * exact data from the `bytes` port.
- *
- * Every conversion here goes through a11::DumpJson and a11::PackMsgpack rather
- * than through nlohmann directly, because nlohmann reports these failures by
- * throwing and this library is compiled without exceptions -- where its
- * fallback is `std::abort()`. A non-UTF-8 filename must be a status, not a
- * crash, and routing it through the codec is what makes that true.
- *
- * BytesChunk() needs none of this: a file really is bytes, and an
- * @c application/octet-stream port carries them untouched in either encoding.
- * None of the three registers a type, because a directory entry really is a map
- * -- which keeps the cross-language tag table out of the standard library.
+ * Writes to an omitted Sink are no-ops. Use Sink::present() to skip expensive
+ * value production. Structured values use JSON by default or MessagePack when
+ * `encoding: "msgpack"` is set. Invalid UTF-8 produces `invalid_argument` for
+ * JSON; use MessagePack or the raw `bytes` port for arbitrary bytes.
+ * ValueChunk() uses a11::DumpJson and a11::PackMsgpack to report conversion
+ * errors as statuses. BytesChunk() carries bytes unchanged in either encoding.
  */
 
 #ifndef A11_SDK_FLOW_ACTIONS_PORTS_H_
@@ -137,32 +98,21 @@ data::Chunk BytesChunk(std::string bytes);
 /**
  * @brief A chunk carrying @p value as JSON.
  *
- * For the handful of places that have no encoding to hand. Prefer ValueChunk().
+ * Use when no encoding option is available. Other callers use ValueChunk().
  */
 absl::StatusOr<data::Chunk> JsonChunk(const nlohmann::json& value);
 
 /**
  * @brief The bytes a chunk means, for a port that carries bytes.
  *
- * The reverse of what ReadJsonInput does for a value port, and needed for the
- * same reason: a writer chose an encoding and a byte port should honour what
- * was *meant* rather than what the encoding happens to spell.
+ * Flow may write a string to a byte port as a JSON string. For example,
+ * `content: greeting | text` supplies `"hello"`; this function returns `hello`.
  *
- * The case that forces it: Flow's runtime encodes a string value as JSON when
- * it writes it to a port, whatever the port's declared type -- so a flow that
- * says `content: greeting | text` hands `write_stdout` the seven bytes
- * `"hello"` **with the quotes**, and a program that printed those would be
- * wrong in a way its author could not see from the source. So:
- *
- *   * `application/octet-stream`, `text/plain`, anything else -- the payload,
- *     untouched. Bytes are bytes.
- *   * `application/json` holding a string -- the string's characters. This is
- *     the case above.
- *   * `application/json` holding anything else -- its JSON text, which is the
- *     only reading of "write this object to a file" that means anything.
- *   * `application/x-msgpack` holding a string or a binary -- those bytes;
- *     anything else, the packed bytes as they arrived, since a caller writing
- *     packed records means the packed records.
+ *   * `application/octet-stream`, `text/plain`, anything else -- raw payload.
+ *   * `application/json` holding a string -- the string's characters.
+ *   * `application/json` holding anything else -- its JSON text.
+ *   * `application/x-msgpack` holding a string or binary -- decoded bytes;
+ *     anything else -- the original packed bytes.
  */
 absl::StatusOr<std::string> BytesOfChunk(const data::Chunk& chunk);
 
@@ -198,9 +148,7 @@ class OutputPorts;
 /**
  * @brief A handle to one output port, or to none.
  *
- * Copyable and cheap. Every write is a no-op on an absent handle -- the port
- * was omitted by the caller, or already closed -- so a handler writes
- * unconditionally and lets the caller's `omit` decide what that costs.
+ * Copyable and cheap. Writes to an omitted or closed port are no-ops.
  *
  * A Sink does not own its port: it stays valid for as long as the OutputPorts
  * it came from, and OutputPorts may be moved without invalidating it.
@@ -215,9 +163,7 @@ class Sink {
   /**
    * @brief Writes one chunk.
    * @param chunk The value to write.
-   * @param final Whether this is the port's last value. Establishes the
-   *        logical end of the stream, which is why a second final write to the
-   *        same port is rejected by the store rather than guessed at.
+   * @param final Whether this ends the stream. A second final write fails.
    */
   absl::Status Put(data::Chunk chunk, bool final = false) const;
   /** @brief Writes one structured value, in this run's encoding. */
@@ -239,11 +185,10 @@ class Sink {
   absl::Status PutOnlyText(std::string_view text) const;
 
   /**
-   * @brief Ends this port now, rather than at OutputPorts::Finish().
+   * @brief Ends this port before OutputPorts::Finish().
    *
-   * Worth doing where a port is finished long before the action is -- an
-   * `info` or `columns` port whose reader is waiting to get on with something
-   * -- and harmless otherwise. Idempotent; the handle goes absent afterwards.
+   * Use when a reader needs a completed port while the action continues.
+   * Idempotent; the handle becomes absent afterwards.
    */
   absl::Status Close() const;
 
@@ -285,9 +230,7 @@ class OutputPorts {
    * @brief Resolves every output port of @p action, closing those in @p
    * omitted.
    * @param action The running action, whose schema names the ports.
-   * @param omitted Port names the caller asked not to be written. A name that
-   *        is not a port is reported rather than ignored: a caller that
-   *        misspelled one would otherwise wait on a port nobody omitted.
+   * @param omitted Port names to close immediately. Unknown names are errors.
    * @param encoding How structured values are written.
    */
   static absl::StatusOr<OutputPorts> Open(
@@ -298,10 +241,7 @@ class OutputPorts {
   /**
    * @brief Returns a handle to port @p name.
    *
-   * A name that is not one of this action's ports is a bug in the handler
-   * rather than a caller's mistake, so it is recorded and surfaced by Finish()
-   * instead of being silently ignored -- and instead of aborting a process
-   * that has a perfectly good way to report an error.
+   * Unknown names are recorded as handler errors and reported by Finish().
    */
   Sink operator[](std::string_view name);
 
@@ -314,10 +254,8 @@ class OutputPorts {
   /**
    * @brief Ends every port still open with @p reason.
    *
-   * A reader of a stream that stopped early needs to know it stopped early;
-   * closing normally would tell it the file simply ended here. Called for a run
-   * that failed, so that a half-written body is a failure at the reader rather
-   * than a short one.
+   * Readers receive @p reason when an action fails after writing part of a
+   * stream.
    */
   absl::Status Abort(const absl::Status& reason);
 
@@ -333,9 +271,7 @@ class OutputPorts {
 /**
  * @brief Opens an action's outputs from its `options`, honouring both settings.
  *
- * What every handler in this library calls: reads `omit` and `encoding` from
- * one
- * place, so neither can be honoured by some actions and forgotten by others.
+ * Reads `omit` and `encoding` from @p options for the action's output ports.
  */
 absl::StatusOr<OutputPorts> OpenOutputs(
     const std::shared_ptr<actions::Action>& action, const Options& options);
@@ -346,17 +282,14 @@ absl::StatusOr<Encoding> EncodingOption(const Options& options);
 /**
  * @brief The `options` sentence every schema in this library ends with.
  *
- * One string, so the wording of the two settings every action shares cannot
- * drift between thirty descriptions.
+ * Provides common help text for `omit` and `encoding`.
  */
 std::string_view SharedOptionsHelp();
 
 /**
  * @brief Declares one port, the way every schema in this library wants it.
  *
- * A free function rather than aggregate initialisation at each site because
- * the flags read as noise in a list of thirty ports, and because `unary` is
- * the one people get backwards.
+ * Names the port flags explicitly in action schemas.
  */
 actions::ActionPortSchema Port(std::string_view name, std::string_view type,
                                std::string_view description, bool required,
@@ -402,9 +335,7 @@ class LineSplitter {
 
   /// A last line with no newline after it is still a line.
   ///
-  /// @param final Ends the port on that last line, rather than leaving it for
-  ///   OutputPorts::Finish(). Worth passing where a reader is waiting on this
-  ///   port and the action still has other work to do.
+  /// @param final Ends the port on the last line before the action finishes.
   absl::Status Flush(bool final = false) {
     if (!sink_.present() || pending_.empty()) {
       return absl::OkStatus();

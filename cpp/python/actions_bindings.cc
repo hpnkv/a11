@@ -305,10 +305,7 @@ std::vector<std::optional<data::NodeFragment>> ActionAutofillsFromPython(
 /**
  * A describe request as text, from whatever Python handed over.
  *
- * A string is already the document. Anything else goes through `json.dumps`
- * rather than being walked here: the request is small, its shape is the one
- * `__list_actions__` documents, and Python's own encoder is the thing that
- * agrees with what a caller wrote.
+ * Strings pass through; other values use Python's `json.dumps`.
  */
 std::string DescribeRequestToJson(const py::object& request) {
   if (request.is_none()) {
@@ -478,9 +475,7 @@ absl::StatusOr<actions::ActionHandler> MakeActionHandler(
   if (callable.is_none()) {
     return actions::ActionHandler{};
   }
-  // A handler that is already native (an SDK Action implemented in C++, handed
-  // back by ActionHandlerToPython) passes straight through: wrapping it in a
-  // PythonActionCallback would bounce every invocation through the.
+  // Keep an existing native handler on its C++ invocation path.
   if (py::isinstance<NativeActionHandler>(callable)) {
     return callable.cast<NativeActionHandler>().value();
   }
@@ -1232,8 +1227,7 @@ void BindActions(py::module_& module) {
       .def("get_verified_authorization",
            &actions::Action::GetVerifiedAuthorization,
            "Return identity and authority already verified for this action.")
-      // Every port accessor releases the GIL, because asking for a port is not
-      // the lookup it looks like.
+      // Port access may wait, so release the GIL.
       .def(
           "get_node",
           [](actions::Action& self, std::string node_id) {
@@ -1291,8 +1285,7 @@ void BindActions(py::module_& module) {
             if (metadata.has_value()) {
               options.metadata = &*metadata;
             }
-            // Released for the reason every port accessor releases it: writing
-            // the log port waits, and what it waits for can need the GIL.
+            // Log writes may wait for code that needs the GIL.
             ThrowIfNotOk(WithoutGil(
                 [&] { return self.Log(std::move(chunk), options); }));
           },

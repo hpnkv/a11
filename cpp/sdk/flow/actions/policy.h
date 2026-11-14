@@ -16,38 +16,12 @@
 
 /**
  * @file
- * @brief What a host is willing to let a flow do, decided where it registers.
+ * @brief Host capabilities for registered Flow actions.
  *
- * A flow can only call the actions that were registered for it, which is the
- * whole reason accepting one from somewhere else -- a file, a peer, a model --
- * is a reasonable thing to do. Registration is therefore the capability, and
- * this file is what makes that decision expressible at the granularity it
- * actually has: not "may it touch the filesystem" but "may it read under
- * /srv/data and write under /tmp/scratch, and nothing else".
- *
- * Two rules shape the whole file, and they are the reason it is not simply a
- * bag of options on the `options` port:
- *
- *   * **The policy is set at registration and the caller cannot widen it.**
- *     `options` may narrow what one call does; it can never reach past what the
- *     host allowed. A policy a flow could set would be a policy the flow's
- *     author sets, which for a model-authored flow is no policy at all.
- *   * **A capability the host did not name is absent.** Every field defaults to
- *     the refusing value: no roots, no programs, no hosts, not writable. A
- *     host that wants more says so, and a host that says nothing gets a
- *     library that can compute and not much else.
- *
- * The presets in flow_actions.h are the intended interface -- ReadOnly,
- * Workspace, System -- and this is what they are made of.
- *
- * ### Paths
- *
- * ResolvePath() is the one function every filesystem action calls first. It
- * makes a path absolute, resolves `..` and any symlinks along it, and only then
- * checks it against the roots -- in that order, because checking before
- * resolving is how `/srv/data/../../etc/passwd` and a symlink out of a
- * sandbox both get through. The check is on the resolved path, so a symlink
- * pointing out of a root is refused however it was spelled.
+ * The host fixes this policy at registration. Call options may narrow access;
+ * they cannot widen it. Unspecified capabilities default to denied.
+ * ResolvePath() resolves relative paths, `..` and symlinks before checking
+ * filesystem roots. flow_actions.h provides common policy builders.
  */
 
 #ifndef A11_SDK_FLOW_ACTIONS_POLICY_H_
@@ -100,18 +74,9 @@ struct FilesystemPolicy {
 /**
  * @brief Whether a child must be confined by the kernel as well as by policy.
  *
- * The distinction that matters is between `kPreferred` and `kRequired`, and it
- * is the difference between defence in depth and a guarantee. Every check in
- * this file happens before A11 makes a syscall -- which is all of them for
- * `read_file`, and *none* of the ones a spawned program makes for itself. A
- * flow allowed to run `python` under a policy rooted at `/work` can read
- * `/etc/passwd` through it unless something outside this library says
- * otherwise.
- *
- * `kRequired` is how a host says it would rather not run the program at all
- * than run it unconfined, and it fails at Prepare() time on a system that
- * cannot
- * confine it. See sandbox.h.
+ * Child programs make syscalls outside A11's in-process checks. `kPreferred`
+ * applies confinement when available; `kRequired` fails Prepare() if the
+ * system cannot confine the child. See sandbox.h.
  */
 enum class SandboxRequest {
   kNever,      ///< Do not confine. The policy is A11's own checks.
@@ -139,10 +104,8 @@ struct ProcessPolicy {
   /** Longest a child may run before it is signalled, or zero for no limit. */
   std::int64_t max_seconds = 0;
   /**
-   * Whether to ask the kernel to enforce the filesystem policy on the child as
-   * well -- Landlock on Linux, Seatbelt on macOS. Defaults to `kPreferred`,
-   * because a sandbox that has to be asked for is one that is usually not, and
-   * the cost of the default is a ruleset per spawn.
+   * Kernel confinement for children: Landlock on Linux, Seatbelt on macOS.
+   * Defaults to `kPreferred`.
    */
   SandboxRequest sandbox = SandboxRequest::kPreferred;
 };
@@ -163,9 +126,7 @@ struct NetworkPolicy {
   bool any_host = false;
   /**
    * Whether loopback, private (RFC 1918) and link-local addresses may be
-   * reached. All three default to refused, and link-local is the one that
-   * matters most: `169.254.169.254` is a cloud instance's credentials, and a
-   * flow that can fetch a URL can otherwise fetch those.
+   * reached. All default to refused; link-local includes 169.254.169.254.
    */
   bool allow_loopback = false;
   bool allow_private = false;
@@ -183,9 +144,7 @@ struct EnvironmentPolicy {
 /**
  * @brief One host's whole answer, shared by every handler it registered.
  *
- * Held by `shared_ptr<const Capabilities>`: the handlers are long-lived and the
- * policy does not change under them, so there is nothing to lock and nothing to
- * copy per call.
+ * Handlers share an immutable `Capabilities` instance across calls.
  */
 struct Capabilities {
   FilesystemPolicy filesystem;
@@ -204,12 +163,9 @@ using CapabilitiesPtr = std::shared_ptr<const Capabilities>;
  * @param path The path as the caller wrote it. Relative paths resolve against
  *        @c policy.current_directory, or the process directory when it is
  *        empty, and are refused when the result is outside every root.
- * @param for_write Whether this is a write. Checked here rather than at each
- *        call site so that a read-only policy refuses `write_file` even if
- *        somebody registers it by mistake.
- * @return The resolved absolute path, or
- * `permission_denied` naming the expected
- *         root. This status does not reveal whether an outside path exists.
+ * @param for_write Whether to require write permission.
+ * @return The resolved absolute path, or `permission_denied` naming the
+ *         expected root without revealing whether an outside path exists.
  */
 absl::StatusOr<std::filesystem::path> ResolvePath(
     const FilesystemPolicy& policy, std::string_view path, bool for_write);

@@ -16,51 +16,16 @@
 
 /**
  * @file
- * @brief Making the policy the kernel's opinion rather than only this
- * library's.
+ * @brief Kernel confinement for child processes.
  *
- * a11::sdk::flow::Capabilities is checked before a path is opened, which is
- * exactly as strong as the checking code -- and no stronger. That is enough for
- * `read_file`, whose every syscall this library makes itself. It is not enough
- * for `spawn_process`, because the program it runs makes its own syscalls and
- * has never heard of the policy. A flow allowed to run `python` under a policy
- * rooted at `/work` can read `/etc/passwd` through it, and every check in
- * policy.cc is irrelevant to that.
+ * In-process capability checks do not govern a spawned program's syscalls.
+ * Linux uses Landlock rules prepared in the parent and applied before exec.
+ * macOS uses a Seatbelt profile passed through `sandbox-exec`; applying the
+ * profile after exec avoids allocation in the child between fork and exec.
  *
- * So the child asks the kernel to enforce it too:
- *
- *   * **Linux: Landlock** (5.13+). A ruleset is built in the parent, naming the
- *     directories the child may read and write; the child calls
- *     `landlock_restrict_self` before `exec`. It is unprivileged, it cannot be
- *     dropped once applied, and it is inherited by everything the child spawns.
- *   * **macOS: Seatbelt**, through `sandbox-exec`. A profile is built in
- *     the parent and the child execs `/usr/bin/sandbox-exec -p <profile>`
- *     wrapping the real program.
- *
- * ### Why macOS goes through a process and Linux does not
- *
- * `sandbox_init()` allocates, and the child of a fork in a threaded process
- * must not: it holds whatever locks the other threads held at the moment of
- * the fork, so a malloc there deadlocks it, rarely and unreproducibly.
- * Landlock has no such problem -- the allocation is the ruleset, built before
- * the fork, and the child makes two bare syscalls against a descriptor. macOS
- * has no equivalent fork-safe entry point, so rather than take a small chance
- * of an undebuggable hang, the profile is passed as `argv` and enforcement
- * begins in a process that has already exec'd. One extra process, and nothing
- * that can deadlock.
- *
- * ### What it does not claim
- *
- * These are **defence in depth, not a replacement for the policy**. Landlock
- * before kernel 6.7 does not restrict network access at all, `sandbox-exec` is
- * deprecated by Apple (it works, and has for a decade, but it is not a
- * contract), and neither confines a child that was already allowed to run
- * something dangerous. Availability() says what the running system can actually
- * do, and `Capabilities::process::require_sandbox` decides whether a host that
- * asked for confinement will accept running without it -- because "the sandbox
- * quietly did not apply" is the one outcome that would make this file worse
- * than
- * not having it.
+ * Landlock before ABI 4 does not confine network access. macOS confinement
+ * permits general reads outside the workspace. Availability() reports the
+ * supported boundaries; `process.sandbox = kRequired` requires enforcement.
  */
 
 #ifndef A11_SDK_FLOW_ACTIONS_SANDBOX_H_
@@ -88,25 +53,10 @@ enum class SandboxKind {
 /**
  * @brief What the running system can do, probed once.
  *
- * The three booleans are not decoration, and a host that cares should read them
- * rather than assume that "sandboxed" means the same thing everywhere. It does
- * not, and the difference is large:
- *
- *   * **Linux/Landlock** confines reads and writes, and -- from ABI 4 -- TCP.
- *   * **macOS/Seatbelt** as this library builds it confines *writes* and the
- *     network, and only explicitly denies sensitive reads. A deny-default
- *     read profile that also lets a
- *     dynamically linked program start needs an exact list of what dyld
- *     touches, which is undocumented and changes between releases; the
- *     alternative on offer -- importing Apple's own `bsd.sb` base profile --
- *     leaves `/etc/passwd` readable. Given the choice between a sandbox that
- *     silently allows reads and one that says it allows reads, this library
- *     says it.
- *
- * So on macOS a confined child can still perform general reads outside the
- * workspace, while credential stores, browser sessions, private user data,
- * shell histories, and common secret files are denied. The policy reports
- * that partial boundary rather than claiming full read confinement.
+ * Landlock confines reads and writes, plus TCP from ABI 4. This Seatbelt
+ * profile confines writes and network access and denies selected sensitive
+ * reads. General reads outside the workspace remain available on macOS;
+ * consult confines_reads before relying on read confinement.
  */
 struct SandboxAvailability {
   SandboxKind kind = SandboxKind::kNone;
@@ -128,10 +78,8 @@ const SandboxAvailability& Availability();
 /**
  * @brief A prepared confinement: everything allocatable, done before the fork.
  *
- * Built by Prepare() in the parent. `Apply()` runs in the child between fork
- * and exec and calls nothing that allocates. `WrapCommand()` is the other
- * half, for the platform where confinement is reached by exec'ing something
- * else.
+ * Prepare() allocates in the parent. Apply() runs between fork and exec without
+ * allocating. WrapCommand() supplies the macOS `sandbox-exec` command.
  */
 class Sandbox {
  public:
@@ -143,9 +91,8 @@ class Sandbox {
    *        prepares nothing, because there is nothing to confine it to.
    * @param program The program about to be run, which has to be readable and
    *        executable however narrow the rest of the policy is.
-   * @return The prepared sandbox. A policy that asks for confinement on a
-   *         system that cannot provide it is an error here rather than a
-   *         surprise later -- see ProcessPolicy::require_sandbox.
+   * @return The prepared sandbox, or an error when required confinement is
+   *         unavailable. See ProcessPolicy::sandbox.
    */
   static absl::StatusOr<std::shared_ptr<Sandbox>> Prepare(
       const Capabilities& capabilities, std::string_view program);
@@ -175,9 +122,7 @@ class Sandbox {
   /**
    * @brief Rewrites the command so that exec'ing it enters the sandbox.
    *
-   * The macOS half. Returns the arguments unchanged where confinement is
-   * applied by Apply() instead, so a caller writes this once and does not
-   * branch on the platform.
+   * Adds `sandbox-exec` on macOS; leaves arguments unchanged elsewhere.
    */
   [[nodiscard]] std::vector<std::string> WrapCommand(
       std::string_view program,

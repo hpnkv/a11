@@ -12,19 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Handlers for the four Bash-tool Actions.
+"""Adapt Bash tool actions to ShellManager.
 
-Each handler is a thin adapter over :class:`~a11.sdk.bash.manager.ShellManager`:
-it reads the action's inputs and headers, calls the manager, and streams results
-back onto the action's output ports. All policy (scope caps, timeouts,
-validation, output processing, cleanup) lives in the manager.
-
-Each also narrates its run through :meth:`a11.actions.action.Action.log`, for
-whoever is showing the tool call to a person: the lifecycle handlers name the
-shell they acted on, and ``shell_execute`` names the command and how much came
-back. None of it declares a port and none of it can reach the model -- the log
-port is not one of the action's outputs, and the tool runner reads it separately
-from them.
+Handlers read action inputs and headers, call
+:class:`~a11.sdk.bash.manager.ShellManager`, and write output ports. The manager
+owns policy, timeouts and cleanup. Handlers send narration through
+:meth:`a11.actions.action.Action.log`, separate from model-visible outputs.
 """
 
 from __future__ import annotations
@@ -71,15 +64,10 @@ def _output_excerpt(lines: list[str]) -> str:
 
 
 async def _write_all_final(node: a11.AsyncNode, values: list[str]) -> None:
-    """Write a known-complete sequence, marking its last value final.
+    """Write a complete sequence with finality on its last value.
 
-    For a producer that has its whole sequence in hand. Finality is what tells
-    a whole-value consumer that the sequence ran to its end rather than being
-    cut short; the null terminator ``finalize()`` would write is avoided on these
-    ports: the LLM-tool runner collects every emitted fragment, and a trailing
-    null (octet-stream) chunk would reach output decoders that cannot deserialize
-    it. So the last
-    value carries finality and the node is only closed.
+    Close the node without a null terminator; output decoders expect every
+    collected fragment to contain a value.
     """
     for index, value in enumerate(values):
         await node.put(value, final=index == len(values) - 1)

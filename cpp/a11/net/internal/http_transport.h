@@ -18,16 +18,10 @@
  * @file
  * @brief Shared TCP/TLS/libuv transport for HTTP connections.
  *
- * HttpTransport owns the socket, the optional OpenSSL BIO pump, and the libuv
- * lifecycle that both the HTTP/2 (nghttp2) and HTTP/1.1 connections sit on top
- * of. The protocol-specific connections derive from it and override three
- * seams: OnInboundPlaintext (bytes decrypted/received), SendProtocolPreamble
- * (emit any startup bytes once the transport is ready), and OnClose (tear down
- * protocol state). Everything below those seams -- the single libuv loop, the
- * TLS handshake, encrypt/decrypt, backpressure to the socket -- is shared.
- *
- * The process-global libuv executor and the RunOnUv marshalling helpers moved
- * to a11/uv/loop.h and are re-exported here under their original names.
+ * HttpTransport owns the socket, optional OpenSSL BIO pump and libuv lifecycle
+ * shared by HTTP/1.1 and HTTP/2 connections. Derived connections handle
+ * plaintext input, protocol preambles and closure. The libuv executor and
+ * RunOnUv helpers come from a11/uv/loop.h.
  */
 
 #ifndef A11_NET_INTERNAL_HTTP_TRANSPORT_H_

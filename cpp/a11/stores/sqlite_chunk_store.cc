@@ -227,13 +227,7 @@ FragmentRow ReadFragmentRow(sqlite3_stmt* statement) {
   return row;
 }
 
-/**
- * Rebuild the fragment a caller originally wrote.
- *
- * `continued` is always recomputed from the node's current final sequence
- * rather than read back from the row: a later batch can declare finality, and
- * a stored flag would then disagree with the store.
- */
+/** Rebuilds a fragment using the current final sequence for `continued`. */
 absl::StatusOr<data::NodeFragment> DecodeFragment(
     const SqliteDatabase& database, std::string_view node_id,
     const FragmentRow& row, const std::optional<std::uint32_t>& final_seq) {
@@ -309,13 +303,8 @@ struct EncodedFragment {
   std::uint64_t payload_bytes = 0;
 };
 
-/**
- * Decompose a fragment into columns, externalizing an oversized payload.
- *
- * Blobs are written here, before the transaction opens, because a blob must be
- * durable before the row referencing it commits. The caller unlinks
- * `owned_blob` if the batch then fails.
- */
+/** Encodes fragment columns and writes large blobs before the row transaction.
+ * The caller removes `owned_blob` if the batch fails. */
 absl::StatusOr<EncodedFragment> EncodeFragment(
     const SqliteDatabase& database, const data::NodeFragment& fragment,
     size_t inline_threshold, absl::Time now) {
@@ -746,9 +735,7 @@ SQLiteChunkStore::Next(absl::Time deadline, size_t limit) {
 
           bool done = false;
           std::optional<absl::Status> terminal;
-          // The shared cursor is persisted, so consuming is a write. The wait
-          // happens after this transaction ends -- parking inside it would hold
-          // the write lock and deadlock every other writer.
+          // Wait after committing the cursor to release SQLite's write lock.
           ABSL_RETURN_IF_ERROR(database->RunWrite(
               [&](SqliteConnection& connection)
                   -> absl::StatusOr<std::vector<std::string>> {
@@ -804,8 +791,7 @@ SQLiteChunkStore::Next(absl::Time deadline, size_t limit) {
                     done = true;
                     break;
                   }
-                  // Checked after the end conditions above, which is what lets
-                  // a full batch still carry a trailing sentinel.
+                  // Check end conditions first to retain a trailing sentinel.
                   if (fragments.size() == limit) {
                     done = true;
                     break;
@@ -1076,8 +1062,7 @@ a11::Future<std::vector<std::uint32_t>> SQLiteChunkStore::PutMany(
             });
 
         if (!outcome.ok()) {
-          // The rows never landed, so the blobs they would have referenced are
-          // garbage. Unlink them now rather than leaving them for the sweeper.
+          // Remove blobs whose rows did not commit.
           for (const std::string& blob : owned_blobs) {
             database->RemoveBlob(blob);
           }
@@ -1248,9 +1233,7 @@ a11::Future<std::uint32_t> SQLiteChunkStore::GetSeqForArrivalOrder(
   return a11::Submit<std::uint32_t>(
       [node_id, database, arrival_order]() -> absl::StatusOr<std::uint32_t> {
         std::optional<std::uint32_t> seq;
-        // SQLite integers are signed, so an arrival order past INT64_MAX cannot
-        // round-trip. It can never have been stored, so report it as absent
-        // rather than letting the bind silently wrap.
+        // Orders above INT64_MAX cannot be stored as SQLite integers.
         if (arrival_order <= static_cast<std::uint64_t>(kMaxSqliteInteger)) {
           ABSL_RETURN_IF_ERROR(database->RunRead(
               [&](SqliteConnection& connection) -> absl::Status {

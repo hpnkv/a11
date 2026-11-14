@@ -180,10 +180,16 @@ std::optional<Binding> Lookup(const std::vector<std::unique_ptr<Unit>>& units,
   return result;
 }
 
+std::string BuiltinTarget(const Binding& binding) {
+  // `std` is a module binding while an editor is typing `std::name`.
+  return binding.member.starts_with("std::") ? binding.member.substr(5)
+                                             : binding.member;
+}
+
 std::string Target(const std::vector<std::unique_ptr<Unit>>& units,
                    const Binding& binding) {
   if (binding.unit == kBuiltin) {
-    return binding.member.substr(5);
+    return BuiltinTarget(binding);
   }
   if (binding.kind == MemberKind::kFlow) {
     const auto& flows = units[binding.unit]->parsed.flows;
@@ -912,7 +918,7 @@ LinkedModule LinkModules(std::string source, std::string identity,
   }
   const auto target_of = [&](const Binding& binding) {
     if (binding.unit == kBuiltin) {
-      return binding.member.substr(5);
+      return BuiltinTarget(binding);
     }
     const auto found = targets.find({binding.unit, binding.member});
     return found == targets.end() ? binding.member : found->second;
@@ -1062,7 +1068,8 @@ LinkedModule LinkModules(std::string source, std::string identity,
         }
         if (auto* zip = syntax::As<syntax::Zip>(&node); zip != nullptr) {
           const auto binding = Lookup(units, index, env, zip->name);
-          if (!binding.has_value() || binding->unit != kBuiltin) {
+          if (!binding.has_value() || binding->unit != kBuiltin ||
+              binding->kind != MemberKind::kIntrinsic) {
             Problem(unit, "flow.form.unknown-builtin",
                     "Qualify this standard function with 'std::' or import it.",
                     zip->location);
@@ -1076,7 +1083,8 @@ LinkedModule LinkModules(std::string source, std::string identity,
             return;
           }
           const auto binding = Lookup(units, index, env, function->name);
-          if (!binding.has_value() || binding->unit != kBuiltin) {
+          if (!binding.has_value() || binding->unit != kBuiltin ||
+              binding->kind != MemberKind::kIntrinsic) {
             Problem(unit, "flow.form.unknown-builtin",
                     function->name.starts_with("std::")
                         ? absl::StrCat("Unknown standard function '",

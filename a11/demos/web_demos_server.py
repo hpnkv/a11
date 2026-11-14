@@ -12,69 +12,35 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The backend the browser guides talk to, and the demo agent on the exchange.
+"""Serve the browser guides and demo agent through one A11 service.
 
-Run with ``python -m a11.demos.web_demos_server``. It serves, on
-``ws://127.0.0.1:9010/a11-demos``:
+Run ``python -m a11.demos.web_demos_server`` to serve
+``ws://127.0.0.1:9010/a11-demos``. The service offers recorded chat turns,
+conversation lookup, deep-research flows, ``echo``, and ``text_to_image`` when
+a Stable Diffusion checkpoint is available. Model provider and model arrive as
+``x-a11-llm-*`` call headers. Page tools use the reverse-dispatch bridge.
 
-* ``interact_with_llm`` — one action for every provider, routed by the
-  ``x-a11-llm-*`` headers the browser sets, with each turn recorded in a SQLite
-  chunk store (see [a11.gateway.conversations][a11.gateway.conversations]).
-* ``get_conversation`` — how a reloaded page picks a conversation up where it
-  left off, given its id.
-* ``deep-research`` and the flows it is made of, compiled from
-  ``deep_research.flow`` beside this file. Registered with `RESEARCH_HEADERS`,
-  which is how they come with this server's own ollama already filled in: a
-  composition declares no headers of its own, so without that a console has no
-  field to offer and a call that names no provider cannot be answered.
-* ``text_to_image``, when [a11.demos.text_to_image][a11.demos.text_to_image] can
-  reach a Stable Diffusion checkpoint.
-* ``echo``, for the browser-clients guide: the smallest action there is, so a
-  page can watch a transport work without a model in the way.
-* `__list_actions__` — which every A11 peer answers, and which is how this
-  server learns what a page serves without the page announcing anything.
-  [a11.gateway.tool_bridge][a11.gateway.tool_bridge]).
+The service uses the gateway conversation store and tool bridge. See the
+chat-sessions, deep-research, browser-tools, and generative-media guides in
+``doc/docs/guides/`` for their browser clients.
 
-This is a trimmed `a11 gateway`: the same conversation store, the same tool
-bridge, without the shell, audio and flow-authoring actions a gateway also
-serves. Anyone already running ``a11 gateway run`` can point the demos at it
-instead — the actions the guides call are the ones it has — and everything but
-``deep-research`` and ``text_to_image`` will answer. Guides:
-``doc/docs/guides/chat-sessions.md``, ``deep-research.md``, ``browser-tools.md``
-and ``generative-media.md``.
-
-## It is served by ``a11 serve``
-
-Every transport, TLS and hosting flag here is
-[`a11 serve`][a11.cli.commands.serve]'s, declared once there and reused: this
-module is a `SERVICE` symbol that command can serve, and ``python -m
-a11.demos.web_demos_server`` is that command with the target filled in and the
-WebSocket defaults the guides quote. The equivalent long way round is
+Transport, TLS, and hosting options come from ``a11 serve``. The equivalent
+command is:
 
 ```sh
 a11 serve a11.demos.web_demos_server:SERVICE --ws --ws-port 9010 \
   --ws-path /a11-demos
 ```
 
-All ``a11 serve`` options are therefore available here, including ``--hosted``:
+For exchange hosting, run:
 
 ```sh
 python -m a11.demos.web_demos_server --ws --hosted demoserver
 ```
 
-takes a claim on the exchange, registers with signalling, and keeps both alive
---- so the same actions a guide's page reaches over its own WebSocket are
-reachable at ``https://a11.to/ui/peer/demoserver`` by anyone logged in, with no
-inbound port involved. A chat turn from that console is a call on
-``interact_with_llm``, so the provider and model arrive the way they always do:
-as ``x-a11-llm-*`` headers on the call.
-
-Two things are configured by environment rather than by flag, because the
-service is built when the symbol is first read --- before, in the ``a11 serve``
-case, any of this module's own flags exist: ``A11_DEMOS_CONVERSATION_ROOT`` (the
-SQLite conversation store, default `conversations.default_root`) and
-``A11_DEMOS_TEXT_TO_IMAGE=0`` (do not serve ``text_to_image``, which needs a
-diffusion checkpoint). ``main`` sets both from its flags.
+Set ``A11_DEMOS_CONVERSATION_ROOT`` for the SQLite conversation directory.
+Set ``A11_DEMOS_TEXT_TO_IMAGE=0`` to omit the image action. The module's CLI
+flags configure these variables before the service is built.
 """
 
 from __future__ import annotations
@@ -107,8 +73,7 @@ from a11.service.service import Service, ServiceOptions
 from a11.service.session import Session
 from a11.status import Status, StatusCode
 
-# The flows name `a11.sdk.Interaction`, and a tag resolves only to a type this
-# process has been told about; importing the module is what tells it.
+# Register `a11.sdk.Interaction` for Flow type resolution.
 import a11.sdk.llm  # noqa: F401  isort:skip
 
 HERE = pathlib.Path(__file__).parent
@@ -136,30 +101,16 @@ DEMO_API_KEY_PLACEHOLDER = "use-a11-demo-resources"
 #: The deep-research composition, beside this file.
 DEEP_RESEARCH_FLOW = HERE / "deep_research.flow"
 
-#: Default backend configuration for the deep-research flows.
-#:
-#: A header schema's ``default`` is *applied*, not merely advertised: an
-#: `Action` seeds its header map from its schema, so a call that names no
-#: provider uses local Ollama. A11 forwards ``x-a11-`` headers to nested model
-#: calls, so callers only need to provide the research topic.
-#:
-#: The demo server uses the hosted Ollama endpoint at ``https://ollama.com``
-#: with the ``glm-5.3-flash:cloud`` model, so visitors can try the demos
-#: without running a local model.
+#: Hosted Ollama defaults for deep-research flows. Action defaults are applied
+#: to calls and forwarded through ``x-a11-`` headers to nested model actions.
 OLLAMA_DEFAULTS: dict[str, str] = {
     LlmHeaders.PROVIDER: "ollama",
     LlmHeaders.MODEL: "glm-5.3-flash:cloud",
     LlmHeaders.BASE_URL: "https://ollama.com",
 }
 
-#: The headers the deep-research flows advertise, with those defaults on them.
-#:
-#: The flows themselves declare none -- a composition is configured by the
-#: headers of the call that started it, so there is nothing for the *language*
-#: to say. Declaring them here is what puts a labelled, pre-filled field in
-#: front of somebody in the console, and `x-a11-llm-base-url` is not in
-#: `a11.DEFAULT_ACTION_HEADERS` or in `interact_with_llm`'s own headers, so this
-#: is the only way it appears at all.
+#: Headers shown for the deep-research flows. They supply labelled console
+#: fields and this deployment's provider defaults.
 RESEARCH_HEADERS = a11.DEFAULT_ACTION_HEADERS | {
     LlmHeaders.PROVIDER: a11.ActionHeaderSchema(
         LlmHeaders.PROVIDER,
@@ -185,9 +136,7 @@ RESEARCH_HEADERS = a11.DEFAULT_ACTION_HEADERS | {
     ),
 }
 
-#: `interact_with_llm` under a second name: the same ports, the same headers,
-#: and the plain handler rather than the one that records a conversation. It is
-#: what a *composition's* model calls use -- see `make_registry`.
+#: The model action used within flows, without conversation recording.
 ASK_MODEL_SCHEMA = a11.ActionSchema(
     name="ask_model",
     description=(
@@ -539,23 +488,15 @@ def make_registry(
 
     registry = a11.ActionRegistry()
 
-    # `interact_with_llm` wrapped in the handler that records the turn, plus
-    # `get_conversation` that reads the recording back. The provider is not
-    # chosen here: it arrives per call as a header, which is what lets one
-    # registration serve Gemini and Ollama alike.
+    # Model provider selection comes from each call's headers.
     conversation_actions.install(registry, store)
-    # The full conversation list is not public on this server: a page
-    # resolves by id (from the URL) instead of browsing.
+    # Pages retrieve conversations by id; the list is not public.
     registry.unregister(conversation_actions.GET_CONVERSATIONS_SCHEMA.name)
 
     # interact_with_llm is LLM-enabled.
     _LLM_ACTION_NAMES.add(INTERACT_WITH_LLM_SCHEMA.name)
 
-    # The same action without the recording, under its own name. A composition's
-    # model calls are steps, not chat turns: recorded, each one would arrive in
-    # the conversation list as a conversation of its own. So the deep-research
-    # flow asks for `ask_model` and the chat guide's page asks for
-    # `interact_with_llm`, and only one of the two is history.
+    # Flow model calls use `ask_model` without creating conversation records.
     registry.register(
         ASK_MODEL_SCHEMA.name, ASK_MODEL_SCHEMA, interact_with_llm
     )
@@ -572,16 +513,8 @@ def make_registry(
         echo_server.ECHO_SCHEMA.name, echo_server.ECHO_SCHEMA, echo_server.echo
     )
 
-    # A composition, as text. The deep-research guide's whole backend is the
-    # file beside this one -- the actions it names are the ones above.
-    #
-    # Registered one at a time rather than with `register_all`, because each
-    # goes in under a schema with `RESEARCH_HEADERS` on it. The amendment is
-    # *this server's* and not the language's: a flow declares no headers because
-    # a composition is configured by the call that started it, and which
-    # provider this particular deployment should fall back to is a hosting
-    # decision. So `deep_research_program()` stays exactly the compiled file,
-    # and the browser can keep checking its ports against it.
+    # Register each compiled flow with this server's research headers. The
+    # program retains its declared ports for browser schema checks.
     program = deep_research_program()
     for flow_name in program.names:
         entry = program[flow_name]
@@ -650,10 +583,8 @@ def make_service(registry: a11.ActionRegistry) -> Service:
 
         per_connection = registry.copy()
 
-        # Wrap every LLM-enabled Python handler with the demo-key proxy
-        # and rate limiter, bound to this connection's identity.
-        # NativeActionHandlers are rebound to a nested Action by the wrapper;
-        # the opaque handle itself is never called by Python.
+        # Bind demo credentials and rate limits to this connection. Native
+        # handlers use a nested Action inside the Python wrapper.
         ip = _extract_ip(stream)
         fingerprint = _extract_fingerprint(stream)
         for action_name in _LLM_ACTION_NAMES:
@@ -674,30 +605,21 @@ def make_service(registry: a11.ActionRegistry) -> Service:
     return Service(
         action_registry=registry,
         on_connection=on_connection,
-        # False: the hook makes the copy itself, because the bridge must own the
-        # very copy it registers the page's tools on.
+        # The connection hook copies the registry that receives page tools.
         options=ServiceOptions(copy_registry_per_connection=False),
     )
 
 
-#: The service, built once, on demand. Not at import: the store it records
-#: conversations in is a directory this module creates, and importing a module
-#: should not create anything -- and `main` has environment to set before the
-#: first read (see `__getattr__`).
+#: Built on first access after environment configuration and loop startup.
 _SERVICE: Service | None = None
 
 
 def service() -> Service:
     """The one service this module serves, built on first use.
 
-    Configured from the environment rather than from arguments, because the
-    reader may be `a11 serve` resolving the `SERVICE` symbol, which has no idea
-    this module has options. See the module docstring for the two variables.
-
-    Call it with an event loop running. A native `Service` binds to the loop it
-    was built on, so one built without one either raises or -- worse -- serves a
-    first request that never completes; `a11 serve` reads the symbol from inside
-    `asyncio.run`, which is why the lazy build is safe there.
+    Configure the conversation root and image action with the environment
+    variables in the module docstring. Call with an event loop running; the
+    native service binds to that loop.
     """
     global _SERVICE
     if _SERVICE is None:
@@ -721,10 +643,7 @@ def service() -> Service:
 def __getattr__(name: str) -> Any:
     """``SERVICE`` and ``REGISTRY``, built when something asks for them.
 
-    PEP 562, so that ``a11 serve a11.demos.web_demos_server:SERVICE`` -- whose
-    whole interface to this module is one `getattr` -- gets a service without
-    this module building one for every importer. ``python -m`` imports it too,
-    under ``__main__``, and never reads either symbol.
+    Module attribute lookup builds the service on first access.
     """
     if name == "SERVICE":
         return service()
@@ -733,19 +652,15 @@ def __getattr__(name: str) -> Any:
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-#: The target `main` serves. Spelled out rather than built from ``__name__``,
-#: which is ``__main__`` under ``python -m`` -- resolvable, since that module is
-#: this one, but reported as ``__main__`` and true only by luck.
+#: Stable import target for ``python -m`` and ``a11 serve``.
 TARGET = "a11.demos.web_demos_server:SERVICE"
 
 
 def _configure(parser: argparse.ArgumentParser) -> None:
     """This module's own two flags, on top of every ``a11 serve`` flag.
 
-    The transport, TLS and hosting flags are `a11 serve`'s own declaration, so
-    there is one vocabulary for them however this is started. Only the WebSocket
-    defaults differ: the guides quote 9010 and ``/a11-demos``, and a page that
-    has to be told a different URL is a page whose instructions are wrong.
+    Reuse `a11 serve` transport, TLS and hosting flags. WebSocket defaults
+    match the guide URL at port 9010 and ``/a11-demos``.
     """
     serve_command.configure(parser, with_target=False)
     parser.set_defaults(
@@ -783,7 +698,7 @@ def main(argv: list[str] | None = None) -> int:
     _configure(parser)
     args = parser.parse_args(argv)
 
-    # Before `serve` reads the symbol, which is what builds the service.
+    # Configure the environment before `serve` builds the service.
     if args.conversation_root is not None:
         os.environ[CONVERSATION_ROOT_ENV] = str(args.conversation_root)
     if args.no_text_to_image:

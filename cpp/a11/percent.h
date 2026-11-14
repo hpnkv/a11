@@ -18,9 +18,8 @@
  * @file
  * @brief Percent-encoding, as inline functions over a string_view.
  *
- * Header-only so that the three unrelated libraries needing it -- a Redis URL,
- * a W3C baggage header, an action-discovery query string -- share one
- * implementation without any of them taking a link dependency on the others.
+ * Inline functions serve Redis URLs, W3C baggage and discovery queries without
+ * a link dependency.
  */
 
 #ifndef A11_PERCENT_H_
@@ -54,10 +53,7 @@ inline int HexDigit(char one) {
 /**
  * @brief Percent-decodes @p value, leaving anything malformed as it stands.
  *
- * The lenient posture: an undecodable `%` is passed through as itself rather
- * than dropped, so a malformed query gives a "no such thing" answer instead of
- * a silently different one, and a propagator keeps a baggage value it cannot
- * read rather than losing it.
+ * Malformed percent escapes remain unchanged.
  *
  * @param value Text to decode.
  * @param plus_is_space Map `+` to a space, as
@@ -90,9 +86,7 @@ inline std::string Decode(std::string_view value, bool plus_is_space = false) {
 /**
  * @brief Percent-decodes @p value, or says why it cannot be decoded.
  *
- * The strict posture, for text where a malformed escape means the caller got
- * the input wrong and should hear about it rather than connect somewhere
- * slightly different -- a URL carrying credentials, for instance.
+ * Returns an error for malformed escapes, including in credential URLs.
  *
  * @param value Text to decode.
  * @param what Names the input in the error, e.g. "Redis URL".

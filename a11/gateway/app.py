@@ -35,9 +35,6 @@ def _make_action_registry(
     config: GatewayConfig,
     conversation_store: conversations.ConversationStore,
 ):
-    # No __ping here any more: it is a builtin every registry answers for,
-    # which is what makes a probe work against any A11 peer rather than only
-    # against this gateway. See a11/gateway/ping.py.
     registry = actions.ActionRegistry()
 
     conversation_actions.install(registry, conversation_store)
@@ -66,20 +63,14 @@ def _make_action_registry(
         for schema, handler in bash.SHELL_ACTIONS:
             registry.register(schema.name, schema, handler)
 
-    # Both groups are gated independently. Until now `--no-audio-capture` did
-    # nothing at all and `--no-speech-recognition` silently took the capture
-    # actions down with it, because registration was all-or-nothing.
+    # Capture and recognition are registered independently.
     audio_actions.register(
         registry,
         capture=config.audio_capture,
         recognition=config.speech_recognition,
     )
 
-    # Last, so a composition can reach everything above it. These let a caller
-    # send a flow rather than a call: the actions it names run here, and only
-    # what the flow declares as an output comes back. A transcript summarised
-    # here is one summary over the wire instead of the whole transcript, and
-    # the same allowed-action patterns still decide what it may call.
+    # Register Flow last so compositions can call the actions above.
     if config.flow_tools:
         flow_tools.register(registry)
 
@@ -89,11 +80,9 @@ def _make_action_registry(
 class A11Gateway:
     """The gateway's shared state, and one Session per accepted stream.
 
-    Which tools a turn may use is the *caller's* decision, expressed as the
-    allowed-action patterns on its ``interact_with_llm`` call: a client that
-    says ``run_command`` is offered that command action, and one that does not
-    is not (see [collect_tools][a11.sdk.llm_tools.runner.collect_tools]). So the
-    gateway registers everything it can serve and lets each call narrow it.
+    Each ``interact_with_llm`` call selects its available tools through
+    allowed-action patterns. See
+    [collect_tools][a11.sdk.llm_tools.runner.collect_tools].
     """
 
     _conversation_store: conversations.ConversationStore
@@ -112,8 +101,7 @@ class A11Gateway:
         self.service = Service(
             action_registry=action_registry,
             on_connection=self._on_connection,
-            # False: the hook makes the copy itself, because the bridge must own
-            # the very copy it registers the peer's tools on.
+            # The hook copies the registry that receives the peer's tools.
             options=ServiceOptions(copy_registry_per_connection=False),
         )
 

@@ -12,12 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Flow as a capability you hand to a model, or to a client.
+"""Register Flow actions for a model or client.
 
-Three Actions -- ``flow_actions``, ``flow_check`` and ``flow_run`` -- let an
-LLM compose the tools it already has into an [A11 Flow][a11.flow] and run the
-composition as a single tool call. Register them on the registry that holds
-those tools:
+``flow_actions``, ``flow_check`` and ``flow_run`` let a model compose tools in
+an [A11 Flow][a11.flow]. Register them beside the actions they may call:
 
 ```python
 from a11.actions import ActionRegistry
@@ -28,25 +26,15 @@ flow_tools.register(registry)
 system_prompt = flow_tools.get_system_prompt()
 ```
 
-The registry matters: a flow calls actions by name through the registry it is
-run under, so these belong beside the actions they are meant to compose.
+Intermediate values stay inside the Flow; the model receives its outputs.
+Use [get_system_prompt][a11.sdk.flow_tools.prompt.get_system_prompt] or the
+``a11.sdk.skill.Skill`` for model instructions.
 
-Values passed between composed steps do not enter the model context. A flow
-that fetches four pages and summarises them returns one summary; the model does
-not read the source pages. Separate model tool calls would include each
-intermediate in both a result and the next request.
-
-The instructions to put in front of the model come with it, as either
-[get_system_prompt][a11.sdk.flow_tools.prompt.get_system_prompt] text or an
-``a11.sdk.skill.Skill`` -- the same words, in whichever shape the host prefers.
-
-A client is the other kind of caller, and it wants ``flow_run`` too -- with the
-flow's ports as *nodes* rather than an object of values. Naming a port on
-``input_streams`` leaves it open to write while the flow runs, and every output
-is readable as it fills; the ids are derived from the call's own
-([flow_input_node_id][a11.sdk.flow_tools.handlers.flow_input_node_id],
-[flow_output_node_id][a11.sdk.flow_tools.handlers.flow_output_node_id]). That is
-the same tool serving a caller that has a session, not a second one.
+A client can use ``flow_run`` with live port nodes. Naming a port on
+``input_streams`` leaves it open while the Flow runs; outputs can be read as
+they fill. Node IDs come from
+[flow_input_node_id][a11.sdk.flow_tools.handlers.flow_input_node_id] and
+[flow_output_node_id][a11.sdk.flow_tools.handlers.flow_output_node_id].
 """
 
 from a11.actions import ActionHandler, ActionRegistry, ActionSchema

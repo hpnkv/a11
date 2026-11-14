@@ -64,11 +64,7 @@ bool IsPositional(const syntax::Stage& stage) {
   return vocabulary::PositionalStages().contains(stage.name);
 }
 
-/// The stages that reshape every value the same way, so twice is once.
-///
-/// `sort` is here because sorting a sorted stream is the same stream, and
-/// `flatten` is not recursive: a stream of lists of lists is flattened one
-/// level at a time, so twice is a second level and not a repeat.
+/// Idempotent stages. `flatten` is excluded because it removes one level.
 bool IsIdempotent(std::string_view stage) {
   return stage == "collect" || stage == "distinct" || stage == "text" ||
          stage == "json" || stage == "packb" || stage == "sort";
@@ -111,17 +107,8 @@ class Inspector {
     found_.push_back(std::move(diagnostic));
   }
 
-  /// Shapes nothing in the file names.
-  ///
-  /// A shape is used when a port is typed with it, another shape has a field of
-  /// it, or a value is made one. Unlike a port or a name, it is not scoped to a
-  /// flow -- so this asks the whole file at once, once, rather than once per
-  /// flow, which would report every shape as unused by every flow that did not
-  /// happen to mention it.
-  ///
-  /// A file that declares only shapes is a file of types, which is a reasonable
-  /// thing to write and is what a JSONSchema is turned into; nothing there is
-  /// unused, so nothing is said about it.
+  /// Report shapes with no references across a file containing flows.
+  /// Shape-only files are valid type declarations and produce no warning.
   void UnusedShapes(const ParseResult& parsed, const ResolveResult& resolved) {
     if (resolved.program.dtos.empty() || resolved.flows.empty()) {
       return;
@@ -169,15 +156,7 @@ class Inspector {
     }
   }
 
-  // Every type a body writes down, however deep: `Shape{..}` and `x as Shape`.
-  // VisitSubtree rather than a recursive walk of its own, so a deeply nested
-  // document costs heap rather than fiber stack.
-  /// Every type a body writes down, however deep: `Shape{..}` and `x as Shape`.
-  ///
-  /// Every node, whatever its kind: a cast can be anywhere an expression can,
-  /// and enumerating the places would be a list to keep in step with the
-  /// grammar for no gain. VisitSubtree rather than a recursive walk of its own,
-  /// so a deeply nested document costs heap rather than fiber stack.
+  /// Find type names throughout a body using the stack-bounded VisitSubtree.
   static void NamedTypes(const std::vector<syntax::NodePtr>& body,
                          absl::flat_hash_set<std::string>& named) {
     for (const syntax::NodePtr& node : body) {
@@ -214,7 +193,7 @@ class Inspector {
     });
   }
 
-  // --- what nothing uses ----------------------------------------------------
+  // --- Unused declarations -------------------------------------------------
 
   void Unused(const ResolvedFlow& flow) {
     for (const Symbol& symbol : flow.symbols) {
@@ -377,14 +356,9 @@ class Inspector {
     }
   }
 
-  // --- a moment nothing pins down -------------------------------------------
+  // --- Unconstrained values ------------------------------------------------
 
-  /// The symbol a name resolves to, or null.
-  ///
-  /// Flat, so a name declared in two scopes answers with the first: enough for
-  /// the questions below, which ask what *kind* of thing a name is, and a flow
-  /// that gives one name to a node here and a loop variable there is a flow
-  /// with a worse problem than the one being reported.
+  /// Returns the first matching symbol across scopes, or null.
   const Symbol* absl_nullable SymbolNamed(std::string_view name) const {
     if (current_ == nullptr) {
       return nullptr;
@@ -397,13 +371,7 @@ class Inspector {
     return nullptr;
   }
 
-  /// Whether a name stands for something that only exists once the flow runs.
-  ///
-  /// An `in` port and a header are there before the first statement, so
-  /// reading one says nothing about when a statement happened. A node, a
-  /// call's port and a barrier are filled in *while* the flow runs, and
-  /// reading one at a moment nothing pins down is the mistake this file is
-  /// about.
+  /// Whether a name is produced during execution: a node, call or barrier.
   bool ProducedWhileRunning(std::string_view name) const {
     const Symbol* symbol = SymbolNamed(name);
     if (symbol == nullptr) {
@@ -414,17 +382,8 @@ class Inspector {
            symbol->kind == SymbolKind::kBarrier;
   }
 
-  /// A clock read in a statement nothing orders.
-  ///
-  /// `now() - started -> elapsed` at the top of a body runs at once, with every
-  /// other statement in it, so what it measures is the flow starting rather
-  /// than whatever it was written to time -- and it is written where it reads
-  /// as the last thing that happens.
-  ///
-  /// `now() -> started` is the other half of the same idiom and is exactly
-  /// right, which is why a value read is asked for too: a clock read on its own
-  /// is a *start*, a clock read against something the flow produced is a
-  /// *measurement*, and only a measurement needs a moment.
+  /// Warn when an unordered clock read measures a value produced by the flow.
+  /// A standalone `now() -> started` records a start time without a warning.
   void ClockRace(const std::vector<const Node*>& roots,
                  const std::vector<syntax::Word>& after) {
     if (guarded_ > 0 || !after.empty()) {
@@ -465,19 +424,8 @@ class Inspector {
            clock->location, Severity::kWarning, Family::kBarrier);
   }
 
-  /// One statement reading one stream twice where a value belongs.
-  ///
-  /// Two value reads of one stream take *turns on one view of it*, so they see
-  /// two different values rather than two copies of the first -- and a node
-  /// carrying one value gives the second read the end of the stream, which
-  /// renders as nothing at all. Within one statement there is no `after` that
-  /// could say which read comes first, so the only fix is to stop reading
-  /// twice:
-  /// `value` names a value, and a value is shared.
-  ///
-  /// Only nodes of the flow's own: everything else a flow reads for a value
-  /// either provably carries one (a port that did not say `stream`, a header, a
-  /// status) or is a `value` value already.
+  /// Warn when one statement reads the same local node as a value twice.
+  /// Each read consumes a distinct stream item; name a value to share it.
   void ValueReadTwice(const std::vector<const Node*>& roots) {
     // Counted first and reported afterwards, at the *second* read in the text:
     // [syntax::VisitSubtree] promises only that a parent comes before its
@@ -527,13 +475,8 @@ class Inspector {
     }
   }
 
-  /// `wait n` on a node this flow lends out rather than writes.
-  ///
-  /// Nothing here writes it, so nothing here would close it either -- and the
-  /// barrier does, which makes it an *ending* rather than a wait: it returns as
-  /// soon as it has closed the node, and the callee that was lent `n.id` finds
-  /// its writer shut. `close n after <call>` is the one that waits, and says
-  /// out loud that the flow which lent the node is the flow that ends it.
+  /// Warn when `wait n` closes a lent node this flow never writes.
+  /// Use `close n after <call>` to wait for the borrower before closing.
   void LentNodes(const ResolvedFlow& flow) {
     absl::flat_hash_set<std::string> written;
     Written(flow.plan.steps, written);
@@ -592,7 +535,7 @@ class Inspector {
     }
   }
 
-  // --- sequences that cannot do what they look like -------------------------
+  // --- Invalid sequences ---------------------------------------------------
 
   void Statements(const std::vector<syntax::NodePtr>& statements) {
     bool phase = false;
@@ -809,13 +752,7 @@ class Inspector {
     Expression(pipeline.source.get());
   }
 
-  /// Pipelines hidden inside an expression: `(hits | count) > 0`.
-  /// Every pipeline written inside an expression, however deeply nested.
-  ///
-  /// A work list rather than recursion: the depth here is the document's
-  /// nesting, and A11 runs this on pooled fibers whose stacks are fixed and
-  /// small. Children are pushed in reverse so the visit order is the one a
-  /// recursive descent would have produced.
+  /// Visit nested expression pipelines with a work list for bounded stack use.
   void Expression(const Node* expression) {
     if (expression == nullptr) {
       return;
@@ -878,14 +815,9 @@ class Inspector {
     }
   }
 
-  // --- barriers that cannot hold --------------------------------------------
+  // --- Invalid barriers ----------------------------------------------------
 
-  /// The orderings a body's own steps make impossible.
-  ///
-  /// Read off the resolved steps rather than the text, because that is where
-  /// the order is: a barrier the flow reaches twice, and a `cancel` of
-  /// something this body already waited for, are both statements about the
-  /// sequence.
+  /// Finds impossible barrier orderings in the resolved step sequence.
   void Barriers(const std::vector<StepPlan>& steps) {
     absl::flat_hash_map<std::string, size_t> waited;
     for (const StepPlan& step : steps) {
@@ -928,12 +860,8 @@ class Inspector {
   std::string flow_;
   /// The flow being walked, for the questions that are about a *name*.
   const ResolvedFlow* absl_nullable current_ = nullptr;
-  /// How many conditional bodies or execution phase gates enclose this step.
-  /// What it
-  /// answers is the one `CheckReachedByChoice` asks in the resolver: whether
-  /// anything at all says when this statement runs. A `nodes` block does not
-  /// count -- it joins the body around it and changes nothing about when its
-  /// statements run.
+  /// Number of enclosing conditions or execution phase gates. `nodes` blocks
+  /// do not change when a statement runs and do not count.
   int guarded_ = 0;
 };
 

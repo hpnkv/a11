@@ -42,31 +42,18 @@ namespace a11::stores {
 
 /** Storage layout policy for SQLiteChunkStore. */
 struct SQLiteChunkStoreOptions {
-  /**
-   * Payloads strictly larger than this move out of the row into a blob file.
-   *
-   * Keeping small payloads inline avoids a file per chunk; keeping large ones
-   * out of the row keeps the database page cache useful and the WAL small.
-   */
+  /** Payloads above this size use blob files; smaller ones stay in SQLite. */
   size_t inline_data_threshold = 128 * 1024;
 
-  /**
-   * Recorded on the node row as its owner. Ownership carries no enforcement
-   * yet; it exists so nodes can be attributed and filtered.
-   */
+  /** Owner recorded for attribution and filtering; not enforced. */
   std::string owner_id;
 
   /** Durability level applied with `PRAGMA synchronous`. */
   internal::SqliteSynchronous synchronous =
       internal::SqliteSynchronous::kNormal;
 
-  /**
-   * How often to look for commits made by other processes, or zero to disable.
-   *
-   * SQLite's change hooks are per-connection, so a writer in another process
-   * cannot wake a reader parked in this one. Zero -- the default -- means
-   * in-process notification only, which is exact and never polls.
-   */
+  /** Poll interval for commits by other processes; zero disables polling.
+   * SQLite change hooks notify only readers in this process. */
   absl::Duration cross_process_poll_interval = absl::ZeroDuration();
 
   /**
@@ -102,33 +89,12 @@ struct SQLiteChunkStoreMetadata {
 
 class SQLiteChunkStoreFactory;
 
-/**
- * A persistent ChunkStore backed by one SQLite database and a blob directory.
- *
- * The layout under the storage root is:
- *
- * ```
- * ./store.sqlite
- * ./blobs/939f2184-db19-4dd0-b949-bb31c5eadcf8
- * ./blobs/7ee4a05e-f439-4e5f-bb97-8d1388960f29
- * ```
- *
- * Node rows carry the shared producer and consumer cursors, closure state and
- * cached counters, so `Size()` and `GetFinalSeq()` are single-row reads. Each
- * fragment is decomposed into columns rather than stored as an opaque blob, so
- * ordinary SQL can filter by owner, timestamp or node reference. Payloads above
- * the inline threshold live in `blobs/` under a UUID name recorded in the row.
- *
- * Unlike `LocalChunkStore` and `RedisChunkStore`, this backend accepts
- * `data::NodeRef` payloads: their target, offset and length become indexed
- * columns, which is what makes traversal between nodes a query rather than an
- * application-level walk.
- *
- * Every mutation is one `BEGIN IMMEDIATE` transaction, so a batch either lands
- * whole or not at all. Readers never poll: they snapshot a per-node generation
- * event, run an optimistic read, and park on that event when the fragment they
- * want has not arrived, which a committing writer then fires.
- */
+/** A persistent ChunkStore backed by `store.sqlite` and a `blobs/` directory.
+ * Node rows hold cursors, closure state, and cached counters. Fragment columns
+ * support owner, timestamp, and node-reference queries; large payloads use
+ * separate blob files. Node references index targets, offsets, and lengths.
+ * Mutations use `BEGIN IMMEDIATE` transactions. Readers wait on per-node
+ * generation events, with optional polling for cross-process writes. */
 class SQLiteChunkStore final : public ChunkStore {
  private:
   struct ConstructorToken {};
@@ -208,8 +174,7 @@ class SQLiteChunkStore final : public ChunkStore {
    *   Find fragments elsewhere in the database whose NodeRef points at this
    *   node, newest sequence last.
    *
-   * This is the traversal the relational layout exists for: the answer comes
-   * from an index on `node_ref_id` rather than from scanning every node.
+   * Uses the `node_ref_id` index for traversal.
    *
    * @param limit
    *   Maximum number of referring fragments to return.
@@ -249,13 +214,8 @@ class SQLiteChunkStore final : public ChunkStore {
   const SQLiteChunkStoreOptions options_;
 };
 
-/**
- * Creates SQLiteChunkStores rooted at one directory.
- *
- * Stores are cheap; the database behind them is not. The factory holds the
- * shared per-root database so that every store it creates reuses one set of
- * connections, worker threads and change hooks. Pass `AsChunkStoreFactory()` to
- * a `NodeMap` or `AsyncNode` to make SQLite the default backing store.
+/** Creates SQLiteChunkStores that share one database per root.
+ * Pass `AsChunkStoreFactory()` to a `NodeMap` or `AsyncNode` to use this store.
  */
 class SQLiteChunkStoreFactory {
  private:

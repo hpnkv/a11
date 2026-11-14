@@ -184,26 +184,9 @@ struct ResolveResult {
   [[nodiscard]] const Diagnostic* absl_nullable FirstError() const;
 };
 
-/// Resolve a parsed program: names, ports, scopes, node maps and types.
-///
-/// **What this is.** The semantic pass: it decides what every name in a flow
-/// means,
-/// checks that a call's ports exist on the flow it names, that a type is a
-/// type,
-/// that a `<-` has a `repeat` to carry into, and produces the [Program] that
-/// `a11 flow describe` prints. Its errors are `a11/flow/plan.py`'s, in the same
-/// words, so the two agree about what compiles.
-///
-/// With `build_graph` it also builds the **executable graph** for every flow
-/// -- the refs, steps and bodies the runtime walks -- beside the description.
-/// That is off by default because an editor, `a11 flow check` and CI want none
-/// of it, and a graph borrows the parse tree it was built from: whoever asks
-/// for one owns both for as long as a flow is registered.
-///
-/// Like the parser, it **never throws and always returns**: a flow with an
-/// unresolvable name in it is still resolved as far as it goes, because an
-/// editor
-/// wants every problem in the file rather than the first.
+/// Resolves names, ports, scopes, node maps, and types in a parsed program.
+/// Returns partial results and diagnostics for invalid source. `build_graph`
+/// adds executable graphs that borrow from `parsed`.
 ResolveResult Resolve(std::string_view source, const ParseResult& parsed,
                       bool build_graph = false,
                       const Program* absl_nullable context = nullptr,

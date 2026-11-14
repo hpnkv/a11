@@ -12,29 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Drive one conversational turn against a gateway.
+"""Run a conversational turn and reduce its events for presentation.
 
-This module owns the non-presentation workflow: build the call, feed history
-and tools, read every output port, and fold events into a
-``PresentationReducer``.
-
-The following ordering and lifecycle requirements are part of the contract:
-
-* The ``thoughts`` and ``new_interactions`` readers start **before** the
-  ``text_output`` loop. Ports carry no global ordering guarantee, and a
-  mid-turn tool run is announced on ``new_interactions`` while text is still
-  streaming; draining text to completion first would show the tool run after
-  the answer it preceded.
-* ``await call.wait(...)`` is not optional. A turn that fails after its first
-  token -- a provider error, a tool that raised, a cancelled stream -- reports
-  it in the call's terminal status and nowhere else, so a driver that stops
-  reading when the ports close would call that turn a success.
-* **Every** output port is read, ``event_stream`` included, whether or not the
-  caller wants its contents. A backend writes each raw provider chunk there, and
-  an output port with no reader fills the session's per-stream buffer and then
-  stops the backend mid-answer -- which presents as a turn that never finishes,
-  intermittently, and more often on long answers. Draining is not optional
-  either; only *caring* about the contents is.
+Start ``thoughts`` and ``new_interactions`` readers before ``text_output`` to
+preserve visible event order. Read every output port, including
+``event_stream``, so backpressure cannot stall a provider. Await the call's
+terminal status to report failures that arrive after streamed output.
 """
 
 from __future__ import annotations

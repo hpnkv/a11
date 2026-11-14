@@ -96,11 +96,9 @@ class PythonSignallingCallback {
 /**
  * A Python callable invoked *synchronously*, from whichever thread calls it.
  *
- * The signalling server's per-message hooks are synchronous on purpose --
- * an asynchronous filter would reorder a connection's messages -- so this
- * takes the GIL, calls, and turns whatever happened into a Status. The
- * callable must not block: it runs on a transport thread, ahead of the
- * message it is deciding about.
+ * Runs synchronously on a transport thread to preserve message order. Takes
+ * the GIL and returns callback failures as statuses. The callable must not
+ * block.
  */
 class PythonSyncCallback {
  public:

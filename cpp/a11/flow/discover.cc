@@ -56,20 +56,8 @@ bool IsSpace(char c) {
 
 // --- masking -----------------------------------------------------------------
 
-/// A source file with its comments and its string *contents* blanked out, and
-/// the strings kept to one side.
-///
-/// **Why a mask rather than a token stream.** Everything structural this has to
-/// do -- find a word, match a bracket, split a list at its top-level commas --
-/// is easy on text where no `)` hides inside a string and no `#` inside a URL
-/// starts a comment, and hard on text where they do. Blanking those *in place*
-/// keeps every offset equal to the offset in the real file, so an origin needs
-/// no translation and is exact. The quotes themselves are left standing, which
-/// is how a value is recognised as a string at all, and the decoded contents
-/// are
-/// found by the offset of the opening quote.
-///
-/// Newlines survive blanking, so a line number is still a line number.
+/// Source with comments and string contents masked at their original offsets.
+/// Quotes and newlines remain; decoded strings are stored separately.
 class Masked {
  public:
   Masked(std::string_view source, Language language)

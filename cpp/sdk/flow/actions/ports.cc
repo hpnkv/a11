@@ -118,8 +118,7 @@ absl::StatusOr<std::string> BytesOfChunk(const data::Chunk& chunk) {
     absl::StatusOr<nlohmann::json> parsed =
         a11::ParseJson(chunk.data, "a byte port's value");
     if (!parsed.ok()) {
-      // Labelled JSON and not JSON. The bytes are what there is, and refusing
-      // them would lose data over a mislabelling nobody can act on.
+      // Preserve bytes from a chunk mislabeled as JSON.
       return chunk.data;
     }
     if (parsed->is_string()) {
@@ -254,8 +253,7 @@ absl::Status Sink::PutText(std::string_view text, bool final) const {
     return Put(*ValueChunk(data::Binary(text), Encoding::kMsgpack), final);
   }
   if (!IsValidUtf8(text)) {
-    // Named, because this is a file the caller can perfectly well read -- just
-    // not as UTF-8 text.
+    // Name the text port in the invalid UTF-8 error.
     return NotEncodableAsText(absl::StrCat("the port '", entry_->name, "'"));
   }
   data::Chunk chunk;
@@ -373,9 +371,7 @@ absl::Status OutputPorts::Abort(const absl::Status& reason) {
       continue;
     }
     entry->closed = true;
-    // A port whose value is already complete has nothing to warn a reader
-    // about, so it is closed rather than aborted: `status_code` was true even
-    // though the body stopped early.
+    // A completed value closes normally even if another port failed.
     const absl::Status ended =
         entry->final ? entry->node->Close().Await().status()
                      : entry->node->AbortWithStatus(reason).Await().status();
@@ -395,9 +391,7 @@ absl::Status OutputPorts::CloseEntry(Sink::Entry& entry) {
   if (entry.node == nullptr) {
     return absl::OkStatus();
   }
-  // A port whose last value was already marked final has its end established;
-  // a null terminator on top of that would claim a second, different one, and
-  // the store rejects that rather than guess which was meant.
+  // A final value already ends this port; do not add a second terminator.
   if (entry.final) {
     return entry.node->Close().Await().status();
   }

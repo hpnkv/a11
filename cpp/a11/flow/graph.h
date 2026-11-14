@@ -35,17 +35,13 @@
 
 namespace a11::flow::graph {
 
-/// Everything in a graph is named by index into the graph that owns it.
-///
-/// Not pointers: the vectors grow while the graph is built, and a plan is
-/// handed across a language boundary and held for as long as a flow is
-/// registered. An index survives both.
+/// Graph IDs are indices into the owning graph's vectors.
 using RefId = size_t;
 using StepId = size_t;
 using BodyId = size_t;
 using ExprId = size_t;
 
-/// No such thing -- the absent id, for the many fields only some kinds use.
+/// Sentinel for an absent graph ID.
 inline constexpr size_t kNone = static_cast<size_t>(-1);
 
 /// What a stream in the plan *is*.
@@ -76,27 +72,14 @@ enum class RefKind {
   /// Several streams read at once, as one stream of their values in the order
   /// they arrive: `interleave(a, b)`.
   kMerge,
-  /// Which subject of a `wait first of` finished first, counted from zero, as
-  /// one value. Produced by the barrier rather than read from anywhere, the way
-  /// a status is produced by the thing it is the status of.
+  /// Zero-based index of the first subject to finish a `wait first of`.
   kWinner,
   /// A stream the runtime binds per pass: a loop's value, its index, or a
   /// `repeat`'s carry.
   kBound,
 };
 
-/// One resolved pipeline stage.
-///
-/// `takes` says which field carries the argument, and it comes from the
-/// vocabulary rather than being decided here: the stage table is the one table.
-/// `kAt` is the one stage the grammar has no spelling for -- it is what
-/// `x.field` and `x[0]` over a *stream* compile to, taking the field out of
-/// each value. What a resolved `log`/`logf` was written with, in a statement or
-/// a stage.
-///
-/// The resolved twin of [syntax::LogTail], and one struct for both places for
-/// the same reason: `log warning it.error` means the same thing wherever it
-/// stands, so the runtime reads it out of one shape.
+/// Resolved `log` or `logf` arguments for a statement or stage.
 struct LogTail {
   /// The level, canonically spelled, or empty for the default.
   std::string level;
@@ -105,12 +88,11 @@ struct LogTail {
   bool has_format = false;
   /// What to log, or what fills the format. Empty in a stage means `it`.
   std::vector<ExprId> arguments;
-  /// The line it was written on, which the log carries so a consumer can point
-  /// at it. There is no path to go with it: a plan does not know where it was
-  /// read from, and a flow's name is not a file.
+  /// Source line included in the log record.
   int line = 0;
 };
 
+/// A resolved pipeline stage. `kAt` extracts a field from each stream value.
 struct Stage {
   std::string name;
   /// Destination context used by a terminal reference stage.
@@ -144,11 +126,7 @@ struct Stage {
   absl::Duration duration;
   /// `sort`: whether the order is reversed.
   bool descending = false;
-  /// `fold`: what the first pass carries, the name it is bound to, and the ref
-  /// that name resolves to inside the fold's expression. The ref is how the
-  /// accumulator reaches [Evaluate]: a name in an expression is a ref, and
-  /// this is the one the runtime fills in per value rather than reading a
-  /// stream for.
+  /// `fold`: initial value, carried name, and its expression reference.
   syntax::Constant start;
   std::string carried;
   RefId carry = kNone;
@@ -164,14 +142,8 @@ struct Stage {
   bool ordered = true;
 };
 
-/// One stream in the plan.
-///
-/// A tagged struct rather than a class hierarchy: which fields mean anything
-/// depends on `kind`, and the runtime switches on it anyway. What every kind
-/// shares is the two questions the analysis asks -- what it reads as a stream,
-/// and what it reads for one value -- and those are answered by
-/// [Graph::Upstreams] and [Graph::ValueRefs] rather than by each kind
-/// separately.
+/// One plan stream. `kind` determines which fields apply.
+/// [Graph::Upstreams] and [Graph::ValueRefs] expose its dependencies.
 struct Ref {
   StepId phase_gate = kNone;
   RefKind kind = RefKind::kExpr;
@@ -179,30 +151,12 @@ struct Ref {
   std::string label;
   /// The body this belongs to, which is where it is materialised.
   BodyId owner = kNone;
-  /// Whether this flow could ever write it, which is what makes it a
-  /// destination rather than something finished by being read to its end.
+  /// Whether this flow may write the stream.
   bool writable = false;
-  /// Whether this stream provably carries at most one value.
-  ///
-  /// A *claim*, so the default is the absence of one: something that forgets to
-  /// say is treated as a stream, which costs a check rather than being wrong. A
-  /// declared port says so (`in q: string` against `in q: string stream`), an
-  /// action's schema says so for its own ports, and everything built out of
-  /// those is derived from them by [Builder::AddRef] -- a reducing stage makes
-  /// one value out of many, a per-value stage keeps the count it was given, and
-  /// a node the flow writes from anywhere is never one.
-  ///
-  /// What it is *for*: reading a stream where a value is expected. A unary
-  /// stream can be consumed -- take the value, and a second one is an error the
-  /// language can name -- while a stream of many has to say which value it
-  /// means.
+  /// Whether the stream provably carries at most one value.
+  /// Defaults to false when cardinality is unknown.
   bool unary = false;
-  /// How many of this stream's first values `skip n` has spoken for.
-  ///
-  /// Applied where the stream is produced, upstream of the fan-out, so it is
-  /// the same values every reader does not see. Several `skip n` statements
-  /// naming one node add up: the ref is one object however many times the flow
-  /// mentions it.
+  /// Values skipped before fan-out; multiple `skip n` statements accumulate.
   long long skip = 0;
 
   /// `kFlowPort`, `kCallPort`, `kNode`: the port or node name.
@@ -230,10 +184,7 @@ struct Ref {
   /// `kBound`: which of a loop's streams this is -- `item`, `index`, `carry`.
   std::string role;
   StepId bound_by = kNone;
-  /// `kZip`: the streams read in step, in the order they were written, which is
-  /// the order their values appear in each tuple. `kMerge`: the streams read at
-  /// once, where the order they were written in says nothing about the order
-  /// their values arrive in.
+  /// `kZip` sources follow tuple order; `kMerge` follows arrival order.
   std::vector<RefId> sources;
 };
 
@@ -261,12 +212,7 @@ enum class StepKind {
 
 std::string_view StepKindName(StepKind kind);
 
-/// Whether a step records an outcome of its own for a name to read.
-///
-/// The steps that run a nested body: what makes them different from a `kCall`
-/// is that their status is not a *call's* status to be asked for, it is theirs
-/// to have recorded. A name bound to one reads what it recorded, which is why
-/// `s = try { .. }` and `done = for x in s { .. }` are the same shape.
+/// Whether a step records its own outcome for a bound name.
 inline bool RecordsOutcome(StepKind kind) {
   return kind == StepKind::kBlock || kind == StepKind::kForEach ||
          kind == StepKind::kRepeat || kind == StepKind::kPipe ||
@@ -365,12 +311,8 @@ struct Step {
   /// `kFail`.
   ExprId code = kNone;
   ExprId message = kNone;
-  /// The canonical code `fail` named outright: `fail not_found "..."`.
-  ///
-  /// Kept apart from `code` because a written-out name is not an expression --
-  /// nothing in scope is called `not_found` -- and the runtime should not have
-  /// to decide which of the two a bare word was. Where this is set, `code` is
-  /// not.
+  /// Canonical code written as a word, such as `fail not_found "..."`.
+  /// `code` is unset when this field is set.
   std::string code_name;
 
   /// `kLog`: the level, the format and what fills it.
@@ -427,13 +369,8 @@ struct Body {
   std::vector<StepId> steps;
 };
 
-/// One resolved expression, and the streams it reads.
-///
-/// `node` is borrowed from the parse tree, which the graph does not own -- see
-/// [Graph]. `bound` is how a name inside an expression becomes a value: the
-/// runtime reads each ref's first value and hands [Evaluate] a map keyed by the
-/// syntax node that named it. Keying on the node rather than rewriting the tree
-/// is what lets the tree stay immutable and shared.
+/// A resolved expression and its stream dependencies.
+/// `node` borrows the parse tree; `bound` maps names to value references.
 struct Expr {
   bool materialized = false;
   const syntax::Node* absl_nullable node = nullptr;
@@ -453,12 +390,7 @@ struct Expr {
 };
 
 /// The executable graph of one flow.
-///
-/// **Borrows the syntax tree.** Every expression here points into the
-/// [ParseResult] the flow was resolved from, because an expression is evaluated
-/// by walking it and copying the tree per flow would be paying for a second
-/// one. So a graph is only valid while that parse result lives, and whatever
-/// owns a registered flow owns both.
+/// Expression nodes borrow the syntax tree; the parse result must outlive it.
 struct FlowGraph {
   std::string name;
   std::vector<Ref> refs;
@@ -479,13 +411,8 @@ struct FlowGraph {
   [[nodiscard]] std::vector<RefId> ValueSources(StepId step) const;
   /// The refs a step writes, one entry per independent writer.
   [[nodiscard]] std::vector<RefId> Destinations(StepId step) const;
-  /// The refs the *stages* a step reads write to: `try ... failures into bad`.
-  ///
-  /// A stage is part of a stream rather than of a statement, so its destination
-  /// is reached through the refs the step reads rather than off the step
-  /// itself. Counted as a writer beside [Destinations] and released with the
-  /// step, which is what closes a failure stream exactly once however many
-  /// values went to it.
+  /// Destinations written by stages a step reads, including failure streams.
+  /// These writer counts close when the step finishes.
   [[nodiscard]] std::vector<RefId> StageDestinations(StepId step) const;
   /// Written refs a step only watches, without writing them itself.
   [[nodiscard]] std::vector<RefId> Observed(StepId step) const;
@@ -493,11 +420,8 @@ struct FlowGraph {
   [[nodiscard]] std::vector<BodyId> NestedBodies(BodyId body) const;
 };
 
-/// Who reads and who writes each ref a body owns.
-///
-/// A stream gets the reader count specified by the plan. A node closes when its
-/// last writer finishes; a running loop or branch counts as one writer. An
-/// incorrect count can leave the flow waiting indefinitely.
+/// Reader and writer counts for the references owned by a body.
+/// A node closes when its last writer finishes.
 struct Analysis {
   BodyId body = kNone;
   /// Every ref this body owns.
@@ -506,8 +430,6 @@ struct Analysis {
   absl::flat_hash_map<RefId, int> readers;
   /// Consumers sharing each value cursor; retire it after the last consumer.
   absl::flat_hash_map<RefId, int> value_consumers;
-  // The ones read from inside a nested body, which are buffered once and
-  // replayed to each reader:
   /// Refs read inside a nested body. They are buffered once and replayed so
   /// each loop pass sees the same outer value.
   absl::flat_hash_set<RefId> materialise;
@@ -550,12 +472,7 @@ class GraphBuilder {
     return ref != kNone && ref < flow_->refs.size() && flow_->refs[ref].unary;
   }
 
-  /// Whether a stage yields exactly one value however many it was given.
-  ///
-  /// The reducing three, and `first 1`, which is how a pipeline says "the
-  /// value" out loud. Read from [vocabulary::ReducingStages] rather than listed
-  /// again, so a stage that joins that set is counted here without being
-  /// taught.
+  /// Whether a stage reduces its input to one value, including `first 1`.
   static bool StageMakesOne(const Stage& stage) {
     if (vocabulary::ReducingStages().contains(stage.name)) {
       {
@@ -565,17 +482,8 @@ class GraphBuilder {
     return stage.name == "first" && stage.count == 1;
   }
 
-  /// Whether a stage yields one value per value it was given.
-  ///
-  /// Then one in gives one out. `map`, `at`, `truncate`, `text`, `json`,
-  /// `packb` and `strformat` reshape each value; `log` and `logf` reshape
-  /// nothing and pass each value straight on; `where`, `mime` and `distinct`
-  /// may drop one, which is still at most one out per one in; `scan` publishes
-  /// the state it reached at each value, so one in gives exactly one out;
-  /// `batch` and `group` gather several into a list, which is *fewer*, as is
-  /// `window` -- its first `n - 1` values produce nothing -- and `chunk` and
-  /// `then` make more. Anything the language gains is assumed not to preserve
-  /// the count until it says so, which is the safe direction.
+  /// Whether a stage produces at most one output per input value.
+  /// Unknown stages default to false.
   static bool StagePreservesCount(const Stage& stage) {
     static const auto* const kPerValue = new absl::flat_hash_set<std::string>{
         "map", "at", "truncate", "text", "json", "packb", "strformat", "where",
@@ -586,13 +494,8 @@ class GraphBuilder {
     return kPerValue->contains(stage.name);
   }
 
-  /// Append a ref, working out what it carries.
-  ///
-  /// Unarity is settled here rather than at each of the dozen places a ref is
-  /// made, because it is a property of the *shape* of the ref for every kind
-  /// but the two that name a declared port -- and a kind added to the language
-  /// then gets an answer by default instead of silently keeping whatever the
-  /// struct's initialiser said.
+  /// Appends a ref and derives cardinality from its kind and sources.
+  /// Declared ports retain their supplied cardinality.
   RefId AddRef(Ref ref) {
     switch (ref.kind) {
       case RefKind::kHeader:

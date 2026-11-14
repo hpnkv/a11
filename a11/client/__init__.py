@@ -12,17 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Talking to A11 peers: gateways, turns, and hosted identities.
+"""Connect to A11 gateways and manage hosted identities.
 
-The client half of what `a11 chat`, the IntelliJ plugin and `a11 serve
---hosted` all do. Keeping it here rather than inside the CLI is the point: a
-turn loop is not a terminal concern, and neither is keeping a hosting claim
-alive.
-
-`ExchangeClient`, `CredentialStore` and `HostedEndpoint` speak to an A11
-exchange -- the hosting service at `a11.services` -- over its documented HTTP
-and WebSocket contract. The dependency runs one way, over the network, so the
-exchange stays a separate thing A11 knows how to use rather than a part of it.
+`GatewayConnection` and `run_turn` support chat clients. `ExchangeClient`,
+`CredentialStore` and `HostedEndpoint` use the exchange's HTTP and WebSocket
+contract to manage hosting claims.
 """
 
 from a11.client.connection import (

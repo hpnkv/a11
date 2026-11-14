@@ -12,14 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Driving the HTTP Actions from Python without wiring ports by hand.
+"""Call HTTP actions from Python with managed ports.
 
-[`make_http_request`][a11.sdk.http.actions] has eight output ports because HTTP
-has eight things to say, and that is exactly what a Flow wants. A Python caller
-who wants three of them does not want to open eight nodes to find out, so this
-module does the wiring: `request` and `fetch` feed the inputs, run the action,
-and hand back a [`Response`][a11.sdk.http.client.Response] that reads the ports
-as they are asked for.
+`request` and `fetch` feed action inputs and return a
+[`Response`][a11.sdk.http.client.Response] that reads outputs on demand.
 
 ```python
 from a11.sdk.http import client
@@ -28,11 +24,8 @@ response = await client.fetch("https://example.com/index.html")
 print(response.status, await response.text())
 ```
 
-Nothing here adds behaviour: it is the same Action either way, and a
-caller that wants a port at a time can use
-[a11.sdk.http.actions][a11.sdk.http.actions] directly. What it adds is that the
-ports nobody asked for are drained rather than left for the garbage collector,
-which is the one piece of bookkeeping the port model does not do for you.
+Unused output ports are drained. Use
+[a11.sdk.http.actions][a11.sdk.http.actions] to wire ports directly.
 """
 
 from __future__ import annotations
@@ -63,9 +56,7 @@ async def _put_one(action: Action, port: str, value: Any) -> None:
 def _bytes_chunk(data: bytes) -> types.Chunk:
     """A body chunk as bytes.
 
-    Written as a chunk rather than through `put`, which would run the value
-    through the serialization registry and base64 it into a JSON string. A body
-    is bytes on the wire and bytes on the port.
+    A raw chunk preserves body bytes without JSON base64 encoding.
     """
     return types.Chunk(
         data=data,

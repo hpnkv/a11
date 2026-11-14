@@ -26,36 +26,10 @@
 
 namespace a11::flow {
 
-/// One question about one document, answered.
-///
-/// The whole of what a frontend needs from the language, behind one function: a
-/// method name, a document, and whatever that method takes. Every surface is an
-/// adapter over this -- `a11-flow serve --protocol json` passes requests
-/// through
-/// almost unchanged, the LSP adapter translates positions and wraps the answers
-/// in what an editor expects, and `a11.flow.request` hands the same dict across
-/// the Python boundary -- so a capability added here is available in all of
-/// them
-/// without any adapter knowing what it is.
-///
-/// A request is
-///
-/// ```json
-/// {"id": 1, "method": "check", "source": "flow t { }", "path": "t.flow"}
-/// ```
-///
-/// and the answer is `{"id": 1, "ok": true, "result": {...}}` with the
-/// envelope the method produces, or `{"id": 1, "ok": false, "error":
-/// {"message": "..."}}` when the request itself made no sense. A *flow* that
-/// makes no sense is not an error; syntax problems are returned as
-/// diagnostics.
-///
-/// `id` is echoed if it is there and omitted if it is not, so a client that
-/// does
-/// not correlate need not invent one.
-/// A `describe` request may set `snippet: true` for a code fragment. The
-/// service first describes the fragment as written, then resolves it as a Flow
-/// body if the first result is only an unclassified identifier.
+/// Handles one language service request and returns its JSON envelope.
+/// Requests name a method and source; an optional `id` is echoed in the result.
+/// Invalid requests return `ok: false`; source problems return diagnostics.
+/// `describe` accepts `snippet: true` for a Flow body fragment.
 nlohmann::json Handle(const nlohmann::json& request,
                       ModuleResolver resolver = {},
                       CompilationLimits limits = {});

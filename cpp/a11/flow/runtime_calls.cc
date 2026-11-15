@@ -73,7 +73,7 @@ absl::StatusOr<std::shared_ptr<actions::Action>> CallHandle::Action() {
   return action_;
 }
 
-absl::StatusOr<NodePtr> CallHandle::Node(const std::string& name,
+absl::StatusOr<NodePtr> CallHandle::Node(std::string_view name,
                                          syntax::PortDirection direction) {
   ABSL_ASSIGN_OR_RETURN(const std::shared_ptr<actions::Action> action,
                         Action());

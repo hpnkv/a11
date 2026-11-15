@@ -15,6 +15,7 @@
 #include "redis/client.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <charconv>
 #include <cstddef>
@@ -971,19 +972,15 @@ struct Client::Impl : public std::enable_shared_from_this<Client::Impl> {
     }
   }
 
-  void EnsureSubscribed(const std::string& name, Channel* channel) {
+  void EnsureSubscribed(std::string_view name, Channel* channel) {
     RemoveExpiredListeners(channel);
     if (channel->listeners.empty() || channel->command_sent ||
         channel->subscribed || subscriber_context == nullptr) {
       return;
     }
-    std::vector<std::string> parts{"SUBSCRIBE", name};
-    std::vector<const char*> values;
-    std::vector<size_t> lengths;
-    for (const std::string& part : parts) {
-      values.push_back(part.data());
-      lengths.push_back(part.size());
-    }
+    const std::array<std::string_view, 2> parts{"SUBSCRIBE", name};
+    std::array<const char*, 2> values{parts[0].data(), parts[1].data()};
+    const std::array<size_t, 2> lengths{parts[0].size(), parts[1].size()};
     const int result = redisAsyncCommandArgv(
         subscriber_context, PubSubCallback, this,
         static_cast<int>(values.size()), values.data(), lengths.data());
@@ -994,7 +991,7 @@ struct Client::Impl : public std::enable_shared_from_this<Client::Impl> {
     channel->command_sent = true;
   }
 
-  void RemoveSubscription(const std::string& channel_name,
+  void RemoveSubscription(std::string_view channel_name,
                           const Subscription::State* listener) {
     const auto found = channels.find(channel_name);
     if (found == channels.end()) {
@@ -1019,17 +1016,13 @@ struct Client::Impl : public std::enable_shared_from_this<Client::Impl> {
     }
   }
 
-  void SendUnsubscribe(const std::string& name, Channel* channel) {
+  void SendUnsubscribe(std::string_view name, Channel* channel) {
     if (subscriber_context == nullptr) {
       return;
     }
-    std::vector<std::string> parts{"UNSUBSCRIBE", name};
-    std::vector<const char*> values;
-    std::vector<size_t> lengths;
-    for (const std::string& part : parts) {
-      values.push_back(part.data());
-      lengths.push_back(part.size());
-    }
+    const std::array<std::string_view, 2> parts{"UNSUBSCRIBE", name};
+    std::array<const char*, 2> values{parts[0].data(), parts[1].data()};
+    const std::array<size_t, 2> lengths{parts[0].size(), parts[1].size()};
     if (redisAsyncCommandArgv(subscriber_context, PubSubCallback, this,
                               static_cast<int>(values.size()), values.data(),
                               lengths.data()) != REDIS_OK) {

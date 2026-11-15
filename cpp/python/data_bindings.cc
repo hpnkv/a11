@@ -587,12 +587,12 @@ void BindData(py::module_& module) {
   module.attr("WIRE_MESSAGE_VERSION") = data::WireMessage::kVersion;
   module.def(
       "validate_name_string",
-      [](const std::string& name) {
+      [](std::string_view name) {
         const absl::Status status = data::ValidateName(name);
         if (!status.ok()) {
           ThrowStatus(status);
         }
-        return name;
+        return std::string(name);
       },
       "Validate a name string and return it, raising if it is invalid.",
       py::arg("name"));
@@ -611,16 +611,16 @@ void BindData(py::module_& module) {
           "Return an iterator over the keys.")
       .def(
           "__contains__",
-          [](const ByteMapView& value, const std::string& key) {
+          [](const ByteMapView& value, std::string_view key) {
             return value.values().find(key) != value.values().end();
           },
           "Return whether the mapping contains the given key.", py::arg("key"))
       .def(
           "__getitem__",
-          [](const ByteMapView& value, const std::string& key) {
+          [](const ByteMapView& value, std::string_view key) {
             const auto found = value.values().find(key);
             if (found == value.values().end()) {
-              throw py::key_error(key);
+              throw py::key_error(std::string(key));
             }
             return py::bytes(found->second);
           },
@@ -638,9 +638,9 @@ void BindData(py::module_& module) {
           "Store bytes under the given key.", py::arg("key"), py::arg("item"))
       .def(
           "__delitem__",
-          [](ByteMapView& value, const std::string& key) {
+          [](ByteMapView& value, std::string_view key) {
             if (value.values().erase(key) == 0) {
-              throw py::key_error(key);
+              throw py::key_error(std::string(key));
             }
           },
           "Delete the entry with the given key.", py::arg("key"))
@@ -665,7 +665,7 @@ void BindData(py::module_& module) {
           "Return a view of the mapping's key/value pairs.")
       .def(
           "get",
-          [](const ByteMapView& value, const std::string& key,
+          [](const ByteMapView& value, std::string_view key,
              const py::typing::Optional<py::bytes>& default_value)
               -> py::typing::Optional<py::bytes> {
             const auto found = value.values().find(key);
@@ -763,7 +763,7 @@ void BindData(py::module_& module) {
                              "bytes.")
       .def(
           "get_attribute",
-          [](const data::ChunkMetadata& value, const std::string& key) {
+          [](const data::ChunkMetadata& value, std::string_view key) {
             return py::bytes(ValueOrThrow(value.GetAttribute(key)));
           },
           "Return the attribute bytes for a key, raising if it is absent.",
@@ -1280,7 +1280,7 @@ void BindData(py::module_& module) {
           "Serialize the message to its JSON wire encoding.")
       .def_static(
           "from_json",
-          [](const std::string& value) {
+          [](std::string_view value) {
             return ValueOrThrow(data::WireMessageFromJson(value));
           },
           "Deserialize a message from its JSON wire encoding.",

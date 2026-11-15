@@ -91,7 +91,7 @@ bool DigestsMatch(std::string_view expected, std::string_view actual) {
   return absl::AsciiStrToLower(expected) == absl::AsciiStrToLower(actual);
 }
 
-absl::StatusOr<std::filesystem::path> RunDownload(std::string url,
+absl::StatusOr<std::filesystem::path> RunDownload(std::string_view url,
                                                   DownloadOptions options) {
   if (options.destination.empty()) {
     return absl::InvalidArgumentError(
@@ -149,7 +149,7 @@ absl::StatusOr<std::filesystem::path> RunDownload(std::string url,
   // submitted, and nesting a Submit would only spend a second one to block this
   // one against.
   const absl::StatusOr<HttpResponseHead> head = internal::FetchBlocking(
-      std::move(url), std::move(options.fetch), sink, options.on_progress);
+      url, std::move(options.fetch), sink, options.on_progress);
   if (!head.ok()) {
     return fail(head.status());
   }

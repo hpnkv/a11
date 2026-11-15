@@ -226,7 +226,7 @@ class Action : public std::enable_shared_from_this<Action> {
    * @return The port's node, or an error when @p name is not an input.
    */
   absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> GetInput(
-      const std::string& name, std::optional<bool> bind_stream = std::nullopt);
+      std::string_view name, std::optional<bool> bind_stream = std::nullopt);
   /**
    * @brief Returns the output port node named @p name.
    * @param name Output port name from the schema.
@@ -234,10 +234,10 @@ class Action : public std::enable_shared_from_this<Action> {
    * @return The port's node, or an error when @p name is not an output.
    */
   absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> GetOutput(
-      const std::string& name, std::optional<bool> bind_stream = std::nullopt);
+      std::string_view name, std::optional<bool> bind_stream = std::nullopt);
   /** @brief Returns the input or output port node named @p name. */
   absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> GetPort(
-      const std::string& name);
+      std::string_view name);
   /** @brief Whether the schema declares a port named @p name. */
   [[nodiscard]] bool ContainsPort(std::string_view name) const;
 
@@ -350,7 +350,7 @@ class Action : public std::enable_shared_from_this<Action> {
   /** @brief Whether header @p name is set. */
   [[nodiscard]] bool HasHeader(std::string_view name) const;
   /** @brief Sets header @p name to @p value. */
-  absl::Status SetHeader(const std::string& name, data::Bytes value);
+  absl::Status SetHeader(std::string_view name, data::Bytes value);
   /** @brief Removes header @p name. */
   absl::Status RemoveHeader(std::string_view name);
   /** @brief Copies header @p name from this action onto @p target. */

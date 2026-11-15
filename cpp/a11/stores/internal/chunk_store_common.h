@@ -103,14 +103,14 @@ a11::Future<T> CompleteInline(F&& operation) {
  */
 inline absl::Status WaitForChange(
     const std::shared_ptr<thread::PermanentEvent>& changed, absl::Time deadline,
-    const std::string& message) {
+    std::string_view message) {
   const int selected =
       thread::SelectUntil(deadline, {thread::OnCancel(), changed->OnEvent()});
   if (selected == 0) {
     return absl::CancelledError("Chunk store operation was cancelled");
   }
   if (selected < 0) {
-    return absl::DeadlineExceededError(std::move(message));
+    return absl::DeadlineExceededError(message);
   }
   return absl::OkStatus();
 }

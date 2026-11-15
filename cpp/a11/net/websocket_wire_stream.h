@@ -34,6 +34,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 
 #include <absl/base/nullability.h>
 #include <absl/status/status.h>
@@ -98,7 +99,7 @@ class WebSocketWireStream final : public ChannelWireStream {
    *     via Start()/Send() once returned.
    */
   static absl::StatusOr<std::shared_ptr<WebSocketWireStream>> CreateClient(
-      const std::string& url, WireStreamOptions options = {},
+      std::string_view url, WireStreamOptions options = {},
       WebSocketClientOptions websocket_options = {});
 
   /**

@@ -6294,7 +6294,7 @@ class FlowResolver {
   };
 
   [[nodiscard]] std::optional<Fields> FieldsOfPattern(
-      const std::string& text) const {
+      std::string_view text) const {
     if (text.empty()) {
       return std::nullopt;
     }

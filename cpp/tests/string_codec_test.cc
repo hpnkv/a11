@@ -51,6 +51,35 @@ SerializationRegistry& Registry() {
   return GlobalSerializationRegistry();
 }
 
+TEST(StringCodecTest, RegistrationOwnsNamesPassedAsViews) {
+  SerializationRegistry registry(/*register_defaults=*/false);
+  std::string tag = "##view-tag##";
+  std::string mimetype = "##application/x-view##";
+  const std::string_view tag_view(tag.data() + 2, tag.size() - 4);
+  const std::string_view mimetype_view(mimetype.data() + 2,
+                                       mimetype.size() - 4);
+  ASSERT_TRUE(registry
+                  .Register<std::string>(
+                      tag_view, mimetype_view,
+                      [](const std::string& value) -> absl::StatusOr<Chunk> {
+                        return Chunk{.data = value};
+                      },
+                      [](const Chunk& chunk) -> absl::StatusOr<std::string> {
+                        return chunk.data;
+                      })
+                  .ok());
+  tag.assign(tag.size(), 'x');
+  mimetype.assign(mimetype.size(), 'x');
+
+  auto chunk = registry.ToChunk<std::string>("hello", "application/x-view");
+  ASSERT_TRUE(chunk.ok()) << chunk.status();
+  ASSERT_TRUE(chunk->metadata.has_value());
+  EXPECT_EQ(chunk->metadata->mimetype, "application/x-view;type=view-tag");
+  auto decoded = registry.FromChunk<std::string>(*chunk);
+  ASSERT_TRUE(decoded.ok()) << decoded.status();
+  EXPECT_EQ(*decoded, "hello");
+}
+
 TEST(StringCodecTest, AStringIsBytesByDefaultAndCarriesNoTag) {
   const std::string value = "hello";
 

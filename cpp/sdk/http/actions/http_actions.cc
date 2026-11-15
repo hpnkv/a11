@@ -670,8 +670,7 @@ struct Attempt {
 };
 
 absl::StatusOr<Attempt> Send(const Exchange& exchange, const ParsedUrl& target,
-                             const std::string& method,
-                             const std::string& body) {
+                             std::string_view method, std::string_view body) {
   Http2Options transport = exchange.options.transport;
   transport.tls.enabled = target.secure();
 
@@ -690,9 +689,10 @@ absl::StatusOr<Attempt> Send(const Exchange& exchange, const ParsedUrl& target,
     // A streamed body has no length to declare, and the transports frame it
     // themselves (DATA frames or chunked).
     a11::net::EraseHttpHeader(&headers, "content-length");
-    ABSL_ASSIGN_OR_RETURN(attempt.upload,
-                          attempt.lease.client()->RequestStreamingBody(
-                              method, target.target(), headers, target.scheme));
+    ABSL_ASSIGN_OR_RETURN(
+        attempt.upload,
+        attempt.lease.client()->RequestStreamingBody(
+            std::string(method), target.target(), headers, target.scheme));
     attempt.response = attempt.upload->response();
     return attempt;
   }
@@ -700,9 +700,10 @@ absl::StatusOr<Attempt> Send(const Exchange& exchange, const ParsedUrl& target,
     a11::net::SetHttpHeader(&headers, "content-length",
                             std::to_string(body.size()));
   }
-  ABSL_ASSIGN_OR_RETURN(attempt.response, attempt.lease.client()->RequestStream(
-                                              method, target.target(), headers,
-                                              body, target.scheme));
+  ABSL_ASSIGN_OR_RETURN(attempt.response,
+                        attempt.lease.client()->RequestStream(
+                            std::string(method), target.target(), headers,
+                            std::string(body), target.scheme));
   return attempt;
 }
 

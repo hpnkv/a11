@@ -166,7 +166,7 @@ bool ReadFile(std::string_view path, std::string& text, std::string& reason) {
   return true;
 }
 
-bool WriteFile(const std::string& path, const std::string& text) {
+bool WriteFile(const std::string& path, std::string_view text) {
   std::ofstream file(path, std::ios::binary | std::ios::trunc);
   if (!file) {
     return false;
@@ -380,7 +380,7 @@ void Outline(const nlohmann::json& node, int depth) {
       keys.push_back(key);
     }
   }
-  const auto rank = [](const std::string& key) {
+  const auto rank = [](std::string_view key) {
     for (size_t index = 0; index < kOrder.size(); ++index) {
       if (kOrder[index] == key) {
         return index;

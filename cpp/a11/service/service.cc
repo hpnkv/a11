@@ -52,7 +52,7 @@ struct Service::State {
   absl::flat_hash_map<std::string, std::string> stream_to_session
       ABSL_GUARDED_BY(mu);
 
-  void Unregister(const std::string& session_id) {
+  void Unregister(std::string_view session_id) {
     thread::MutexLock lock(&mu);
     sessions.erase(session_id);
     for (auto it = stream_to_session.begin(); it != stream_to_session.end();) {

@@ -22,6 +22,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -533,7 +534,7 @@ class Http2WebSocketChannel final
     return absl::OkStatus();
   }
 
-  absl::Status WriteFrame(std::uint8_t opcode, const std::string& payload) {
+  absl::Status WriteFrame(std::uint8_t opcode, std::string_view payload) {
     thread::MutexLock write_lock(&write_mu_);
     const bool masked = role_ == Role::kClient;
     std::string frame;

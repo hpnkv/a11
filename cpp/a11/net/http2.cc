@@ -954,9 +954,8 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
   }
 
   absl::StatusOr<std::shared_ptr<Http2ResponseStream>> SubmitRequestOnLoop(
-      std::string method, const std::string& scheme,
-      const std::string& authority, std::string path, HttpHeaders headers,
-      std::string body) {
+      std::string method, std::string_view scheme, std::string_view authority,
+      std::string_view path, HttpHeaders headers, std::string body) {
     if (server_) {
       return absl::FailedPreconditionError(
           "A server HTTP/2 connection cannot submit requests");
@@ -1063,8 +1062,8 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
   }
 
   absl::StatusOr<std::shared_ptr<Http2DuplexStream>> SubmitDuplexOnLoop(
-      std::string protocol, const std::string& scheme,
-      const std::string& authority, std::string path, HttpHeaders headers) {
+      std::string_view protocol, std::string_view scheme,
+      std::string_view authority, std::string_view path, HttpHeaders headers) {
     if (protocol.empty()) {
       return absl::InvalidArgumentError(
           "HTTP/2 extended CONNECT requires a protocol");
@@ -1073,8 +1072,8 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
       return absl::InvalidArgumentError(
           "HTTP/2 extended CONNECT protocol must be a lowercase token");
     }
-    return OpenDuplexOnLoop("CONNECT", protocol, scheme, authority,
-                            std::move(path), std::move(headers));
+    return OpenDuplexOnLoop("CONNECT", protocol, scheme, authority, path,
+                            std::move(headers));
   }
 
   /**
@@ -1087,9 +1086,8 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
    * until Write() feeds it -- so it is written once.
    */
   absl::StatusOr<std::shared_ptr<Http2DuplexStream>> OpenDuplexOnLoop(
-      std::string method, const std::string& protocol,
-      const std::string& scheme, const std::string& authority, std::string path,
-      HttpHeaders headers) {
+      std::string method, std::string_view protocol, std::string_view scheme,
+      std::string_view authority, std::string_view path, HttpHeaders headers) {
     if (server_) {
       return absl::FailedPreconditionError(
           "A server HTTP/2 connection cannot submit requests");

@@ -15,6 +15,8 @@
 #ifndef A11_FLOW_INTERNAL_CALL_HANDLE_H_
 #define A11_FLOW_INTERNAL_CALL_HANDLE_H_
 
+#include <string_view>
+
 #include "a11/flow/internal/runtime_monitor.h"
 
 namespace a11::flow::internal {
@@ -70,7 +72,7 @@ class CallHandle {
   }
 
   /// The node of one of the call's ports, once the call has started.
-  absl::StatusOr<NodePtr> Node(const std::string& name,
+  absl::StatusOr<NodePtr> Node(std::string_view name,
                                syntax::PortDirection direction);
 
   /// How the call went, once it has gone.

@@ -33,6 +33,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 
 #include <absl/base/nullability.h>
 #include <absl/status/status.h>
@@ -224,9 +225,7 @@ class HttpSseWireStream
   enum class Role { kClient, kServer };
   struct State;
 
-  HttpSseWireStream(Role role, const std::string& id,
-                    const HttpSseOptions& options,
-                    InProcessWireStream::Pair pair,
+  HttpSseWireStream(Role role, InProcessWireStream::Pair pair,
                     std::shared_ptr<State> state);
 
   a11::Task StartEndpoint(bool accept, OnMessage on_message, OnDone on_done);
@@ -279,7 +278,7 @@ class HttpSseClientWireStream final : public HttpSseWireStream {
    * @return The stream, or an error status.
    */
   static absl::StatusOr<std::shared_ptr<HttpSseClientWireStream>> Create(
-      std::string url, HttpSseOptions options = {},
+      std::string_view url, HttpSseOptions options = {},
       std::shared_ptr<Http2Client> client = nullptr,
       HttpHeaders request_headers = {});
 
@@ -296,9 +295,7 @@ class HttpSseClientWireStream final : public HttpSseWireStream {
    */
   [[nodiscard]] SseOutboundDelivery outbound_delivery() const;
 
-  HttpSseClientWireStream(ConstructorToken, const std::string& url,
-                          const HttpSseOptions& options,
-                          InProcessWireStream::Pair pair,
+  HttpSseClientWireStream(ConstructorToken, InProcessWireStream::Pair pair,
                           std::shared_ptr<State> state,
                           std::shared_ptr<ClientState> client_state);
 
@@ -316,7 +313,7 @@ class HttpSseClientWireStream final : public HttpSseWireStream {
   /// @p response_headers do not advertise the streamed mode.
   absl::Status OpenOutboundStream(const HttpHeaders& response_headers);
   /// Sends one already-encoded message on the streamed outbound body.
-  absl::Status TransmitOnStream(const std::string& payload, bool terminal);
+  absl::Status TransmitOnStream(std::string_view payload, bool terminal);
   /// Sends one already-encoded message as its own POST, awaiting the response.
   absl::Status TransmitAsPost(std::string payload);
   /// Blocks until an outbound POST slot is free, then claims it.
@@ -348,9 +345,7 @@ class HttpSseServerWireStream final : public HttpSseWireStream {
    * and ready for the server to send on. */
   a11::Task Accepted() const;
 
-  HttpSseServerWireStream(ConstructorToken, const std::string& id,
-                          const HttpSseOptions& options,
-                          InProcessWireStream::Pair pair,
+  HttpSseServerWireStream(ConstructorToken, InProcessWireStream::Pair pair,
                           std::shared_ptr<State> state,
                           std::shared_ptr<ServerStreamState> server_state);
 

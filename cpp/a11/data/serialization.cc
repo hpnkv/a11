@@ -204,7 +204,7 @@ absl::StatusOr<nlohmann::json> DeserializeJsonMsgpack(const Chunk& chunk) {
 template <typename T>
 absl::Status RegisterNative(SerializationRegistry* registry) {
   return registry->Register<T>(
-      SerialTypeTag<T>(), std::string(kMsgpackMimetype),
+      SerialTypeTag<T>(), kMsgpackMimetype,
       [](const T& value) -> absl::StatusOr<Chunk> {
         ABSL_ASSIGN_OR_RETURN(Bytes encoded, value.ToMsgpack());
         return Chunk{.data = std::move(encoded)};
@@ -220,7 +220,7 @@ using ::a11::IsValidUtf8;
 absl::Status RegisterStringCodecs(
     SerializationRegistry* absl_nonnull registry) {
   ABSL_RETURN_IF_ERROR(registry->Register<std::string>(
-      "bytes", std::string(kBytesMimetype),
+      "bytes", kBytesMimetype,
       [](const std::string& value) -> absl::StatusOr<Chunk> {
         return Chunk{.data = value};
       },
@@ -228,7 +228,7 @@ absl::Status RegisterStringCodecs(
         return chunk.data;
       }));
   return registry->Register<std::string>(
-      "string", std::string(kTextMimetype),
+      "string", kTextMimetype,
       [](const std::string& value) -> absl::StatusOr<Chunk> {
         // Checked on the way out, not on the way in.
         if (!IsValidUtf8(value)) {
@@ -299,7 +299,7 @@ const SerializationRegistry::Impl* SerializationRegistry::GetImpl() const {
 }
 
 absl::Status SerializationRegistry::RegisterSerializerErased(
-    std::type_index type, std::string type_name, const std::string& mimetype,
+    std::type_index type, std::string_view type_name, std::string_view mimetype,
     ErasedSerializer serializer) {
   if (type_name.empty()) {
     return absl::InvalidArgumentError("type_name must not be empty");
@@ -320,7 +320,7 @@ absl::Status SerializationRegistry::RegisterSerializerErased(
   }
   impl->serializers.push_back(SerializerRegistration{
       .type = type,
-      .type_name = std::move(type_name),
+      .type_name = std::string(type_name),
       .mimetype = std::move(parsed),
       .serializer = std::move(serializer),
       .order = impl->next_order++,
@@ -329,7 +329,7 @@ absl::Status SerializationRegistry::RegisterSerializerErased(
 }
 
 absl::Status SerializationRegistry::RegisterDeserializerErased(
-    std::type_index type, std::string type_name, const std::string& mimetype,
+    std::type_index type, std::string_view type_name, std::string_view mimetype,
     ErasedDeserializer deserializer) {
   if (type_name.empty()) {
     return absl::InvalidArgumentError("type_name must not be empty");
@@ -350,7 +350,7 @@ absl::Status SerializationRegistry::RegisterDeserializerErased(
   }
   impl->deserializers.push_back(DeserializerRegistration{
       .type = type,
-      .type_name = std::move(type_name),
+      .type_name = std::string(type_name),
       .mimetype = std::move(parsed),
       .deserializer = std::move(deserializer),
       .order = impl->next_order++,
@@ -496,10 +496,9 @@ absl::Status SerializationRegistry::RegisterDefaults() {
   // application/octet-stream rather than a quoted JSON copy of itself.
   ABSL_RETURN_IF_ERROR(RegisterStringCodecs(this));
   ABSL_RETURN_IF_ERROR(Register<nlohmann::json>(
-      "json", std::string(kJsonMimetype), SerializeJson, DeserializeJson));
-  ABSL_RETURN_IF_ERROR(
-      Register<nlohmann::json>("json", std::string(kMsgpackMimetype),
-                               SerializeJsonMsgpack, DeserializeJsonMsgpack));
+      "json", kJsonMimetype, SerializeJson, DeserializeJson));
+  ABSL_RETURN_IF_ERROR(Register<nlohmann::json>(
+      "json", kMsgpackMimetype, SerializeJsonMsgpack, DeserializeJsonMsgpack));
   ABSL_RETURN_IF_ERROR(RegisterNative<ChunkMetadata>(this));
   ABSL_RETURN_IF_ERROR(RegisterNative<Chunk>(this));
   ABSL_RETURN_IF_ERROR(RegisterNative<NodeRef>(this));

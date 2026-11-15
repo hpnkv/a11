@@ -177,7 +177,7 @@ absl::StatusOr<absl::Status> DecodeStoredStatus(std::string_view encoded) {
 
 absl::StatusOr<data::NodeFragment> DecodeItemFields(
     const std::vector<redis::Reply>& values, size_t offset,
-    const std::string& node_id) {
+    std::string_view node_id) {
   if (offset > values.size() || values.size() - offset < 4) {
     return ProtocolError("chunk item is truncated");
   }
@@ -203,7 +203,7 @@ absl::StatusOr<data::NodeFragment> DecodeItemFields(
     ABSL_ASSIGN_OR_RETURN(data::NodeRef reference,
                           data::NodeRef::FromMsgpack(payload));
     return data::NodeFragment{
-        .id = node_id,
+        .id = std::string(node_id),
         .data = std::move(reference),
         .seq = seq,
         .continued = !final_seq.has_value() || seq < *final_seq,
@@ -224,7 +224,7 @@ absl::StatusOr<data::NodeFragment> DecodeItemFields(
     return ProtocolError("tombstone payload is not data-free");
   }
   return data::NodeFragment{
-      .id = node_id,
+      .id = std::string(node_id),
       .data = std::move(*chunk),
       .seq = seq,
       .continued = !final_seq.has_value() || seq < *final_seq,
@@ -232,7 +232,7 @@ absl::StatusOr<data::NodeFragment> DecodeItemFields(
 }
 
 absl::StatusOr<data::NodeFragment> ParseItemReply(
-    const std::vector<redis::Reply>& values, const std::string& node_id) {
+    const std::vector<redis::Reply>& values, std::string_view node_id) {
   if (values.size() != 5) {
     return ProtocolError("item reply does not have five fields");
   }
@@ -252,7 +252,7 @@ struct NextPage {
 };
 
 absl::StatusOr<NextPage> ParseNextReply(const std::vector<redis::Reply>& values,
-                                        const std::string& node_id) {
+                                        std::string_view node_id) {
   if (values.size() < 4) {
     return ProtocolError("next reply is truncated");
   }

@@ -534,7 +534,7 @@ absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> Action::GetNode(
 }
 
 absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> Action::GetInput(
-    const std::string& name, std::optional<bool> bind_stream) {
+    std::string_view name, std::optional<bool> bind_stream) {
   ABSL_RETURN_IF_ERROR(data::ValidateName(name));
   std::string node_id;
   bool bind = false;
@@ -560,7 +560,7 @@ absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> Action::GetInput(
 }
 
 absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> Action::GetOutput(
-    const std::string& name, std::optional<bool> bind_stream) {
+    std::string_view name, std::optional<bool> bind_stream) {
   ABSL_RETURN_IF_ERROR(data::ValidateName(name));
   std::string node_id;
   bool bind = false;
@@ -610,7 +610,7 @@ absl::Status Action::CloseUnwrittenOutput(
 }
 
 absl::StatusOr<std::shared_ptr<nodes::AsyncNode>> Action::GetPort(
-    const std::string& name) {
+    std::string_view name) {
   bool input = false;
   bool output = false;
   {
@@ -845,7 +845,7 @@ bool Action::HasHeader(std::string_view name) const {
   return headers_.find(absl::AsciiStrToLower(name)) != headers_.end();
 }
 
-absl::Status Action::SetHeader(const std::string& name, data::Bytes value) {
+absl::Status Action::SetHeader(std::string_view name, data::Bytes value) {
   ABSL_RETURN_IF_ERROR(data::ValidateName(name));
   thread::MutexLock lock(&mu_);
   headers_.insert_or_assign(absl::AsciiStrToLower(name), std::move(value));
@@ -865,9 +865,8 @@ absl::Status Action::ForwardHeader(const std::shared_ptr<Action>& target,
     return absl::InvalidArgumentError("target must not be null");
   }
   ABSL_ASSIGN_OR_RETURN(std::optional<data::Bytes> value, GetHeader(name));
-  return value.has_value()
-             ? target->SetHeader(std::string(name), std::move(*value))
-             : absl::OkStatus();
+  return value.has_value() ? target->SetHeader(name, std::move(*value))
+                           : absl::OkStatus();
 }
 
 absl::Status Action::ForwardHeadersWithPrefix(

@@ -1459,7 +1459,7 @@ Returns the destination path. A destination that already exists and matches
   module.def(
       "get_http_header",
       [](const py::typing::List<py::typing::Tuple<py::str, py::str>>& headers,
-         const std::string& name) -> py::typing::Optional<py::str> {
+         std::string_view name) -> py::typing::Optional<py::str> {
         std::optional<std::string> value = net::GetHttpHeader(
             ValueOrThrow(HttpHeadersFromPython(headers)), name);
         if (!value.has_value()) {

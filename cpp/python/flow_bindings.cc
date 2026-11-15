@@ -922,14 +922,13 @@ void BindFlow(py::module_& module) {
               py::arg("value"), "Construct a Flow literal from a JSON value.")
           .def_static(
               "invoke",
-              [](std::string action,
+              [](std::string_view action,
                  const std::map<std::string, flow::Expression>& arguments,
-                 bool remote, bool tolerant, std::string node_map) {
+                 bool remote, bool tolerant, std::string_view node_map) {
                 std::vector<std::pair<std::string, flow::Expression>> ordered(
                     arguments.begin(), arguments.end());
                 return ValueOrThrow(flow::Expression::Invoke(
-                    std::move(action), std::move(ordered), remote, tolerant,
-                    std::move(node_map)));
+                    action, std::move(ordered), remote, tolerant, node_map));
               },
               py::arg("action"),
               py::arg("arguments") = std::map<std::string, flow::Expression>{},
@@ -958,25 +957,27 @@ void BindFlow(py::module_& module) {
               py::arg("items"), "Construct an array of expressions.")
           .def_static(
               "builtin",
-              [](std::string name, std::vector<flow::Expression> arguments) {
-                return ValueOrThrow(flow::Expression::Builtin(
-                    std::move(name), std::move(arguments)));
+              [](std::string_view name,
+                 std::vector<flow::Expression> arguments) {
+                return ValueOrThrow(
+                    flow::Expression::Builtin(name, std::move(arguments)));
               },
               py::arg("name"), py::arg("arguments"),
               "Apply a language builtin.")
           .def_static(
               "node",
-              [](std::optional<flow::Expression> id, std::string node_map) {
+              [](std::optional<flow::Expression> id,
+                 std::string_view node_map) {
                 return ValueOrThrow(
-                    flow::Expression::Node(std::move(id), std::move(node_map)));
+                    flow::Expression::Node(std::move(id), node_map));
               },
               py::arg("id") = std::nullopt, py::arg("node_map") = "",
               "Allocate or attach a node.")
           .def_static(
               "completion",
-              [](std::string operation, const flow::Expression& subject) {
-                return ValueOrThrow(flow::Expression::Completion(
-                    std::move(operation), subject));
+              [](std::string_view operation, const flow::Expression& subject) {
+                return ValueOrThrow(
+                    flow::Expression::Completion(operation, subject));
               },
               py::arg("operation"), py::arg("subject"),
               "Read status, wait for, or close a subject.")
@@ -1082,11 +1083,11 @@ void BindFlow(py::module_& module) {
       "Extract the next item, optionally representing EOF as absence.");
   expression.def_static(
       "invoke_with",
-      [](std::string action,
+      [](std::string_view action,
          const std::map<std::string, flow::Expression>& arguments,
          const flow::CallOptions& options) {
         return ValueOrThrow(flow::Expression::InvokeWith(
-            std::move(action), {arguments.begin(), arguments.end()}, options));
+            action, {arguments.begin(), arguments.end()}, options));
       },
       py::arg("action"), py::arg("arguments"), py::arg("options"),
       "Construct an invocation with typed modifiers.");
@@ -1095,10 +1096,10 @@ void BindFlow(py::module_& module) {
                               "A typed statement in an executable Flow body.")
       .def_static(
           "bind",
-          [](std::string name, const flow::Expression& value,
+          [](std::string_view name, const flow::Expression& value,
              std::optional<flow::syntax::TypeExpression> type) {
-            return ValueOrThrow(flow::Statement::Initialize(
-                std::move(name), value, std::move(type)));
+            return ValueOrThrow(
+                flow::Statement::Initialize(name, value, std::move(type)));
           },
           py::arg("name"), py::arg("value"), py::arg("type") = std::nullopt,
           "Initialize or reassign a value with an optional type guarantee.")
@@ -1149,21 +1150,21 @@ void BindFlow(py::module_& module) {
           "Construct conditional statement bodies.")
       .def_static(
           "if_some",
-          [](std::string name, const flow::Expression& option,
+          [](std::string_view name, const flow::Expression& option,
              const std::vector<flow::Statement>& then_body,
              const std::vector<flow::Statement>& else_body) {
-            return ValueOrThrow(flow::Statement::IfSome(std::move(name), option,
-                                                        then_body, else_body));
+            return ValueOrThrow(
+                flow::Statement::IfSome(name, option, then_body, else_body));
           },
           py::arg("name"), py::arg("option"), py::arg("then_body"),
           py::arg("else_body") = std::vector<flow::Statement>{},
           "Bind an option payload only in its success branch; evaluate once.")
       .def_static(
           "for_",
-          [](std::string variable, const flow::Expression& source,
+          [](std::string_view variable, const flow::Expression& source,
              const std::vector<flow::Statement>& body, int parallel) {
-            return ValueOrThrow(flow::Statement::For(std::move(variable),
-                                                     source, body, parallel));
+            return ValueOrThrow(
+                flow::Statement::For(variable, source, body, parallel));
           },
           py::arg("variable"), py::arg("source"), py::arg("body"),
           py::arg("parallel") = 1, "Construct a loop over a stream.")
@@ -1302,11 +1303,10 @@ void BindFlow(py::module_& module) {
           "Append a documented header with an optional byte-text default.")
       .def(
           "bind",
-          [](flow::FlowBuilder& self, std::string name,
+          [](flow::FlowBuilder& self, std::string_view name,
              const flow::Expression& value,
              std::optional<flow::syntax::TypeExpression> type) {
-            ThrowIfNotOk(
-                self.AddInitialize(std::move(name), value, std::move(type)));
+            ThrowIfNotOk(self.AddInitialize(name, value, std::move(type)));
           },
           py::arg("name"), py::arg("value"), py::arg("type") = std::nullopt,
           "Initialize or reassign an expression value.")
@@ -1563,14 +1563,14 @@ void BindFlow(py::module_& module) {
               "references.")
           .def(
               "effective_schema",
-              [](const flow::ModuleDocument& self, std::string name,
+              [](const flow::ModuleDocument& self, std::string_view name,
                  const std::map<std::string, std::string>& modules,
                  const std::vector<std::string>& source_roots,
                  flow::CompilationLimits limits) {
                 flow::ModuleSources sources(modules.begin(), modules.end());
                 flow::Program program;
                 program.flows.push_back(ValueOrThrow(self.EffectiveSchema(
-                    std::move(name), sources,
+                    name, sources,
                     flow::FileModuleResolver(limits.max_source_bytes, {},
                                              source_roots),
                     limits)));

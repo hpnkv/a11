@@ -245,7 +245,7 @@ std::shared_ptr<void> TypeInfoFromClass(const py::object& cls) {
 // Resolves the Python class a port's typeinfo should point at from the type tag
 // embedded in the port's declared media type; str for text/plain; else empty.
 std::shared_ptr<void> TypeInfoForPort(const py::module_& native,
-                                      const std::string& port_type) {
+                                      std::string_view port_type) {
   const std::pair<std::string_view, const char*> kByTag[] = {
       {audio::kAudioBufferTypeTag, "AudioBuffer"},
       {audio::kAudioInputOptionsTypeTag, "AudioInputOptions"},
@@ -347,7 +347,7 @@ void BindAudioEvents(py::module_& module) {
       module, "AudioControlEvent",
       "A command on an Action's control_events input; 'stop' finishes capture "
       "gracefully.")
-      .def(py::init([](const std::string& command) {
+      .def(py::init([](std::string_view command) {
              absl::StatusOr<audio::AudioControlEvent::Command> parsed =
                  audio::ParseControlCommand(command);
              if (!parsed.ok()) {
@@ -363,7 +363,7 @@ void BindAudioEvents(py::module_& module) {
           [](const audio::AudioControlEvent& self) {
             return std::string(audio::ToString(self.command));
           },
-          [](audio::AudioControlEvent& self, const std::string& value) {
+          [](audio::AudioControlEvent& self, std::string_view value) {
             absl::StatusOr<audio::AudioControlEvent::Command> parsed =
                 audio::ParseControlCommand(value);
             if (!parsed.ok()) {
@@ -381,7 +381,7 @@ void BindAudioEvents(py::module_& module) {
   py::class_<audio::AudioCaptureEvent>(
       module, "AudioCaptureEvent",
       "A capture lifecycle or dropped-buffer notification from capture_audio.")
-      .def(py::init([](const std::string& kind, std::uint64_t dropped) {
+      .def(py::init([](std::string_view kind, std::uint64_t dropped) {
              absl::StatusOr<audio::AudioCaptureEvent::Kind> parsed =
                  audio::ParseCaptureKind(kind);
              if (!parsed.ok()) {
@@ -404,7 +404,7 @@ void BindAudioEvents(py::module_& module) {
           [](const audio::AudioCaptureEvent& self) {
             return std::string(audio::ToString(self.kind));
           },
-          [](audio::AudioCaptureEvent& self, const std::string& value) {
+          [](audio::AudioCaptureEvent& self, std::string_view value) {
             absl::StatusOr<audio::AudioCaptureEvent::Kind> parsed =
                 audio::ParseCaptureKind(value);
             if (!parsed.ok()) {
@@ -425,7 +425,7 @@ void BindAudioEvents(py::module_& module) {
   py::class_<audio::TranscriptionEvent>(
       module, "TranscriptionEvent",
       "A capture/inference lifecycle notification from capture_transcription.")
-      .def(py::init([](const std::string& kind) {
+      .def(py::init([](std::string_view kind) {
              absl::StatusOr<audio::TranscriptionEvent::Kind> parsed =
                  audio::ParseTranscriptionKind(kind);
              if (!parsed.ok()) {
@@ -446,7 +446,7 @@ void BindAudioEvents(py::module_& module) {
           [](const audio::TranscriptionEvent& self) {
             return std::string(audio::ToString(self.kind));
           },
-          [](audio::TranscriptionEvent& self, const std::string& value) {
+          [](audio::TranscriptionEvent& self, std::string_view value) {
             absl::StatusOr<audio::TranscriptionEvent::Kind> parsed =
                 audio::ParseTranscriptionKind(value);
             if (!parsed.ok()) {

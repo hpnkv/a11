@@ -17,6 +17,7 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <string_view>
 
 #include "a11/actions/action.h"
 #include "a11/actions/registry.h"
@@ -26,7 +27,7 @@
 #include "openssl/rand.h"
 #include "openssl/sha.h"
 
-std::string HashHex(const std::string& input) {
+std::string HashHex(std::string_view input) {
   unsigned char digest[SHA256_DIGEST_LENGTH]{};
   SHA256(reinterpret_cast<const unsigned char*>(input.data()), input.size(),
          digest);

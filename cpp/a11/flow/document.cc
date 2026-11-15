@@ -279,9 +279,9 @@ absl::StatusOr<Expression> Expression::Literal(nlohmann::json value) {
 }
 
 absl::StatusOr<Expression> Expression::Invoke(
-    std::string action,
+    std::string_view action,
     std::vector<std::pair<std::string, Expression>> arguments, bool remote,
-    bool tolerant, std::string node_map) {
+    bool tolerant, std::string_view node_map) {
   if (!utf8::IsValid(action)) {
     return absl::InvalidArgumentError(
         "An action name must contain valid UTF-8.");
@@ -307,13 +307,12 @@ absl::StatusOr<Expression> Expression::Invoke(
 }
 
 absl::StatusOr<Expression> Expression::InvokeWith(
-    std::string action,
+    std::string_view action,
     std::vector<std::pair<std::string, Expression>> arguments,
     const CallOptions& options) {
-  ABSL_ASSIGN_OR_RETURN(
-      auto invocation,
-      Invoke(std::move(action), std::move(arguments), options.remote,
-             options.tolerant, options.node_map));
+  ABSL_ASSIGN_OR_RETURN(auto invocation,
+                        Invoke(action, std::move(arguments), options.remote,
+                               options.tolerant, options.node_map));
   std::string source = invocation.source();
   source.pop_back();
   if (options.tee) {
@@ -387,9 +386,9 @@ absl::StatusOr<Expression> Expression::Array(std::vector<Expression> items) {
 }
 
 absl::StatusOr<Expression> Expression::Builtin(
-    std::string name, std::vector<Expression> arguments) {
+    std::string_view name, std::vector<Expression> arguments) {
   if (name.starts_with("std::")) {
-    name.erase(0, 5);
+    name.remove_prefix(5);
   }
   if (!vocabulary::Builtins().contains(name)) {
     return absl::InvalidArgumentError("Unknown Flow builtin.");
@@ -405,7 +404,7 @@ absl::StatusOr<Expression> Expression::Builtin(
 }
 
 absl::StatusOr<Expression> Expression::Node(std::optional<Expression> id,
-                                            std::string node_map) {
+                                            std::string_view node_map) {
   std::string source =
       absl::StrCat("node(", id.has_value() ? id->source() : "", ")");
   if (!node_map.empty()) {
@@ -415,7 +414,7 @@ absl::StatusOr<Expression> Expression::Node(std::optional<Expression> id,
   return Expression(std::move(source));
 }
 
-absl::StatusOr<Expression> Expression::Completion(std::string operation,
+absl::StatusOr<Expression> Expression::Completion(std::string_view operation,
                                                   const Expression& subject) {
   if (operation != "wait" && operation != "close" && operation != "status") {
     return absl::InvalidArgumentError("Expected wait, close, or status.");
@@ -437,13 +436,13 @@ absl::StatusOr<Expression> Expression::Index(const Expression& index) const {
   return Expression(absl::StrCat(source_, "[", index.source(), "]"));
 }
 
-absl::StatusOr<Expression> Expression::Field(std::string name) const {
+absl::StatusOr<Expression> Expression::Field(std::string_view name) const {
   ABSL_RETURN_IF_ERROR(Name(name));
   return Expression(absl::StrCat(source_, ".", name));
 }
 
 absl::StatusOr<Expression> Expression::Pipeline(
-    std::string stage, std::optional<Expression> argument) const {
+    std::string_view stage, std::optional<Expression> argument) const {
   const auto spec = vocabulary::StageTakes(stage);
   if (!spec.has_value()) {
     return absl::InvalidArgumentError("Unknown pipeline stage.");
@@ -458,12 +457,11 @@ absl::StatusOr<Expression> Expression::Pipeline(
 }
 
 absl::StatusOr<Expression> Expression::PipelineInvoke(
-    std::string action,
+    std::string_view action,
     std::vector<std::pair<std::string, Expression>> arguments,
     const CallOptions& options) const {
-  ABSL_ASSIGN_OR_RETURN(
-      auto invocation,
-      InvokeWith(std::move(action), std::move(arguments), options));
+  ABSL_ASSIGN_OR_RETURN(auto invocation,
+                        InvokeWith(action, std::move(arguments), options));
   const auto& called = invocation.source();
   std::string source =
       absl::StrCat("(", source_, " | ",
@@ -486,7 +484,7 @@ std::string Statement::Body(const std::vector<Statement>& statements) {
 }
 
 absl::StatusOr<Statement> Statement::Initialize(
-    std::string name, const Expression& value,
+    std::string_view name, const Expression& value,
     std::optional<syntax::TypeExpression> type) {
   ABSL_RETURN_IF_ERROR(Name(name));
   std::string prefix;
@@ -537,7 +535,7 @@ absl::StatusOr<Statement> Statement::If(
 }
 
 absl::StatusOr<Statement> Statement::IfSome(
-    std::string name, const Expression& option,
+    std::string_view name, const Expression& option,
     const std::vector<Statement>& then_body,
     const std::vector<Statement>& else_body) {
   ABSL_RETURN_IF_ERROR(Name(name));
@@ -549,7 +547,7 @@ absl::StatusOr<Statement> Statement::IfSome(
   return Validated(std::move(source));
 }
 
-absl::StatusOr<Statement> Statement::For(std::string variable,
+absl::StatusOr<Statement> Statement::For(std::string_view variable,
                                          const Expression& source,
                                          const std::vector<Statement>& body,
                                          int parallel) {
@@ -616,11 +614,10 @@ absl::Status FlowBuilder::AddPort(std::string name, syntax::TypeExpression type,
 }
 
 absl::Status FlowBuilder::AddInitialize(
-    std::string name, const Expression& value,
+    std::string_view name, const Expression& value,
     std::optional<syntax::TypeExpression> type) {
-  ABSL_ASSIGN_OR_RETURN(
-      auto statement,
-      Statement::Initialize(std::move(name), value, std::move(type)));
+  ABSL_ASSIGN_OR_RETURN(auto statement,
+                        Statement::Initialize(name, value, std::move(type)));
   return AddStatement(std::move(statement));
 }
 
@@ -1626,8 +1623,8 @@ absl::StatusOr<DocumentChange> ModuleDocument::RenameImport(
 }
 
 absl::StatusOr<FlowPlan> ModuleDocument::EffectiveSchema(
-    std::string name, const ModuleSources& sources, ModuleResolver resolver,
-    CompilationLimits limits) const {
+    std::string_view name, const ModuleSources& sources,
+    ModuleResolver resolver, CompilationLimits limits) const {
   CompilationBudget budget(limits);
   auto linked = Link(sources, std::move(resolver), limits, &budget);
   const auto resolved =

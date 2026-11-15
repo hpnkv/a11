@@ -18,6 +18,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -391,7 +392,7 @@ void BindWebRtc(py::module_& module) {
           "Serialize this message to its JSON wire representation.")
       .def_static(
           "from_json",
-          [](const std::string& json) {
+          [](std::string_view json) {
             return ValueOrThrow(net::SignallingMessage::FromJson(json));
           },
           "Parse a signalling message from its JSON wire "
@@ -488,7 +489,7 @@ void BindWebRtc(py::module_& module) {
       .def(py::init<>(), "Construct an empty TURN server configuration.")
       .def_static(
           "from_string",
-          [](const std::string& value) {
+          [](std::string_view value) {
             return ValueOrThrow(net::TurnServer::FromString(value));
           },
           "Parse a TURN server from a URL-like string.", py::arg("value"))
@@ -986,8 +987,7 @@ void BindWebRtc(py::module_& module) {
           "Stop the server and close all client connections.")
       .def(
           "disconnect",
-          [](net::WebSocketSignallingServer& self,
-             const std::string& identity) {
+          [](net::WebSocketSignallingServer& self, std::string_view identity) {
             CallWithoutGil(
                 [&self, &identity] { return self.Disconnect(identity); });
           },

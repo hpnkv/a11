@@ -19,6 +19,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -371,7 +372,7 @@ void BindService(py::module_& module) {
           "call time.")
       .def(
           "get_stream",
-          [](const service::Session& self, const std::string& stream_id) {
+          [](const service::Session& self, std::string_view stream_id) {
             return ValueOrThrow(self.GetStream(stream_id));
           },
           "Look up an attached stream by its id, raising if no such stream "
@@ -435,14 +436,14 @@ void BindService(py::module_& module) {
           "snapshot of in-flight work.")
       .def(
           "get_action",
-          [](const service::Session& self, const std::string& action_id) {
+          [](const service::Session& self, std::string_view action_id) {
             return ValueOrThrow(self.GetAction(action_id));
           },
           "Look up a running action by its id, raising if none matches.",
           py::arg("action_id"))
       .def(
           "cancel_action",
-          [](service::Session& self, const std::string& action_id) {
+          [](service::Session& self, std::string_view action_id) {
             // A dispatched cancellation may reach a backpressured transport.
             CallWithoutGil([&] { return self.CancelAction(action_id); });
           },
@@ -622,7 +623,7 @@ Examples:
       .def(
           "send",
           [](service::Session& self, data::WireMessage message,
-             const std::string& stream_id) {
+             std::string_view stream_id) {
             ThrowIfNotOk(self.Send(std::move(message), stream_id));
           },
           R"doc(Enqueue a wire message for delivery on the named stream (or the default stream), raising on failure. Delivery happens asynchronously as the stream drains.

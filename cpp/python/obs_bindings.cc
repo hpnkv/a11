@@ -70,7 +70,7 @@ class PySpan {
     return "00-" + trace_id + "-" + span_.SpanIdHex() + "-01";
   }
 
-  void SetAttribute(const std::string& key, const py::object& value) {
+  void SetAttribute(std::string_view key, const py::object& value) {
     if (py::isinstance<py::bool_>(value)) {
       span_.SetAttribute(key, value.cast<bool>());
     } else if (py::isinstance<py::int_>(value)) {
@@ -82,9 +82,9 @@ class PySpan {
     }
   }
 
-  void SetName(const std::string& name) { span_.UpdateName(name); }
+  void SetName(std::string_view name) { span_.UpdateName(name); }
 
-  void SetStatus(std::string_view code, const std::string& description) {
+  void SetStatus(std::string_view code, std::string_view description) {
     obs::SpanStatus status = obs::SpanStatus::kUnset;
     if (code == "ok") {
       status = obs::SpanStatus::kOk;
@@ -103,13 +103,13 @@ class PySpan {
   obs::Span span_;
 };
 
-std::unique_ptr<PySpan> StartSpan(const std::string& name,
-                                  std::string_view kind,
-                                  const std::string& parent_traceparent) {
+std::unique_ptr<PySpan> StartSpan(std::string_view name, std::string_view kind,
+                                  std::string_view parent_traceparent) {
   const obs::SpanKind span_kind = ParseSpanKind(kind);
   if (!parent_traceparent.empty()) {
     data::ByteMap headers;
-    headers[std::string(obs::kTraceparentHeader)] = parent_traceparent;
+    headers[std::string(obs::kTraceparentHeader)] =
+        std::string(parent_traceparent);
     absl::StatusOr<std::optional<obs::TraceContext>> context =
         obs::ExtractTraceContext(headers);
     if (!context.ok()) {

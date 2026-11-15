@@ -305,7 +305,7 @@ CapabilitiesBuilder CapabilitiesFrom(const Options& options) {
 }
 
 /// Prints a diagnostic the way a compiler does: file, line, column, why.
-void PrintDiagnostic(const Diagnostic& diagnostic, const std::string& path) {
+void PrintDiagnostic(const Diagnostic& diagnostic, std::string_view path) {
   std::cerr << path << ":" << diagnostic.range.start.line + 1 << ":"
             << diagnostic.range.start.column + 1 << ": "
             << (diagnostic.severity == Severity::kError ? "error" : "warning")

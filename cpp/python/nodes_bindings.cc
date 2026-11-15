@@ -17,6 +17,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -127,8 +128,7 @@ NativeStatus StatusObject(const absl::Status& status) {
 // A node map's readers take its mutex, which a fiber creating a node may be
 // holding, so these wait without the GIL like everything else here. See
 // [WithoutGil].
-const auto Contains = [](const nodes::NodeMap& self,
-                         const std::string& node_id) {
+const auto Contains = [](const nodes::NodeMap& self, std::string_view node_id) {
   return WithoutGil([&] { return self.Contains(node_id); });
 };
 
@@ -281,7 +281,7 @@ void BindNodes(py::module_& module) {
           py::arg("reference"), py::arg("source"))
       .def(
           "get_if_exists",
-          [](const nodes::NodeMap& self, const std::string& node_id) {
+          [](const nodes::NodeMap& self, std::string_view node_id) {
             return ValueOrThrow(
                 WithoutGil([&] { return self.GetIfExists(node_id); }));
           },
@@ -289,7 +289,7 @@ void BindNodes(py::module_& module) {
           py::arg("node_id"))
       .def(
           "discard",
-          [](nodes::NodeMap& self, const std::string& node_id,
+          [](nodes::NodeMap& self, std::string_view node_id,
              const std::shared_ptr<nodes::AsyncNode>& expected) {
             return ValueOrThrow(
                 WithoutGil([&] { return self.Discard(node_id, expected); }));

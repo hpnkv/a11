@@ -19,6 +19,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include <Python.h>
@@ -915,7 +916,7 @@ Examples:
                                                         "WebSocketWireStream")
       .def_static(
           "connect",
-          [](const std::string& url, net::WireStreamOptions options,
+          [](std::string_view url, net::WireStreamOptions options,
              net::WebSocketClientOptions websocket_options) {
             return ValueOrThrow(net::WebSocketWireStream::CreateClient(
                 url, options, std::move(websocket_options)));

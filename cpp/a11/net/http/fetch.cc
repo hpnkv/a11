@@ -90,7 +90,7 @@ std::uint64_t ContentLengthOf(const HttpResponseHead& head) {
  * here: Fetch() supplies a sink that appends to its response body, so there is
  * one implementation of connect/redirect/read rather than two.
  */
-absl::StatusOr<HttpResponseHead> RunFetch(std::string url_text,
+absl::StatusOr<HttpResponseHead> RunFetch(std::string_view url_text,
                                           FetchOptions options,
                                           const FetchSink& sink,
                                           const OnFetchProgress& on_progress,
@@ -155,7 +155,7 @@ absl::StatusOr<HttpResponseHead> RunFetch(std::string url_text,
               absl::StatusCode::kResourceExhausted,
               absl::StrCat("fetch followed ", options.max_redirects,
                            " redirects without reaching a final response"),
-              nlohmann::json{{"url", url_text},
+              nlohmann::json{{"url", std::string(url_text)},
                              {"last_url", target.ToString()}});
         }
         // The body of a redirect is of no interest, and reading it would only
@@ -236,15 +236,14 @@ absl::Status FetchOptions::Validate() const {
 namespace internal {
 
 absl::StatusOr<HttpResponseHead> FetchBlocking(
-    std::string url, FetchOptions options, const FetchSink& sink,
+    std::string_view url, FetchOptions options, const FetchSink& sink,
     const OnFetchProgress& on_progress) {
   if (sink == nullptr) {
     return absl::InvalidArgumentError("fetch needs a sink");
   }
   ABSL_RETURN_IF_ERROR(options.Validate());
   const absl::Time deadline = DeadlineFor(options);
-  return RunFetch(std::move(url), std::move(options), sink, on_progress,
-                  deadline);
+  return RunFetch(url, std::move(options), sink, on_progress, deadline);
 }
 
 }  // namespace internal

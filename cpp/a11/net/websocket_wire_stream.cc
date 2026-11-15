@@ -93,7 +93,7 @@ absl::Status WebSocketClientOptions::Validate() const {
 }
 
 absl::StatusOr<std::shared_ptr<WebSocketWireStream>>
-WebSocketWireStream::CreateClient(const std::string& url,
+WebSocketWireStream::CreateClient(std::string_view url,
                                   WireStreamOptions options,
                                   WebSocketClientOptions websocket_options) {
   ABSL_RETURN_IF_ERROR(options.Validate());

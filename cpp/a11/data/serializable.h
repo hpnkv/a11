@@ -183,7 +183,7 @@ template <typename T>
 requires JsonSerializable<T> absl::Status RegisterJsonSerializable(
     SerializationRegistry& registry) {
   return registry.Register<T>(
-      serializable_internal::SerialTag<T>(), std::string(kJsonMimetype),
+      serializable_internal::SerialTag<T>(), kJsonMimetype,
       [](const T& value) -> absl::StatusOr<Chunk> {
         ABSL_ASSIGN_OR_RETURN(nlohmann::json json, A11ToJson(value));
         ABSL_ASSIGN_OR_RETURN(std::string encoded, DumpJson(json, "JSON"));
@@ -206,7 +206,7 @@ requires MsgpackSerializable<T> absl::Status RegisterMsgpackSerializable(
     SerializationRegistry& registry) {
   if constexpr (serializable_internal::HasMsgpackBytes<T>) {
     return registry.Register<T>(
-        serializable_internal::SerialTag<T>(), std::string(kMsgpackMimetype),
+        serializable_internal::SerialTag<T>(), kMsgpackMimetype,
         [](const T& value) -> absl::StatusOr<Chunk> {
           ABSL_ASSIGN_OR_RETURN(std::string bytes, A11ToMsgpackBytes(value));
           return Chunk{.data = std::move(bytes)};
@@ -217,7 +217,7 @@ requires MsgpackSerializable<T> absl::Status RegisterMsgpackSerializable(
   } else {
     // Derive MessagePack from the JSON representation.
     return registry.Register<T>(
-        serializable_internal::SerialTag<T>(), std::string(kMsgpackMimetype),
+        serializable_internal::SerialTag<T>(), kMsgpackMimetype,
         [](const T& value) -> absl::StatusOr<Chunk> {
           ABSL_ASSIGN_OR_RETURN(nlohmann::json json, A11ToJson(value));
           ABSL_ASSIGN_OR_RETURN(std::string encoded, PackMsgpack(json, "JSON"));

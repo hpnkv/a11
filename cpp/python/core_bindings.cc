@@ -17,6 +17,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include <absl/status/status.h>
@@ -62,7 +63,7 @@ py::object JsonToPython(const nlohmann::json& value) {
   return py::module_::import("json").attr("loads")(value.dump());
 }
 
-absl::Status MakeNativeStatus(int code, const std::string& message,
+absl::Status MakeNativeStatus(int code, std::string_view message,
                               const py::handle& details) {
   nlohmann::json converted = JsonFromPython(details);
   if (!converted.is_array()) {
@@ -77,7 +78,7 @@ void SetStatusCode(NativeStatus& status, int code) {
                               StatusDetails(status.value()));
 }
 
-void SetStatusMessage(NativeStatus& status, const std::string& message) {
+void SetStatusMessage(NativeStatus& status, std::string_view message) {
   status.value() =
       MakeStatus(status.value().code(), message, StatusDetails(status.value()));
 }

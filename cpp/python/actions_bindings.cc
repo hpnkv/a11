@@ -151,16 +151,16 @@ void BindSchemaMapView(py::class_<SchemaMapView<T>>& cls) {
           "Return an iterator over the map's keys.")
       .def(
           "__contains__",
-          [](const SchemaMapView<T>& view, const std::string& key) {
+          [](const SchemaMapView<T>& view, std::string_view key) {
             return view.values().find(key) != view.values().end();
           },
           "Return True when the map contains the given key.", py::arg("key"))
       .def(
           "__getitem__",
-          [](SchemaMapView<T>& view, const std::string& key) -> T& {
+          [](SchemaMapView<T>& view, std::string_view key) -> T& {
             const auto found = view.values().find(key);
             if (found == view.values().end()) {
-              throw py::key_error(key);
+              throw py::key_error(std::string(key));
             }
             return found->second;
           },
@@ -179,16 +179,16 @@ void BindSchemaMapView(py::class_<SchemaMapView<T>>& cls) {
           py::arg("key"), py::arg("value"))
       .def(
           "__delitem__",
-          [](SchemaMapView<T>& view, const std::string& key) {
+          [](SchemaMapView<T>& view, std::string_view key) {
             if (view.values().find(key) == view.values().end()) {
-              throw py::key_error(key);
+              throw py::key_error(std::string(key));
             }
             view.Mutate([&] { view.values().erase(key); });
           },
           "Remove the entry stored under the given key.", py::arg("key"))
       .def(
           "get",
-          [](SchemaMapView<T>& view, const std::string& key,
+          [](SchemaMapView<T>& view, std::string_view key,
              const py::typing::Optional<T>& default_value)
               -> py::typing::Optional<T> {
             const auto found = view.values().find(key);
@@ -710,7 +710,7 @@ void BindActions(py::module_& module) {
              [](const actions::AuthorizationEnvelope& envelope) {
                return ValueOrThrow(actions::AuthorizationToText(envelope));
              });
-  module.def("_authorization_from_text", [](const std::string& value) {
+  module.def("_authorization_from_text", [](std::string_view value) {
     return ValueOrThrow(actions::AuthorizationFromText(value));
   });
   module.def(
@@ -1088,7 +1088,7 @@ void BindActions(py::module_& module) {
            py::keep_alive<1, 6>(), py::keep_alive<1, 7>())
       .def_static(
           "make_node_id",
-          [](const std::string& action_id, const std::string& node_name) {
+          [](std::string_view action_id, std::string_view node_name) {
             return ValueOrThrow(
                 actions::Action::MakeNodeId(action_id, node_name));
           },
@@ -1237,7 +1237,7 @@ void BindActions(py::module_& module) {
           "Return the async node with the given id.", py::arg("node_id"))
       .def(
           "get_input",
-          [](actions::Action& self, std::string name,
+          [](actions::Action& self, std::string_view name,
              std::optional<bool> bind_stream) {
             return ValueOrThrow(
                 WithoutGil([&] { return self.GetInput(name, bind_stream); }));
@@ -1246,7 +1246,7 @@ void BindActions(py::module_& module) {
           py::arg("bind_stream") = std::nullopt)
       .def(
           "get_output",
-          [](actions::Action& self, std::string name,
+          [](actions::Action& self, std::string_view name,
              std::optional<bool> bind_stream) {
             return ValueOrThrow(
                 WithoutGil([&] { return self.GetOutput(name, bind_stream); }));
@@ -1255,7 +1255,7 @@ void BindActions(py::module_& module) {
           py::arg("bind_stream") = std::nullopt)
       .def(
           "get_port",
-          [](actions::Action& self, std::string name) {
+          [](actions::Action& self, std::string_view name) {
             return ValueOrThrow(WithoutGil([&] { return self.GetPort(name); }));
           },
           "Return the port node with the given name.", py::arg("name"))
@@ -1372,8 +1372,7 @@ void BindActions(py::module_& module) {
           "The action's headers as a mapping of name to bytes.")
       .def(
           "get_header",
-          [](const actions::Action& self,
-             const std::string& name) -> py::object {
+          [](const actions::Action& self, std::string_view name) -> py::object {
             absl::StatusOr<std::optional<data::Bytes>> value =
                 self.GetHeader(name);
             if (!value.ok()) {
@@ -1392,7 +1391,7 @@ void BindActions(py::module_& module) {
       .def(
           "set_header",
           [](const std::shared_ptr<actions::Action>& self,
-             const std::string& name, const py::object& value) {
+             std::string_view name, const py::object& value) {
             std::string bytes;
             if (py::isinstance<py::bytes>(value)) {
               bytes = value.cast<std::string>();
@@ -1408,7 +1407,7 @@ void BindActions(py::module_& module) {
           py::arg("name"), py::arg("value"))
       .def(
           "remove_header",
-          [](actions::Action& self, const std::string& name) {
+          [](actions::Action& self, std::string_view name) {
             ThrowIfNotOk(self.RemoveHeader(name));
           },
           "Remove the header with the given name.", py::arg("name"))
@@ -1416,7 +1415,7 @@ void BindActions(py::module_& module) {
           "forward_header",
           [](const actions::Action& self,
              const std::shared_ptr<actions::Action>& target,
-             const std::string& name) {
+             std::string_view name) {
             ThrowIfNotOk(self.ForwardHeader(target, name));
           },
           "Copy a single header from this action to a target action.",
@@ -1425,7 +1424,7 @@ void BindActions(py::module_& module) {
           "forward_headers_with_prefix",
           [](const actions::Action& self,
              const std::shared_ptr<actions::Action>& target,
-             const std::string& prefix) {
+             std::string_view prefix) {
             ThrowIfNotOk(self.ForwardHeadersWithPrefix(target, prefix));
           },
           "Copy all headers with the given prefix to a target action.",
@@ -1442,7 +1441,7 @@ void BindActions(py::module_& module) {
           py::arg("propagate_io") = true, py::arg("forward_headers") = true)
       .def(
           "make_nested",
-          [](actions::Action& self, const std::string& action_name,
+          [](actions::Action& self, std::string_view action_name,
              bool propagate_io, bool forward_headers) {
             return ValueOrThrow(
                 self.MakeNested(action_name, propagate_io, forward_headers));
@@ -1569,7 +1568,7 @@ Examples:
           "The action's span id as lowercase hex, or empty when untraced.")
       .def(
           "set_span_attribute",
-          [](actions::Action& self, const std::string& key,
+          [](actions::Action& self, std::string_view key,
              const py::object& value) {
             // bool is a subclass of int in Python, so test it first.
             if (py::isinstance<py::bool_>(value)) {
@@ -1586,14 +1585,14 @@ Examples:
           py::arg("key"), py::arg("value"))
       .def(
           "set_span_name",
-          [](actions::Action& self, const std::string& name) {
+          [](actions::Action& self, std::string_view name) {
             self.SetSpanName(name);
           },
           "Set the name of the action's span.", py::arg("name"))
       .def(
           "set_span_status",
           [](actions::Action& self, std::string_view code,
-             const std::string& description) {
+             std::string_view description) {
             obs::SpanStatus status = obs::SpanStatus::kUnset;
             if (code == "ok") {
               status = obs::SpanStatus::kOk;
@@ -1668,7 +1667,7 @@ Examples:
           py::arg("action_name"), py::arg("schema"), py::arg("handler"))
       .def(
           "unregister",
-          [](actions::ActionRegistry& self, const std::string& name) {
+          [](actions::ActionRegistry& self, std::string_view name) {
             ThrowIfNotOk(self.Unregister(name));
           },
           "Remove the action with the given name from the registry.",
@@ -1678,14 +1677,14 @@ Examples:
            py::arg("action_name"))
       .def(
           "get_schema",
-          [](const actions::ActionRegistry& self, const std::string& name) {
+          [](const actions::ActionRegistry& self, std::string_view name) {
             return ValueOrThrow(self.GetSchema(name));
           },
           "Return the schema registered under the given action name.",
           py::arg("action_name"))
       .def(
           "get_handler",
-          [](const actions::ActionRegistry& self, const std::string& name) {
+          [](const actions::ActionRegistry& self, std::string_view name) {
             return ActionHandlerToPython(ValueOrThrow(self.GetHandler(name)));
           },
           "Return the handler registered under the given action name: the "
@@ -1694,7 +1693,7 @@ Examples:
           py::arg("action_name"))
       .def(
           "make_action",
-          [](actions::ActionRegistry& self, const std::string& action_name,
+          [](actions::ActionRegistry& self, std::string_view action_name,
              std::string action_id, std::shared_ptr<nodes::NodeMap> node_map,
              std::shared_ptr<net::WireStream> stream,
              std::shared_ptr<service::Session> session) {
@@ -1718,7 +1717,7 @@ Examples:
           py::keep_alive<0, 6>())
       .def(
           "make_action_message",
-          [](actions::ActionRegistry& self, const std::string& action_name,
+          [](actions::ActionRegistry& self, std::string_view action_name,
              std::string action_id) {
             return ValueOrThrow(
                 self.MakeActionMessage(action_name, std::move(action_id)));
@@ -1767,7 +1766,7 @@ Examples:
       py::arg("all_ports") = false);
   module.def(
       "schema_from_json",
-      [](const std::string& described) {
+      [](std::string_view described) {
         return ValueOrThrow(actions::SchemaFromJsonText(described));
       },
       "Rebuild an ActionSchema from one described action, for a side that has "
@@ -1810,8 +1809,8 @@ Examples:
       std::string(actions::kActionDispatchStatusOutput);
   module.def(
       "log_record_from_chunk",
-      [](const data::Chunk& chunk, const std::string& action_name,
-         const std::string& action_id) {
+      [](const data::Chunk& chunk, std::string_view action_name,
+         std::string_view action_id) {
         const actions::LogRecord record =
             actions::LogRecordFromChunk(chunk, action_name, action_id);
         py::dict result;

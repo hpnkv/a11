@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <string_view>
+
 #include <pybind11/stl.h>
 
 #include "python/bindings.h"
@@ -26,7 +28,7 @@ void BindLlmContext(pybind11::module_& module) {
   namespace ctx = a11::sdk::llm_context;
   module.def(
       "llm_context_compact_json",
-      [](const std::string& text, size_t limit, size_t depth) {
+      [](std::string_view text, size_t limit, size_t depth) {
         return ValueWithoutGil(
             [&] { return ctx::CompactJson(text, limit, depth); });
       },
@@ -35,7 +37,7 @@ void BindLlmContext(pybind11::module_& module) {
       "Compact JSON without changing its string or number tokens.");
   module.def(
       "llm_context_encode",
-      [](const std::string& text, const std::string& format, size_t limit) {
+      [](std::string_view text, std::string_view format, size_t limit) {
         return ValueWithoutGil(
             [&] { return ctx::Encode(text, format, limit); });
       },
@@ -44,7 +46,7 @@ void BindLlmContext(pybind11::module_& module) {
       "Encode content in a reversible model-facing envelope.");
   module.def(
       "llm_context_expand",
-      [](const std::string& text, size_t limit) {
+      [](std::string_view text, size_t limit) {
         return ValueWithoutGil([&] { return ctx::Expand(text, limit); });
       },
       py::arg("text"), py::arg("max_bytes") = 8 * 1024 * 1024,

@@ -222,7 +222,7 @@ void BindRedis(py::module_& module) {
            "Raise if these connection options are invalid.")
       .def_static(
           "from_url",
-          [](const std::string& url) {
+          [](std::string_view url) {
             return ValueOrThrow(redis::ClientOptions::FromUrl(url));
           },
           "Parse a `redis://[user:password@]host[:port][/database]` URL.",

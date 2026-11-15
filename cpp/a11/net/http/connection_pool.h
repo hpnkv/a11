@@ -37,6 +37,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include <absl/container/flat_hash_map.h>
@@ -168,7 +169,7 @@ class HttpConnectionPool
                             const Http2Options& options);
 
   /// Drops @p key's entry, once its last lease has closed the connection.
-  void Forget(const std::string& key);
+  void Forget(std::string_view key);
 
   /// Wraps a new client so the last lease closes and unregisters it.
   std::shared_ptr<Http2Client> Adopt(std::string key,

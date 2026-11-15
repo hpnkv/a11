@@ -127,7 +127,7 @@ bool IsAbort(const data::WireMessage& message) {
 /** Fixed little-endian length prefix in front of every streamed message. */
 constexpr size_t kStreamFramePrefix = sizeof(std::uint32_t);
 
-std::string FrameStreamedMessage(const std::string& payload) {
+std::string FrameStreamedMessage(std::string_view payload) {
   std::string framed;
   framed.reserve(kStreamFramePrefix + payload.size());
   auto length = static_cast<std::uint32_t>(payload.size());
@@ -256,17 +256,12 @@ absl::Status HttpSseOptions::Validate() const {
   return absl::OkStatus();
 }
 
-HttpSseWireStream::HttpSseWireStream(Role role, const std::string& id,
-                                     const HttpSseOptions& options,
-                                     InProcessWireStream::Pair pair,
+HttpSseWireStream::HttpSseWireStream(Role role, InProcessWireStream::Pair pair,
                                      std::shared_ptr<State> state)
     : role_(role),
       application_(std::move(pair.first)),
       bridge_(std::move(pair.second)),
-      state_(std::move(state)) {
-  (void)id;
-  (void)options;
-}
+      state_(std::move(state)) {}
 
 absl::Status HttpSseWireStream::Send(data::WireMessage message) {
   return application_->Send(std::move(message));
@@ -608,15 +603,13 @@ struct HttpSseClientWireStream::ClientState {
 };
 
 HttpSseClientWireStream::HttpSseClientWireStream(
-    ConstructorToken, const std::string& url, const HttpSseOptions& options,
-    InProcessWireStream::Pair pair, std::shared_ptr<State> state,
-    std::shared_ptr<ClientState> client_state)
-    : HttpSseWireStream(Role::kClient, url, options, std::move(pair),
-                        std::move(state)),
+    ConstructorToken, InProcessWireStream::Pair pair,
+    std::shared_ptr<State> state, std::shared_ptr<ClientState> client_state)
+    : HttpSseWireStream(Role::kClient, std::move(pair), std::move(state)),
       client_state_(std::move(client_state)) {}
 
 absl::StatusOr<std::shared_ptr<HttpSseClientWireStream>>
-HttpSseClientWireStream::Create(std::string url, HttpSseOptions options,
+HttpSseClientWireStream::Create(std::string_view url, HttpSseOptions options,
                                 std::shared_ptr<Http2Client> client,
                                 HttpHeaders request_headers) {
   ABSL_ASSIGN_OR_RETURN(ParsedUrl parsed, ParseUrl(url));
@@ -668,8 +661,8 @@ HttpSseClientWireStream::Create(std::string url, HttpSseOptions options,
     client_state->max_posts_in_flight = options.max_concurrent_posts;
   }
   return std::make_shared<HttpSseClientWireStream>(
-      ConstructorToken{}, std::move(url), std::move(options), std::move(pair),
-      std::move(state), std::move(client_state));
+      ConstructorToken{}, std::move(pair), std::move(state),
+      std::move(client_state));
 }
 
 std::shared_ptr<Http2Client> HttpSseClientWireStream::client() const {
@@ -939,8 +932,8 @@ absl::Status HttpSseClientWireStream::TransmitAsPost(std::string payload) {
   return HttpStatusError(response, "SSE message request");
 }
 
-absl::Status HttpSseClientWireStream::TransmitOnStream(
-    const std::string& payload, bool terminal) {
+absl::Status HttpSseClientWireStream::TransmitOnStream(std::string_view payload,
+                                                       bool terminal) {
   std::shared_ptr<Http2DuplexStream> upload;
   {
     thread::MutexLock lock(&client_state_->mu);
@@ -1149,11 +1142,10 @@ struct HttpSseServerWireStream::ServerStreamState {
 };
 
 HttpSseServerWireStream::HttpSseServerWireStream(
-    ConstructorToken, const std::string& id, const HttpSseOptions& options,
-    InProcessWireStream::Pair pair, std::shared_ptr<State> state,
+    ConstructorToken, InProcessWireStream::Pair pair,
+    std::shared_ptr<State> state,
     std::shared_ptr<ServerStreamState> server_state)
-    : HttpSseWireStream(Role::kServer, id, options, std::move(pair),
-                        std::move(state)),
+    : HttpSseWireStream(Role::kServer, std::move(pair), std::move(state)),
       server_state_(std::move(server_state)) {}
 
 a11::Task HttpSseServerWireStream::Accepted() const {
@@ -1277,12 +1269,9 @@ a11::Task SendHttpStatus(const std::shared_ptr<Http2ResponseWriter>& response,
                                            std::string(status.message())));
 }
 
-std::string PathWithoutQuery(std::string path) {
+std::string_view PathWithoutQuery(std::string_view path) {
   const size_t query = path.find_first_of("?#");
-  if (query != std::string::npos) {
-    path.erase(query);
-  }
-  return path;
+  return path.substr(0, query);
 }
 
 absl::StatusOr<std::string> MatchMessagePath(std::string_view path,
@@ -1315,26 +1304,23 @@ absl::StatusOr<std::shared_ptr<HttpSseServer>> HttpSseServer::Create(
   // open-ended sequence of messages rather than a document, so the HTTP server
   // has to hand it over as it arrives instead of buffering it to its.
   auto inherited = std::move(options.http2_options.stream_request_body);
-  options.http2_options.stream_request_body = [pattern =
-                                                   options.message_endpoint,
-                                               inherited =
-                                                   std::move(inherited)](
-                                                  std::string_view method,
-                                                  std::string_view path,
-                                                  const HttpHeaders& headers) {
-    if (inherited != nullptr && inherited(method, path, headers)) {
-      return true;
-    }
-    if (!absl::EqualsIgnoreCase(method, "POST")) {
-      return false;
-    }
-    const std::optional<std::string> content_type =
-        GetHttpHeader(headers, "content-type");
-    return content_type.has_value() &&
-           absl::StartsWithIgnoreCase(*content_type,
-                                      kSseWireStreamContentType) &&
-           MatchMessagePath(PathWithoutQuery(std::string(path)), pattern).ok();
-  };
+  options.http2_options.stream_request_body =
+      [pattern = options.message_endpoint, inherited = std::move(inherited)](
+          std::string_view method, std::string_view path,
+          const HttpHeaders& headers) {
+        if (inherited != nullptr && inherited(method, path, headers)) {
+          return true;
+        }
+        if (!absl::EqualsIgnoreCase(method, "POST")) {
+          return false;
+        }
+        const std::optional<std::string> content_type =
+            GetHttpHeader(headers, "content-type");
+        return content_type.has_value() &&
+               absl::StartsWithIgnoreCase(*content_type,
+                                          kSseWireStreamContentType) &&
+               MatchMessagePath(PathWithoutQuery(path), pattern).ok();
+      };
   auto state =
       std::make_shared<State>(std::move(options), std::move(on_connect));
   std::weak_ptr<State> weak = state;
@@ -1373,7 +1359,7 @@ HttpSseServer::~HttpSseServer() {
 a11::Task HttpSseServer::HandleRequest(
     const std::shared_ptr<State>& state, HttpRequest request,
     std::shared_ptr<Http2ResponseWriter> response) {
-  const std::string path = PathWithoutQuery(request.path);
+  const std::string_view path = PathWithoutQuery(request.path);
   std::string described;
   const bool is_describe =
       MatchDescribePath(path, state->options.describe, &described);
@@ -1448,8 +1434,8 @@ a11::Task HttpSseServer::HandleConnect(
         std::make_shared<HttpSseServerWireStream::ServerStreamState>(
             response, std::move(remove));
     auto stream = std::make_shared<HttpSseServerWireStream>(
-        HttpSseServerWireStream::ConstructorToken{}, id, state->options,
-        std::move(*pair), std::move(base_state), std::move(stream_state));
+        HttpSseServerWireStream::ConstructorToken{}, std::move(*pair),
+        std::move(base_state), std::move(stream_state));
     std::shared_ptr<a11::Promise<std::shared_ptr<HttpSseServerWireStream>>>
         waiter;
     OnHttpSseConnect on_connect;

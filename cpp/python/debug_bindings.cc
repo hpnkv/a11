@@ -14,6 +14,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <absl/time/time.h>
@@ -123,7 +124,7 @@ void BindDebug(py::module_& module) {
 
   module.def(
       "set_current_fiber_name",
-      [](const std::string& name) { thread::SetCurrentFiberName(name); },
+      [](std::string_view name) { thread::SetCurrentFiberName(name); },
       py::arg("name"),
       "Names the calling fiber for reports, truncating at 47 characters. "
       "No-op off a fiber.");

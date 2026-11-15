@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "a11/actions/describe.h"
-
 #include <algorithm>
 #include <string>
 #include <string_view>
@@ -27,6 +25,7 @@
 #include <absl/strings/str_cat.h>
 #include <nlohmann/json.hpp>
 
+#include "a11/actions/describe.h"
 #include "a11/actions/schema.h"
 #include "a11/json_codec.h"
 
@@ -101,7 +100,7 @@ bool SaysNothing(const nlohmann::json& schema) {
 /// consumer building a tool definition can splice it in rather than re-parse
 /// it. Text that is not JSON is dropped: a schema nobody can read is worse
 /// than an absent one, which at least reads as "no type information".
-void AttachJsonSchema(nlohmann::json* target, const std::string& encoded) {
+void AttachJsonSchema(nlohmann::json* target, std::string_view encoded) {
   if (encoded.empty()) {
     return;
   }

@@ -206,7 +206,7 @@ a11::Task WatchControlForStop(std::shared_ptr<AsyncNode> control,
 // Reads a unary options input, returning `fallback` when the input is absent.
 template <typename T>
 absl::StatusOr<T> ReadOptionalOptions(const std::shared_ptr<Action>& action,
-                                      const std::string& port, T fallback) {
+                                      std::string_view port, T fallback) {
   ABSL_ASSIGN_OR_RETURN(const std::shared_ptr<AsyncNode> node,
                         action->GetInput(port));
   ABSL_ASSIGN_OR_RETURN(std::optional<T> value, NextValue<T>(node));
@@ -225,11 +225,11 @@ absl::Status PutJson(AsyncNode& node, const T& value, bool final) {
 
 // Encodes a string the way every other language's registry expects one: a JSON
 // scalar, not a bare `text/plain` payload.
-data::Chunk TextChunk(const std::string& text) {
+data::Chunk TextChunk(std::string_view text) {
   data::Chunk chunk;
   chunk.metadata =
       data::ChunkMetadata{.mimetype = std::string(a11::data::kJsonMimetype)};
-  chunk.data = nlohmann::json(text).dump();
+  chunk.data = nlohmann::json(std::string(text)).dump();
   return chunk;
 }
 

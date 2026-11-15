@@ -101,7 +101,7 @@ std::string HttpConnectionPool::KeyFor(const ParsedUrl& origin,
       options.max_buffered_response_bytes);
 }
 
-void HttpConnectionPool::Forget(const std::string& key) {
+void HttpConnectionPool::Forget(std::string_view key) {
   thread::MutexLock lock(&mu_);
   const auto found = entries_.find(key);
   // Only drop an entry whose connection really has gone: a later dial for the

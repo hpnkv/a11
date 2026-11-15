@@ -327,11 +327,10 @@ absl::StatusOr<std::vector<std::string>> ReadArguments(
  */
 class ChildPlan {
  public:
-  ChildPlan(const std::string& program,
-            const std::vector<std::string>& arguments,
+  ChildPlan(std::string_view program, const std::vector<std::string>& arguments,
             const SpawnSettings& settings) {
     argument_storage_.reserve(arguments.size() + 1);
-    argument_storage_.push_back(program);
+    argument_storage_.emplace_back(program);
     for (const std::string& argument : arguments) {
       argument_storage_.push_back(argument);
     }

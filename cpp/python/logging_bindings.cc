@@ -14,6 +14,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include <Python.h>
@@ -210,7 +211,7 @@ void BindLogging(py::module_& module) {
 
   module.def(
       "emit_log",
-      [](int severity, const std::string& message, int verbosity) {
+      [](int severity, std::string_view message, int verbosity) {
         absl::LogSeverity level = absl::LogSeverity::kInfo;
         if (severity == static_cast<int>(absl::LogSeverity::kWarning)) {
           level = absl::LogSeverity::kWarning;

@@ -181,14 +181,14 @@ class SerializationRegistry {
    * @return OK on success, or an error (e.g. when @p serializer is empty).
    */
   template <typename T>
-  absl::Status RegisterSerializer(std::string type_name,
-                                  const std::string& mimetype,
+  absl::Status RegisterSerializer(std::string_view type_name,
+                                  std::string_view mimetype,
                                   Serializer<T> serializer) {
     if (!serializer) {
       return absl::InvalidArgumentError("serializer must be callable");
     }
     return RegisterSerializerErased(
-        typeid(T), std::move(type_name), mimetype,
+        typeid(T), type_name, mimetype,
         [serializer = std::move(serializer)](
             const void* absl_nonnull value) -> absl::StatusOr<Chunk> {
           if (value == nullptr) {
@@ -218,14 +218,14 @@ class SerializationRegistry {
    * @return OK on success, or an error (e.g. when @p deserializer is empty).
    */
   template <typename T>
-  absl::Status RegisterDeserializer(std::string type_name,
-                                    const std::string& mimetype,
+  absl::Status RegisterDeserializer(std::string_view type_name,
+                                    std::string_view mimetype,
                                     Deserializer<T> deserializer) {
     if (!deserializer) {
       return absl::InvalidArgumentError("deserializer must be callable");
     }
     return RegisterDeserializerErased(
-        typeid(T), std::move(type_name), mimetype,
+        typeid(T), type_name, mimetype,
         [deserializer = std::move(deserializer)](
             const Chunk& chunk) -> absl::StatusOr<std::any> {
           // See RegisterSerializer above for why the guard sits here.
@@ -257,8 +257,8 @@ class SerializationRegistry {
    * @return OK on success, or the first error encountered.
    */
   template <typename T>
-  absl::Status Register(const std::string& type_name,
-                        const std::string& mimetype, Serializer<T> serializer,
+  absl::Status Register(std::string_view type_name, std::string_view mimetype,
+                        Serializer<T> serializer,
                         Deserializer<T> deserializer) {
     ABSL_RETURN_IF_ERROR(
         RegisterSerializer<T>(type_name, mimetype, std::move(serializer)));
@@ -337,12 +337,12 @@ class SerializationRegistry {
   [[nodiscard]] const Impl* absl_nonnull GetImpl() const;
 
   absl::Status RegisterSerializerErased(std::type_index type,
-                                        std::string type_name,
-                                        const std::string& mimetype,
+                                        std::string_view type_name,
+                                        std::string_view mimetype,
                                         ErasedSerializer serializer);
   absl::Status RegisterDeserializerErased(std::type_index type,
-                                          std::string type_name,
-                                          const std::string& mimetype,
+                                          std::string_view type_name,
+                                          std::string_view mimetype,
                                           ErasedDeserializer deserializer);
   void RemoveSerializer(std::type_index type, std::string_view type_name,
                         std::string_view mimetype);

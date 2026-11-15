@@ -1326,7 +1326,7 @@ class Completer {
   }
 
   /// The fields of a declared struct, where `named` is one.
-  bool AddShapeFields(const std::string& named) {
+  bool AddShapeFields(std::string_view named) {
     if (named.empty()) {
       return false;
     }
@@ -1352,7 +1352,7 @@ class Completer {
   /// The one place the language knows the fields of a value nobody declared:
   /// they are written in the pattern that made it. A positional pattern names
   /// nothing, so there is nothing to offer for one.
-  bool AddPatternFields(const std::string& text) {
+  bool AddPatternFields(std::string_view text) {
     if (text.empty()) {
       return false;
     }

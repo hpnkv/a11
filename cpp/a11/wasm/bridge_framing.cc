@@ -15,6 +15,7 @@
 #include <climits>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -52,6 +53,9 @@ Result* a11_wasm_frame_parse(const std::uint8_t* data, size_t size) {
   auto packet = a11::net::ParseBytePacket(View(data, size));
   if (!packet.ok()) return Failure(packet.status());
   std::string encoded;
+  if (packet->payload.size() > encoded.max_size() - kPacketHeaderSize) {
+    return Failure(absl::OutOfRangeError("WASM byte packet is too large"));
+  }
   encoded.reserve(kPacketHeaderSize + packet->payload.size());
   encoded.push_back(static_cast<char>(packet->type));
   const auto append = [&encoded](std::uint64_t value, unsigned width) {
@@ -75,6 +79,12 @@ Result* a11_wasm_frame_split(const std::uint8_t* data, size_t size,
   }
   std::string encoded;
   for (const auto& packet : *packets) {
+    if (packet.size() > std::numeric_limits<std::uint32_t>::max() ||
+        encoded.size() > encoded.max_size() - sizeof(std::uint32_t) ||
+        packet.size() >
+            encoded.max_size() - sizeof(std::uint32_t) - encoded.size()) {
+      return Failure(absl::OutOfRangeError("WASM byte packet is too large"));
+    }
     const auto length = static_cast<std::uint32_t>(packet.size());
     for (unsigned shift = 0; shift < 32; shift += 8) {
       encoded.push_back(static_cast<char>((length >> shift) & 0xff));

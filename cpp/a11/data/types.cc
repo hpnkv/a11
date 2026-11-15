@@ -94,7 +94,8 @@ absl::StatusOr<std::string> JsonString(const nlohmann::json& value,
   return value.get<std::string>();
 }
 
-void PackByteMap(MsgpackWriter* absl_nonnull writer, const ByteMap& values) {
+absl::Status PackByteMap(MsgpackWriter* absl_nonnull writer,
+                         const ByteMap& values) {
   // Sorted, because nlohmann's object type is ordered and a ByteMap is a hash
   // map: sorting is what keeps these bytes identical to the JSON path's, and
   // also the only thing that makes the encoding deterministic at all.
@@ -108,11 +109,12 @@ void PackByteMap(MsgpackWriter* absl_nonnull writer, const ByteMap& values) {
       [](const ByteMap::value_type* left, const ByteMap::value_type* right) {
         return left->first < right->first;
       });
-  writer->PackMapHeader(entries.size());
+  ABSL_RETURN_IF_ERROR(writer->PackMapHeader(entries.size()));
   for (const ByteMap::value_type* entry : entries) {
-    writer->PackString(entry->first);
-    writer->PackBinary(entry->second);
+    ABSL_RETURN_IF_ERROR(writer->PackString(entry->first));
+    ABSL_RETURN_IF_ERROR(writer->PackBinary(entry->second));
   }
+  return absl::OkStatus();
 }
 
 absl::StatusOr<ByteMap> DecodeByteMap(const nlohmann::json& value,
@@ -265,14 +267,13 @@ absl::StatusOr<Bytes> ChunkMetadata::ToMsgpack() const {
 
 absl::Status ChunkMetadata::ToMsgpackInto(
     MsgpackWriter* absl_nonnull writer) const {
-  writer->PackString(mimetype);
+  ABSL_RETURN_IF_ERROR(writer->PackString(mimetype));
   if (timestamp.has_value()) {
     writer->PackInt(absl::ToUnixMicros(*timestamp));
   } else {
     writer->PackNil();
   }
-  PackByteMap(writer, attributes);
-  return absl::OkStatus();
+  return PackByteMap(writer, attributes);
 }
 
 absl::StatusOr<ChunkMetadata> ChunkMetadata::FromMsgpack(
@@ -382,11 +383,10 @@ absl::Status Chunk::ToMsgpackInto(MsgpackWriter* absl_nonnull writer) const {
   } else {
     writer->PackNil();
   }
-  writer->PackString(ref);
+  ABSL_RETURN_IF_ERROR(writer->PackString(ref));
   // The payload itself, copied once into the buffer instead of once into a
   // vector, once into a string and once again on append.
-  writer->PackBinary(data);
-  return absl::OkStatus();
+  return writer->PackBinary(data);
 }
 
 absl::StatusOr<Chunk> Chunk::FromMsgpack(std::string_view bytes) {
@@ -571,7 +571,7 @@ absl::StatusOr<Bytes> NodeRef::ToMsgpack() const {
 }
 
 absl::Status NodeRef::ToMsgpackInto(MsgpackWriter* absl_nonnull writer) const {
-  writer->PackString(id);
+  ABSL_RETURN_IF_ERROR(writer->PackString(id));
   writer->PackUint(offset);
   if (length.has_value()) {
     writer->PackUint(*length);
@@ -685,7 +685,7 @@ absl::StatusOr<Bytes> NodeFragment::ToMsgpack() const {
 
 absl::Status NodeFragment::ToMsgpackInto(
     MsgpackWriter* absl_nonnull writer) const {
-  writer->PackString(id);
+  ABSL_RETURN_IF_ERROR(writer->PackString(id));
   const bool is_chunk = std::holds_alternative<Chunk>(data);
   writer->PackUint(is_chunk ? 0 : 1);
   ABSL_RETURN_IF_ERROR(
@@ -782,9 +782,8 @@ absl::StatusOr<Bytes> Port::ToMsgpack() const {
 }
 
 absl::Status Port::ToMsgpackInto(MsgpackWriter* absl_nonnull writer) const {
-  writer->PackString(name);
-  writer->PackString(id);
-  return absl::OkStatus();
+  ABSL_RETURN_IF_ERROR(writer->PackString(name));
+  return writer->PackString(id);
 }
 
 absl::StatusOr<Port> Port::FromMsgpack(std::string_view bytes) {
@@ -854,17 +853,16 @@ absl::StatusOr<Bytes> ActionMessage::ToMsgpack() const {
 
 absl::Status ActionMessage::ToMsgpackInto(
     MsgpackWriter* absl_nonnull writer) const {
-  writer->PackString(id);
-  writer->PackString(name);
+  ABSL_RETURN_IF_ERROR(writer->PackString(id));
+  ABSL_RETURN_IF_ERROR(writer->PackString(name));
   for (const std::vector<Port>* ports : {&inputs, &outputs}) {
-    writer->PackArrayHeader(ports->size());
+    ABSL_RETURN_IF_ERROR(writer->PackArrayHeader(ports->size()));
     for (const Port& port : *ports) {
       ABSL_RETURN_IF_ERROR(writer->PackRecord(
           [&port](MsgpackWriter* child) { return port.ToMsgpackInto(child); }));
     }
   }
-  PackByteMap(writer, headers);
-  return absl::OkStatus();
+  return PackByteMap(writer, headers);
 }
 
 absl::StatusOr<ActionMessage> ActionMessage::FromMsgpack(
@@ -1019,20 +1017,19 @@ absl::StatusOr<Bytes> WireMessage::ToMsgpack() const {
 absl::Status WireMessage::ToMsgpackInto(
     MsgpackWriter* absl_nonnull writer) const {
   writer->PackUint(kVersion);
-  writer->PackArrayHeader(node_fragments.size());
+  ABSL_RETURN_IF_ERROR(writer->PackArrayHeader(node_fragments.size()));
   for (const NodeFragment& fragment : node_fragments) {
     ABSL_RETURN_IF_ERROR(writer->PackRecord([&fragment](MsgpackWriter* child) {
       return fragment.ToMsgpackInto(child);
     }));
   }
-  writer->PackArrayHeader(actions.size());
+  ABSL_RETURN_IF_ERROR(writer->PackArrayHeader(actions.size()));
   for (const ActionMessage& action : actions) {
     ABSL_RETURN_IF_ERROR(writer->PackRecord([&action](MsgpackWriter* child) {
       return action.ToMsgpackInto(child);
     }));
   }
-  PackByteMap(writer, headers);
-  return absl::OkStatus();
+  return PackByteMap(writer, headers);
 }
 
 absl::StatusOr<WireMessage> WireMessage::FromMsgpack(std::string_view bytes) {

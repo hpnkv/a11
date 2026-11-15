@@ -259,7 +259,8 @@ a11::Future<HttpResponse> Fetch(std::string url, FetchOptions options) {
         HttpResponse response;
         FetchSink sink = [&response,
                           limit](std::string_view chunk) -> absl::Status {
-          if (response.body.size() + chunk.size() > limit) {
+          if (response.body.size() > limit ||
+              chunk.size() > limit - response.body.size()) {
             return absl::OutOfRangeError(
                 "HTTP response exceeds max_response_body_size");
           }

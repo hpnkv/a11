@@ -89,14 +89,32 @@ absl::Status StepDone(sqlite3_stmt* statement, std::string_view what) {
   return absl::OkStatus();
 }
 
-void BindText(sqlite3_stmt* statement, int index, std::string_view value) {
-  sqlite3_bind_text(statement, index, value.data(),
-                    static_cast<int>(value.size()), SQLITE_TRANSIENT);
+absl::Status BindStatus(sqlite3_stmt* statement, int code) {
+  if (code == SQLITE_OK) {
+    return absl::OkStatus();
+  }
+  if (code == SQLITE_TOOBIG) {
+    return absl::OutOfRangeError("SQLite value exceeds the configured limit");
+  }
+  return absl::InternalError(sqlite3_errmsg(sqlite3_db_handle(statement)));
 }
 
-void BindBlob(sqlite3_stmt* statement, int index, std::string_view value) {
-  sqlite3_bind_blob(statement, index, value.data(),
-                    static_cast<int>(value.size()), SQLITE_TRANSIENT);
+absl::Status BindText(sqlite3_stmt* statement, int index,
+                      std::string_view value) {
+  return BindStatus(
+      statement,
+      sqlite3_bind_text64(statement, index, value.empty() ? "" : value.data(),
+                          static_cast<sqlite3_uint64>(value.size()),
+                          SQLITE_TRANSIENT, SQLITE_UTF8));
+}
+
+absl::Status BindBlob(sqlite3_stmt* statement, int index,
+                      std::string_view value) {
+  return BindStatus(
+      statement,
+      sqlite3_bind_blob64(statement, index, value.empty() ? "" : value.data(),
+                          static_cast<sqlite3_uint64>(value.size()),
+                          SQLITE_TRANSIENT));
 }
 
 std::string ColumnText(sqlite3_stmt* statement, int index) {
@@ -132,7 +150,7 @@ absl::StatusOr<SqliteNodeState> LoadNodeState(SqliteConnection& connection,
           "SELECT owner_id, closed, status, final_seq, next_cursor, put_count, "
           "size, data_bytes, max_seq, revision, created_at, updated_at "
           "FROM nodes WHERE id = ?1"));
-  BindText(statement, 1, node_id);
+  ABSL_RETURN_IF_ERROR(BindText(statement, 1, node_id));
 
   SqliteNodeState state;
   const int code = sqlite3_step(statement);
@@ -363,7 +381,7 @@ absl::Status InsertFragment(SqliteConnection& connection,
           "mimetype, data, ref, metadata, node_ref_id, node_ref_offset, "
           "node_ref_length) VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6, ?7, ?8, ?9, "
           "?10, ?11, ?12, ?13, ?14, ?15)"));
-  BindText(statement, 1, node_id);
+  ABSL_RETURN_IF_ERROR(BindText(statement, 1, node_id));
   sqlite3_bind_int64(statement, 2, static_cast<std::int64_t>(encoded.seq));
   sqlite3_bind_int64(statement, 3,
                      static_cast<std::int64_t>(encoded.arrival_order));
@@ -373,23 +391,23 @@ absl::Status InsertFragment(SqliteConnection& connection,
   sqlite3_bind_int64(statement, 7, encoded.timestamp_micros);
   sqlite3_bind_int(statement, 8, encoded.timestamp_explicit ? 1 : 0);
   if (encoded.mimetype.has_value()) {
-    BindText(statement, 9, *encoded.mimetype);
+    ABSL_RETURN_IF_ERROR(BindText(statement, 9, *encoded.mimetype));
   } else {
     sqlite3_bind_null(statement, 9);
   }
   if (encoded.storage == kStorageInline || encoded.storage == kStorageNodeRef) {
-    BindBlob(statement, 10, encoded.data);
+    ABSL_RETURN_IF_ERROR(BindBlob(statement, 10, encoded.data));
   } else {
     sqlite3_bind_null(statement, 10);
   }
-  BindText(statement, 11, encoded.ref);
+  ABSL_RETURN_IF_ERROR(BindText(statement, 11, encoded.ref));
   if (encoded.metadata.has_value()) {
-    BindBlob(statement, 12, *encoded.metadata);
+    ABSL_RETURN_IF_ERROR(BindBlob(statement, 12, *encoded.metadata));
   } else {
     sqlite3_bind_null(statement, 12);
   }
   if (encoded.node_ref_id.has_value()) {
-    BindText(statement, 13, *encoded.node_ref_id);
+    ABSL_RETURN_IF_ERROR(BindText(statement, 13, *encoded.node_ref_id));
     sqlite3_bind_int64(statement, 14,
                        static_cast<std::int64_t>(encoded.node_ref_offset));
     if (encoded.node_ref_length.has_value()) {
@@ -416,11 +434,11 @@ absl::Status EnsureNodeRow(SqliteConnection& connection,
           "INSERT INTO nodes (id, owner_id, created_at, updated_at) "
           "VALUES (?1, ?2, ?3, ?3) "
           "ON CONFLICT(id) DO UPDATE SET updated_at = ?3"));
-  BindText(statement, 1, node_id);
+  ABSL_RETURN_IF_ERROR(BindText(statement, 1, node_id));
   if (owner_id.empty()) {
     sqlite3_bind_null(statement, 2);
   } else {
-    BindText(statement, 2, owner_id);
+    ABSL_RETURN_IF_ERROR(BindText(statement, 2, owner_id));
   }
   sqlite3_bind_int64(statement, 3, absl::ToUnixMicros(now));
   return StepDone(statement, "Cannot create node row");
@@ -434,7 +452,7 @@ absl::StatusOr<bool> FragmentExists(SqliteConnection& connection,
       sqlite3_stmt * statement,
       connection.Prepare(
           "SELECT 1 FROM fragments WHERE node_id = ?1 AND seq = ?2"));
-  BindText(statement, 1, node_id);
+  ABSL_RETURN_IF_ERROR(BindText(statement, 1, node_id));
   sqlite3_bind_int64(statement, 2, static_cast<std::int64_t>(seq));
   return sqlite3_step(statement) == SQLITE_ROW;
 }
@@ -662,7 +680,7 @@ a11::Future<data::NodeFragment> SQLiteChunkStore::Read(ReadKind kind,
                       connection.Prepare(absl::StrCat(
                           "SELECT ", kFragmentColumns,
                           " FROM fragments WHERE node_id = ?1 AND seq = ?2")));
-                  BindText(statement, 1, node_id);
+                  ABSL_RETURN_IF_ERROR(BindText(statement, 1, node_id));
                   sqlite3_bind_int64(statement, 2,
                                      static_cast<std::int64_t>(value));
                   if (sqlite3_step(statement) == SQLITE_ROW) {
@@ -675,7 +693,7 @@ a11::Future<data::NodeFragment> SQLiteChunkStore::Read(ReadKind kind,
                           absl::StrCat("SELECT ", kFragmentColumns,
                                        " FROM fragments WHERE node_id = ?1 AND "
                                        "arrival_order = ?2")));
-                  BindText(statement, 1, node_id);
+                  ABSL_RETURN_IF_ERROR(BindText(statement, 1, node_id));
                   sqlite3_bind_int64(statement, 2,
                                      static_cast<std::int64_t>(value));
                   if (sqlite3_step(statement) == SQLITE_ROW) {
@@ -770,7 +788,7 @@ SQLiteChunkStore::Next(absl::Time deadline, size_t limit) {
                       connection.Prepare(absl::StrCat(
                           "SELECT ", kFragmentColumns,
                           " FROM fragments WHERE node_id = ?1 AND seq = ?2")));
-                  BindText(statement, 1, node_id);
+                  ABSL_RETURN_IF_ERROR(BindText(statement, 1, node_id));
                   sqlite3_bind_int64(statement, 2,
                                      static_cast<std::int64_t>(expected));
                   const bool present = sqlite3_step(statement) == SQLITE_ROW;
@@ -813,7 +831,7 @@ SQLiteChunkStore::Next(absl::Time deadline, size_t limit) {
                       connection.Prepare(
                           "UPDATE nodes SET next_cursor = ?2, updated_at = ?3 "
                           "WHERE id = ?1"));
-                  BindText(update, 1, node_id);
+                  ABSL_RETURN_IF_ERROR(BindText(update, 1, node_id));
                   sqlite3_bind_int64(update, 2,
                                      static_cast<std::int64_t>(cursor));
                   sqlite3_bind_int64(update, 3,
@@ -1037,7 +1055,7 @@ a11::Future<std::vector<std::uint32_t>> SQLiteChunkStore::PutMany(
                       "data_bytes = ?4, max_seq = ?5, final_seq = ?6, "
                       "revision = revision + 1, updated_at = ?7 "
                       "WHERE id = ?1"));
-              BindText(update, 1, node_id);
+              ABSL_RETURN_IF_ERROR(BindText(update, 1, node_id));
               sqlite3_bind_int64(update, 2,
                                  static_cast<std::int64_t>(state.put_count +
                                                            fragments.size()));
@@ -1094,7 +1112,7 @@ a11::Future<data::NodeFragment> SQLiteChunkStore::ClearData(std::uint32_t seq) {
               connection.Prepare(absl::StrCat(
                   "SELECT ", kFragmentColumns,
                   " FROM fragments WHERE node_id = ?1 AND seq = ?2")));
-          BindText(statement, 1, node_id);
+          ABSL_RETURN_IF_ERROR(BindText(statement, 1, node_id));
           sqlite3_bind_int64(statement, 2, static_cast<std::int64_t>(seq));
           if (sqlite3_step(statement) != SQLITE_ROW) {
             return absl::NotFoundError(
@@ -1128,7 +1146,7 @@ a11::Future<data::NodeFragment> SQLiteChunkStore::ClearData(std::uint32_t seq) {
               connection.Prepare("UPDATE fragments SET data = NULL, ref = '', "
                                  "storage = ?3, tombstone = 1 "
                                  "WHERE node_id = ?1 AND seq = ?2"));
-          BindText(update, 1, node_id);
+          ABSL_RETURN_IF_ERROR(BindText(update, 1, node_id));
           sqlite3_bind_int64(update, 2, static_cast<std::int64_t>(seq));
           sqlite3_bind_int(update, 3, kStorageTombstone);
           ABSL_RETURN_IF_ERROR(StepDone(update, "Cannot clear fragment"));
@@ -1140,7 +1158,7 @@ a11::Future<data::NodeFragment> SQLiteChunkStore::ClearData(std::uint32_t seq) {
               connection.Prepare(
                   "UPDATE nodes SET data_bytes = MAX(0, data_bytes - ?2), "
                   "revision = revision + 1, updated_at = ?3 WHERE id = ?1"));
-          BindText(node_update, 1, node_id);
+          ABSL_RETURN_IF_ERROR(BindText(node_update, 1, node_id));
           sqlite3_bind_int64(node_update, 2,
                              static_cast<std::int64_t>(cleared_bytes));
           sqlite3_bind_int64(node_update, 3, absl::ToUnixMicros(absl::Now()));
@@ -1194,8 +1212,8 @@ a11::Future<absl::Status> SQLiteChunkStore::CloseWritesWithStatus(
               connection.Prepare(
                   "UPDATE nodes SET closed = 1, status = ?2, "
                   "revision = revision + 1, updated_at = ?3 WHERE id = ?1"));
-          BindText(update, 1, node_id);
-          BindBlob(update, 2, packed);
+          ABSL_RETURN_IF_ERROR(BindText(update, 1, node_id));
+          ABSL_RETURN_IF_ERROR(BindBlob(update, 2, packed));
           sqlite3_bind_int64(update, 3, absl::ToUnixMicros(now));
           ABSL_RETURN_IF_ERROR(StepDone(update, "Cannot close writes"));
 
@@ -1241,7 +1259,7 @@ a11::Future<std::uint32_t> SQLiteChunkStore::GetSeqForArrivalOrder(
                     sqlite3_stmt * statement,
                     connection.Prepare("SELECT seq FROM fragments WHERE "
                                        "node_id = ?1 AND arrival_order = ?2"));
-                BindText(statement, 1, node_id);
+                ABSL_RETURN_IF_ERROR(BindText(statement, 1, node_id));
                 sqlite3_bind_int64(statement, 2,
                                    static_cast<std::int64_t>(arrival_order));
                 if (sqlite3_step(statement) == SQLITE_ROW) {
@@ -1349,7 +1367,7 @@ a11::Future<std::vector<data::NodeFragment>> SQLiteChunkStore::FindReferrers(
                                     "SELECT node_id, ", kFragmentColumns,
                                     " FROM fragments WHERE node_ref_id = ?1 "
                                     "ORDER BY node_id, seq LIMIT ?2")));
-          BindText(statement, 1, node_id);
+          ABSL_RETURN_IF_ERROR(BindText(statement, 1, node_id));
           sqlite3_bind_int64(statement, 2, static_cast<std::int64_t>(limit));
           while (sqlite3_step(statement) == SQLITE_ROW) {
             const std::string referrer_id = ColumnText(statement, 0);

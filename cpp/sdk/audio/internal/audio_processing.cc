@@ -63,7 +63,7 @@ absl::Status StreamingMonoResampler::Process(
         absl::StrCat("Audio buffer sample rate is ", buffer.sample_rate,
                      "; expected ", input_sample_rate_));
   }
-  if (buffer.samples.size() != buffer.num_channels * buffer.num_frames) {
+  if (!buffer.HasValidDimensions()) {
     return absl::InvalidArgumentError(
         "Audio buffer sample storage does not match its dimensions");
   }

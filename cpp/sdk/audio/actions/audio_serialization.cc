@@ -86,7 +86,7 @@ std::string_view A11SerialTag(a11::data::TypeTag<AudioBuffer>) {
 }
 
 absl::StatusOr<std::string> A11ToMsgpackBytes(const AudioBuffer& value) {
-  if (value.samples.size() != value.num_channels * value.num_frames) {
+  if (!value.HasValidDimensions()) {
     return absl::InvalidArgumentError(
         "AudioBuffer.samples size does not match num_channels * num_frames");
   }
@@ -95,7 +95,9 @@ absl::StatusOr<std::string> A11ToMsgpackBytes(const AudioBuffer& value) {
   // compactness; end_time is nanoseconds since the Unix epoch, or null when
   // it carries the infinite-past sentinel.
   const std::string_view sample_bytes(
-      reinterpret_cast<const char*>(value.samples.data()),
+      value.samples.empty()
+          ? ""
+          : reinterpret_cast<const char*>(value.samples.data()),
       value.samples.size() * sizeof(float));
   ABSL_RETURN_IF_ERROR(writer.Pack(a11::data::Binary(sample_bytes)));
   ABSL_RETURN_IF_ERROR(writer.Pack(value.num_channels));
@@ -137,8 +139,15 @@ absl::StatusOr<AudioBuffer> A11FromMsgpackBytes(a11::data::TypeTag<AudioBuffer>,
   result.num_channels = num_channels.get<std::size_t>();
   result.num_frames = num_frames.get<std::size_t>();
   result.sample_rate = sample_rate.get<double>();
+  if (!AudioBuffer::DimensionsMatch(raw.size() / sizeof(float),
+                                    result.num_channels, result.num_frames)) {
+    return absl::InvalidArgumentError(
+        "AudioBuffer.samples size does not match num_channels * num_frames");
+  }
   result.samples.resize(raw.size() / sizeof(float));
-  std::memcpy(result.samples.data(), raw.data(), raw.size());
+  if (!raw.empty()) {
+    std::memcpy(result.samples.data(), raw.data(), raw.size());
+  }
   if (end_time.is_null()) {
     result.end_time = a11::InfinitePast();
   } else {
@@ -147,10 +156,6 @@ absl::StatusOr<AudioBuffer> A11FromMsgpackBytes(a11::data::TypeTag<AudioBuffer>,
           "AudioBuffer.end_time must be integer nanoseconds or null");
     }
     result.end_time = absl::FromUnixNanos(end_time.get<std::int64_t>());
-  }
-  if (result.samples.size() != result.num_channels * result.num_frames) {
-    return absl::InvalidArgumentError(
-        "AudioBuffer.samples size does not match num_channels * num_frames");
   }
   return result;
 }

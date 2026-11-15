@@ -52,6 +52,19 @@ struct AudioBuffer {
   /// Best-effort wall-clock instant the final sample in this block was taken.
   a11::Time end_time = a11::InfinitePast();
 
+  /// Whether a sample count matches the declared dimensions.
+  [[nodiscard]] static bool DimensionsMatch(size_t sample_count,
+                                            size_t channels, size_t frames) {
+    return channels == 0 ? frames == 0 && sample_count == 0
+                         : sample_count % channels == 0 &&
+                               sample_count / channels == frames;
+  }
+
+  /// Whether the sample storage matches this buffer's dimensions.
+  [[nodiscard]] bool HasValidDimensions() const {
+    return DimensionsMatch(samples.size(), num_channels, num_frames);
+  }
+
   /**
    * @brief Returns a contiguous view of one channel's samples.
    * @param index Zero-based channel index.

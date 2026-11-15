@@ -152,6 +152,10 @@ absl::Status Http1Connection::ServerParse() {
     if (state_ == ParseState::kHead) {
       const std::optional<size_t> head_end =
           internal::FindHeaderBlockEnd(inbuf_);
+      if (head_end.has_value() &&
+          *head_end > options().max_buffered_request_bytes) {
+        return absl::ResourceExhaustedError("HTTP/1.1 request head too large");
+      }
       if (!head_end.has_value()) {
         if (inbuf_.size() > options().max_buffered_request_bytes) {
           return absl::ResourceExhaustedError(
@@ -262,23 +266,22 @@ absl::Status Http1Connection::ServerParse() {
     if (state_ == ParseState::kBody) {
       if (request_body_plan_.framing == BodyFraming::kContentLength) {
         const size_t take = std::min(request_body_remaining_, inbuf_.size());
+        if (request_body_.size() > options().max_request_body_size ||
+            take > options().max_request_body_size - request_body_.size()) {
+          return absl::OutOfRangeError("HTTP/1.1 request body too large");
+        }
         request_body_.append(inbuf_, 0, take);
         inbuf_.erase(0, take);
         request_body_remaining_ -= take;
         if (request_body_remaining_ > 0) {
-          if (request_body_.size() > options().max_request_body_size) {
-            return absl::OutOfRangeError("HTTP/1.1 request body too large");
-          }
           return absl::OkStatus();  // Await more body bytes.
         }
       } else {  // Chunked.
         bool complete = false;
         ABSL_RETURN_IF_ERROR(
-            request_chunk_decoder_.Feed(inbuf_, &request_body_, &complete));
+            request_chunk_decoder_.Feed(inbuf_, &request_body_, &complete,
+                                        options().max_request_body_size));
         inbuf_.clear();
-        if (request_body_.size() > options().max_request_body_size) {
-          return absl::OutOfRangeError("HTTP/1.1 request body too large");
-        }
         if (!complete) {
           return absl::OkStatus();  // Await more chunks.
         }
@@ -615,7 +618,14 @@ absl::Status Http1Connection::ClientParse() {
 
   if (!client_head_parsed_) {
     const std::optional<size_t> head_end = internal::FindHeaderBlockEnd(inbuf_);
+    if (head_end.has_value() &&
+        *head_end > options().max_buffered_response_bytes) {
+      return absl::ResourceExhaustedError("HTTP/1.1 response head too large");
+    }
     if (!head_end.has_value()) {
+      if (inbuf_.size() > options().max_buffered_response_bytes) {
+        return absl::ResourceExhaustedError("HTTP/1.1 response head too large");
+      }
       return absl::OkStatus();
     }
     absl::StatusOr<Http1ResponseHead> head = internal::ParseResponseHead(

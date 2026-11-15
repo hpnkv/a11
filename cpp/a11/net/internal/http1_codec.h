@@ -31,6 +31,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -112,9 +113,12 @@ class ChunkedDecoder {
    * @param data Newly received bytes.
    * @param out Decoded payload is appended here.
    * @param complete Set to true when the final chunk has been decoded.
+   * @param max_output_size Maximum decoded bytes in @p out.
    * @return An error on a malformed chunk header, otherwise OK.
    */
-  absl::Status Feed(std::string_view data, std::string* out, bool* complete);
+  absl::Status Feed(
+      std::string_view data, std::string* out, bool* complete,
+      size_t max_output_size = std::numeric_limits<size_t>::max());
 
   [[nodiscard]] bool complete() const { return state_ == State::kComplete; }
 
@@ -131,6 +135,7 @@ class ChunkedDecoder {
   State state_ = State::kSize;
   std::string pending_;          // Partial line (size line or trailer line).
   std::uint64_t remaining_ = 0;  // Bytes left in the current chunk's data.
+  size_t trailer_bytes_ = 0;
   HttpHeaders trailers_;         // Trailer section, once the body completes.
 };
 

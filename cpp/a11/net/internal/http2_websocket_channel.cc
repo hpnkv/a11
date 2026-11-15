@@ -80,7 +80,7 @@ void MaskInPlace(char* data, size_t length, const char (&mask)[4]) {
   std::uint32_t word = 0;
   std::memcpy(&word, mask, sizeof(word));
   size_t index = 0;
-  for (; index + sizeof(word) <= length; index += sizeof(word)) {
+  for (; length - index >= sizeof(word); index += sizeof(word)) {
     std::uint32_t chunk = 0;
     std::memcpy(&chunk, data + index, sizeof(chunk));
     chunk ^= word;
@@ -359,7 +359,11 @@ class Http2WebSocketChannel final
       if (closed_) {
         return absl::OkStatus();
       }
-      if (input_.size() + data.size() > max_message_size_ + 14) {
+      const size_t frame_limit = max_message_size_ > input_.max_size() - 14
+                                     ? input_.max_size()
+                                     : max_message_size_ + 14;
+      if (input_.size() > frame_limit ||
+          data.size() > frame_limit - input_.size()) {
         return absl::ResourceExhaustedError(
             "Buffered WebSocket frame exceeds max_message_size");
       }
@@ -449,11 +453,13 @@ class Http2WebSocketChannel final
             "WebSocket control frame must be final and at most 125 bytes");
       }
       const size_t mask_size = masked ? 4 : 0;
-      const size_t full_size =
-          header_size + mask_size + static_cast<size_t>(payload_size);
-      if (input_.size() - consumed < full_size) {
+      const size_t available = input_.size() - consumed;
+      const size_t prefix_size = header_size + mask_size;
+      if (available < prefix_size ||
+          static_cast<size_t>(payload_size) > available - prefix_size) {
         break;
       }
+      const size_t full_size = prefix_size + static_cast<size_t>(payload_size);
 
       const size_t mask_offset = consumed + header_size;
       const size_t payload_offset = mask_offset + mask_size;
@@ -514,7 +520,8 @@ class Http2WebSocketChannel final
           return absl::InvalidArgumentError(
               "WebSocket continuation has no initial frame");
         }
-        if (fragmented_.size() + payload.size() > max_message_size_) {
+        if (fragmented_.size() > max_message_size_ ||
+            payload.size() > max_message_size_ - fragmented_.size()) {
           return absl::OutOfRangeError(
               "Fragmented WebSocket message exceeds max_message_size");
         }
@@ -538,6 +545,9 @@ class Http2WebSocketChannel final
     thread::MutexLock write_lock(&write_mu_);
     const bool masked = role_ == Role::kClient;
     std::string frame;
+    if (payload.size() > frame.max_size() - 14) {
+      return absl::OutOfRangeError("WebSocket frame is too large");
+    }
     frame.reserve(payload.size() + 14);
     frame.push_back(static_cast<char>(0x80U | opcode));
     const std::uint8_t mask_flag = masked ? 0x80U : 0;
@@ -621,6 +631,9 @@ class Http2WebSocketChannel final
       closed_ = true;
       open_ = false;
       status_ = status;
+      std::string().swap(input_);
+      std::string().swap(fragmented_);
+      fragment_opcode_.reset();
       callback = callbacks_.on_error;
       duplex = duplex_;
       request = request_;
@@ -650,6 +663,9 @@ class Http2WebSocketChannel final
       opening_ = false;
       closed_ = true;
       open_ = false;
+      std::string().swap(input_);
+      std::string().swap(fragmented_);
+      fragment_opcode_.reset();
       callback = callbacks_.on_closed;
     }
     if (callback) {

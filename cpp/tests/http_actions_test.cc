@@ -42,6 +42,7 @@
 #include "a11/nodes/async_node.h"
 #include "a11/nodes/node_map.h"
 #include "sdk/http/render/web_render.h"
+#include "thread/fiber.h"
 
 namespace a11::sdk::http {
 namespace {
@@ -110,6 +111,15 @@ class ActionTestServer {
           200,
           {{"content-type", "text/plain"}, {"x-tag", "one"}, {"x-tag", "two"}},
           "a plain body");
+    }
+    if (path == "/stream-limit") {
+      ABSL_RETURN_IF_ERROR(
+          response->SendHeaders(200, {{"content-type", "text/plain"}}));
+      for (int part = 0; part < 3; ++part) {
+        ABSL_RETURN_IF_ERROR(response->Write("abcd"));
+        thread::SleepFor(absl::Milliseconds(10));
+      }
+      return response->Finish();
     }
     if (path == "/trailed") {
       ABSL_RETURN_IF_ERROR(response->SendHeaders(
@@ -884,6 +894,19 @@ TEST(HttpActionsTest, WebFetchStreamsTheBodyForACallerThatWantsBytes) {
       << action->Wait(kPatience).Await().status();
   EXPECT_EQ(Concat(ReadAll(action, "body")), "a plain body");
   EXPECT_TRUE(ReadAll(action, "text").empty());
+}
+
+TEST(HttpActionsTest, WebFetchLimitsTotalStreamedBodyBytes) {
+  ActionTestServer server;
+  ASSERT_TRUE(server.ok());
+  const std::shared_ptr<Action> action =
+      MakeFetch("fetch-limited", server.url("/stream-limit"),
+                nlohmann::json{{"max_body_bytes", 6},
+                               {"omit", {"text", "json", "items"}}});
+  ASSERT_NE(action, nullptr);
+  ASSERT_TRUE(action->Run().ok());
+  EXPECT_EQ(action->Wait(kPatience).Await().status().code(),
+            absl::StatusCode::kOutOfRange);
 }
 
 }  // namespace

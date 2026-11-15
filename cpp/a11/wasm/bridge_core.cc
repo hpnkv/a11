@@ -21,6 +21,7 @@
 #include <utility>
 #include <vector>
 
+#include <absl/log/check.h>
 #include <absl/status/status.h>
 #include <absl/status/statusor.h>
 
@@ -41,11 +42,13 @@ Result* Failure(const absl::Status& status) {
 }
 
 std::string_view View(const std::uint8_t* data, size_t size) {
-  return {reinterpret_cast<const char*>(data), size};
+  CHECK(data != nullptr || size == 0);
+  return {data == nullptr ? "" : reinterpret_cast<const char*>(data), size};
 }
 
 std::string_view View(const char* data, size_t size) {
-  return {data, size};
+  CHECK(data != nullptr || size == 0);
+  return {data == nullptr ? "" : data, size};
 }
 
 Result* Success() {

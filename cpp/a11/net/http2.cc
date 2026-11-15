@@ -1560,9 +1560,14 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
       return NGHTTP2_ERR_DEFERRED;
     }
     std::string& front = stream->outbound.front();
+    if (stream->outbound_offset > front.size()) {
+      return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
+    }
     const size_t remaining = front.size() - stream->outbound_offset;
     const size_t copied = std::min(length, remaining);
-    std::memcpy(buffer, front.data() + stream->outbound_offset, copied);
+    if (copied != 0) {
+      std::memcpy(buffer, front.data() + stream->outbound_offset, copied);
+    }
     stream->outbound_offset += copied;
     if (stream->outbound_offset == front.size()) {
       stream->outbound.pop_front();
@@ -1713,6 +1718,9 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
     if (stream == nullptr) {
       return 0;
     }
+    if (length == 0) {
+      return 0;
+    }
     if (self->server_) {
       if (stream->request_body != nullptr) {
         absl::Status pushed = stream->request_body->Push(
@@ -1725,8 +1733,9 @@ class Http2Connection : public internal::HttpTransport, public HttpConnection {
         }
         return 0;
       }
-      if (stream->request.body.size() + length >
-          self->options_.max_request_body_size) {
+      if (stream->request.body.size() > self->options_.max_request_body_size ||
+          length > self->options_.max_request_body_size -
+                       stream->request.body.size()) {
         stream->request_too_large = true;
         const int reset = nghttp2_submit_rst_stream(
             session, NGHTTP2_FLAG_NONE, stream_id, NGHTTP2_ENHANCE_YOUR_CALM);
@@ -2787,8 +2796,9 @@ a11::Future<HttpResponse> Http2Client::Request(std::string method,
           if (!chunk.has_value()) {
             break;
           }
-          if (response.body.size() + chunk->size() >
-              options.max_response_body_size) {
+          if (response.body.size() > options.max_response_body_size ||
+              chunk->size() >
+                  options.max_response_body_size - response.body.size()) {
             absl::Status status = absl::OutOfRangeError(
                 "HTTP/2 response exceeds max_response_body_size");
             (void)stream->Cancel(status);

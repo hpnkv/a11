@@ -254,8 +254,9 @@ void InProcessWireStream::DeliverClaimed(const std::shared_ptr<State>& state,
     if (!peer->transport_finished &&
         peer->incoming.size() < peer->options.max_buffered_incoming_messages &&
         (peer->incoming_bytes == 0 ||
-         peer->incoming_bytes + payload->size() <=
-             peer->options.max_buffered_incoming_bytes)) {
+         (peer->incoming_bytes <= peer->options.max_buffered_incoming_bytes &&
+          payload->size() <= peer->options.max_buffered_incoming_bytes -
+                                 peer->incoming_bytes))) {
       peer->incoming_bytes += payload->size();
       peer->incoming.push_back(std::move(*payload));
       peer->incoming_cv.SignalAll();
@@ -544,12 +545,14 @@ void InProcessWireStream::Sender(const std::shared_ptr<State>& state) {
     absl::Status send_status;
     {
       thread::MutexLock peer_lock(&peer->mu);
-      while (!peer->transport_finished &&
-             (peer->incoming.size() >=
-                  peer->options.max_buffered_incoming_messages ||
-              (peer->incoming_bytes != 0 &&
-               peer->incoming_bytes + payload->size() >
-                   peer->options.max_buffered_incoming_bytes))) {
+      while (
+          !peer->transport_finished &&
+          (peer->incoming.size() >=
+               peer->options.max_buffered_incoming_messages ||
+           (peer->incoming_bytes != 0 &&
+            (peer->incoming_bytes > peer->options.max_buffered_incoming_bytes ||
+             payload->size() > peer->options.max_buffered_incoming_bytes -
+                                   peer->incoming_bytes)))) {
         peer->room_cv.Wait(&peer->mu);
       }
       if (peer->transport_finished) {

@@ -30,7 +30,9 @@ T = TypeVar("T")
 
 def ensure_memoryview(data: bytes | bytearray | memoryview) -> memoryview:
     if isinstance(data, memoryview):
-        return data
+        if data.ndim == 1 and data.format == "B" and data.c_contiguous:
+            return data
+        return memoryview(data.tobytes())
 
     if not isinstance(data, (bytes, bytearray)):
         raise Status(
@@ -212,7 +214,7 @@ def unpackb(
 ) -> T | None:
     data = ensure_memoryview(data)
 
-    if data[0] == b"\xc0" and allow_none:
+    if data and data[0] == 0xC0 and allow_none:
         if len(data) == 1:
             return None
         else:
@@ -222,7 +224,7 @@ def unpackb(
                     "MessagePack data contained a nullopt, but had extra"
                     " following bytes."
                 ),
-            )
+            ).to_exception()
 
     unpack_fn = unpack_fn or msgpack.unpackb
 

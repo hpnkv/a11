@@ -37,11 +37,17 @@ absl::Status ExternalError(const std::exception& error) {
 // are a range construction over reinterpreted pointers: one memcpy, and no pass
 // to value-initialise a buffer that is about to be overwritten.
 rtc::binary ToRtcBinary(std::string_view bytes) {
+  if (bytes.empty()) {
+    return {};
+  }
   const auto* first = reinterpret_cast<const std::byte*>(bytes.data());
   return {first, first + bytes.size()};
 }
 
 std::string FromRtcBinary(const rtc::binary& bytes) {
+  if (bytes.empty()) {
+    return {};
+  }
   return {reinterpret_cast<const char*>(bytes.data()), bytes.size()};
 }
 

@@ -68,6 +68,14 @@ class WorkQueue {
     if (overflow_.empty()) {
       return false;
     }
+    // The lock publishes the overflow producer's preceding ring pushes.
+    if (TryPopRing(out)) {
+      return true;
+    }
+    if (head_.load(std::memory_order_acquire) !=
+        tail_.load(std::memory_order_acquire)) {
+      return false;
+    }
     out = std::move(overflow_.front());
     overflow_.pop_front();
     overflow_size_.fetch_sub(1, std::memory_order_release);

@@ -18,6 +18,7 @@
 #include <string>
 #include <string_view>
 
+#include <absl/status/status.h>
 #include <gtest/gtest.h>
 
 namespace a11::net::internal {
@@ -177,6 +178,31 @@ TEST(Http1CodecTest, RejectsBadChunkSize) {
   std::string out;
   bool complete = false;
   EXPECT_FALSE(decoder.Feed("zz\r\n", &out, &complete).ok());
+}
+
+TEST(Http1CodecTest, BoundsChunkLinesAndTrailers) {
+  ChunkedDecoder decoder;
+  std::string out;
+  bool complete = false;
+  EXPECT_TRUE(absl::IsResourceExhausted(
+      decoder.Feed(std::string(8193, 'a'), &out, &complete)));
+
+  ChunkedDecoder trailers;
+  std::string wire = "0\r\n";
+  for (int index = 0; index < 257; ++index) {
+    wire += "x: v\r\n";
+  }
+  wire += "\r\n";
+  EXPECT_TRUE(absl::IsResourceExhausted(trailers.Feed(wire, &out, &complete)));
+}
+
+TEST(Http1CodecTest, RejectsDecodedBodyBeforeExceedingLimit) {
+  ChunkedDecoder decoder;
+  std::string out;
+  bool complete = false;
+  EXPECT_TRUE(
+      absl::IsOutOfRange(decoder.Feed("5\r\nhello\r\n", &out, &complete, 4)));
+  EXPECT_TRUE(out.empty());
 }
 
 TEST(Http1CodecTest, SerializesRequestAndResponse) {

@@ -47,6 +47,8 @@ class ResponseUsageObserver:
         max_event_bytes: int = 1024 * 1024,
         started_at: float | None = None,
     ):
+        if max_event_bytes <= 0:
+            raise ValueError("max_event_bytes must be positive")
         self.profile, self.request_id, self.record = profile, request_id, record
         self.metadata = metadata or {}
         self.max_event_bytes = max_event_bytes
@@ -80,38 +82,52 @@ class ResponseUsageObserver:
                     self._first_byte = time.monotonic() - self._started
                 if self._limited:
                     return
-                self._buffer.extend(data)
                 if self._sse:
-                    while True:
-                        raw = bytes(self._buffer)
-                        lf, crlf = raw.find(b"\n\n"), raw.find(b"\r\n\r\n")
-                        boundaries = [
-                            (i, width)
-                            for i, width in ((lf, 2), (crlf, 4))
-                            if i >= 0
-                        ]
-                        if not boundaries:
+                    remaining = memoryview(data)
+                    while remaining and not self._limited:
+                        space = self.max_event_bytes + 4 - len(self._buffer)
+                        if space <= 0:
+                            self._limited = True
                             break
-                        end, width = min(boundaries)
-                        block = raw[:end]
-                        del self._buffer[: end + width]
-                        if len(block) <= self.max_event_bytes:
+                        take = min(len(remaining), space)
+                        self._buffer.extend(remaining[:take])
+                        remaining = remaining[take:]
+                        while not self._limited:
+                            raw = bytes(self._buffer)
+                            lf, crlf = raw.find(b"\n\n"), raw.find(b"\r\n\r\n")
+                            boundaries = [
+                                (i, width)
+                                for i, width in ((lf, 2), (crlf, 4))
+                                if i >= 0
+                            ]
+                            if not boundaries:
+                                break
+                            end, width = min(boundaries)
+                            block = raw[:end]
+                            del self._buffer[: end + width]
+                            if len(block) > self.max_event_bytes:
+                                self._limited = True
+                                break
                             payload = b"\n".join(
                                 line[5:].lstrip(b" ")
                                 for line in block.splitlines()
                                 if line.startswith(b"data:")
                             )
                             self._consume(payload)
-                        else:
+                        if len(self._buffer) > self.max_event_bytes + 3:
                             self._limited = True
-                if len(self._buffer) > self.max_event_bytes:
+                elif len(data) > self.max_event_bytes - len(self._buffer):
                     self._limited = True
-                    self._buffer.clear()
+                else:
+                    self._buffer.extend(data)
+                if self._limited:
+                    self._buffer = bytearray()
             elif event in ("complete", "limit", "error"):
                 if not self._sse and self._buffer and not self._limited:
                     self._consume(bytes(self._buffer))
                 if self._sse and self._buffer.strip():
                     self._limited = True
+                self._buffer = bytearray()
                 complete = (
                     event == "complete"
                     and not self._limited

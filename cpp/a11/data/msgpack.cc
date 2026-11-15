@@ -292,6 +292,7 @@ class ScratchBytes {
   }
 
   ~ScratchBytes() {
+    bytes_.clear();
     std::vector<std::string>& pool = ScratchPool();
     if (pool.size() < kMaxPooledBuffers &&
         bytes_.capacity() <= kMaxPooledCapacity) {
@@ -313,14 +314,21 @@ class ScratchBytes {
 absl::Status MsgpackWriter::Pack(const nlohmann::json& value) {
   ABSL_ASSIGN_OR_RETURN(const std::string encoded,
                         PackMsgpack(value, "a value"));
+  if (!Reserve(encoded.size())) {
+    return absl::OutOfRangeError("MessagePack record is too large");
+  }
   bytes_->append(encoded);
   return absl::OkStatus();
 }
 
-void MsgpackWriter::Reserve(size_t extra) {
+bool MsgpackWriter::Reserve(size_t extra) {
+  if (extra > bytes_->max_size() - bytes_->size()) {
+    return false;
+  }
   if (bytes_->capacity() - bytes_->size() < extra) {
     bytes_->reserve(bytes_->size() + extra);
   }
+  return true;
 }
 
 void MsgpackWriter::PackNil() {
@@ -373,8 +381,18 @@ void MsgpackWriter::PackInt(std::int64_t value) {
   }
 }
 
-void MsgpackWriter::PackString(std::string_view value) {
-  Reserve(value.size() + 5);
+absl::Status MsgpackWriter::PackString(std::string_view value) {
+  if (value.size() > std::numeric_limits<std::uint32_t>::max()) {
+    return absl::OutOfRangeError("MessagePack string is too large");
+  }
+  const size_t header_size = value.size() < 32U       ? 1
+                             : value.size() <= 255U   ? 2
+                             : value.size() <= 65535U ? 3
+                                                      : 5;
+  if (value.size() > bytes_->max_size() - header_size ||
+      !Reserve(value.size() + header_size)) {
+    return absl::OutOfRangeError("MessagePack record is too large");
+  }
   if (value.size() < 32U) {  // fixstr
     AppendByte(bytes_, static_cast<std::uint8_t>(0xa0U | value.size()));
   } else if (value.size() <= std::numeric_limits<std::uint8_t>::max()) {
@@ -388,10 +406,20 @@ void MsgpackWriter::PackString(std::string_view value) {
     AppendBigEndian(bytes_, static_cast<std::uint32_t>(value.size()));
   }
   bytes_->append(value);
+  return absl::OkStatus();
 }
 
-void MsgpackWriter::PackBinary(std::string_view value) {
-  Reserve(value.size() + 5);
+absl::Status MsgpackWriter::PackBinary(std::string_view value) {
+  if (value.size() > std::numeric_limits<std::uint32_t>::max()) {
+    return absl::OutOfRangeError("MessagePack binary is too large");
+  }
+  const size_t header_size = value.size() <= 255U     ? 2
+                             : value.size() <= 65535U ? 3
+                                                      : 5;
+  if (value.size() > bytes_->max_size() - header_size ||
+      !Reserve(value.size() + header_size)) {
+    return absl::OutOfRangeError("MessagePack record is too large");
+  }
   if (value.size() <= std::numeric_limits<std::uint8_t>::max()) {
     AppendByte(bytes_, 0xc4U);
     AppendByte(bytes_, static_cast<std::uint8_t>(value.size()));
@@ -403,9 +431,17 @@ void MsgpackWriter::PackBinary(std::string_view value) {
     AppendBigEndian(bytes_, static_cast<std::uint32_t>(value.size()));
   }
   bytes_->append(value);
+  return absl::OkStatus();
 }
 
-void MsgpackWriter::PackArrayHeader(size_t length) {
+absl::Status MsgpackWriter::PackArrayHeader(size_t length) {
+  if (length > std::numeric_limits<std::uint32_t>::max()) {
+    return absl::OutOfRangeError("MessagePack array is too large");
+  }
+  const size_t header_size = length < 16U ? 1 : length <= 65535U ? 3 : 5;
+  if (!Reserve(header_size)) {
+    return absl::OutOfRangeError("MessagePack record is too large");
+  }
   if (length < 16U) {  // fixarray
     AppendByte(bytes_, static_cast<std::uint8_t>(0x90U | length));
   } else if (length <= std::numeric_limits<std::uint16_t>::max()) {
@@ -415,9 +451,17 @@ void MsgpackWriter::PackArrayHeader(size_t length) {
     AppendByte(bytes_, 0xddU);
     AppendBigEndian(bytes_, static_cast<std::uint32_t>(length));
   }
+  return absl::OkStatus();
 }
 
-void MsgpackWriter::PackMapHeader(size_t length) {
+absl::Status MsgpackWriter::PackMapHeader(size_t length) {
+  if (length > std::numeric_limits<std::uint32_t>::max()) {
+    return absl::OutOfRangeError("MessagePack map is too large");
+  }
+  const size_t header_size = length < 16U ? 1 : length <= 65535U ? 3 : 5;
+  if (!Reserve(header_size)) {
+    return absl::OutOfRangeError("MessagePack record is too large");
+  }
   if (length < 16U) {  // fixmap
     AppendByte(bytes_, static_cast<std::uint8_t>(0x80U | length));
   } else if (length <= std::numeric_limits<std::uint16_t>::max()) {
@@ -427,6 +471,7 @@ void MsgpackWriter::PackMapHeader(size_t length) {
     AppendByte(bytes_, 0xdfU);
     AppendBigEndian(bytes_, static_cast<std::uint32_t>(length));
   }
+  return absl::OkStatus();
 }
 
 absl::Status MsgpackWriter::PackRecord(
@@ -434,8 +479,7 @@ absl::Status MsgpackWriter::PackRecord(
   ScratchBytes scratch;
   MsgpackWriter child(&scratch.get());
   ABSL_RETURN_IF_ERROR(encode(&child));
-  PackBinary(scratch.get());
-  return absl::OkStatus();
+  return PackBinary(scratch.get());
 }
 
 absl::StatusOr<nlohmann::json> MsgpackReader::Read() {

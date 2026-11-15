@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -83,6 +84,13 @@ audio::OnModelProgress AudioProgressFromPython(const py::object& on_progress) {
 }
 
 py::buffer_info AudioBufferView(audio::AudioBuffer& buffer) {
+  const size_t max_dimension =
+      static_cast<size_t>(std::numeric_limits<py::ssize_t>::max());
+  if (!buffer.HasValidDimensions() || buffer.num_channels > max_dimension ||
+      buffer.num_frames > max_dimension / sizeof(float)) {
+    ThrowStatus(absl::InvalidArgumentError(
+        "audio buffer dimensions cannot be exposed to Python"));
+  }
   const auto frames = static_cast<py::ssize_t>(buffer.num_frames);
   const auto channels = static_cast<py::ssize_t>(buffer.num_channels);
   return py::buffer_info(buffer.samples.data(),
@@ -96,20 +104,31 @@ py::buffer_info AudioBufferView(audio::AudioBuffer& buffer) {
 // Builds an AudioBuffer from any Python buffer-protocol object (bytes, a NumPy
 // array, a CPU PyTorch tensor, ...).
 bool IsCContiguous(const py::buffer_info& info) {
+  if (info.itemsize <= 0 || info.size < 0 || info.ndim < 0 ||
+      info.shape.size() != static_cast<size_t>(info.ndim) ||
+      info.strides.size() != static_cast<size_t>(info.ndim)) {
+    return false;
+  }
   py::ssize_t expected = info.itemsize;
   for (py::ssize_t axis = info.ndim - 1; axis >= 0; --axis) {
     // `shape` and `strides` are indexed by size_t; the walk is signed because
     // it runs down to -1.
     const auto at = static_cast<size_t>(axis);
+    if (info.shape[at] < 0) {
+      return false;
+    }
     if (info.shape[at] == 0) {
-      return true;
+      return info.size == 0;
     }
     if (info.strides[at] != expected) {
       return false;
     }
+    if (expected > std::numeric_limits<py::ssize_t>::max() / info.shape[at]) {
+      return false;
+    }
     expected *= info.shape[at];
   }
-  return true;
+  return expected / info.itemsize == info.size;
 }
 
 audio::AudioBuffer MakeAudioBufferFromBuffer(const py::buffer& data,
@@ -120,10 +139,16 @@ audio::AudioBuffer MakeAudioBufferFromBuffer(const py::buffer& data,
     ThrowStatus(absl::InvalidArgumentError(
         "audio samples must be a C-contiguous buffer"));
   }
+  if (info.size > 0 && info.ptr == nullptr) {
+    ThrowStatus(absl::InvalidArgumentError("audio buffer has no sample data"));
+  }
   std::vector<float> samples;
-  if (info.format == py::format_descriptor<float>::format()) {
+  if (info.format == py::format_descriptor<float>::format() &&
+      info.itemsize == static_cast<py::ssize_t>(sizeof(float))) {
     const auto* first = static_cast<const float*>(info.ptr);
-    samples.assign(first, first + info.size);
+    if (info.size > 0) {
+      samples.assign(first, first + info.size);
+    }
   } else if (info.itemsize == 1) {
     const auto byte_count = static_cast<size_t>(info.size);
     if (byte_count % sizeof(float) != 0) {
@@ -131,7 +156,9 @@ audio::AudioBuffer MakeAudioBufferFromBuffer(const py::buffer& data,
           "raw audio bytes must be a whole number of float32 samples"));
     }
     samples.resize(byte_count / sizeof(float));
-    std::memcpy(samples.data(), info.ptr, byte_count);
+    if (byte_count > 0) {
+      std::memcpy(samples.data(), info.ptr, byte_count);
+    }
   } else {
     ThrowStatus(absl::InvalidArgumentError(
         "audio samples must be float32 or a raw byte buffer"));

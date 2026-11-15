@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -127,8 +128,12 @@ bool IsAbort(const data::WireMessage& message) {
 /** Fixed little-endian length prefix in front of every streamed message. */
 constexpr size_t kStreamFramePrefix = sizeof(std::uint32_t);
 
-std::string FrameStreamedMessage(std::string_view payload) {
+absl::StatusOr<std::string> FrameStreamedMessage(std::string_view payload) {
   std::string framed;
+  if (payload.size() > std::numeric_limits<std::uint32_t>::max() ||
+      payload.size() > framed.max_size() - kStreamFramePrefix) {
+    return absl::OutOfRangeError("SSE streamed WireMessage is too large");
+  }
   framed.reserve(kStreamFramePrefix + payload.size());
   auto length = static_cast<std::uint32_t>(payload.size());
   for (size_t index = 0; index < kStreamFramePrefix; ++index) {
@@ -934,6 +939,7 @@ absl::Status HttpSseClientWireStream::TransmitAsPost(std::string payload) {
 
 absl::Status HttpSseClientWireStream::TransmitOnStream(std::string_view payload,
                                                        bool terminal) {
+  ABSL_ASSIGN_OR_RETURN(std::string framed, FrameStreamedMessage(payload));
   std::shared_ptr<Http2DuplexStream> upload;
   {
     thread::MutexLock lock(&client_state_->mu);
@@ -949,7 +955,7 @@ absl::Status HttpSseClientWireStream::TransmitOnStream(std::string_view payload,
   if (upload == nullptr) {
     return absl::UnavailableError("The SSE outbound stream is not open");
   }
-  ABSL_RETURN_IF_ERROR(upload->Write(FrameStreamedMessage(payload)));
+  ABSL_RETURN_IF_ERROR(upload->Write(std::move(framed)));
   if (terminal) {
     // Ending the request body is the peer's end-of-stream. It lands behind the
     // write above because both go through the connection's one FIFO queue.
@@ -1637,6 +1643,11 @@ a11::Task HttpSseServer::HandleMessageStream(
               // A body chunk is whatever the transport handed over -- an HTTP/2
               // DATA frame is typically 16 KiB -- so a large message
               // accumulates over several of them.
+              if (consumed > buffer.max_size() - kStreamFramePrefix ||
+                  length > buffer.max_size() - kStreamFramePrefix - consumed) {
+                return fail(absl::OutOfRangeError(
+                    "Incoming SSE streamed WireMessage is too large"));
+              }
               buffer.reserve(consumed + kStreamFramePrefix + length);
               break;  // Await the rest of this frame.
             }

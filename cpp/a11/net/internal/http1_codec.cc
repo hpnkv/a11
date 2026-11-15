@@ -18,6 +18,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -193,8 +194,11 @@ absl::StatusOr<BodyPlan> PlanBody(const HttpHeaders& headers,
       return absl::InvalidArgumentError(
           absl::StrCat("Invalid Content-Length: ", *length_header));
     }
+    if (length > std::numeric_limits<size_t>::max()) {
+      return absl::OutOfRangeError("Content-Length exceeds platform size");
+    }
     return BodyPlan{.framing = BodyFraming::kContentLength,
-                    .content_length = static_cast<std::size_t>(length)};
+                    .content_length = static_cast<size_t>(length)};
   }
   if (allow_until_close) {
     return BodyPlan{.framing = BodyFraming::kUntilClose};
@@ -222,7 +226,10 @@ absl::StatusOr<BodyPlan> PlanResponseBody(std::string_view request_method,
 }
 
 absl::Status ChunkedDecoder::Feed(std::string_view data, std::string* out,
-                                  bool* complete) {
+                                  bool* complete, size_t max_output_size) {
+  constexpr size_t kMaxLineSize = 8192;
+  constexpr size_t kMaxTrailerBytes = 65536;
+  constexpr size_t kMaxTrailerFields = 256;
   size_t offset = 0;
   while (offset < data.size() && state_ != State::kComplete) {
     switch (state_) {
@@ -232,6 +239,9 @@ absl::Status ChunkedDecoder::Feed(std::string_view data, std::string* out,
         const bool have_line = newline != std::string_view::npos;
         const std::string_view slice = data.substr(
             offset, (have_line ? newline + 1 : data.size()) - offset);
+        if (slice.size() > kMaxLineSize - pending_.size()) {
+          return absl::ResourceExhaustedError("HTTP chunk line is too long");
+        }
         pending_.append(slice);
         offset += slice.size();
         if (!have_line) {
@@ -264,11 +274,18 @@ absl::Status ChunkedDecoder::Feed(std::string_view data, std::string* out,
             state_ = State::kData;
           }
         } else {  // kTrailer
+          if (pending_.size() > kMaxTrailerBytes - trailer_bytes_) {
+            return absl::ResourceExhaustedError("HTTP trailers are too large");
+          }
+          trailer_bytes_ += pending_.size();
           const bool blank = line.empty();
           if (blank) {
             state_ = State::kComplete;
           } else if (const size_t colon = line.find(':');
                      colon != std::string_view::npos) {
+            if (trailers_.size() >= kMaxTrailerFields) {
+              return absl::ResourceExhaustedError("Too many HTTP trailers");
+            }
             // A malformed trailer line is dropped rather than failing the body:
             // everything the response was actually for has already been
             // delivered by this point.
@@ -283,7 +300,13 @@ absl::Status ChunkedDecoder::Feed(std::string_view data, std::string* out,
         break;
       }
       case State::kData: {
-        const size_t take = std::min<size_t>(remaining_, data.size() - offset);
+        const size_t take = static_cast<size_t>(
+            std::min<std::uint64_t>(remaining_, data.size() - offset));
+        if (out->size() > max_output_size ||
+            take > max_output_size - out->size() ||
+            take > out->max_size() - out->size()) {
+          return absl::OutOfRangeError("HTTP chunked body is too large");
+        }
         out->append(data.substr(offset, take));
         offset += take;
         remaining_ -= take;

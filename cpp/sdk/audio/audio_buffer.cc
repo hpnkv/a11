@@ -21,7 +21,7 @@
 namespace a11::sdk::audio {
 
 absl::Span<const float> AudioBuffer::Channel(size_t index) const {
-  if (index >= num_channels || num_frames == 0) {
+  if (index >= num_channels || num_frames == 0 || !HasValidDimensions()) {
     return {};
   }
   return {samples.data() + index * num_frames, num_frames};

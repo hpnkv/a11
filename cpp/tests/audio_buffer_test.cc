@@ -14,6 +14,8 @@
 
 #include "sdk/audio/audio_buffer.h"
 
+#include <limits>
+
 #include <gtest/gtest.h>
 
 namespace a11::sdk::audio {
@@ -51,6 +53,14 @@ TEST(AudioBufferTest, OutOfRangeChannelIsEmpty) {
 
 TEST(AudioBufferTest, EmptyBufferChannelIsEmpty) {
   const AudioBuffer buffer;
+  EXPECT_TRUE(buffer.Channel(0).empty());
+}
+
+TEST(AudioBufferTest, OverflowingDimensionsDoNotExposeSamples) {
+  AudioBuffer buffer;
+  buffer.num_channels = std::numeric_limits<size_t>::max() / 2 + 1;
+  buffer.num_frames = 2;
+  EXPECT_FALSE(buffer.HasValidDimensions());
   EXPECT_TRUE(buffer.Channel(0).empty());
 }
 

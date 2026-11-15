@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <utility>
@@ -136,7 +137,7 @@ TEST(ByteChunkingTest, InterleavedMessagesRemainIndependent) {
   EXPECT_EQ(reassembler.pending_message_count(), 0);
 }
 
-TEST(ByteChunkingTest, RejectsDuplicateWithoutGrowingAccounting) {
+TEST(ByteChunkingTest, RejectsDuplicateAndDiscardsPendingMessage) {
   auto packets = SplitBytesIntoPackets(std::string(100, 'z'), 99, 24);
   ASSERT_TRUE(packets.ok());
   ByteChunkingOptions options{.packet_size = 24,
@@ -147,13 +148,62 @@ TEST(ByteChunkingTest, RejectsDuplicateWithoutGrowingAccounting) {
   const std::string duplicate = packets->front();
   auto first = reassembler.Feed(std::move(packets->front()));
   ASSERT_TRUE(first.ok());
-  const size_t bytes = reassembler.pending_byte_count();
   auto repeated = reassembler.Feed(duplicate);
   EXPECT_TRUE(absl::IsAlreadyExists(repeated.status()));
-  EXPECT_EQ(reassembler.pending_byte_count(), bytes);
-  reassembler.Clear();
   EXPECT_EQ(reassembler.pending_message_count(), 0);
   EXPECT_EQ(reassembler.pending_byte_count(), 0);
+}
+
+TEST(ByteChunkingTest, RejectsOversizedMessageAndEmptyChunk) {
+  auto packets = SplitBytesIntoPackets(std::string(50, 'x'), 12, 32);
+  ASSERT_TRUE(packets.ok());
+  ByteChunkingOptions options{.packet_size = 32,
+                              .max_message_size = 23,
+                              .max_pending_messages = 2,
+                              .max_pending_bytes = 100};
+  ByteReassembler reassembler(options);
+  ASSERT_TRUE(reassembler.Feed((*packets)[0]).ok());
+  EXPECT_TRUE(absl::IsOutOfRange(reassembler.Feed((*packets)[1]).status()));
+  EXPECT_EQ(reassembler.pending_message_count(), 0);
+  EXPECT_EQ(reassembler.pending_byte_count(), 0);
+
+  std::string empty_chunk = (*packets)[0].substr(15);
+  EXPECT_TRUE(absl::IsInvalidArgument(
+      reassembler.Feed(std::move(empty_chunk)).status()));
+  EXPECT_EQ(reassembler.pending_message_count(), 0);
+}
+
+TEST(ByteChunkingTest, MalformedPacketDiscardsEarlierFragments) {
+  auto packets = SplitBytesIntoPackets(std::string(50, 'x'), 13, 32);
+  ASSERT_TRUE(packets.ok());
+  ByteChunkingOptions options{.packet_size = 32,
+                              .max_message_size = 100,
+                              .max_pending_messages = 2,
+                              .max_pending_bytes = 100};
+  ByteReassembler reassembler(options);
+  ASSERT_TRUE(reassembler.Feed((*packets)[0]).ok());
+  std::string empty_chunk = (*packets)[0].substr(15);
+  EXPECT_TRUE(absl::IsInvalidArgument(
+      reassembler.Feed(std::move(empty_chunk)).status()));
+  EXPECT_EQ(reassembler.pending_message_count(), 0);
+  EXPECT_EQ(reassembler.pending_byte_count(), 0);
+
+  ASSERT_TRUE(reassembler.Feed((*packets)[0]).ok());
+  auto complete = SplitBytesIntoPackets("replacement", 13, 32);
+  ASSERT_TRUE(complete.ok());
+  EXPECT_TRUE(absl::IsAlreadyExists(
+      reassembler.Feed(std::move(complete->front())).status()));
+  EXPECT_EQ(reassembler.pending_message_count(), 0);
+  EXPECT_EQ(reassembler.pending_byte_count(), 0);
+}
+
+TEST(ByteChunkingTest, ValidatesLimitsWithoutOverflow) {
+  ByteChunkingOptions options{
+      .packet_size = kMinimumBytePacketSize,
+      .max_message_size = std::numeric_limits<size_t>::max(),
+      .max_pending_messages = 1,
+      .max_pending_bytes = 1};
+  EXPECT_TRUE(options.Validate().ok());
 }
 
 TEST(ByteChunkingTest, BoundsPendingMessagesAndRejectsMalformedPackets) {

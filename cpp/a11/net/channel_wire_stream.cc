@@ -344,8 +344,11 @@ a11::Task ChannelWireStream::StartEndpoint(bool accept, OnMessage on_message,
                 } else if (state->incoming.size() >=
                                state->options.max_buffered_incoming_messages ||
                            (!state->incoming.empty() &&
-                            state->incoming_bytes + complete->size() >
-                                state->options.max_buffered_incoming_bytes)) {
+                            (state->incoming_bytes >
+                                 state->options.max_buffered_incoming_bytes ||
+                             complete->size() >
+                                 state->options.max_buffered_incoming_bytes -
+                                     state->incoming_bytes))) {
                   error = absl::ResourceExhaustedError(
                       "Incoming WireMessage buffer capacity was exceeded");
                 } else {

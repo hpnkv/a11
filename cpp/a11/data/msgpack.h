@@ -72,14 +72,14 @@ class MsgpackWriter {
   void PackUint(std::uint64_t value);
   /// Append a signed integer in the narrowest MessagePack form that fits.
   void PackInt(std::int64_t value);
-  /// Append a string field, copying @p value once.
-  void PackString(std::string_view value);
-  /// Append a binary field, copying @p value once.
-  void PackBinary(std::string_view value);
-  /// Append an array header; @p length element fields must follow.
-  void PackArrayHeader(size_t length);
-  /// Append a map header; @p length key/value field pairs must follow.
-  void PackMapHeader(size_t length);
+  /// Append a string field; reject lengths MessagePack cannot encode.
+  absl::Status PackString(std::string_view value);
+  /// Append a binary field; reject lengths MessagePack cannot encode.
+  absl::Status PackBinary(std::string_view value);
+  /// Append an array header for @p length fields; reject larger counts.
+  absl::Status PackArrayHeader(size_t length);
+  /// Append a map header for @p length pairs; reject larger counts.
+  absl::Status PackMapHeader(size_t length);
 
   /**
    * @brief
@@ -104,7 +104,7 @@ class MsgpackWriter {
 
  private:
   /// Reserve @p extra bytes beyond what is already written.
-  void Reserve(size_t extra);
+  bool Reserve(size_t extra);
 
   std::string owned_;
   std::string* absl_nonnull bytes_;

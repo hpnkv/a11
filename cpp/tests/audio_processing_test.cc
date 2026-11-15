@@ -15,6 +15,7 @@
 #include "sdk/audio/internal/audio_processing.h"
 
 #include <cstddef>
+#include <limits>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -60,6 +61,14 @@ TEST(StreamingMonoResamplerTest, DownmixesPlanarChannels) {
   EXPECT_FLOAT_EQ(output[1], 0.5f);
   EXPECT_FLOAT_EQ(output[2], -0.5f);
   EXPECT_FLOAT_EQ(output[3], 0.0f);
+}
+
+TEST(StreamingMonoResamplerTest, RejectsOverflowingDimensions) {
+  const size_t channels = std::numeric_limits<size_t>::max() / 2 + 1;
+  StreamingMonoResampler resampler(16000.0, channels);
+  std::vector<float> output;
+  EXPECT_FALSE(
+      resampler.Process(Buffer({}, channels, 2, 16000.0), &output).ok());
 }
 
 TEST(StreamingMonoResamplerTest, PreservesFractionalCursorAcrossBuffers) {

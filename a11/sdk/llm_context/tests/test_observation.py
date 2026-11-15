@@ -170,3 +170,30 @@ def test_provider_error_after_usage_stays_partial():
     capture("body", None, b'data: {"type":"response.failed"}\n\n')
     capture("complete", None, b"")
     assert records[-1]["coverage"] == "partial"
+
+
+def test_observer_bounds_large_body_chunk_before_buffering():
+    records = []
+    capture = ResponseUsageObserver(
+        "chat", "request", records.append, max_event_bytes=16
+    )
+    capture(
+        "headers",
+        SimpleNamespace(
+            status=200, headers=[("content-type", "text/event-stream")]
+        ),
+        b"",
+    )
+    capture("body", None, b"x" * 100_000)
+    assert capture._limited
+    assert not capture._buffer
+    capture("complete", None, b"")
+    assert records[-1]["coverage"] == "partial"
+
+
+def test_observer_consumes_multiple_small_events_in_one_chunk():
+    capture, records = observer()
+    capture("body", None, b"data: [DONE]\n\ndata: [DONE]\n\n")
+    capture("complete", None, b"")
+    assert records[-1]["coverage"] == "complete"
+    assert not capture._buffer

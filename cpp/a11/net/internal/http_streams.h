@@ -78,8 +78,9 @@ struct Http2RequestBodyStream::State {
       if (pending_read != nullptr) {
         reader = std::move(pending_read);
       } else {
-        if (buffered_bytes + data.size() > max_buffered_bytes &&
-            !chunks.empty()) {
+        if (!chunks.empty() &&
+            (buffered_bytes > max_buffered_bytes ||
+             data.size() > max_buffered_bytes - buffered_bytes)) {
           return absl::ResourceExhaustedError(
               "HTTP request exceeded max_buffered_request_bytes");
         }

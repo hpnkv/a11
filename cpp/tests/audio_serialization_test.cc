@@ -15,6 +15,7 @@
 #include "sdk/audio/actions/audio_serialization.h"
 
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -24,6 +25,7 @@
 #include <absl/time/time.h>
 #include <gtest/gtest.h>
 
+#include "a11/data/msgpack.h"
 #include "a11/data/serialization.h"
 #include "a11/data/types.h"
 #include "a11/time.h"
@@ -84,6 +86,23 @@ TEST(AudioSerializationTest, AudioBufferChunkEncodeDecode) {
   EXPECT_EQ(decoded->num_frames, 4u);
   EXPECT_EQ(decoded->sample_rate, 16000.0);
   EXPECT_EQ(decoded->samples, buffer.samples);
+}
+
+TEST(AudioSerializationTest, RejectsOverflowingAudioDimensions) {
+  AudioBuffer buffer;
+  buffer.num_channels = std::numeric_limits<size_t>::max() / 2 + 1;
+  buffer.num_frames = 2;
+  EXPECT_FALSE(A11ToMsgpackBytes(buffer).ok());
+
+  data::MsgpackWriter writer;
+  ASSERT_TRUE(writer.PackBinary("").ok());
+  writer.PackUint(buffer.num_channels);
+  writer.PackUint(buffer.num_frames);
+  ASSERT_TRUE(writer.Pack(16000.0).ok());
+  writer.PackNil();
+  EXPECT_FALSE(
+      A11FromMsgpackBytes(data::TypeTag<AudioBuffer>{}, writer.TakeBytes())
+          .ok());
 }
 
 TEST(AudioSerializationTest, AudioBufferHasNoJsonCodec) {

@@ -599,7 +599,7 @@ absl::StatusOr<std::string> DrainBody(const std::shared_ptr<AsyncNode>& node,
     if (chunk->IsNull()) {
       continue;
     }
-    if (body.size() + chunk->data.size() > limit) {
+    if (body.size() > limit || chunk->data.size() > limit - body.size()) {
       return absl::OutOfRangeError(
           "The request body exceeds options.max_body_bytes");
     }
@@ -788,12 +788,12 @@ absl::Status PumpPushes(const std::shared_ptr<Action>& action,
       if (!chunk->has_value()) {
         break;
       }
-      written += (*chunk)->size();
-      if (written > limit) {
+      if (written > limit || (*chunk)->size() > limit - written) {
         (void)push.response->Cancel(absl::OutOfRangeError(
             "A pushed response exceeds options.max_body_bytes"));
         break;
       }
+      written += (*chunk)->size();
       ABSL_RETURN_IF_ERROR(body->PutChunk(BytesChunk(std::move(**chunk)),
                                           std::nullopt,
                                           /*final=*/false)
@@ -945,12 +945,13 @@ absl::Status RunRequest(const std::shared_ptr<Action>& action) {
         if (!chunk->has_value()) {
           break;
         }
-        received += (*chunk)->size();
-        if (received > exchange.options.max_body_bytes) {
+        if (received > exchange.options.max_body_bytes ||
+            (*chunk)->size() > exchange.options.max_body_bytes - received) {
           body_status = absl::OutOfRangeError(
               "The response body exceeds options.max_body_bytes");
           break;
         }
+        received += (*chunk)->size();
         ABSL_RETURN_IF_ERROR(outputs.Put("body", BytesChunk(std::move(**chunk)),
                                          /*final=*/false));
       }
@@ -1215,6 +1216,7 @@ absl::Status RunFetch(const std::shared_ptr<Action>& action) {
     EventStreamDecoder events;
     LineDecoder lines;
     std::string whole;
+    size_t received_bytes = 0;
     absl::Status body_status = absl::OkStatus();
     while (true) {
       absl::StatusOr<std::optional<std::string>> chunk =
@@ -1227,11 +1229,13 @@ absl::Status RunFetch(const std::shared_ptr<Action>& action) {
         break;
       }
       const std::string& piece = **chunk;
-      if (whole.size() + piece.size() > exchange.options.max_body_bytes) {
+      if (received_bytes > exchange.options.max_body_bytes ||
+          piece.size() > exchange.options.max_body_bytes - received_bytes) {
         body_status = absl::OutOfRangeError(
             "The response body exceeds options.max_body_bytes");
         break;
       }
+      received_bytes += piece.size();
       ABSL_RETURN_IF_ERROR(outputs.Put("body", BytesChunk(piece),
                                        /*final=*/false));
       if (wants_whole) {

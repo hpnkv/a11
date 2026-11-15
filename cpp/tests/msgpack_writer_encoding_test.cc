@@ -36,6 +36,7 @@
 #include <string>
 #include <vector>
 
+#include <absl/status/status_macros.h>
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
@@ -97,7 +98,7 @@ TEST(MsgpackWriterEncodingTest, StringsMatchAcrossEverySizeClass) {
         size_t{65535}, size_t{65536}}) {
     const std::string value(length, 'x');
     MsgpackWriter writer;
-    writer.PackString(value);
+    ASSERT_TRUE(writer.PackString(value).ok());
     EXPECT_EQ(writer.TakeBytes(), ViaJson(nlohmann::json(value)))
         << "length " << length;
   }
@@ -108,10 +109,29 @@ TEST(MsgpackWriterEncodingTest, BinaryMatchesAcrossEverySizeClass) {
                               size_t{65535}, size_t{65536}}) {
     const std::string value(length, '\x7f');
     MsgpackWriter writer;
-    writer.PackBinary(value);
+    ASSERT_TRUE(writer.PackBinary(value).ok());
     EXPECT_EQ(writer.TakeBytes(), ViaJson(Binary(value)))
         << "length " << length;
   }
+}
+
+TEST(MsgpackWriterEncodingTest, ShortPayloadsUseTheirActualHeaderSize) {
+  std::string text;
+  text.reserve(64);
+  const size_t text_capacity = text.capacity();
+  ASSERT_LT(text_capacity, 256u);
+  MsgpackWriter text_writer(&text);
+  ASSERT_TRUE(text_writer.PackString(std::string(text_capacity - 2, 'x')).ok());
+  EXPECT_EQ(text.capacity(), text_capacity);
+
+  std::string binary;
+  binary.reserve(64);
+  const size_t binary_capacity = binary.capacity();
+  ASSERT_LT(binary_capacity, 256u);
+  MsgpackWriter binary_writer(&binary);
+  ASSERT_TRUE(
+      binary_writer.PackBinary(std::string(binary_capacity - 2, 'x')).ok());
+  EXPECT_EQ(binary.capacity(), binary_capacity);
 }
 
 TEST(MsgpackWriterEncodingTest, NilAndBooleansMatch) {
@@ -135,10 +155,10 @@ TEST(MsgpackWriterEncodingTest, ArrayOfBinaryRecordsMatches) {
        {size_t{0}, size_t{1}, size_t{15}, size_t{16}, size_t{17}}) {
     nlohmann::json array = nlohmann::json::array();
     MsgpackWriter writer;
-    writer.PackArrayHeader(count);
+    ASSERT_TRUE(writer.PackArrayHeader(count).ok());
     for (size_t index = 0; index < count; ++index) {
       const std::string element = "record-" + std::to_string(index);
-      writer.PackBinary(element);
+      ASSERT_TRUE(writer.PackBinary(element).ok());
       array.push_back(Binary(element));
     }
     EXPECT_EQ(writer.TakeBytes(), ViaJson(array)) << "count " << count;
@@ -152,15 +172,15 @@ TEST(MsgpackWriterEncodingTest, MapOfBinaryValuesMatches) {
   for (const size_t count : {size_t{0}, size_t{1}, size_t{15}, size_t{16}}) {
     nlohmann::json object = nlohmann::json::object();
     MsgpackWriter writer;
-    writer.PackMapHeader(count);
+    ASSERT_TRUE(writer.PackMapHeader(count).ok());
     for (size_t index = 0; index < count; ++index) {
       // Zero-padded so lexical and numeric order agree for this fixture.
       const std::string key =
           "k" + std::string(2 - std::to_string(index).size(), '0') +
           std::to_string(index);
       const std::string value = "v" + std::to_string(index);
-      writer.PackString(key);
-      writer.PackBinary(value);
+      ASSERT_TRUE(writer.PackString(key).ok());
+      ASSERT_TRUE(writer.PackBinary(value).ok());
       object[key] = Binary(value);
     }
     EXPECT_EQ(writer.TakeBytes(), ViaJson(object)) << "count " << count;
@@ -172,18 +192,18 @@ TEST(MsgpackWriterEncodingTest, PackRecordMatchesEncodingThenEmbedding) {
   // must prove is that skipping it changes nothing.
   MsgpackWriter direct;
   ASSERT_TRUE(direct
-                  .PackRecord([](MsgpackWriter* child) {
-                    child->PackString("node-1");
+                  .PackRecord([](MsgpackWriter* child) -> absl::Status {
+                    ABSL_RETURN_IF_ERROR(child->PackString("node-1"));
                     child->PackUint(7);
                     return absl::OkStatus();
                   })
                   .ok());
 
   MsgpackWriter inner;
-  inner.PackString("node-1");
+  ASSERT_TRUE(inner.PackString("node-1").ok());
   inner.PackUint(7);
   MsgpackWriter outer;
-  outer.PackBinary(inner.bytes());
+  ASSERT_TRUE(outer.PackBinary(inner.bytes()).ok());
 
   EXPECT_EQ(direct.TakeBytes(), outer.TakeBytes());
 }
@@ -196,6 +216,19 @@ TEST(MsgpackWriterEncodingTest, PackRecordPropagatesFailure) {
   EXPECT_TRUE(absl::IsInvalidArgument(status)) << status;
   // Nothing half-written: a failed child must not leave a binary header behind.
   EXPECT_TRUE(writer.bytes().empty());
+}
+
+TEST(MsgpackWriterEncodingTest, RejectsUnrepresentableCollectionLength) {
+  if constexpr (sizeof(size_t) > sizeof(std::uint32_t)) {
+    MsgpackWriter writer;
+    writer.PackUint(1);
+    const std::string before = writer.bytes();
+    EXPECT_TRUE(absl::IsOutOfRange(
+        writer.PackArrayHeader(std::numeric_limits<size_t>::max())));
+    EXPECT_TRUE(absl::IsOutOfRange(
+        writer.PackMapHeader(std::numeric_limits<size_t>::max())));
+    EXPECT_EQ(writer.bytes(), before);
+  }
 }
 
 TEST(MsgpackWriterEncodingTest, BorrowedBufferAppendsRatherThanReplaces) {

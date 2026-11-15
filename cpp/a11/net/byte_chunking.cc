@@ -104,7 +104,9 @@ absl::Status ByteChunkingOptions::Validate() const {
     return absl::InvalidArgumentError(
         "byte chunking limits must all be positive");
   }
-  if (packet_size > max_message_size + kCompleteMetadataSize) {
+  if (max_message_size <=
+          std::numeric_limits<size_t>::max() - kCompleteMetadataSize &&
+      packet_size > max_message_size + kCompleteMetadataSize) {
     return absl::InvalidArgumentError(
         "byte packet_size must not exceed max_message_size plus metadata");
   }
@@ -118,17 +120,24 @@ absl::StatusOr<std::vector<std::string>> SplitBytesIntoPackets(
         "byte packet_size must be at least ", kMinimumBytePacketSize));
   }
   if (bytes.size() <= packet_size - kCompleteMetadataSize) {
+    if (bytes.size() > std::string().max_size() - kCompleteMetadataSize) {
+      return absl::OutOfRangeError("byte packet is too large");
+    }
     std::vector<std::string> packets;
     packets.reserve(1);
     packets.push_back(SerializeComplete(bytes, transient_id));
     return packets;
   }
 
+  if (packet_size > std::string().max_size()) {
+    return absl::OutOfRangeError("byte packet_size exceeds string capacity");
+  }
+
   const size_t first_payload_size = packet_size - kFirstChunkMetadataSize;
   const size_t later_payload_size = packet_size - kChunkMetadataSize;
   const size_t remaining = bytes.size() - first_payload_size;
   const size_t later_count =
-      (remaining + later_payload_size - 1) / later_payload_size;
+      remaining / later_payload_size + (remaining % later_payload_size != 0);
   if (later_count >= std::numeric_limits<std::uint32_t>::max()) {
     return absl::OutOfRangeError("byte message requires too many packets");
   }
@@ -212,6 +221,10 @@ absl::StatusOr<std::vector<std::string>> SplitOwnedBytesIntoPackets(
   if (bytes.size() > packet_size - kCompleteMetadataSize) {
     return SplitBytesIntoPackets(bytes, transient_id, packet_size);
   }
+  if (bytes.size() > bytes.max_size() - kCompleteMetadataSize) {
+    return absl::OutOfRangeError("byte packet is too large");
+  }
+  bytes.reserve(bytes.size() + kCompleteMetadataSize);
   AppendLittleEndian(&bytes, transient_id);
   bytes.push_back(static_cast<char>(BytePacketType::kCompleteBytes));
   std::vector<std::string> packets;
@@ -250,6 +263,14 @@ struct ByteReassembler::Impl {
   const ByteChunkingOptions options;
   absl::flat_hash_map<std::uint64_t, Pending> pending ABSL_GUARDED_BY(mu);
   size_t pending_bytes ABSL_GUARDED_BY(mu) = 0;
+
+  void Discard(std::uint64_t transient_id) ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu) {
+    auto found = pending.find(transient_id);
+    if (found != pending.end()) {
+      pending_bytes -= found->second.byte_count;
+      pending.erase(found);
+    }
+  }
 };
 
 ByteReassembler::ByteReassembler(ByteChunkingOptions options) {
@@ -278,31 +299,42 @@ absl::StatusOr<std::optional<std::string>> ByteReassembler::Feed(
   }
   ABSL_ASSIGN_OR_RETURN(BytePacket packet,
                         ParseOwnedBytePacket(std::move(serialized)));
+  thread::MutexLock lock(&impl->mu);
   if (packet.payload.size() > impl->options.max_message_size) {
+    impl->Discard(packet.transient_id);
     return absl::OutOfRangeError("incoming byte message exceeds its limit");
   }
 
-  thread::MutexLock lock(&impl->mu);
   if (packet.type == BytePacketType::kCompleteBytes) {
     if (impl->pending.find(packet.transient_id) != impl->pending.end()) {
+      impl->Discard(packet.transient_id);
       return absl::AlreadyExistsError(
           "complete byte packet collides with pending chunks");
     }
     return std::optional<std::string>(std::move(packet.payload));
   }
 
-  if (packet.sequence > impl->options.max_message_size) {
+  if (packet.payload.empty()) {
+    impl->Discard(packet.transient_id);
+    return absl::InvalidArgumentError("byte chunk has no payload");
+  }
+
+  if (packet.sequence >= impl->options.max_message_size) {
+    impl->Discard(packet.transient_id);
     return absl::OutOfRangeError(
         "byte chunk sequence exceeds the configured message bound");
   }
   if (packet.type == BytePacketType::kLengthSuffixedByteChunk &&
       static_cast<size_t>(packet.packet_count) >
-          impl->options.max_message_size + 1) {
+          impl->options.max_message_size) {
+    impl->Discard(packet.transient_id);
     return absl::OutOfRangeError(
         "byte message declares an unreasonable packet count");
   }
-  if (impl->pending_bytes + packet.payload.size() >
-      impl->options.max_pending_bytes) {
+  if (impl->pending_bytes > impl->options.max_pending_bytes ||
+      packet.payload.size() >
+          impl->options.max_pending_bytes - impl->pending_bytes) {
+    impl->Discard(packet.transient_id);
     return absl::ResourceExhaustedError(
         "pending byte chunks exceed max_pending_bytes");
   }
@@ -320,14 +352,14 @@ absl::StatusOr<std::optional<std::string>> ByteReassembler::Feed(
   if (packet.type == BytePacketType::kLengthSuffixedByteChunk) {
     if (pending.packet_count.has_value() &&
         *pending.packet_count != packet.packet_count) {
+      impl->Discard(packet.transient_id);
       return absl::InvalidArgumentError(
           "byte message has conflicting packet counts");
     }
     for (const auto& [sequence, chunk] : pending.chunks) {
       (void)chunk;
       if (sequence >= packet.packet_count) {
-        impl->pending_bytes -= pending.byte_count;
-        impl->pending.erase(found);
+        impl->Discard(packet.transient_id);
         return absl::OutOfRangeError(
             "byte chunk sequence exceeds the declared packet count");
       }
@@ -336,14 +368,18 @@ absl::StatusOr<std::optional<std::string>> ByteReassembler::Feed(
   }
   if (pending.packet_count.has_value() &&
       packet.sequence >= *pending.packet_count) {
+    impl->Discard(packet.transient_id);
     return absl::OutOfRangeError(
         "byte chunk sequence exceeds the declared packet count");
   }
   if (pending.chunks.find(packet.sequence) != pending.chunks.end()) {
+    impl->Discard(packet.transient_id);
     return absl::AlreadyExistsError("duplicate byte chunk sequence");
   }
-  if (pending.byte_count + packet.payload.size() >
-      impl->options.max_message_size) {
+  if (pending.byte_count > impl->options.max_message_size ||
+      packet.payload.size() >
+          impl->options.max_message_size - pending.byte_count) {
+    impl->Discard(packet.transient_id);
     return absl::OutOfRangeError(
         "reassembled byte message exceeds max_message_size");
   }

@@ -217,6 +217,8 @@ String tokens split into nonoverlapping `string` and `string-escape` spans;
 each span retains `lexical: "string"`. Escapes use their original source ranges
 in both ordinary and triple-quoted strings. LSP exposes the `stringEscape`
 semantic type, which VS Code maps to its string escape palette.
+Slash-delimited pattern literals use `kind: "regex"` and `lexical: "regex"`;
+editors may color these separately from quoted strings.
 
 Tokens tile the source: every offset in the file is covered by exactly one of
 them, comments included, so a client can colour a whole file from one response.

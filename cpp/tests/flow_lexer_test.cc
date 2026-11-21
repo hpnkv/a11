@@ -198,7 +198,8 @@ TEST(FlowLexer, CommonEscapesHaveTheSameValueInBothStringForms) {
   for (const std::string quote : {"\"", "\"\"\""}) {
     const std::string source = quote + escapes + quote;
     const auto result = Lex(source);
-    ASSERT_TRUE(result.diagnostics.empty());
+    ASSERT_EQ(result.diagnostics.size(), 1u);
+    EXPECT_EQ(result.diagnostics[0].code, "flow.syntax.suspicious-escape");
     ASSERT_EQ(result.tokens.size(), 2u);
     EXPECT_EQ(result.tokens.front().string_value, expected);
     EXPECT_EQ(result.tokens.front().text, source);
@@ -534,6 +535,50 @@ TEST(FlowLexer, AQuoteInsideAStringIsWrittenWithABackslash) {
   // statements.
   EXPECT_EQ(absl::StrJoin(Dump(R"("a\"b" -> c)"), " "),
             R"(string:"a\"b" ->:-> word:c)");
+}
+
+TEST(FlowLexer, RegexLiteralsAndDivisionHaveDistinctTokens) {
+  EXPECT_EQ(absl::StrJoin(Dump("a/b/c"), " "), "word:a /:/ word:b /:/ word:c");
+  EXPECT_EQ(absl::StrJoin(Dump(R"(std::match(/a\/b/i, text))"), " "),
+            R"(word:std ::::: word:match (:( regex:/a\/b/i ,:, word:text ):))");
+  EXPECT_EQ(absl::StrJoin(Dump(R"(lines | match all /[a/b]+/)"), " "),
+            R"(word:lines |:| word:match word:all regex:/[a/b]+/)");
+  EXPECT_EQ(Codes("x = /unterminated\n"),
+            (std::vector<std::string>{"flow.form.bad-pattern"}));
+}
+
+TEST(FlowLexer, SuggestsWordOperatorsWithoutAcceptingSymbolAliases) {
+  for (const auto& [source, wanted] :
+       {std::pair{"a&&b", "and"}, std::pair{"a||b", "or"},
+        std::pair{"!a", "not"}}) {
+    const auto result = Lex(source);
+    ASSERT_FALSE(result.diagnostics.empty());
+    EXPECT_EQ(result.diagnostics[0].code, "flow.syntax.unsupported-operator");
+    EXPECT_NE(result.diagnostics[0].message.find(wanted), std::string::npos);
+    const size_t offset = std::string_view(source).find_first_of("&|!");
+    EXPECT_EQ(result.diagnostics[0].range.start.offset, offset);
+    EXPECT_EQ(result.diagnostics[0].range.end.offset,
+              offset + (wanted == std::string_view("not") ? 1 : 2));
+    ASSERT_FALSE(result.diagnostics[0].fixes.empty());
+    EXPECT_NE(result.diagnostics[0].fixes[0].edits[0].text.find(wanted),
+              std::string::npos);
+    const auto& edit = result.diagnostics[0].fixes[0].edits[0];
+    const std::string repaired = std::string(source).replace(
+        edit.start, edit.end - edit.start, edit.text);
+    EXPECT_TRUE(Lex(repaired).diagnostics.empty()) << repaired;
+  }
+  EXPECT_TRUE(Lex("a != b").diagnostics.empty());
+}
+
+TEST(FlowLexer, WarnsWhenRegexEscapesInStringsLoseTheirBackslash) {
+  const auto result = Lex(R"("\W+" """\d+""" "\b" std::split("x", /\W+/))");
+  ASSERT_EQ(result.diagnostics.size(), 3u);
+  for (const auto& warning : result.diagnostics) {
+    EXPECT_EQ(warning.code, "flow.syntax.suspicious-escape");
+    EXPECT_EQ(warning.severity, Severity::kWarning);
+  }
+  EXPECT_EQ(result.tokens[0].string_value, "W+");
+  EXPECT_TRUE(Lex(R"("\q")").diagnostics.empty());
 }
 
 TEST(FlowVocabulary, OnlyGenericTypesTakeParameters) {

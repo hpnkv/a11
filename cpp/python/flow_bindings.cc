@@ -87,6 +87,9 @@ py::dict TokenToDict(const flow::Token& token) {
     case flow::TokenKind::kString:
       value["value"] = token.string_value;
       break;
+    case flow::TokenKind::kRegex:
+      value["value"] = std::string(token.text);
+      break;
     case flow::TokenKind::kNumber:
       // Integral where it was written without a fractional part, which is what
       // the counted forms of the grammar ask for.
@@ -503,6 +506,7 @@ py::object ValueToPython(const flow::Value& value) {
     case flow::Value::Kind::kTypedFloat:
       return py::float_(value.number());
     case flow::Value::Kind::kString:
+    case flow::Value::Kind::kRegex:
       return py::str(value.text());
     case flow::Value::Kind::kBytes:
       return py::bytes(value.text());
@@ -2062,7 +2066,7 @@ whole truth would be misled.
         return value;
       },
       py::arg("target") = "sublime",
-R"doc(Generate an editor definition from the Flow vocabulary.
+      R"doc(Generate an editor definition from the Flow vocabulary.
 
 Returns the generated text and its repository path.
 

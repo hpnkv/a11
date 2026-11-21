@@ -171,6 +171,8 @@ nlohmann::json ConstantToJson(const Constant& value) {
       return value.number;
     case Constant::Kind::kString:
       return value.text;
+    case Constant::Kind::kRegex:
+      return nlohmann::json{{"$regex", value.text}};
     case Constant::Kind::kDuration:
       return absl::FormatDuration(value.duration);
     case Constant::Kind::kList: {

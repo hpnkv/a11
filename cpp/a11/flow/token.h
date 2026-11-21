@@ -42,6 +42,8 @@ enum class TokenKind {
   kComment,
   /// A quoted string. `string_value` holds it with escapes resolved.
   kString,
+  /// A slash-delimited regular expression, including its flags.
+  kRegex,
   /// A number, integral or not. `number` holds it.
   kNumber,
   /// A number with a duration unit: `250ms`. `duration` holds it.

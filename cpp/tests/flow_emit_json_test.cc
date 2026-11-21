@@ -24,9 +24,28 @@
 
 #include "a11/flow/diagnostic.h"
 #include "a11/flow/emit_json.h"
+#include "a11/flow/parser.h"
+#include "a11/flow/resolve.h"
 
 namespace a11::flow {
 namespace {
+
+TEST(FlowConstantJson, CarriesDeclarationsAndResolvedValues) {
+  constexpr std::string_view source =
+      "const int kLimit exported = 3\nflow main { out result: int; "
+      "const kSelected = kLimit; kSelected -> result }\n";
+  const auto parsed = Parse(source);
+  const auto syntax = SyntaxToJsonValue(source, parsed);
+  ASSERT_EQ(syntax["constants"].size(), 1u);
+  EXPECT_EQ(syntax["constants"][0]["name"], "kLimit");
+  EXPECT_EQ(syntax["constants"][0]["type"]["name"], "int");
+  EXPECT_EQ(syntax["flows"][0]["body"][0]["constant"], true);
+  const auto resolved = Resolve(source, parsed);
+  ASSERT_FALSE(resolved.HasErrors());
+  const auto plan = PlanToJsonValue("<test>", resolved.program);
+  EXPECT_EQ(plan["constants"]["kLimit"]["value"], 3);
+  EXPECT_EQ(plan["constants"]["kLimit"]["exported"], true);
+}
 
 Diagnostic Example() {
   Diagnostic diagnostic;

@@ -73,6 +73,8 @@ struct Symbol {
   SymbolKind kind = SymbolKind::kInputPort;
   std::string name;
   syntax::Location location;
+  bool constant = false;
+  std::optional<syntax::Constant> static_value;
   /// Whether the language bound it rather than the author: the `index` every
   /// loop provides. Nothing is said about one of these going unread.
   bool implicit = false;

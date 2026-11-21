@@ -55,6 +55,64 @@ flow main { out value: string
   EXPECT_NE(linked.CatalogueAt(0).Type("ImportedReport"), nullptr);
 }
 
+TEST(FlowModule, ExportedConstantsReachImportedFlowsAndStructs) {
+  const ModuleSources sources{{"lib", R"(
+mod policy exported {
+  const kPattern exported = /^[a-z]+$/
+  const kFallback exported = "guest"
+}
+)"}};
+  auto linked = LinkModules(R"(
+import "lib" as lib
+from lib::policy import kPattern, kFallback
+struct User { name: string matching kPattern default kFallback }
+flow main { out name: string
+  kFallback -> name
+}
+)",
+                            "root", sources);
+  auto resolved = Resolve(linked.source, linked.parsed, true);
+  ASSERT_FALSE(resolved.HasErrors())
+      << DiagnosticsToJsonValue("root", resolved.diagnostics);
+  ASSERT_EQ(resolved.program.dtos.size(), 1u);
+  EXPECT_EQ(resolved.program.dtos[0].fields[0].pattern, "^[a-z]+$");
+  EXPECT_EQ(resolved.program.dtos[0].fields[0].default_value.text, "guest");
+}
+
+TEST(FlowModule, ConstantsAppearOnceInDocumentOutline) {
+  const std::string source = R"(
+mod settings exported {
+  const int kLimit exported = 3
+}
+flow main {
+  out result: int
+  settings::kLimit -> result
+}
+)";
+  const auto symbols = Symbols(source);
+  ASSERT_EQ(symbols.size(), 2u);
+  EXPECT_EQ(symbols[0].name, "settings");
+  ASSERT_EQ(symbols[0].children.size(), 1u);
+  EXPECT_EQ(symbols[0].children[0].name, "kLimit");
+  EXPECT_EQ(symbols[0].children[0].detail, "const int");
+}
+
+TEST(FlowModule, LocalConstantShadowsImportedConstant) {
+  const ModuleSources sources{{"lib", "const kValue exported = 3\n"}};
+  auto linked = LinkModules(R"(
+import "lib" as lib
+from lib import kValue
+flow main { out result: int
+  const kValue = 7
+  kValue -> result
+}
+)",
+                            "root", sources);
+  const auto resolved = Resolve(linked.source, linked.parsed, true);
+  EXPECT_FALSE(resolved.HasErrors())
+      << DiagnosticsToJsonValue("root", resolved.diagnostics);
+}
+
 TEST(FlowModule, IncompleteStandardTypeDoesNotAbortLinking) {
   const std::string source = "flow { out result: std }";
   auto linked = LinkModules(source, "root");

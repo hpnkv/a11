@@ -1186,9 +1186,8 @@ target_include_directories(
 # linked through the installed target without exposing OTel in A11 headers.
 # The Flow language: text to tokens to a syntax tree to a resolved plan, plus
 # the diagnostics, highlighting, formatting and completion every editor and CI
-# job needs. Nothing here touches a socket or a node, and nothing here links
-# anything but Abseil and nlohmann -- see cpp/a11/flow/CMakeLists.txt for why
-# that boundary is worth keeping.
+# job needs. This layer uses RE2 for regex literals but has no socket or node
+# dependencies.
 add_library(a11_flow_lang STATIC ${A11_FLOW_LANG_SOURCES})
 add_library(a11::flow_lang ALIAS a11_flow_lang)
 set_target_properties(a11_flow_lang PROPERTIES EXPORT_NAME flow_lang)
@@ -1209,7 +1208,7 @@ target_link_libraries(
         nlohmann_json::nlohmann_json
         PRIVATE $<BUILD_INTERFACE:absl::strings> $<INSTALL_INTERFACE:absl::strings>
         $<BUILD_INTERFACE:absl::str_format> $<INSTALL_INTERFACE:absl::str_format>
-        a11::warnings)
+        a11::warnings a11::regex)
 
 # The standalone language tool. Off where only the library is wanted (a wheel
 # build), on by default: an editor that cannot embed Python runs this, and the

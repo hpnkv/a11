@@ -66,9 +66,7 @@ target_link_libraries(
                         nlohmann_json::nlohmann_json)
 add_test(NAME a11_core_test COMMAND a11_core_test)
 
-# The Flow language. Its own executable because a11::flow_lang links nothing but
-# Abseil and nlohmann, and a test binary that proves it stays that way is worth
-# more than one more file in a11_core_test.
+# The Flow language has its own test binary to check its dependency boundary.
 add_executable(a11_flow_test
   flow_complete_test.cc
   flow_diagnostic_test.cc
@@ -90,8 +88,7 @@ target_link_libraries(
 add_test(NAME a11_flow_test COMMAND a11_flow_test)
 
 # The executing half, which does link the node and action layers. Kept out of
-# a11_flow_test on purpose: that binary's link line is the proof the language
-# needs nothing but Abseil and nlohmann.
+# a11_flow_test: the language tests run without the executing half.
 add_executable(a11_flow_runtime_test
   flow_runtime_test.cc
   flow_frame_test.cc

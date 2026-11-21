@@ -66,6 +66,7 @@ struct Constant {
     kInteger,
     kDouble,
     kString,
+    kRegex,
     kDuration,
     kList,
     kObject,
@@ -86,6 +87,7 @@ struct Constant {
   static Constant Integer(long long value);
   static Constant Double(double value);
   static Constant String(std::string value);
+  static Constant Regex(std::string value);
   static Constant Duration(absl::Duration value);
 
   /// The number this holds, whichever way it was written.
@@ -334,6 +336,10 @@ struct Stage : NodeOf<NodeKind::kStage> {
   bool is_integer = false;
   /// `kString`/`kOptionalString`: the text, with escapes resolved.
   std::string text;
+  /// `match all`: emit each nonoverlapping occurrence.
+  bool match_all = false;
+  bool match_regex = false;
+  std::string match_offset;
   /// `kExpression`/`kOptionalExpression`: the expression, with `it` bound.
   /// `kSortKey`: the `by` key, or null for the values themselves. `kFold`: the
   /// fold expression, with the carried name and `it` bound. `kStream`: the
@@ -455,6 +461,7 @@ struct Bind : NodeOf<NodeKind::kBind> {
   std::vector<Word> names;
   NodePtr value;
   std::optional<TypeExpression> type;
+  bool constant = false;
 };
 
 /// `[try] { ... }` groups concurrent statements into one outcome.
@@ -576,6 +583,7 @@ struct Repeat : NodeOf<NodeKind::kRepeat> {
   NodePtr start;
   /// Optional `max n` bound; absent for a condition-only loop.
   std::optional<int> max_iterations;
+  NodePtr max_source;
   std::vector<NodePtr> body;
   /// Optional postcondition, resolved in the iteration scope.
   NodePtr termination;
@@ -644,6 +652,7 @@ struct HeaderDeclaration : NodeOf<NodeKind::kHeaderDeclaration> {
   std::string name;
   Word alias;
   Constant default_value;
+  NodePtr default_source;
   bool has_default = false;
   std::string description;
 };
@@ -680,6 +689,16 @@ struct ModuleDeclaration {
   Location extent;
 };
 
+/// A file or module value, fixed for the lifetime of a compiled program.
+struct ConstDeclaration {
+  Word name;
+  std::string scope;
+  std::optional<TypeExpression> type;
+  NodePtr value;
+  bool exported = false;
+  Location extent;
+};
+
 /// A public alias of an existing namespace member.
 struct ExportDeclaration {
   Word symbol;
@@ -707,6 +726,8 @@ struct FlowDeclaration : NodeOf<NodeKind::kFlowDeclaration> {
   std::vector<PortDeclarationPtr> ports;
   std::vector<HeaderDeclarationPtr> headers;
   std::vector<Import> imports;
+  /// Names visible to this flow through module imports, mapped to linked constants.
+  std::vector<std::pair<std::string, std::string>> constant_aliases;
   std::vector<std::unique_ptr<FlowDeclaration>> declarations;
   std::vector<std::unique_ptr<DtoDeclaration>> structs;
   std::vector<NodePtr> body;
@@ -734,15 +755,20 @@ struct FieldDeclaration : NodeOf<NodeKind::kFieldDeclaration> {
   /// `unique`: no two items of a list are equal.
   bool unique = false;
   FieldRange range;
+  NodePtr minimum_source;
+  NodePtr maximum_source;
   /// `matching "..."`: the pattern every value has to match, unanchored, as
   /// JSONSchema's `pattern` is.
   std::string pattern;
+  NodePtr pattern_source;
   bool has_pattern = false;
   /// `one of [..]`: the only values allowed.
   std::vector<Constant> enumeration;
+  NodePtr enumeration_source;
   bool has_enumeration = false;
   /// `default ..`: what a value that was not given is.
   Constant default_value;
+  NodePtr default_source;
   bool has_default = false;
   std::string description;
 };
@@ -767,7 +793,10 @@ using DtoDeclarationPtr = std::unique_ptr<DtoDeclaration>;
 bool IsPureLiteralExpression(const Node& node);
 
 /// Folds a literal expression, or returns `nullopt` for runtime values.
-std::optional<Constant> ConstantValue(const Node* node);
+using ConstantLookup =
+    std::function<std::optional<Constant>(std::string_view name)>;
+std::optional<Constant> ConstantValue(const Node* node,
+                                      const ConstantLookup* lookup = nullptr);
 
 /// Visits direct child nodes in source order.
 /// Type expressions are values on nodes and are not visited separately.

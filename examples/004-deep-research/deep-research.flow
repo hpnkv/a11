@@ -18,7 +18,7 @@ struct DeepResearchSource {
   describe "A source an investigation cited, correlated to the prose by id."
   id:   string required matching "^[A-Za-z0-9_-]+$"
     "As written in <span source>."
-  url:  string required matching "^https?://"
+  url:  string required matching /^https?:\/\//
   type: string required one of ["web", "paper", "book"]
   tags: string[] required unique "How the source was found."
   rank: number 0..1 default 0.5  "How much to trust it."
@@ -63,10 +63,7 @@ flow investigate-with-notes {
 
   found = node()
   notes = node()
-  inner = run investigate(
-    whole_research_brief: whole_research_brief,
-    investigation_brief: investigation_brief,
-  )
+  inner = run investigate(whole_research_brief, investigation_brief)
   inner.investigation -> investigation
   inner.sources -> found
   annotate = run note-each(sources: found)

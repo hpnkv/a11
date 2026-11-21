@@ -200,6 +200,16 @@ struct FlowPlan {
 struct Program {
   std::string source_name;
   std::vector<FlowPlan> flows;
+
+  struct ConstantPlan {
+    std::string name;
+    syntax::Constant value;
+    std::optional<syntax::TypeExpression> type;
+    bool exported = false;
+    syntax::Location location;
+  };
+
+  std::vector<ConstantPlan> constants;
   /// The shapes, in declaration order.
   ///
   /// Beside the flows because a shape is not any one flow's: two flows in a
@@ -220,6 +230,8 @@ struct Program {
 
   /// The shape of this name, or `nullptr`.
   [[nodiscard]] const DtoPlan* absl_nullable Dto(std::string_view name) const;
+  [[nodiscard]] const ConstantPlan* absl_nullable Constant(
+      std::string_view name) const;
 };
 
 /// The `format` field of the plan envelope.

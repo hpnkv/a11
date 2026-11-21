@@ -1230,12 +1230,9 @@ class ActionRegistry:
         self, source: str, *, name: str | None = None, source_name: str = ""
     ) -> a11.flow.plan.FlowPlan:
         """
-        Register a Flow composition as an Action, deriving both halves from it.
+        Register a Flow's declared ports and handler as an Action.
 
-        What [`action`][a11.actions.registry.ActionRegistry.action] is for a
-        function, this is for a flow -- except that there is nothing to infer from
-        Python here. A flow declares its own ports and *is* its own handler, so the
-        text is the whole Action and this takes it as it stands:
+        The source declares the Action's ports and execution:
 
         ```python
         registry = ActionRegistry()
@@ -1250,21 +1247,17 @@ class ActionRegistry:
         ''')
         ```
 
-        The source must declare exactly one flow, and a named one: a file of several
-        is [`register_all`][a11.flow.plan.Program.register_all]'s business, and a
-        `flow { ... }` entry point has no name to be called by.
+        Source must contain exactly one named Flow. Use
+        [`register_all`][a11.flow.plan.Program.register_all] for multiple Flows.
 
         Args:
             source: The flow's text.
-            name: Action name to register under; defaults to the flow's own. The
-                schema is registered under this name too, so a peer asking what this
-                side serves is told the name it can actually call.
-            source_name: What to call the source in a diagnostic -- a file name,
-                usually. Defaults to the name it is registered under.
+            name: Action name; defaults to the Flow's name. The schema uses it too.
+            source_name: Source label in diagnostics, usually a filename. Defaults
+                to the registered name.
 
         Returns:
-            The compiled [FlowPlan][a11.flow.plan.FlowPlan], which is also how to
-            run the composition here rather than through the registry.
+            The compiled [FlowPlan][a11.flow.plan.FlowPlan] for direct execution.
 
         Raises:
             FlowSyntaxError: If the source will not compile.
@@ -1336,18 +1329,15 @@ class ActionRegistry:
             registry.register("summarise", SUMMARISE, summarise)
             ```
 
-            Or the schema alone, which says the action lives on a peer and is to be
-            reached with a flow's `call` rather than run here:
+            Register a peer action's schema without a local handler:
 
             ```python
             registry.register("shell_execute", SHELL_EXECUTE)
             ```
 
-        Each port carrying a `typeinfo` also gets a `json_schema` derived from it on
-        the way in, because only Python can read a Python type. That happens here
-        rather than when the action is described, so the answer a peer gets over the
-        wire -- built by the native describer, which sees only what is on the schema
-        -- is the same document a local caller gets. See
+        Ports with `typeinfo` receive a derived `json_schema` at registration.
+        The native describer then returns the same schema to local and peer
+        callers. See
         [a11.actions.describe][a11.actions.describe].
         """
 

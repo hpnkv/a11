@@ -189,8 +189,9 @@ std::optional<size_t> TypedRun(HoleType type, std::string_view subject,
 /// Exact holes take their typed length; run holes try longest first.
 /// Open holes try shortest first, or take the rest of the final line.
 bool MatchFrom(const Pattern& pattern, size_t piece, std::string_view subject,
-               size_t at, std::vector<Capture>& captures) {
+               size_t at, std::vector<Capture>& captures, size_t& match_end) {
   if (piece >= pattern.pieces.size()) {
+    match_end = at;
     return true;
   }
   const Pattern::Piece& one = pattern.pieces[piece];
@@ -200,12 +201,12 @@ bool MatchFrom(const Pattern& pattern, size_t piece, std::string_view subject,
     if (!next.has_value()) {
       return false;
     }
-    return MatchFrom(pattern, piece + 1, subject, *next, captures);
+    return MatchFrom(pattern, piece + 1, subject, *next, captures, match_end);
   }
 
   const auto take = [&](size_t end) {
-    captures.push_back(Capture{subject.substr(at, end - at)});
-    if (MatchFrom(pattern, piece + 1, subject, end, captures)) {
+    captures.push_back(Capture{subject.substr(at, end - at), at, end});
+    if (MatchFrom(pattern, piece + 1, subject, end, captures, match_end)) {
       return true;
     }
     captures.pop_back();
@@ -409,7 +410,7 @@ Compiled Compile(std::string_view text) {
   return out;
 }
 
-std::optional<std::vector<Capture>> Match(const Pattern& pattern,
+std::optional<MatchResult> MatchWithSpans(const Pattern& pattern,
                                           std::string_view subject) {
   if (pattern.pieces.empty()) {
     return std::nullopt;
@@ -419,11 +420,20 @@ std::optional<std::vector<Capture>> Match(const Pattern& pattern,
   // is the one a reader means by "the line has this in it".
   for (size_t start = 0; start <= subject.size(); ++start) {
     captures.clear();
-    if (MatchFrom(pattern, 0, subject, start, captures)) {
-      return captures;
+    size_t match_end = start;
+    if (MatchFrom(pattern, 0, subject, start, captures, match_end)) {
+      return MatchResult{start, match_end, std::move(captures)};
     }
   }
   return std::nullopt;
+}
+
+std::optional<std::vector<Capture>> Match(const Pattern& pattern,
+                                          std::string_view subject) {
+  auto result = MatchWithSpans(pattern, subject);
+  return result.has_value()
+             ? std::optional<std::vector<Capture>>(std::move(result->captures))
+             : std::nullopt;
 }
 
 }  // namespace a11::flow::pattern

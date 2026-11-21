@@ -128,6 +128,7 @@ contexts:
               scope: keyword.modifier.default.a11flow
             - include: port-types
             - include: strings
+            - include: regex-literals
             - include: literals
             # `1..200`: the range between two bounds.
             - match: '\.\.'
@@ -223,6 +224,7 @@ contexts:
     - include: bare-stages
     - include: operators
     - include: strings
+    - include: regex-literals
     - include: literals
     - include: builtins
     - include: status-codes
@@ -249,9 +251,9 @@ contexts:
         2: keyword.control.a11flow
     - match: |-
         (?x) \b (
-          skip|wait|close|abort|cancel|fail|log|logf|if|for|repeat
-          |after|else|SKIP|WAIT|CLOSE|ABORT|CANCEL|FAIL|LOG|LOGF|IF
-          |FOR|REPEAT|AFTER|ELSE
+          const|skip|wait|close|abort|cancel|fail|log|logf|if|for
+          |repeat|after|else|CONST|SKIP|WAIT|CLOSE|ABORT|CANCEL|FAIL
+          |LOG|LOGF|IF|FOR|REPEAT|AFTER|ELSE
         ) {{kw_boundary}}
       scope: keyword.control.a11flow
     - match: '\b(parallel|unordered|max|of|by|before|desc|(?:failures|FAILURES)\s+(?:into|INTO)|until|while|numbered|base|PARALLEL|UNORDERED|MAX|OF|BY|BEFORE|DESC|UNTIL|WHILE|NUMBERED|BASE){{kw_boundary}}'
@@ -397,19 +399,19 @@ contexts:
           len|lower|upper|trim|text|number|i8|i16|i32|i64|i128|u8|u16
           |u32|u64|u128|f32|f64|floor|ceil|round|bool|keys|values|join
           |split|merge|contains|startswith|endswith|replace|match
-          |slice|to_chunk|from_chunk|strformat|b64encode|b64decode
-          |b64urlencode|b64urldecode|utf8encode|utf8decode|now
-          |infinite_future|infnite_future|infinite_past
+          |matches|matches_pattern|slice|to_chunk|from_chunk|strformat
+          |b64encode|b64decode|b64urlencode|b64urldecode|utf8encode
+          |utf8decode|now|infinite_future|infnite_future|infinite_past
           |infinite_duration|zero_duration|duration|time|seconds
           |nanoseconds|microseconds|milliseconds|minutes|hours
           |parse_time|parse_duration|integer|int|string|bytes|object
           |list|boolean|array|any|json|option|status|null|LEN|LOWER
           |UPPER|TRIM|TEXT|NUMBER|I8|I16|I32|I64|I128|U8|U16|U32|U64
           |U128|F32|F64|FLOOR|CEIL|ROUND|BOOL|KEYS|VALUES|JOIN|SPLIT
-          |MERGE|CONTAINS|STARTSWITH|ENDSWITH|REPLACE|MATCH|SLICE
-          |TO_CHUNK|FROM_CHUNK|STRFORMAT|B64ENCODE|B64DECODE
-          |B64URLENCODE|B64URLDECODE|UTF8ENCODE|UTF8DECODE|NOW
-          |INFINITE_FUTURE|INFNITE_FUTURE|INFINITE_PAST
+          |MERGE|CONTAINS|STARTSWITH|ENDSWITH|REPLACE|MATCH|MATCHES
+          |MATCHES_PATTERN|SLICE|TO_CHUNK|FROM_CHUNK|STRFORMAT
+          |B64ENCODE|B64DECODE|B64URLENCODE|B64URLDECODE|UTF8ENCODE
+          |UTF8DECODE|NOW|INFINITE_FUTURE|INFNITE_FUTURE|INFINITE_PAST
           |INFINITE_DURATION|ZERO_DURATION|DURATION|TIME|SECONDS
           |NANOSECONDS|MICROSECONDS|MILLISECONDS|MINUTES|HOURS
           |PARSE_TIME|PARSE_DURATION|INTEGER|INT|STRING|BYTES|OBJECT
@@ -449,6 +451,10 @@ contexts:
       scope: constant.numeric.duration.a11flow
     - match: '\b-?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?\b'
       scope: constant.numeric.a11flow
+
+  regex-literals:
+    - match: '(?<![A-Za-z0-9_$)\]])/(?![ \t])(?:\\.|\[[^\n]*?\]|[^/\\\n])+/[ims]*'
+      scope: string.regexp.a11flow
 
   strings:
     # Match `"""..."""` first so three quotes are not read as an empty string

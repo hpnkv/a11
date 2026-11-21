@@ -64,10 +64,8 @@ void PermanentEvent::Notify() {
   while (cases_to_be_selected_) {
     internal::CaseInSelectClause* case_in_select_clause = cases_to_be_selected_;
     thread::MutexLock l2(&case_in_select_clause->selector->mu);
-    case_in_select_clause->TryPick();
-    // Continued storage of enqueued_list_ after TryPick() is guaranteed by
-    // selector->mu
     internal::UnlinkFromList(&cases_to_be_selected_, case_in_select_clause);
+    case_in_select_clause->TryPick();
   }
 }
 

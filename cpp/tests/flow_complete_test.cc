@@ -75,6 +75,16 @@ TEST(FlowComplete, PlainPipelineNamesOfferCompletionSubjects) {
              "take until"));
 }
 
+TEST(FlowComplete, OffersModuleConstantsAsValueSources) {
+  const auto* offered = Find(
+      "const int kLimit = 3\nflow f { out n: int\n"
+      "  value = |CARET|\n}",
+      "kLimit");
+  ASSERT_NE(offered, nullptr);
+  EXPECT_EQ(offered->kind, ProposalKind::kVariable);
+  EXPECT_NE(offered->documentation.find("Constant"), std::string::npos);
+}
+
 TEST(FlowComplete, VariablesCarryKnownTypesIntoSuggestions) {
   const auto* inferred =
       Find("flow f {\n  answer = \"ready\"\n  next = |CARET|", "answer");

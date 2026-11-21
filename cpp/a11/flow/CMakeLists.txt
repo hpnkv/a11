@@ -12,15 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# The Flow language, as a component that depends on nothing but the standard
-# library, Abseil and nlohmann.
+# The Flow language depends on the standard library, Abseil, nlohmann and RE2.
 #
-# That is deliberate and load-bearing: the lexer, parser, resolver, inspector,
-# formatter and highlighter are what editors and CI need, and keeping them clear
-# of OpenSSL, libuv, nghttp2, libdatachannel and PortAudio is what lets the
-# tooling ship as a small binary on platforms where the full runtime is not
-# built. The executing half of the language lives in A11_FLOW_RUNTIME_SOURCES,
-# which does link the node and action layers.
+# The tooling runs without OpenSSL, libuv, nghttp2, libdatachannel and
+# PortAudio. The executing half lives in A11_FLOW_RUNTIME_SOURCES and links
+# the node and action layers.
 set(A11_FLOW_LANG_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/catalogue.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/complete.cc

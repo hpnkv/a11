@@ -398,6 +398,9 @@ nlohmann::json NodeJson(const syntax::Node* node) {
       value["name"] = bind->name.text;
       value["names"] = WordList(bind->names);
       value["value"] = NodeJson(bind->value.get());
+      if (bind->constant) {
+        value["constant"] = true;
+      }
       break;
     }
     case syntax::NodeKind::kBlock: {
@@ -995,6 +998,8 @@ nlohmann::json ConstantToJsonValue(const syntax::Constant& constant) {
       return constant.number;
     case syntax::Constant::Kind::kString:
       return constant.text;
+    case syntax::Constant::Kind::kRegex:
+      return nlohmann::json{{"$regex", constant.text}};
     case syntax::Constant::Kind::kDuration:
       // Tagged rather than a bare number: `250ms` and `0.25` are different
       // things, and a reader of this format should not have to guess which.
@@ -1055,12 +1060,27 @@ nlohmann::json SyntaxToJsonValue(std::string_view source,
                        {"scope", symbol.scope},
                        {"at", LocationJson(symbol.extent)}});
   }
-  return nlohmann::json{
+  nlohmann::json written{
       {"format", kSyntaxFormat}, {"source", std::string(source)},
       {"flows", flows},          {"imports", imports},
       {"modules", modules},      {"exports", exports},
       {"structs", dtos},         {"diagnostics", diagnostics},
   };
+  if (!result.constants.empty()) {
+    auto& constants = written["constants"] = nlohmann::json::array();
+    for (const auto& constant : result.constants) {
+      nlohmann::json entry{{"name", constant.name.text},
+                           {"scope", constant.scope},
+                           {"exported", constant.exported},
+                           {"value", NodeJson(constant.value.get())},
+                           {"at", LocationJson(constant.extent)}};
+      if (constant.type.has_value()) {
+        entry["type"] = TypeJson(*constant.type);
+      }
+      constants.push_back(std::move(entry));
+    }
+  }
+  return written;
 }
 
 std::string SyntaxToJson(std::string_view source, const ParseResult& result) {
@@ -1379,12 +1399,24 @@ nlohmann::json PlanToJsonValue(std::string_view source_name,
   for (const DtoPlan& dto : program.dtos) {
     dtos.push_back(DtoToJson(dto));
   }
-  return nlohmann::json{
+  nlohmann::json written{
       {"format", kPlanFormat},
       {"source", std::string(source_name)},
       {"flows", flows},
       {"structs", dtos},
   };
+  if (!program.constants.empty()) {
+    auto& constants = written["constants"] = nlohmann::json::object();
+    for (const auto& constant : program.constants) {
+      nlohmann::json entry{{"value", ConstantToJsonValue(constant.value)},
+                           {"exported", constant.exported}};
+      if (constant.type.has_value()) {
+        entry["type"] = TypeJson(*constant.type);
+      }
+      constants[constant.name] = std::move(entry);
+    }
+  }
+  return written;
 }
 
 nlohmann::json DtoToJsonValue(const DtoPlan& dto,

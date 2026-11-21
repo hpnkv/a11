@@ -143,6 +143,10 @@ class Lexer {
         ReadWord();
         continue;
       }
+      if (letter == '/' && RegexCanStart()) {
+        ReadRegex();
+        continue;
+      }
       ReadPunctuation();
     }
 
@@ -201,15 +205,54 @@ class Lexer {
   }
 
   void Report(std::string_view code, std::string message, size_t start,
-              size_t end, Family family = Family::kSyntax) {
+              size_t end, Family family = Family::kSyntax,
+              Severity severity = Severity::kError) {
     Diagnostic diagnostic;
     diagnostic.code = std::string(code);
-    diagnostic.severity = Severity::kError;
+    diagnostic.severity = severity;
     diagnostic.family = family;
     diagnostic.message = std::move(message);
     diagnostic.range.start = Position{start, line_, Column(start)};
     diagnostic.range.end = Position{end, line_, Column(end)};
     result_.diagnostics.push_back(std::move(diagnostic));
+  }
+
+  void SuggestOperator(std::string_view found, std::string_view replacement,
+                       size_t start) {
+    Report(
+        "flow.syntax.unsupported-operator",
+        absl::StrCat("Flow uses '", replacement, "' instead of '", found, "'."),
+        start, start + found.size());
+    const std::string inserted = found == "!"
+                                     ? absl::StrCat("not ")
+                                     : absl::StrCat(" ", replacement, " ");
+    result_.diagnostics.back().fixes.push_back(
+        {absl::StrCat("Use '", replacement, "'"),
+         {{start, start + found.size(), inserted}},
+         true});
+  }
+
+  void WarnSuspiciousEscape(size_t start) {
+    if (start + 1 >= source_.size()) {
+      return;
+    }
+    const char letter = source_[start + 1];
+    if (letter == 'b') {
+      Report("flow.syntax.suspicious-escape",
+             "String escape '\\b' becomes a backspace; use a /.../ regex "
+             "literal for a word boundary.",
+             start, start + 2, Family::kSyntax, Severity::kWarning);
+      return;
+    }
+    if (std::string_view("wWdDsSpPBAZ").find(letter) ==
+        std::string_view::npos) {
+      return;
+    }
+    Report("flow.syntax.suspicious-escape",
+           absl::StrCat("String escape '\\", std::string(1, letter),
+                        "' removes the backslash; use a /.../ regex literal "
+                        "for patterns."),
+           start, start + 2, Family::kSyntax, Severity::kWarning);
   }
 
   /// The value of a `"""..."""` string with source indentation removed.
@@ -327,6 +370,7 @@ class Lexer {
     std::vector<StringEscape> escapes;
     while (index_ < source_.size()) {
       if (source_[index_] == '\\' && index_ + 1 < source_.size()) {
+        WarnSuspiciousEscape(index_);
         escapes.push_back(EscapeAt(index_));
         if (source_[index_ + 1] == '\n') {
           ++line_;
@@ -390,6 +434,7 @@ class Lexer {
       }
       if (letter == '\\') {
         if (index_ + 1 < source_.size() && source_[index_ + 1] != '\n') {
+          WarnSuspiciousEscape(index_);
           escapes.push_back(EscapeAt(index_));
         }
         ++index_;
@@ -526,6 +571,73 @@ class Lexer {
     Push(TokenKind::kWord, start, index_);
   }
 
+  bool RegexCanStart() const {
+    if (result_.tokens.empty()) {
+      return true;
+    }
+    const Token& previous = result_.tokens.back();
+    if (previous.kind == TokenKind::kWord) {
+      const std::string word = vocabulary::Canonical(previous.text);
+      if (word == "match" || word == "matching" || word == "if" ||
+          word == "where" || word == "map" || word == "then" || word == "not" ||
+          word == "and" || word == "or" || word == "default") {
+        return true;
+      }
+      return word == "all" && result_.tokens.size() >= 2 &&
+             vocabulary::Canonical(
+                 result_.tokens[result_.tokens.size() - 2].text) == "match";
+    }
+    switch (previous.kind) {
+      case TokenKind::kNewline:
+      case TokenKind::kSemicolon:
+      case TokenKind::kEqual:
+      case TokenKind::kComma:
+      case TokenKind::kColon:
+      case TokenKind::kLeftParen:
+      case TokenKind::kLeftBracket:
+      case TokenKind::kLeftBrace:
+      case TokenKind::kPlus:
+      case TokenKind::kMinus:
+      case TokenKind::kStar:
+      case TokenKind::kSlash:
+      case TokenKind::kPercent:
+      case TokenKind::kPipe:
+      case TokenKind::kArrow:
+      case TokenKind::kEqualEqual:
+      case TokenKind::kBangEqual:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  void ReadRegex() {
+    const size_t start = index_++;
+    bool escaped = false;
+    bool in_class = false;
+    while (index_ < source_.size() && source_[index_] != '\n') {
+      const char ch = source_[index_++];
+      if (escaped) {
+        escaped = false;
+      } else if (ch == '\\') {
+        escaped = true;
+      } else if (ch == '[') {
+        in_class = true;
+      } else if (ch == ']') {
+        in_class = false;
+      } else if (ch == '/' && !in_class) {
+        while (index_ < source_.size() && IsAsciiLetter(source_[index_])) {
+          ++index_;
+        }
+        Push(TokenKind::kRegex, start, index_);
+        return;
+      }
+    }
+    Report("flow.form.bad-pattern", "Unterminated regex literal.", start,
+           index_, Family::kForm);
+    Push(TokenKind::kBad, start, index_);
+  }
+
   void ReadPunctuation() {
     const size_t start = index_;
     const char letter = source_[index_];
@@ -565,6 +677,18 @@ class Lexer {
     }
     if (letter == '>' && next == '=') {
       return Take(TokenKind::kGreaterEqual, start, 2);
+    }
+    if (letter == '&' && next == '&') {
+      SuggestOperator("&&", "and", start);
+      return Take(TokenKind::kBad, start, 2);
+    }
+    if (letter == '|' && next == '|') {
+      SuggestOperator("||", "or", start);
+      return Take(TokenKind::kBad, start, 2);
+    }
+    if (letter == '!') {
+      SuggestOperator("!", "not", start);
+      return Take(TokenKind::kBad, start, 1);
     }
 
     switch (letter) {
@@ -654,6 +778,8 @@ std::string_view KindName(TokenKind kind) {
       return "comment";
     case TokenKind::kString:
       return "string";
+    case TokenKind::kRegex:
+      return "regex";
     case TokenKind::kNumber:
       return "number";
     case TokenKind::kDuration:
@@ -728,24 +854,43 @@ std::string_view KindName(TokenKind kind) {
 
 TokenKind KindFromName(std::string_view name) {
   static constexpr TokenKind kAll[] = {
-      TokenKind::kNewline,      TokenKind::kSemicolon,
-      TokenKind::kComment,      TokenKind::kString,
-      TokenKind::kNumber,       TokenKind::kDuration,
-      TokenKind::kWord,         TokenKind::kDot,
-      TokenKind::kQuestionDot,  TokenKind::kQuestionBracket,
-      TokenKind::kRange,        TokenKind::kSpread,
-      TokenKind::kArrow,        TokenKind::kCarry,
-      TokenKind::kEqual,        TokenKind::kEqualEqual,
-      TokenKind::kBangEqual,    TokenKind::kLess,
-      TokenKind::kLessEqual,    TokenKind::kGreater,
-      TokenKind::kGreaterEqual, TokenKind::kPlus,
-      TokenKind::kMinus,        TokenKind::kPipe,
-      TokenKind::kColon,        TokenKind::kScope,
-      TokenKind::kStar,         TokenKind::kSlash,
-      TokenKind::kPercent,      TokenKind::kComma,
-      TokenKind::kLeftBrace,    TokenKind::kRightBrace,
-      TokenKind::kLeftParen,    TokenKind::kRightParen,
-      TokenKind::kLeftBracket,  TokenKind::kRightBracket,
+      TokenKind::kNewline,
+      TokenKind::kSemicolon,
+      TokenKind::kComment,
+      TokenKind::kString,
+      TokenKind::kRegex,
+      TokenKind::kNumber,
+      TokenKind::kDuration,
+      TokenKind::kWord,
+      TokenKind::kDot,
+      TokenKind::kQuestionDot,
+      TokenKind::kQuestionBracket,
+      TokenKind::kRange,
+      TokenKind::kSpread,
+      TokenKind::kArrow,
+      TokenKind::kCarry,
+      TokenKind::kEqual,
+      TokenKind::kEqualEqual,
+      TokenKind::kBangEqual,
+      TokenKind::kLess,
+      TokenKind::kLessEqual,
+      TokenKind::kGreater,
+      TokenKind::kGreaterEqual,
+      TokenKind::kPlus,
+      TokenKind::kMinus,
+      TokenKind::kPipe,
+      TokenKind::kColon,
+      TokenKind::kScope,
+      TokenKind::kStar,
+      TokenKind::kSlash,
+      TokenKind::kPercent,
+      TokenKind::kComma,
+      TokenKind::kLeftBrace,
+      TokenKind::kRightBrace,
+      TokenKind::kLeftParen,
+      TokenKind::kRightParen,
+      TokenKind::kLeftBracket,
+      TokenKind::kRightBracket,
       TokenKind::kEnd,
   };
   for (const TokenKind kind : kAll) {

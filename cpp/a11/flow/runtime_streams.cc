@@ -727,6 +727,30 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
         });
   }
   if (name == "match") {
+    if (stage.match_regex) {
+      const SpanFields spans{stage.match_offset};
+      return per_value([&](const ItemPtr& item,
+                           std::vector<ItemPtr>& out) -> absl::Status {
+        ABSL_ASSIGN_OR_RETURN(const Value value, item->Read(&host));
+        const std::string subject = AsText(value);
+        if (stage.match_all) {
+          ABSL_ASSIGN_OR_RETURN(
+              auto found, MatchAllRegexLiteral(stage.text, subject,
+                                               &runner_->prepared(), spans));
+          for (Value& capture : found) {
+            out.push_back(Item::Of(std::move(capture)));
+          }
+        } else {
+          ABSL_ASSIGN_OR_RETURN(Value found,
+                                MatchRegexLiteral(stage.text, subject,
+                                                  &runner_->prepared(), spans));
+          if (!found.IsNull()) {
+            out.push_back(Item::Of(std::move(found)));
+          }
+        }
+        return absl::OkStatus();
+      });
+    }
     const auto& patterns = runner_->prepared().patterns;
     const auto cached = patterns.find(stage.text);
     std::optional<pattern::Compiled> fallback;
@@ -741,17 +765,18 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
       }
       compiled = &fallback->pattern;
     }
-    return per_value(
-        [&](const ItemPtr& item, std::vector<ItemPtr>& out) -> absl::Status {
-          ABSL_ASSIGN_OR_RETURN(const Value value, item->Read(&host));
-          Value found = MatchCompiled(*compiled, AsText(value));
-          // A value the pattern does not fit is dropped, which is what makes
-          // this a combined `where` and `map` stage.
-          if (!found.IsNull()) {
-            out.push_back(Item::Of(std::move(found)));
-          }
-          return absl::OkStatus();
-        });
+    return per_value([&](const ItemPtr& item,
+                         std::vector<ItemPtr>& out) -> absl::Status {
+      ABSL_ASSIGN_OR_RETURN(const Value value, item->Read(&host));
+      ABSL_ASSIGN_OR_RETURN(Value found, MatchCompiled(*compiled, AsText(value),
+                                                       {stage.match_offset}));
+      // A value the pattern does not fit is dropped, which is what makes
+      // this a combined `where` and `map` stage.
+      if (!found.IsNull()) {
+        out.push_back(Item::Of(std::move(found)));
+      }
+      return absl::OkStatus();
+    });
   }
   if (name == "flatten") {
     // The inverse of `batch`: a list becomes its own values, and anything else

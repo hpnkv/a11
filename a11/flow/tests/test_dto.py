@@ -27,7 +27,7 @@ import json
 
 import pytest
 
-from a11 import flow
+from a11 import flow, to_chunk
 from a11.flow.plan import _model_for_dto
 from a11.flow.tests.test_flow import registry, run_flow  # noqa: F401
 
@@ -101,6 +101,35 @@ async def test_a_shape_typed_port_carries_a_pydantic_model(
     assert source.rank == 0.5
     assert source.parent is None
     assert source.model_dump()["id"] == "a"
+    assert "parent" not in source.model_dump()
+    assert "parent" not in json.loads(
+        bytes(to_chunk(source, "application/json").data)
+    )
+
+
+@pytest.mark.asyncio
+async def test_omitted_struct_fields_stay_absent_in_json(registry):
+    result = await run_flow(
+        """
+        struct WebRenderOptions {
+          timeout: f64
+          max_redirects: int
+          include_image: bool
+          headers: std::json
+        }
+        flow options {
+          out value: std::json
+          WebRenderOptions{timeout: 30, max_redirects: 5} -> value
+        }
+        """,
+        registry,
+    )
+    value = result["value"]
+    assert value.model_dump() == {"timeout": 30.0, "max_redirects": 5}
+    assert json.loads(bytes(to_chunk(value, "application/json").data)) == {
+        "timeout": 30.0,
+        "max_redirects": 5,
+    }
 
 
 def test_the_model_is_built_once_per_shape():

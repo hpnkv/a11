@@ -145,6 +145,12 @@ run local_action(input) means run local_action(input: input). Arguments may
 appear in any order or mix shorthand with explicit port: expression values.
 
 x = expression or T x = expression initializes once per scope, eagerly.
+const [T] kName = expression captures one scalar value when reached; the
+binding and its Flow-owned list/record contents cannot be reassigned. At module
+scope, const [T] kName [exported] = value requires a closed expression of
+literals, lists, records, and other module constants. kThisLetterCase is a
+naming convention, not a requirement. Module constants may be imported and
+used in static defaults, patterns, enumerations, and bounds.
 Reassignment follows source order, including child-scope updates. Parallel
 conflicting updates are rejected. Names and destructuring patterns are lvalues.
 x = take source consumes one successive item; EOF fails.
@@ -279,7 +285,18 @@ escapes. Triple-quoted strings and comments remain intact.
 Prefer list[T] and list(value). list is a prelude alias of std::list; neither
 form requires an import. The qualified spelling remains valid.
 Stages stay unqualified. Functions are qualified: std::len, std::upper,
-std::join, std::match, std::strformat, std::now, std::duration, std::time.
+std::join, std::match, std::matches, std::matches_pattern, std::strformat, std::now,
+std::duration, std::time.
+Regex literals use /.../ with optional i, m and s flags and RE2 syntax.
+Named captures use (?<name>...). std::match returns the first match;
+std::matches returns a list of nonoverlapping matches. A match stage emits
+one result per input value; match all emits every result. An optional offset
+name wraps each capture as {value: captured, NAME: character_offset}.
+std::split(text, /separator/) and std::replace(text, /pattern/, replacement)
+accept regex literals; quoted separators and search strings remain literal.
+Regex replacements support $1, ${name}, and $$ for a literal dollar sign.
+std::matches_pattern(text, /pattern/) returns a boolean. A quoted "\\W+"
+is not a regex literal. Use and, or, not rather than &&, ||, !.
 from std import now makes now() available without a prefix.
 std::parse_time(text) and std::parse_duration(text) fail on invalid text;
 std::time(text) and std::duration(text) retain permissive conversions.

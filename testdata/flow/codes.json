@@ -115,6 +115,36 @@
       "summary": "Invalid 'match' pattern: unclosed hole, unknown kind, or duplicate hole name."
     },
     {
+      "code": "flow.form.constant-cycle",
+      "family": "form",
+      "severity": "error",
+      "summary": "Module constants have a dependency cycle."
+    },
+    {
+      "code": "flow.form.constant-depth",
+      "family": "form",
+      "severity": "error",
+      "summary": "Module constant dependencies exceed the safe depth."
+    },
+    {
+      "code": "flow.form.constant-initializer",
+      "family": "form",
+      "severity": "error",
+      "summary": "A module constant initializer is not a closed value expression."
+    },
+    {
+      "code": "flow.form.constant-type",
+      "family": "form",
+      "severity": "error",
+      "summary": "A constant does not fit its declared type."
+    },
+    {
+      "code": "flow.form.constant-value",
+      "family": "form",
+      "severity": "error",
+      "summary": "A local constant initializer is not one scalar value."
+    },
+    {
       "code": "flow.form.continuation-grouping",
       "family": "form",
       "severity": "error",
@@ -457,6 +487,12 @@
       "summary": "A call is used as a stream; select an output port."
     },
     {
+      "code": "flow.name.constant-reassignment",
+      "family": "name",
+      "severity": "error",
+      "summary": "A constant cannot be reassigned."
+    },
+    {
       "code": "flow.name.discard-bound",
       "family": "name",
       "severity": "error",
@@ -667,6 +703,12 @@
       "summary": "Unexpected text after a complete statement."
     },
     {
+      "code": "flow.syntax.suspicious-escape",
+      "family": "syntax",
+      "severity": "warning",
+      "summary": "A quoted string escape resembles regex syntax and loses its backslash."
+    },
+    {
       "code": "flow.syntax.unclosed",
       "family": "syntax",
       "severity": "error",
@@ -683,6 +725,12 @@
       "family": "syntax",
       "severity": "error",
       "summary": "Invalid character in Flow source."
+    },
+    {
+      "code": "flow.syntax.unsupported-operator",
+      "family": "syntax",
+      "severity": "error",
+      "summary": "Flow uses word operators instead of &&, ||, or !."
     },
     {
       "code": "flow.syntax.unterminated-string",

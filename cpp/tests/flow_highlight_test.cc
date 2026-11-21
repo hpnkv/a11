@@ -321,6 +321,12 @@ TEST(FlowHighlight, StringEscapesAreSeparateNonoverlappingSpans) {
   }
 }
 
+TEST(FlowHighlight, RegexLiteralHasOwnSemanticKind) {
+  const auto tokens = Coloured(R"(std::matches_pattern("x", /x+/i))");
+  EXPECT_NE(std::find(tokens.begin(), tokens.end(), "regex:/x+/i"),
+            tokens.end());
+}
+
 TEST(FlowHighlight, EveryTokenIsClassifiedAndNoneIsInvented) {
   const std::string source =
       "flow t {\n  in q: string\n  q | first 1 -> a  # done\n}\n";
@@ -338,6 +344,7 @@ TEST(FlowHighlight, EveryTokenIsClassifiedAndNoneIsInvented) {
 TEST(FlowHighlight, SemanticKindNamesRoundTrip) {
   for (const SemanticKind kind : {SemanticKind::kComment,
                                   SemanticKind::kString,
+                                  SemanticKind::kRegex,
                                   SemanticKind::kStringEscape,
                                   SemanticKind::kNumber,
                                   SemanticKind::kDuration,

@@ -34,7 +34,7 @@ namespace {
 using syntax::Node;
 using syntax::NodeKind;
 
-enum class MemberKind { kModule, kFlow, kType, kIntrinsic };
+enum class MemberKind { kModule, kFlow, kType, kConstant, kIntrinsic };
 
 struct Binding {
   size_t unit = static_cast<size_t>(-1);
@@ -569,6 +569,12 @@ LinkedModule LinkModules(std::string source, std::string identity,
           Binding{index, type->name.text, MemberKind::kType, type->exported,
                   type->name.location});
     }
+    for (const auto& constant : unit.parsed.constants) {
+      owned_module(constant.scope, constant.name.location);
+      Add(unit, constant.name.text,
+          Binding{index, constant.name.text, MemberKind::kConstant,
+                  constant.exported, constant.name.location});
+    }
     for (const auto& flow : unit.parsed.flows) {
       if (!flow->entry) {
         Add(unit, flow->name.text,
@@ -1037,6 +1043,25 @@ LinkedModule LinkModules(std::string source, std::string identity,
   const LineIndex lines(linked.source);
   for (size_t index = 0; index < units.size(); ++index) {
     auto& unit = *units[index];
+    for (auto& constant : unit.parsed.constants) {
+      if (constant.type.has_value()) {
+        resolve_type(index, constant.scope, *constant.type);
+      }
+      syntax::VisitMutableSubtree(*constant.value, [&](Node& node) {
+        if (auto* name = syntax::As<syntax::Name>(&node); name != nullptr) {
+          const auto binding = Lookup(units, index, constant.scope, name->name);
+          if (binding.has_value() && binding->kind == MemberKind::kConstant) {
+            name->name = target_of(*binding);
+          } else {
+            inaccessible(index, constant.scope, name->name, name->location);
+          }
+        }
+        if (auto* typed = syntax::As<syntax::TypedValue>(&node);
+            typed != nullptr) {
+          resolve_type(index, constant.scope, typed->type);
+        }
+      });
+    }
     for (auto& type : unit.parsed.dtos) {
       for (auto& field : type->fields) {
         resolve_type(index, type->scope, field->type,
@@ -1044,9 +1069,32 @@ LinkedModule LinkModules(std::string source, std::string identity,
                          ? target_of(unit.members.at(type->name.text))
                          : "");
       }
+      syntax::VisitMutableSubtree(*type, [&](Node& node) {
+        if (auto* name = syntax::As<syntax::Name>(&node); name != nullptr) {
+          const auto binding = Lookup(units, index, type->scope, name->name);
+          if (binding.has_value() && binding->kind == MemberKind::kConstant) {
+            name->name = target_of(*binding);
+          } else {
+            inaccessible(index, type->scope, name->name, name->location);
+          }
+        }
+      });
     }
     for (auto& flow : unit.parsed.flows) {
       const auto& env = environments[index].at(flow.get());
+      for (auto& header : flow->headers) {
+        if (header->default_source == nullptr) {
+          continue;
+        }
+        syntax::VisitMutableSubtree(*header->default_source, [&](Node& node) {
+          if (auto* name = syntax::As<syntax::Name>(&node); name != nullptr) {
+            const auto binding = Lookup(units, index, env, name->name);
+            if (binding.has_value() && binding->kind == MemberKind::kConstant) {
+              name->name = target_of(*binding);
+            }
+          }
+        });
+      }
       syntax::VisitMutableSubtree(*flow, [&](Node& node) {
         if (!budget->Check()) {
           return;
@@ -1112,6 +1160,37 @@ LinkedModule LinkModules(std::string source, std::string identity,
           resolve_type(index, env, *bind->type);
         }
       });
+      for (const auto& statement : flow->body) {
+        syntax::VisitSubtree(*statement, [&](const Node& node) {
+          const auto* name = syntax::As<syntax::Name>(&node);
+          if (name == nullptr) {
+            return;
+          }
+          const auto binding = Lookup(units, index, env, name->name);
+          if (binding.has_value() && binding->kind == MemberKind::kConstant) {
+            const auto alias = std::pair{name->name, target_of(*binding)};
+            if (std::find(flow->constant_aliases.begin(),
+                          flow->constant_aliases.end(),
+                          alias) == flow->constant_aliases.end()) {
+              flow->constant_aliases.push_back(alias);
+            }
+          }
+        });
+      }
+    }
+    for (auto& constant : unit.parsed.constants) {
+      const auto binding = unit.members.find(constant.name.text);
+      if (binding != unit.members.end()) {
+        constant.exported |= binding->second.exported;
+        constant.name.text = target_of(binding->second);
+      }
+      Shift(constant.extent, unit.start, lines);
+      Shift(constant.name.location, unit.start, lines);
+      if (constant.type.has_value()) {
+        ShiftType(*constant.type, unit.start, lines);
+      }
+      ShiftTree(*constant.value, unit.start, lines);
+      linked.parsed.constants.push_back(std::move(constant));
     }
     for (auto& type : unit.parsed.dtos) {
       const auto binding = unit.members.find(type->name.text);

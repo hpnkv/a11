@@ -23,6 +23,7 @@
 #include <gtest/gtest.h>
 
 #include "thread/concurrency.h"
+#include "thread/cases.h"
 #include "thread/executor.h"
 #include "thread/internal/work_queue.h"
 
@@ -241,6 +242,41 @@ TEST(ThreadSelectTest, NotificationWinsAConcurrentTimedSelection) {
     waiter->Join();
     EXPECT_EQ(selected.load(std::memory_order_acquire), 0);
   }
+}
+
+TEST(ThreadSelectTest, SelectedCaseUnregistersBeforeSelectorIsDestroyed) {
+  class DelayedSelectable final : public internal::Selectable {
+   public:
+    bool Handle(internal::CaseInSelectClause* case_state,
+                bool enqueue) override {
+      EXPECT_TRUE(enqueue);
+      pending.store(case_state, std::memory_order_release);
+      return false;
+    }
+
+    void Unregister(internal::CaseInSelectClause* case_state) override {
+      EXPECT_EQ(case_state, pending.load(std::memory_order_acquire));
+      unregistered.fetch_add(1, std::memory_order_release);
+    }
+
+    std::atomic<internal::CaseInSelectClause*> pending{nullptr};
+    std::atomic<int> unregistered{0};
+  } selectable;
+
+  int selected = -1;
+  std::thread waiter([&] { selected = Select({Case(&selectable)}); });
+  internal::CaseInSelectClause* pending = nullptr;
+  while ((pending = selectable.pending.load(std::memory_order_acquire)) ==
+         nullptr) {
+    std::this_thread::yield();
+  }
+  {
+    thread::MutexLock lock(&pending->selector->mu);
+    EXPECT_TRUE(pending->TryPick());
+  }
+  waiter.join();
+  EXPECT_EQ(selected, 0);
+  EXPECT_EQ(selectable.unregistered.load(std::memory_order_acquire), 1);
 }
 
 TEST(ThreadSelectTest, CancellationUnregistersOtherCasesAndReleasesFibers) {

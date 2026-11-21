@@ -495,6 +495,25 @@ async def test_stages_reshape_a_stream(registry):
 
 
 @pytest.mark.asyncio
+async def test_regex_match_all_exposes_each_capture_offset(registry):
+    result = await run_flow(
+        """
+        flow identifiers {
+          in  lines: string stream
+          out captures: object stream
+          lines | match all /id=(?<id>\\w+)/ offset "at" -> captures
+        }
+        """,
+        registry,
+        lines=["é id=one id=two"],
+    )
+    assert result["captures"] == [
+        {"id": {"value": "one", "at": 5}},
+        {"id": {"value": "two", "at": 12}},
+    ]
+
+
+@pytest.mark.asyncio
 async def test_first_stops_reading_without_stalling_the_producer(registry):
     result = await run_flow(
         """

@@ -69,6 +69,13 @@ Constant Constant::String(std::string value) {
   return constant;
 }
 
+Constant Constant::Regex(std::string value) {
+  Constant constant;
+  constant.kind = Kind::kRegex;
+  constant.text = std::move(value);
+  return constant;
+}
+
 Constant Constant::Duration(absl::Duration value) {
   Constant constant;
   constant.kind = Kind::kDuration;
@@ -101,6 +108,8 @@ std::string_view ConstantKindName(Constant::Kind kind) {
       return "number";
     case Constant::Kind::kString:
       return "string";
+    case Constant::Kind::kRegex:
+      return "regex";
     case Constant::Kind::kDuration:
       return "duration";
     case Constant::Kind::kList:
@@ -374,9 +383,18 @@ bool IsPureLiteralExpression(const Node& node) {
   return true;
 }
 
-std::optional<Constant> ConstantValue(const Node* node) {
+std::optional<Constant> ConstantValue(const Node* node,
+                                      const ConstantLookup* lookup) {
   if (const auto* literal = As<Literal>(node); literal != nullptr) {
     return literal->value;
+  }
+  if (lookup != nullptr) {
+    if (const auto* name = As<Name>(node); name != nullptr) {
+      return (*lookup)(name->name);
+    }
+    if (const auto* typed = As<TypedValue>(node); typed != nullptr) {
+      return ConstantValue(typed->value.get(), lookup);
+    }
   }
   if (const auto* list = As<ListLiteral>(node); list != nullptr) {
     Constant constant;
@@ -385,7 +403,8 @@ std::optional<Constant> ConstantValue(const Node* node) {
       // A spread of a constant list is still a constant: the items are known
       // here, so splicing them is folding rather than running anything.
       if (const Spread* spread = As<Spread>(item.get()); spread != nullptr) {
-        std::optional<Constant> held = ConstantValue(spread->value.get());
+        std::optional<Constant> held =
+            ConstantValue(spread->value.get(), lookup);
         if (!held.has_value() || held->kind != Constant::Kind::kList) {
           return std::nullopt;
         }
@@ -394,7 +413,7 @@ std::optional<Constant> ConstantValue(const Node* node) {
         }
         continue;
       }
-      std::optional<Constant> value = ConstantValue(item.get());
+      std::optional<Constant> value = ConstantValue(item.get(), lookup);
       if (!value.has_value()) {
         return std::nullopt;
       }
@@ -407,7 +426,8 @@ std::optional<Constant> ConstantValue(const Node* node) {
     constant.kind = Constant::Kind::kObject;
     for (const auto& [key, item] : object->pairs) {
       if (const Spread* spread = As<Spread>(item.get()); spread != nullptr) {
-        std::optional<Constant> held = ConstantValue(spread->value.get());
+        std::optional<Constant> held =
+            ConstantValue(spread->value.get(), lookup);
         if (!held.has_value() || held->kind != Constant::Kind::kObject) {
           return std::nullopt;
         }
@@ -416,7 +436,7 @@ std::optional<Constant> ConstantValue(const Node* node) {
         }
         continue;
       }
-      std::optional<Constant> value = ConstantValue(item.get());
+      std::optional<Constant> value = ConstantValue(item.get(), lookup);
       if (!value.has_value()) {
         return std::nullopt;
       }
@@ -669,6 +689,7 @@ void VisitChildren(const Node& node,
     case NodeKind::kRepeat: {
       const auto& repeat = static_cast<const Repeat&>(node);
       one(repeat.start);
+      one(repeat.max_source);
       all(repeat.body);
       one(repeat.termination);
       return;
@@ -697,10 +718,19 @@ void VisitChildren(const Node& node,
       one(static_cast<const NodeExpression&>(node).id);
       return;
     case NodeKind::kPortDeclaration:
-    case NodeKind::kHeaderDeclaration:
-    case NodeKind::kFieldDeclaration:
-      // What these hold is a type and a constant, neither of which is a node.
       return;
+    case NodeKind::kHeaderDeclaration:
+      one(static_cast<const HeaderDeclaration&>(node).default_source);
+      return;
+    case NodeKind::kFieldDeclaration: {
+      const auto& field = static_cast<const FieldDeclaration&>(node);
+      one(field.minimum_source);
+      one(field.maximum_source);
+      one(field.pattern_source);
+      one(field.enumeration_source);
+      one(field.default_source);
+      return;
+    }
     case NodeKind::kFlowDeclaration: {
       const auto& flow = static_cast<const FlowDeclaration&>(node);
       for (const PortDeclarationPtr& port : flow.ports) {

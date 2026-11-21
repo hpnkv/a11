@@ -45,6 +45,7 @@
 
 #include "a11/data/serial_tags.h"
 #include "a11/data/serialization.h"
+#include "a11/flow/regex_literal.h"
 #include "a11/flow/vocabulary.h"
 #include "a11/internal/regex.h"
 #include "a11/json_codec.h"
@@ -456,6 +457,7 @@ void AppendJson(const Value& value, std::string& out) {
       }
       return;
     case Value::Kind::kString:
+    case Value::Kind::kRegex:
       AppendJsonString(value.text(), out);
       return;
     case Value::Kind::kList: {
@@ -1141,6 +1143,10 @@ Value Value::String(std::string value) {
   return TextValue(Kind::kString, std::move(value));
 }
 
+Value Value::Regex(std::string value) {
+  return TextValue(Kind::kRegex, std::move(value));
+}
+
 Value Value::Bytes(data::Bytes value) {
   return TextValue(Kind::kBytes, std::move(value));
 }
@@ -1307,6 +1313,8 @@ Value Value::Of(const syntax::Constant& constant) {
       return Double(constant.number);
     case syntax::Constant::Kind::kString:
       return String(constant.text);
+    case syntax::Constant::Kind::kRegex:
+      return Regex(constant.text);
     case syntax::Constant::Kind::kDuration:
       return Duration(constant.duration);
     case syntax::Constant::Kind::kList: {
@@ -1363,6 +1371,7 @@ bool operator==(const Value& left, const Value& right) {
     case Value::Kind::kTypedFloat:
       return left.number() == right.number();
     case Value::Kind::kString:
+    case Value::Kind::kRegex:
     case Value::Kind::kBytes:
       return left.text() == right.text();
     case Value::Kind::kList:
@@ -1526,6 +1535,7 @@ bool Truthy(const Value& value) {
     case Value::Kind::kTypedFloat:
       return value.number() != 0.0;
     case Value::Kind::kString:
+    case Value::Kind::kRegex:
     case Value::Kind::kBytes:
       return !value.text().empty();
     case Value::Kind::kList:
@@ -1546,6 +1556,7 @@ std::string AsText(const Value& value) {
     case Value::Kind::kNull:
       return {};
     case Value::Kind::kString:
+    case Value::Kind::kRegex:
     case Value::Kind::kBytes:
       return value.text();
     case Value::Kind::kBool:
@@ -1599,6 +1610,7 @@ Value AsNumber(const Value& value) {
       return Value::Double(static_cast<double>(*nanoseconds) / 1e9);
     }
     case Value::Kind::kString:
+    case Value::Kind::kRegex:
     case Value::Kind::kBytes: {
       const std::string trimmed(absl::StripAsciiWhitespace(value.text()));
       if (trimmed.empty()) {
@@ -1686,40 +1698,215 @@ Value AsHole(pattern::HoleType type, std::string_view text) {
   return written;
 }
 
+namespace {
+
+absl::StatusOr<Value> WithSpans(Value value, std::optional<size_t> offset,
+                                SpanFields spans) {
+  if (spans.offset.empty()) {
+    return value;
+  }
+  if (spans.offset == "value") {
+    return absl::InvalidArgumentError("Offset name must differ from 'value'.");
+  }
+  Value::Pairs fields;
+  fields.emplace_back("value", std::move(value));
+  if (offset.has_value() &&
+      *offset > static_cast<size_t>(std::numeric_limits<std::int64_t>::max())) {
+    return absl::ResourceExhaustedError("A capture offset exceeds int64.");
+  }
+  fields.emplace_back(std::string(spans.offset),
+                      offset.has_value()
+                          ? Value::Integer(static_cast<std::int64_t>(*offset))
+                          : Value::Null());
+  return Value::Object(std::move(fields));
+}
+
+}  // namespace
+
 absl::StatusOr<Value> MatchPattern(std::string_view text,
-                                   std::string_view subject) {
+                                   std::string_view subject, SpanFields spans) {
   const pattern::Compiled compiled = pattern::Compile(text);
   if (!compiled.ok()) {
     return absl::InvalidArgumentError(absl::StrCat(
         "The pattern '", text, "' cannot be read: ", compiled.error));
   }
-  return MatchCompiled(compiled.pattern, subject);
+  return MatchCompiled(compiled.pattern, subject, spans);
 }
 
-Value MatchCompiled(const pattern::Pattern& compiled,
-                    std::string_view subject) {
-  const std::optional<std::vector<pattern::Capture>> captures =
-      pattern::Match(compiled, subject);
-  if (!captures.has_value()) {
+absl::StatusOr<Value> MatchCompiled(const pattern::Pattern& compiled,
+                                    std::string_view subject,
+                                    SpanFields spans) {
+  const std::optional<pattern::MatchResult> match =
+      pattern::MatchWithSpans(compiled, subject);
+  if (!match.has_value()) {
     return Value::Null();
   }
+  const auto offset_of = [&](size_t byte) -> std::optional<size_t> {
+    return spans.offset.empty()
+               ? std::nullopt
+               : std::optional<size_t>(Utf8Length(subject.substr(0, byte)));
+  };
 
   if (!compiled.AllNamed()) {
     std::vector<Value> items;
-    items.reserve(captures->size());
-    for (size_t index = 0; index < captures->size(); ++index) {
-      items.push_back(
-          AsHole(compiled.holes[index].type, (*captures)[index].text));
+    items.reserve(match->captures.size());
+    for (size_t index = 0; index < match->captures.size(); ++index) {
+      const auto& capture = match->captures[index];
+      ABSL_ASSIGN_OR_RETURN(
+          Value item,
+          WithSpans(AsHole(compiled.holes[index].type, capture.text),
+                    offset_of(capture.start), spans));
+      items.push_back(std::move(item));
     }
     return Value::List(std::move(items));
   }
   Value::Pairs pairs;
-  pairs.reserve(captures->size());
-  for (size_t index = 0; index < captures->size(); ++index) {
+  pairs.reserve(match->captures.size());
+  for (size_t index = 0; index < match->captures.size(); ++index) {
     const pattern::Hole& hole = compiled.holes[index];
-    pairs.emplace_back(hole.name, AsHole(hole.type, (*captures)[index].text));
+    const auto& capture = match->captures[index];
+    ABSL_ASSIGN_OR_RETURN(Value item,
+                          WithSpans(AsHole(hole.type, capture.text),
+                                    offset_of(capture.start), spans));
+    pairs.emplace_back(hole.name, std::move(item));
   }
   return Value::Object(std::move(pairs));
+}
+
+namespace {
+
+absl::StatusOr<std::shared_ptr<const a11::internal::Regex>> RegexForLiteral(
+    std::string_view literal, const PreparedExpressions* prepared) {
+  if (prepared != nullptr) {
+    const auto found = prepared->regexes.find(literal);
+    if (found != prepared->regexes.end()) {
+      return found->second;
+    }
+  }
+  ABSL_ASSIGN_OR_RETURN(std::string expression, RegexExpression(literal));
+  ABSL_ASSIGN_OR_RETURN(auto compiled, a11::internal::CompileRegex(expression));
+  if (compiled.CaptureCount() > 32) {
+    return absl::InvalidArgumentError("A regex may capture at most 32 groups.");
+  }
+  bool named = false;
+  bool positional = false;
+  for (size_t group = 1; group <= compiled.CaptureCount(); ++group) {
+    named |= !compiled.CaptureName(group).empty();
+    positional |= compiled.CaptureName(group).empty();
+  }
+  if (named && positional) {
+    return absl::InvalidArgumentError(
+        "Use either named or positional capture groups in one regex.");
+  }
+  return std::make_shared<const a11::internal::Regex>(std::move(compiled));
+}
+
+absl::StatusOr<Value> RegexCaptureValue(const a11::internal::Regex& regex,
+                                        const a11::internal::RegexMatch& match,
+                                        std::string_view subject,
+                                        size_t base_byte, size_t base_chars,
+                                        SpanFields spans) {
+  const auto offset_of =
+      [&](const a11::internal::RegexCapture& capture) -> std::optional<size_t> {
+    if (spans.offset.empty() || !capture.offset.has_value()) {
+      return std::nullopt;
+    }
+    return base_chars +
+           Utf8Length(subject.substr(base_byte, *capture.offset - base_byte));
+  };
+  if (regex.CaptureCount() == 0) {
+    const auto& capture = match.groups[0];
+    ABSL_ASSIGN_OR_RETURN(Value value,
+                          WithSpans(Value::String(std::string(*capture.text)),
+                                    offset_of(capture), spans));
+    Value::Pairs pair;
+    pair.emplace_back("match", std::move(value));
+    return Value::Object(std::move(pair));
+  }
+  if (!regex.CaptureName(1).empty()) {
+    Value::Pairs pairs;
+    pairs.reserve(regex.CaptureCount());
+    for (size_t group = 1; group < match.groups.size(); ++group) {
+      const auto& capture = match.groups[group];
+      ABSL_ASSIGN_OR_RETURN(
+          Value item, WithSpans(capture.text.has_value()
+                                    ? Value::String(std::string(*capture.text))
+                                    : Value::Null(),
+                                offset_of(capture), spans));
+      pairs.emplace_back(std::string(regex.CaptureName(group)),
+                         std::move(item));
+    }
+    return Value::Object(std::move(pairs));
+  }
+  std::vector<Value> items;
+  items.reserve(regex.CaptureCount());
+  for (size_t group = 1; group < match.groups.size(); ++group) {
+    const auto& capture = match.groups[group];
+    ABSL_ASSIGN_OR_RETURN(
+        Value item, WithSpans(capture.text.has_value()
+                                  ? Value::String(std::string(*capture.text))
+                                  : Value::Null(),
+                              offset_of(capture), spans));
+    items.push_back(std::move(item));
+  }
+  return Value::List(std::move(items));
+}
+
+}  // namespace
+
+absl::StatusOr<Value> MatchRegexLiteral(std::string_view literal,
+                                        std::string_view subject,
+                                        const PreparedExpressions* prepared,
+                                        SpanFields spans) {
+  ABSL_ASSIGN_OR_RETURN(auto regex, RegexForLiteral(literal, prepared));
+  ABSL_ASSIGN_OR_RETURN(auto match, regex->Find(subject));
+  if (!match.has_value()) {
+    return Value::Null();
+  }
+  return RegexCaptureValue(*regex, *match, subject, 0, 0, spans);
+}
+
+absl::StatusOr<std::vector<Value>> MatchAllRegexLiteral(
+    std::string_view literal, std::string_view subject,
+    const PreparedExpressions* prepared, SpanFields spans) {
+  ABSL_ASSIGN_OR_RETURN(auto regex, RegexForLiteral(literal, prepared));
+  std::vector<Value> results;
+  size_t offset = 0;
+  size_t counted_byte = 0;
+  size_t counted_chars = 0;
+  while (offset <= subject.size()) {
+    ABSL_ASSIGN_OR_RETURN(auto match, regex->Find(subject, offset));
+    if (!match.has_value()) {
+      break;
+    }
+    if (results.size() >= 65536) {
+      return absl::ResourceExhaustedError(
+          "Too many regex matches in one value.");
+    }
+    if (!spans.offset.empty()) {
+      counted_chars +=
+          Utf8Length(subject.substr(counted_byte, match->start - counted_byte));
+    }
+    counted_byte = match->start;
+    ABSL_ASSIGN_OR_RETURN(
+        Value captured, RegexCaptureValue(*regex, *match, subject, counted_byte,
+                                          counted_chars, spans));
+    results.push_back(std::move(captured));
+    offset = match->end;
+    if (match->start == match->end) {
+      if (offset == subject.size()) {
+        break;
+      }
+      ++offset;
+      while (offset < subject.size() && utf8::IsContinuation(subject[offset])) {
+        ++offset;
+      }
+    }
+    counted_chars +=
+        Utf8Length(subject.substr(counted_byte, offset - counted_byte));
+    counted_byte = offset;
+  }
+  return results;
 }
 
 namespace {
@@ -2294,6 +2481,131 @@ std::vector<std::string> Endings(const Value& value) {
   return options;
 }
 
+absl::StatusOr<std::string> RegexReplacement(
+    std::string_view replacement, const a11::internal::Regex& regex,
+    const a11::internal::RegexMatch& match) {
+  std::string result;
+  for (size_t at = 0; at < replacement.size(); ++at) {
+    if (replacement[at] != '$' || at + 1 == replacement.size()) {
+      result.push_back(replacement[at]);
+      continue;
+    }
+    const char next = replacement[at + 1];
+    if (next == '$') {
+      result.push_back('$');
+      ++at;
+      continue;
+    }
+    size_t group = 0;
+    if (next == '{') {
+      const size_t end = replacement.find('}', at + 2);
+      if (end == std::string_view::npos || end == at + 2) {
+        return Invalid("A named regex replacement needs ${name}.");
+      }
+      const std::string_view name = replacement.substr(at + 2, end - at - 2);
+      group = regex.CaptureCount() + 1;
+      for (size_t candidate = 1; candidate <= regex.CaptureCount();
+           ++candidate) {
+        if (regex.CaptureName(candidate) == name) {
+          group = candidate;
+          break;
+        }
+      }
+      at = end;
+    } else if (next >= '0' && next <= '9') {
+      group = static_cast<size_t>(next - '0');
+      ++at;
+      if (at + 1 < replacement.size() && replacement[at + 1] >= '0' &&
+          replacement[at + 1] <= '9') {
+        group = group * 10 + static_cast<size_t>(replacement[++at] - '0');
+      }
+    } else {
+      result.push_back('$');
+      continue;
+    }
+    if (group > regex.CaptureCount()) {
+      return Invalid("Regex replacement names a missing capture group.");
+    }
+    if (match.groups[group].text.has_value()) {
+      result.append(*match.groups[group].text);
+    }
+  }
+  return result;
+}
+
+absl::StatusOr<Value> RegexSplit(std::string_view source,
+                                 std::string_view literal,
+                                 const PreparedExpressions* prepared) {
+  ABSL_ASSIGN_OR_RETURN(auto regex, RegexForLiteral(literal, prepared));
+  std::vector<Value> pieces;
+  size_t cursor = 0;
+  size_t emitted_through = 0;
+  while (cursor <= source.size()) {
+    ABSL_ASSIGN_OR_RETURN(auto match, regex->Find(source, cursor));
+    if (!match.has_value()) {
+      break;
+    }
+    if (pieces.size() >= 65536) {
+      return absl::ResourceExhaustedError(
+          "Too many regex splits in one value.");
+    }
+    pieces.push_back(Value::String(std::string(
+        source.substr(emitted_through, match->start - emitted_through))));
+    emitted_through = match->end;
+    cursor = match->end;
+    if (match->start == match->end) {
+      if (cursor == source.size()) {
+        break;
+      }
+      ++cursor;
+      while (cursor < source.size() && utf8::IsContinuation(source[cursor])) {
+        ++cursor;
+      }
+    }
+  }
+  pieces.push_back(Value::String(std::string(source.substr(emitted_through))));
+  return Value::List(std::move(pieces));
+}
+
+absl::StatusOr<Value> RegexReplace(std::string_view source,
+                                   std::string_view literal,
+                                   std::string_view replacement,
+                                   const PreparedExpressions* prepared) {
+  ABSL_ASSIGN_OR_RETURN(auto regex, RegexForLiteral(literal, prepared));
+  std::string result;
+  size_t cursor = 0;
+  size_t emitted_through = 0;
+  size_t matches = 0;
+  while (cursor <= source.size()) {
+    ABSL_ASSIGN_OR_RETURN(auto match, regex->Find(source, cursor));
+    if (!match.has_value()) {
+      break;
+    }
+    if (++matches > 65536) {
+      return absl::ResourceExhaustedError(
+          "Too many regex replacements in one value.");
+    }
+    result.append(
+        source.substr(emitted_through, match->start - emitted_through));
+    ABSL_ASSIGN_OR_RETURN(std::string inserted,
+                          RegexReplacement(replacement, *regex, *match));
+    result.append(inserted);
+    emitted_through = match->end;
+    cursor = match->end;
+    if (match->start == match->end) {
+      if (cursor == source.size()) {
+        break;
+      }
+      ++cursor;
+      while (cursor < source.size() && utf8::IsContinuation(source[cursor])) {
+        ++cursor;
+      }
+    }
+  }
+  result.append(source.substr(emitted_through));
+  return Value::String(std::move(result));
+}
+
 }  // namespace
 
 absl::StatusOr<Value> CallBuiltin(std::string_view name,
@@ -2304,6 +2616,22 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
     name.remove_prefix(5);
   }
   const Value& first = Argument(arguments, 0);
+  SpanFields spans;
+  if (name == "match" || name == "matches") {
+    if (arguments.size() < 2 || arguments.size() > 3) {
+      return Invalid("A match needs a pattern, text and optional offset name.");
+    }
+    if (arguments.size() == 3) {
+      const Value& field = arguments[2];
+      if (field.IsNull()) {
+        // Null leaves capture values unchanged.
+      } else if (field.kind() != Value::Kind::kString || field.text().empty()) {
+        return Invalid("A span field name must be a nonempty string or null.");
+      } else {
+        spans.offset = field.text();
+      }
+    }
+  }
   if (prepared != nullptr && first.kind() == Value::Kind::kString) {
     if (name == "strformat") {
       const auto cached = prepared->formats.find(first.text());
@@ -2316,7 +2644,8 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
     if (name == "match") {
       const auto cached = prepared->patterns.find(first.text());
       if (cached != prepared->patterns.end()) {
-        return MatchCompiled(cached->second, AsText(Argument(arguments, 1)));
+        return MatchCompiled(cached->second, AsText(Argument(arguments, 1)),
+                             spans);
       }
     }
   }
@@ -2330,8 +2659,21 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
     return Coerce(first, type,
                   CoerceContext{.bridge = bridge, .shapes = nullptr});
   }
-  if (name == "match") {
-    return MatchPattern(AsText(first), AsText(Argument(arguments, 1)));
+  if (name == "match" || name == "matches") {
+    const std::string subject = AsText(arguments[1]);
+    if (first.kind() == Value::Kind::kRegex) {
+      if (name == "matches") {
+        ABSL_ASSIGN_OR_RETURN(
+            auto found,
+            MatchAllRegexLiteral(first.text(), subject, prepared, spans));
+        return Value::List(std::move(found));
+      }
+      return MatchRegexLiteral(first.text(), subject, prepared, spans);
+    }
+    if (name == "matches") {
+      return Invalid("std::matches requires a regex literal.");
+    }
+    return MatchPattern(AsText(first), subject, spans);
   }
   if (name == "strformat") {
     return Value::String(
@@ -2629,6 +2971,9 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
   if (name == "split") {
     const Value& separator = Argument(arguments, 1);
     const std::string text = AsText(first);
+    if (separator.kind() == Value::Kind::kRegex) {
+      return RegexSplit(text, separator.text(), prepared);
+    }
     std::vector<Value> pieces;
     if (Truthy(separator)) {
       for (std::string_view piece : absl::StrSplit(text, AsText(separator))) {
@@ -2666,6 +3011,16 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
   if (name == "contains") {
     return Value::Bool(Contains(first, Argument(arguments, 1)));
   }
+  if (name == "matches_pattern") {
+    if (arguments.size() != 2 ||
+        arguments[1].kind() != Value::Kind::kRegex) {
+      return Invalid("std::matches_pattern needs text, then a regex literal.");
+    }
+    ABSL_ASSIGN_OR_RETURN(auto regex,
+                          RegexForLiteral(arguments[1].text(), prepared));
+    ABSL_ASSIGN_OR_RETURN(auto found, regex->Find(AsText(first)));
+    return Value::Bool(found.has_value());
+  }
   if (name == "startswith" || name == "endswith") {
     const std::string text = AsText(first);
     const std::vector<std::string> options = Endings(Argument(arguments, 1));
@@ -2680,6 +3035,10 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
   }
   if (name == "replace") {
     std::string text = AsText(first);
+    if (Argument(arguments, 1).kind() == Value::Kind::kRegex) {
+      return RegexReplace(text, Argument(arguments, 1).text(),
+                          AsText(Argument(arguments, 2)), prepared);
+    }
     const std::string from = AsText(Argument(arguments, 1));
     const std::string to = AsText(Argument(arguments, 2));
     if (from.empty()) {
@@ -3082,6 +3441,11 @@ absl::StatusOr<Value> Coerce(const Value& value,
   if (lowered == "null") {
     return value.IsNull() ? absl::StatusOr<Value>(value)
                           : absl::StatusOr<Value>(Invalid("Expected null."));
+  }
+  if (lowered == "regex") {
+    return value.kind() == Value::Kind::kRegex
+               ? absl::StatusOr<Value>(value)
+               : absl::StatusOr<Value>(Invalid("Expected a regex literal."));
   }
   if (lowered == "option") {
     if (value.kind() != Value::Kind::kObject) {
@@ -3742,7 +4106,8 @@ absl::StatusOr<Value> Evaluate(const syntax::Node& node,
           if (held == nullptr) {
             continue;
           }
-          value = *held;
+          Value unwrapped = *held;
+          value = std::move(unwrapped);
         }
         put(key, std::move(value));
       }

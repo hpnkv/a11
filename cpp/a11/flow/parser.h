@@ -35,6 +35,7 @@ struct ParseResult {
   std::vector<syntax::ModuleDeclaration> modules;
   std::vector<syntax::ExportDeclaration> exports;
   std::vector<syntax::Import> imports;
+  std::vector<syntax::ConstDeclaration> constants;
   std::vector<syntax::FlowDeclarationPtr> flows;
   /// Top-level shapes in declaration order.
   std::vector<syntax::DtoDeclarationPtr> dtos;

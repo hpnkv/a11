@@ -13,6 +13,8 @@
 // limitations under the License.
 
 #include "a11/flow/internal/execution.h"
+#include "a11/flow/regex_literal.h"
+#include "a11/internal/regex.h"
 
 namespace a11::flow {
 
@@ -61,8 +63,25 @@ absl::StatusOr<std::shared_ptr<CompiledProgram>> CompiledProgram::Compile(
         !budget.TryOptional(text.size() + 1)) {
       return;
     }
-    if (kind == "match" && compiled->prepared_.patterns.find(text) ==
-                               compiled->prepared_.patterns.end()) {
+    if (kind == "regex" || kind == "matches") {
+      if (compiled->prepared_.regexes.find(text) !=
+          compiled->prepared_.regexes.end()) {
+        return;
+      }
+      const auto expression = RegexExpression(text);
+      if (!expression.ok()) {
+        return;
+      }
+      auto regex = a11::internal::CompileRegex(*expression);
+      const size_t cost = text.size() * 4 + 256;
+      if (regex.ok() && cost <= 65536 - preparation_bytes) {
+        compiled->prepared_.regexes.emplace(
+            std::string(text),
+            std::make_shared<const a11::internal::Regex>(std::move(*regex)));
+        preparation_bytes += cost;
+      }
+    } else if (kind == "match" && compiled->prepared_.patterns.find(text) ==
+                                      compiled->prepared_.patterns.end()) {
       auto pattern = pattern::Compile(text);
       if (pattern.ok()) {
         const auto cost =
@@ -98,9 +117,18 @@ absl::StatusOr<std::shared_ptr<CompiledProgram>> CompiledProgram::Compile(
         if (const auto* literal =
                 syntax::As<syntax::Literal>(builtin->args[0].get());
             literal != nullptr &&
-            literal->value.kind == syntax::Constant::Kind::kString) {
-          prepare_text(builtin->name, literal->value.text);
+            (literal->value.kind == syntax::Constant::Kind::kString ||
+             literal->value.kind == syntax::Constant::Kind::kRegex)) {
+          prepare_text(literal->value.kind == syntax::Constant::Kind::kRegex
+                           ? "regex"
+                           : builtin->name,
+                       literal->value.text);
         }
+      }
+      if (const auto* literal = syntax::As<syntax::Literal>(&node);
+          literal != nullptr &&
+          literal->value.kind == syntax::Constant::Kind::kRegex) {
+        prepare_text("regex", literal->value.text);
       }
       if ((node.kind == syntax::NodeKind::kUnary ||
            node.kind == syntax::NodeKind::kBinary) &&
@@ -117,7 +145,8 @@ absl::StatusOr<std::shared_ptr<CompiledProgram>> CompiledProgram::Compile(
   for (const auto& flow : compiled->flows()) {
     for (const auto& ref : flow.graph.refs) {
       if (ref.kind == graph::RefKind::kDerived) {
-        prepare_text(ref.stage.name, ref.stage.text);
+        prepare_text(ref.stage.match_regex ? "regex" : ref.stage.name,
+                     ref.stage.text);
         if (ref.stage.log.has_format) {
           prepare_text("strformat", ref.stage.log.format);
         }

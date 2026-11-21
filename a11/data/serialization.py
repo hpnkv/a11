@@ -1578,9 +1578,18 @@ _NORMALIZED_MODELS: set[type] = set()
 
 
 def _pydantic_values(model: pydantic.BaseModel) -> dict[str, Any]:
+    fields = (
+        (
+            name
+            for name in type(model).model_fields
+            if name in model.model_fields_set
+        )
+        if getattr(type(model), "__a11_flow_dto__", False)
+        else type(model).model_fields
+    )
     result = {
         name: getattr(model, name)
-        for name in type(model).model_fields
+        for name in fields
         if hasattr(model, name)
     }
     extra = getattr(model, "__pydantic_extra__", None)

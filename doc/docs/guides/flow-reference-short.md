@@ -63,6 +63,9 @@ lowercase or UPPERCASE. Functions need `std::` unless imported; stages do not.
 Flows join owned work; emitting an output does not finish execution.
 Strings and `"""` strings decode `\0` (NUL), `\a`, `\b`, `\f`, `\n`, `\r`,
 `\t`, `\v`, `\"`, `\'`, and `\\`. Other escapes yield the following character.
+Regex literals `/.../` use RE2 with optional `i`, `m`, `s` flags; write
+`/\W+/`, not `"\W+"` (the string loses its backslash). Quoted search and
+separator strings remain literal.
 
 | Form | Meaning |
 |---|---|
@@ -96,7 +99,8 @@ Strings and `"""` strings decode `\0` (NUL), `\a`, `\b`, `\f`, `\n`, `\r`,
 | Call tail: `timeout D`, `deadline t`, `after subjects`, `via m`, `tee`, `id e`, `id-into dest`, `with "k": e`, `forward headers "pattern"` | Positive relative duration / absolute time; earlier limit wins. `id-into` writes the assigned action ID once. Deadline is eager; `after` delays its entire expression. Waits also accept timeout/deadline. |
 | `mod m [exported] { ... }`; `declare mod m { ... }`; `declare flow m::f { interface }` | Modules/members default private. Contracts describe local, imported, or host-supplied implementations; structs are fully defined. No modules inside flows/structs; `std` reserved. |
 | `import "dir/lib.flow" [as m]`; `from lib import f [as g], T`; `from lib import *` | Default namespace `lib`; symbol/wildcard imports also work in module/flow scopes. `from std import f` exposes standard names. Filesystem imports require approved host roots. |
-| `export symbol [as alias]`; `struct T [exported] { fields }` | Explicit reexport; record type. Fields: `name: T`, `required` or `default LITERAL` (exclusive), numeric bounds `1..10`, text RE2 regex `matching "pattern"`, `one of [...]`, list `unique`. |
+| `const [T] kName [exported] = value`; inside a flow `const [T] kName = value` | Module constants are closed expressions of literals, lists, records, and other module constants; they can be exported/imported and used in static declarations. Local constants capture one scalar value when reached. Both the binding and its Flow-owned contents are immutable. `kThisLetterCase` is a convention, never required. |
+| `export symbol [as alias]`; `struct T [exported] { fields }` | Explicit reexport; record type. Fields: `name: T`, `required` or `default LITERAL_OR_MODULE_CONST` (exclusive), numeric bounds `1..10`, text RE2 regex `matching /pattern/i`, `matching "pattern"`, or a module constant, `one of [...]`, list `unique`. |
 | `m::f`, `a11::sdk::Interaction`; `j.output`, `v.field`, `v[index]` | Static qualification / runtime projection. Registered host types need no import; wire tags retain dotted spelling. |
 | `v?.field`, `v?[key]`; `s \| present` | Safe projection returns `std::option[T]`: missing is absent, present null remains present. Safe chaining unwraps an option base. `present` drops absent options and emits present payloads. |
 | `T{field:e}`; `e as T`; `[e, ...]`; `{key:e, ...other}` | Typed record, cast, list, object/spread. Object fields omit absent options and unwrap present ones. Strings: `"..."` or triple quotes. Literals: `true`, `false`, `null`. |
@@ -221,11 +225,11 @@ Brackets mark optional arguments; `v` is a value, `s` text, `xs` a list.
 | `len(v)` | Length. |
 | `lower(v)`, `upper(v)`, `trim(v)` | Text case / surrounding whitespace. |
 | `contains(v,x)`, `startswith(s,p)`, `endswith(s,p)` | Membership / prefix / suffix; `p` may be a list of alternatives. |
-| `replace(s,old,new)`, `slice(v,start[,stop])` | Replace all / slice; negative indices supported. |
-| `split(s[,sep])`, `join(xs[,sep])` | Split on whitespace runs, omitting empties, by default / join with empty separator by default. |
+| `replace(s,old,new)`, `slice(v,start[,stop])` | Replace all / slice; `old` may be a literal string or `/regex/`. Regex replacements use `$1`, `${name}`, `$$`. Negative slice indices work. |
+| `split(s[,sep])`, `join(xs[,sep])` | Split on whitespace runs, omitting empties, by default / join with empty separator by default. A quoted separator is literal; `/regex/` splits by pattern. |
 | `keys(v)`, `values(v)` | Lists in sorted-key order. |
 | `merge(a,b,...)` | Merge records; later keys win. |
-| `match("{name:word}={n:int}",s)` | Flow capture template (not regex): record or null. Holes also support number, bool, line, rest, duration, time, json. |
+| `match(pattern,s[,"at"])`, `matches(/regex/,s[,"at"])`, `matches_pattern(s,/regex/)` | Extract one match, every regex match, or a boolean. An offset name wraps each capture as `{value: ..., at: ...}`. Templates support typed holes. |
 | `strformat(fmt,args...)` | printf-style formatting: `%s`, `%d`, `%.2f`, `%2$s`; time `%(%H:%M)s`. |
 | `now()`; `infinite_future()`, `infinite_past()`, `infinite_duration()`, `zero_duration()` | Current instant and temporal boundary values. Unary minus negates a duration. |
 | `floor(x)`, `ceil(x)`, `round(x)` | Round numeric values down, up, or to nearest. Halfway values round away from zero. Integers stay unchanged; floats keep their width. |
@@ -257,7 +261,7 @@ expressions, evaluated once per activation outside `it`.
 | `present` | Drop absent `std::option[T]` items and emit present payloads, including null/false/zero/empty values. |
 | `context e before N after M [numbered [base B]]` | Excerpts with N preceding items; each match within M trailing items resets the tail. EOF flushes. Counts: nonnegative int32, evaluated once outside `it`. `numbered`: `{index, value}`, counting every source item from B (default 1). Active excerpts can grow; bound endless sources upstream. |
 | `sort [by e] [desc]` | Collect and order; ascending by default. |
-| `match "pattern"`; `mime "text/*"` | Extract matching records, dropping nonmatches / filter representations. |
+| `match "pattern"`, `match /regex/`, `match all /regex/` `[offset "at"]`; `mime "text/*"` | Extract one or every nonoverlapping match per value, dropping nonmatches / filter representations. |
 | `collect`; `consume`; `count` | One list (empty → `[]`) / require exactly one item and EOF / item count (empty → 0). |
 | `sum [e]`; `min [e]`; `max [e]`; `avg [e]` | Aggregate items or projections. Empty: `sum` → 0; `min`/`max`/`avg` → no item (`take` then fails). |
 | `fold INITIAL as acc, e`; `scan INITIAL as acc, e` | Final / every accumulator; INITIAL is a literal, including a record. Empty `fold` yields INITIAL. |

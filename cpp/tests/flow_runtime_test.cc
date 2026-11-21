@@ -430,6 +430,81 @@ flow copy {
   EXPECT_EQ(outcome.outputs.at("said"), Values({"\"a\"", "\"b\""}));
 }
 
+TEST(FlowRuntimeTest, ModuleAndLocalConstantsProvideImmutableValues) {
+  const Outcome outcome = RunFlow(R"(
+const kPolicy = {limit: 3, labels: ["ready", "done"]}
+flow check {
+  out limit: int
+  out label: string
+  const kSnapshot = kPolicy
+  kSnapshot.limit -> limit
+  kSnapshot.labels[0] -> label
+}
+)",
+                                  "check");
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("limit"), Values({"3"}));
+  EXPECT_EQ(outcome.outputs.at("label"), Values({"\"ready\""}));
+}
+
+TEST(FlowRuntimeTest, LocalConstantCapturesDynamicInputOnce) {
+  const Outcome outcome = RunFlow(R"(
+flow main {
+  in values: int stream
+  out first: int
+  out second: int
+  const kFirst = take values
+  kFirst -> first
+  (take values) -> second
+}
+)",
+                                  "main", {{"values", Values({"4", "5"})}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("first"), Values({"4"}));
+  EXPECT_EQ(outcome.outputs.at("second"), Values({"5"}));
+}
+
+TEST(FlowRuntimeTest, LocalConstantCanShadowModuleConstant) {
+  const Outcome outcome = RunFlow(R"(
+const kValue = 3
+flow main {
+  out result: int
+  const kValue = 7
+  kValue -> result
+}
+)",
+                                  "main");
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("result"), Values({"7"}));
+}
+
+TEST(FlowRuntimeTest, TypedModuleConstantAppliesRecordDefaults) {
+  const Outcome outcome = RunFlow(R"(
+struct Policy { retry: int default 3 }
+const Policy kPolicy = {}
+flow main { out result: int
+  kPolicy.retry -> result
+}
+)",
+                                  "main");
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("result"), Values({"3"}));
+}
+
+TEST(FlowRuntimeTest, LoopLocalConstantIsCapturedPerIteration) {
+  const Outcome outcome = RunFlow(R"(
+flow main { out results: int stream
+  for n in [1, 2] | flatten {
+    const kNext = n + 1
+    kNext -> results
+  }
+}
+)",
+                                  "main");
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("results"), Values({"2", "3"}));
+}
+
 TEST(FlowRuntimeTest, StagesReshapeAStream) {
   const Outcome outcome =
       RunFlow(R"(
@@ -1271,6 +1346,51 @@ flow split {
               "split", {{"lines", {"\"left:right\"", "\"a:b\""}}});
   ASSERT_TRUE(outcome.status.ok()) << outcome.status;
   EXPECT_EQ(outcome.outputs.at("out"), Values({"\"right\"", "\"b\""}));
+}
+
+TEST(FlowRuntimeTest, RegexMatchAllEmitsEachCaptureWithItsOffset) {
+  const Outcome outcome = RunFlow(
+      R"(
+flow extracted {
+  in lines: string stream required
+  out offsets: int stream
+  lines | match all /id=(?<id>\w+)/ offset "at"
+    | map it.id.at -> offsets
+}
+)",
+      "extracted", {{"lines", {"\"é id=one id=two\""}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("offsets"), Values({"5", "12"}));
+}
+
+TEST(FlowRuntimeTest, QuotedSlashPatternRemainsATemplate) {
+  const Outcome outcome = RunFlow(
+      R"(
+flow path {
+  in lines: string stream required
+  out segments: string stream
+  lines | match "/{segment:word}" | map it.segment -> segments
+}
+)",
+      "path", {{"lines", {"\"/alpha\"", "\"/beta\""}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("segments"), Values({"\"alpha\"", "\"beta\""}));
+}
+
+TEST(FlowRuntimeTest, RegexLiteralCanBeBoundAndPassedToMatch) {
+  const Outcome outcome = RunFlow(
+      R"(
+flow bound {
+  in line: string required
+  out name: string
+  expression = /id=(?<id>\w+)/
+  result = take (std::match(expression, line))
+  result.id -> name
+}
+)",
+      "bound", {{"line", {"\"id=Alice\""}}});
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("name"), Values({"\"Alice\""}));
 }
 
 TEST(FlowRuntimeTest, APatternThatCannotBeReadIsRefusedBeforeItRuns) {

@@ -53,6 +53,8 @@ nlohmann::json ConstantJson(const Constant& value) {
       return value.number;
     case Constant::Kind::kString:
       return value.text;
+    case Constant::Kind::kRegex:
+      return value.text;
     case Constant::Kind::kDuration:
       return absl::FormatDuration(value.duration);
     case Constant::Kind::kList: {
@@ -86,6 +88,8 @@ std::string ConstantFlow(const Constant& value) {
       return nlohmann::json(value.number).dump();
     case Constant::Kind::kString:
       return nlohmann::json(value.text).dump();
+    case Constant::Kind::kRegex:
+      return value.text;
     case Constant::Kind::kDuration:
       return absl::FormatDuration(value.duration);
     case Constant::Kind::kList: {

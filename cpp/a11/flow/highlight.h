@@ -37,6 +37,8 @@ namespace a11::flow {
 enum class SemanticKind {
   kComment,
   kString,
+  /// Slash-delimited RE2 pattern literal.
+  kRegex,
   kStringEscape,
   kNumber,
   kDuration,

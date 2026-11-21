@@ -9,6 +9,7 @@
       "patterns": [
         {"include": "#comment"},
         {"include": "#string"},
+        {"include": "#regex"},
         {"include": "#duration"},
         {"include": "#number"},
         {"include": "#declaration-name"},
@@ -50,6 +51,10 @@
         }
       ]
     },
+    "regex": {
+      "name": "string.regexp.a11flow",
+      "match": "(?<![A-Za-z0-9_$)\\]])/(?![ \\t])(?:\\\\.|\\[[^\\n]*?\\]|[^/\\\\\\n])+/[ims]*"
+    },
     "duration": {
       "//": "Longest unit first: a pattern offering `m` before `ms` reads `250ms` as metres.",
       "name": "constant.numeric.duration.a11flow",
@@ -77,7 +82,7 @@
     },
     "builtin": {
       "//": "A function only where it is called, which is what tells `text(it)` from the port type of the same name.",
-      "match": "\\b(len|lower|upper|trim|text|number|i8|i16|i32|i64|i128|u8|u16|u32|u64|u128|f32|f64|floor|ceil|round|bool|keys|values|join|split|merge|contains|startswith|endswith|replace|match|slice|to_chunk|from_chunk|strformat|b64encode|b64decode|b64urlencode|b64urldecode|utf8encode|utf8decode|now|infinite_future|infnite_future|infinite_past|infinite_duration|zero_duration|duration|time|seconds|nanoseconds|microseconds|milliseconds|minutes|hours|parse_time|parse_duration|integer|int|string|bytes|object|list|boolean|array|any|json|option|status|null|LEN|LOWER|UPPER|TRIM|TEXT|NUMBER|I8|I16|I32|I64|I128|U8|U16|U32|U64|U128|F32|F64|FLOOR|CEIL|ROUND|BOOL|KEYS|VALUES|JOIN|SPLIT|MERGE|CONTAINS|STARTSWITH|ENDSWITH|REPLACE|MATCH|SLICE|TO_CHUNK|FROM_CHUNK|STRFORMAT|B64ENCODE|B64DECODE|B64URLENCODE|B64URLDECODE|UTF8ENCODE|UTF8DECODE|NOW|INFINITE_FUTURE|INFNITE_FUTURE|INFINITE_PAST|INFINITE_DURATION|ZERO_DURATION|DURATION|TIME|SECONDS|NANOSECONDS|MICROSECONDS|MILLISECONDS|MINUTES|HOURS|PARSE_TIME|PARSE_DURATION|INTEGER|INT|STRING|BYTES|OBJECT|LIST|BOOLEAN|ARRAY|ANY|JSON|OPTION|STATUS|NULL)(?=\\s*\\()",
+      "match": "\\b(len|lower|upper|trim|text|number|i8|i16|i32|i64|i128|u8|u16|u32|u64|u128|f32|f64|floor|ceil|round|bool|keys|values|join|split|merge|contains|startswith|endswith|replace|match|matches|matches_pattern|slice|to_chunk|from_chunk|strformat|b64encode|b64decode|b64urlencode|b64urldecode|utf8encode|utf8decode|now|infinite_future|infnite_future|infinite_past|infinite_duration|zero_duration|duration|time|seconds|nanoseconds|microseconds|milliseconds|minutes|hours|parse_time|parse_duration|integer|int|string|bytes|object|list|boolean|array|any|json|option|status|null|LEN|LOWER|UPPER|TRIM|TEXT|NUMBER|I8|I16|I32|I64|I128|U8|U16|U32|U64|U128|F32|F64|FLOOR|CEIL|ROUND|BOOL|KEYS|VALUES|JOIN|SPLIT|MERGE|CONTAINS|STARTSWITH|ENDSWITH|REPLACE|MATCH|MATCHES|MATCHES_PATTERN|SLICE|TO_CHUNK|FROM_CHUNK|STRFORMAT|B64ENCODE|B64DECODE|B64URLENCODE|B64URLDECODE|UTF8ENCODE|UTF8DECODE|NOW|INFINITE_FUTURE|INFNITE_FUTURE|INFINITE_PAST|INFINITE_DURATION|ZERO_DURATION|DURATION|TIME|SECONDS|NANOSECONDS|MICROSECONDS|MILLISECONDS|MINUTES|HOURS|PARSE_TIME|PARSE_DURATION|INTEGER|INT|STRING|BYTES|OBJECT|LIST|BOOLEAN|ARRAY|ANY|JSON|OPTION|STATUS|NULL)(?=\\s*\\()",
       "name": "support.function.builtin.a11flow"
     },
     "port-type": {
@@ -103,7 +108,7 @@
       ]
     },
     "declaration": {
-      "match": "\\b(declare|exported|mod|export|import|from|flow|struct|describe|in|out|header|as|default|stream|required|node|nodes|DECLARE|EXPORTED|MOD|EXPORT|IMPORT|FROM|FLOW|STRUCT|DESCRIBE|IN|OUT|HEADER|AS|DEFAULT|STREAM|REQUIRED|NODE|NODES)\\b",
+      "match": "\\b(const|declare|exported|mod|export|import|from|flow|struct|describe|in|out|header|as|default|stream|required|node|nodes|CONST|DECLARE|EXPORTED|MOD|EXPORT|IMPORT|FROM|FLOW|STRUCT|DESCRIBE|IN|OUT|HEADER|AS|DEFAULT|STREAM|REQUIRED|NODE|NODES)\\b",
       "name": "keyword.declaration.a11flow"
     },
     "wait-mode": {
@@ -114,7 +119,7 @@
       }
     },
     "statement": {
-      "match": "\\b(abort|after|base|before|by|call|cancel|close|desc|else|fail|(?:failures|FAILURES)\s+(?:into|INTO)|for|id|if|interleave|log|logf|max|nodes|numbered|of|parallel|repeat|run|skip|status|take|try|unordered|until|wait|while|zip|ABORT|AFTER|BASE|BEFORE|BY|CALL|CANCEL|CLOSE|DESC|ELSE|FAIL|FOR|ID|IF|INTERLEAVE|LOG|LOGF|MAX|NODES|NUMBERED|OF|PARALLEL|REPEAT|RUN|SKIP|STATUS|TAKE|TRY|UNORDERED|UNTIL|WAIT|WHILE|ZIP)\\b",
+      "match": "\\b(abort|after|base|before|by|call|cancel|close|const|desc|else|fail|(?:failures|FAILURES)\s+(?:into|INTO)|for|id|if|interleave|log|logf|max|nodes|numbered|of|parallel|repeat|run|skip|status|take|try|unordered|until|wait|while|zip|ABORT|AFTER|BASE|BEFORE|BY|CALL|CANCEL|CLOSE|CONST|DESC|ELSE|FAIL|FOR|ID|IF|INTERLEAVE|LOG|LOGF|MAX|NODES|NUMBERED|OF|PARALLEL|REPEAT|RUN|SKIP|STATUS|TAKE|TRY|UNORDERED|UNTIL|WAIT|WHILE|ZIP)\\b",
       "name": "keyword.control.a11flow"
     },
     "modifier": {

@@ -31,9 +31,11 @@
 
 #include "a11/flow/diagnostic.h"
 #include "a11/flow/lexer.h"
+#include "a11/flow/regex_literal.h"
 #include "a11/flow/syntax.h"
 #include "a11/flow/token.h"
 #include "a11/flow/vocabulary.h"
+#include "a11/internal/regex.h"
 
 namespace a11::flow {
 namespace {
@@ -640,6 +642,32 @@ class ParserImpl {
         EndStatement();
         continue;
       }
+      if (AtWord("const")) {
+        const Token start = Advance();
+        SkipNewlines();
+        syntax::ConstDeclaration declaration;
+        declaration.scope = module_scope_;
+        if (Keyword(NewlinesAhead(1)) != "exported" &&
+            OpensTypedBinding(/*allow_exported=*/true)) {
+          declaration.type = ParseType();
+        }
+        declaration.name = ExpectName("a constant name");
+        declaration.name.text = Qualify(declaration.name.text);
+        declaration.exported = AcceptWord("exported");
+        Expect(TokenKind::kEqual);
+        SkipNewlines();
+        declaration.value = ParseExpression();
+        declaration.extent = syntax::LocationOf(start);
+        declaration.extent.end = tokens_[position_ - 1].end;
+        if (declarations_only) {
+          Report("flow.form.declaration-body",
+                 "A declared module cannot define a constant.", start,
+                 Severity::kError, Family::kForm);
+        }
+        result_.constants.push_back(std::move(declaration));
+        EndStatement();
+        continue;
+      }
       if (AtWord("struct") && Following().kind == TokenKind::kWord) {
         const Token& keyword = Advance();
         auto dto = ParseDto(keyword);
@@ -736,7 +764,8 @@ class ParserImpl {
       }
     }
     if (result_.flows.empty() && result_.dtos.empty() &&
-        result_.imports.empty() && result_.modules.empty()) {
+        result_.constants.empty() && result_.imports.empty() &&
+        result_.modules.empty()) {
       ReportHere("flow.syntax.unexpected",
                  "A flow file must declare at least one flow or struct.");
     }
@@ -934,8 +963,17 @@ class ParserImpl {
                Peek(at).kind == TokenKind::kRange;
       });
       const Token& at = Current();
+      bool named_range = false;
+      if (Current().IsWord()) {
+        size_t ahead = NewlinesAhead(1);
+        while (Peek(ahead).kind == TokenKind::kScope &&
+               Peek(NewlinesAhead(ahead + 1)).IsWord()) {
+          ahead = NewlinesAhead(ahead + 2);
+        }
+        named_range = Peek(ahead).kind == TokenKind::kRange;
+      }
       if (At(TokenKind::kRange) || At(TokenKind::kNumber) ||
-          At(TokenKind::kDuration)) {
+          At(TokenKind::kDuration) || named_range) {
         if (!ParseFieldRange(*field)) {
           break;
         }
@@ -961,13 +999,34 @@ class ParserImpl {
         Advance();
         SkipNewlines();
         ordered("matching", at);
-        if (At(TokenKind::kString) || At(TokenKind::kLeftParen)) {
+        if (At(TokenKind::kRegex)) {
+          const Token& token = Advance();
+          CheckRegex(token);
+          const auto expression = RegexExpression(token.text);
+          if (expression.ok()) {
+            field->pattern = *expression;
+            field->has_pattern = true;
+          }
+        } else if (At(TokenKind::kString) || At(TokenKind::kLeftParen)) {
+          const Token& pattern_token = Current();
           field->pattern = ParseStringArgument();
           field->has_pattern = true;
+          if (field->pattern.size() > 4096) {
+            Report("flow.form.bad-pattern",
+                   "A regex pattern exceeds 4096 bytes.", pattern_token,
+                   Severity::kError, Family::kForm);
+          } else {
+            CheckRegexExpression(field->pattern, pattern_token);
+          }
+        } else if (Current().IsWord()) {
+          const Token& pattern_token = Current();
+          auto pattern = Make<syntax::Name>(pattern_token);
+          pattern->name = ParseDottedName("a constant pattern name").text;
+          field->pattern_source = std::move(pattern);
         } else {
           ReportHere("flow.syntax.unexpected",
-                     absl::StrCat("Expected a quoted pattern after 'matching', "
-                                  "found ",
+                     absl::StrCat("Expected a regex literal or quoted pattern "
+                                  "after 'matching', found ",
                                   Found(), "."));
         }
         continue;
@@ -982,7 +1041,6 @@ class ParserImpl {
       if (word == "default") {
         Advance();
         ordered("default", at);
-        const Token& value_at = Current();
         const DescriptionBoundary description(this);
         NodePtr value = ParseExpression();
         std::optional<syntax::Constant> constant =
@@ -991,8 +1049,7 @@ class ParserImpl {
           field->default_value = *std::move(constant);
           field->has_default = true;
         } else if (value->kind != syntax::NodeKind::kError) {
-          Report("flow.syntax.constant-required",
-                 "A field's default is a constant value.", value_at);
+          field->default_source = std::move(value);
         }
         continue;
       }
@@ -1010,20 +1067,26 @@ class ParserImpl {
     const Token& start = Current();
     syntax::FieldRange range;
     if (!At(TokenKind::kRange)) {
-      const Token& low = Advance();
-      std::optional<syntax::Constant> minimum = BoundOf(low);
-      if (!minimum.has_value()) {
-        return false;
+      if (Current().IsWord()) {
+        const Token& low = Current();
+        auto name = Make<syntax::Name>(low);
+        name->name = ParseDottedName("a constant range bound").text;
+        field.minimum_source = std::move(name);
+        range.has_minimum = true;
+      } else {
+        const Token& low = Advance();
+        std::optional<syntax::Constant> minimum = BoundOf(low);
+        if (!minimum.has_value()) {
+          return false;
+        }
+        range.minimum = *std::move(minimum);
+        range.has_minimum = true;
       }
       if (!At(TokenKind::kRange)) {
         Report("flow.syntax.unexpected",
-               absl::StrCat("Expected '..' after ", Quoted(low.text),
-                            " to make it a range."),
-               low);
+               "Expected '..' after the lower bound to make a range.", start);
         return false;
       }
-      range.minimum = *std::move(minimum);
-      range.has_minimum = true;
     }
     Expect(TokenKind::kRange);
     if (At(TokenKind::kNumber) || At(TokenKind::kDuration)) {
@@ -1033,6 +1096,13 @@ class ParserImpl {
         range.maximum = *std::move(maximum);
         range.has_maximum = true;
       }
+    } else if (Current().IsWord() &&
+               !vocabulary::FieldModifierWords().contains(Keyword())) {
+      const Token& high = Current();
+      auto name = Make<syntax::Name>(high);
+      name->name = ParseDottedName("a constant range bound").text;
+      field.maximum_source = std::move(name);
+      range.has_maximum = true;
     }
     if (range.Empty()) {
       Report("flow.form.empty-range",
@@ -1068,8 +1138,7 @@ class ParserImpl {
         syntax::ConstantValue(value.get());
     if (!constant.has_value()) {
       if (value->kind != syntax::NodeKind::kError) {
-        Report("flow.syntax.constant-required",
-               "'one of' takes a list of constant values.", at);
+        field.enumeration_source = std::move(value);
       }
       return;
     }
@@ -1379,7 +1448,6 @@ class ParserImpl {
       header->alias = ExpectName("a header alias");
     }
     if (AcceptWord("default")) {
-      const Token& at = Current();
       const DescriptionBoundary description(this);
       NodePtr value = ParseExpression();
       std::optional<syntax::Constant> constant =
@@ -1388,8 +1456,7 @@ class ParserImpl {
         header->default_value = *std::move(constant);
         header->has_default = true;
       } else if (value->kind != syntax::NodeKind::kError) {
-        Report("flow.syntax.constant-required", "Expected a constant value.",
-               at);
+        header->default_source = std::move(value);
       }
     }
     header->description = ParseDescription();
@@ -1476,7 +1543,7 @@ class ParserImpl {
     }
   }
 
-  bool OpensTypedBinding() const {
+  bool OpensTypedBinding(bool allow_exported = false) const {
     size_t at = 0;
     const auto step = [&] {
       at = NewlinesAhead(at + 1);
@@ -1517,6 +1584,9 @@ class ParserImpl {
         return false;
       }
       step();
+    }
+    if (allow_exported && Keyword(at) == "exported") {
+      at = NewlinesAhead(at + 1);
     }
     return Peek(at).kind == TokenKind::kEqual;
   }
@@ -1660,10 +1730,16 @@ class ParserImpl {
         }
       }
 
+      const bool constant = word == "const";
+      if (constant) {
+        Advance();
+        SkipNewlines();
+      }
       const bool typed_binding = OpensTypedBinding();
-      if (typed_binding || Following().kind == TokenKind::kEqual ||
+      if (constant || typed_binding || Following().kind == TokenKind::kEqual ||
           Following().kind == TokenKind::kComma) {
         auto bind = Make<syntax::Bind>(keyword);
+        bind->constant = constant;
         if (typed_binding) {
           bind->type = ParseType();
         }
@@ -2105,7 +2181,14 @@ class ParserImpl {
       repeat->start = ParseExpression();
     }
     if (AcceptWord("max")) {
-      repeat->max_iterations = ExpectCount();
+      if (Current().IsWord()) {
+        const Token& name = Current();
+        auto source = Make<syntax::Name>(name);
+        source->name = ParseDottedName("a constant maximum").text;
+        repeat->max_source = std::move(source);
+      } else {
+        repeat->max_iterations = ExpectCount();
+      }
     }
     repeat->body = ParseBlock();
     repeat->termination = ParseLoopTermination();
@@ -2173,6 +2256,11 @@ class ParserImpl {
       }
       case TokenKind::kString:
         return syntax::Constant::String(std::string(Advance().string_value));
+      case TokenKind::kRegex: {
+        const Token& token = Advance();
+        CheckRegex(token);
+        return syntax::Constant::Regex(std::string(token.text));
+      }
       case TokenKind::kDuration:
         return syntax::Constant::Duration(Advance().duration);
       default:
@@ -2497,6 +2585,49 @@ class ParserImpl {
     }
   }
 
+  void CheckRegexExpression(std::string_view expression, const Token& token) {
+    const auto regex = internal::CompileRegex(expression);
+    if (!regex.ok()) {
+      Report("flow.form.bad-pattern", std::string(regex.status().message()),
+             token, Severity::kError, Family::kForm);
+      return;
+    }
+    if (regex->CaptureCount() > 32) {
+      Report("flow.form.bad-pattern", "A regex may capture at most 32 groups.",
+             token, Severity::kError, Family::kForm);
+    }
+    bool named = false;
+    bool positional = false;
+    for (size_t group = 1; group <= regex->CaptureCount(); ++group) {
+      if (regex->CaptureName(group).empty()) {
+        positional = true;
+      } else {
+        named = true;
+      }
+    }
+    if (named && positional) {
+      Report("flow.form.bad-pattern",
+             "Use either named or positional capture groups in one regex.",
+             token, Severity::kError, Family::kForm);
+    }
+  }
+
+  void CheckRegex(const Token& token) {
+    if (token.text.size() > 4096) {
+      Report("flow.form.bad-pattern", "A regex literal exceeds 4096 bytes.",
+             token, Severity::kError, Family::kForm);
+      return;
+    }
+    const auto expression = RegexExpression(token.text);
+    if (!expression.ok()) {
+      Report("flow.form.bad-pattern",
+             std::string(expression.status().message()), token,
+             Severity::kError, Family::kForm);
+      return;
+    }
+    CheckRegexExpression(*expression, token);
+  }
+
   /// One stage, and whether a `try` stood before its name.
   syntax::StagePtr ParseStage(bool tolerant = false) {
     const Token& keyword = Current();
@@ -2522,6 +2653,10 @@ class ParserImpl {
     }
     Advance();
     stage->name = vocabulary::Canonical(keyword.text);
+    if (stage->name == "match" && AtWord("all")) {
+      Advance();
+      stage->match_all = true;
+    }
     if (stage->name == "take") {
       SkipNewlines();
       if (AtWord("while", "until")) {
@@ -2591,7 +2726,12 @@ class ParserImpl {
         break;
       }
       case vocabulary::StageArgument::kString:
-        if (At(TokenKind::kString)) {
+        if (stage->name == "match" && At(TokenKind::kRegex)) {
+          const Token& token = Advance();
+          CheckRegex(token);
+          stage->match_regex = true;
+          stage->text = std::string(token.text);
+        } else if (At(TokenKind::kString)) {
           stage->text = ParseStringRun();
         } else {
           Report("flow.form.stage-argument",
@@ -2674,6 +2814,28 @@ class ParserImpl {
             ParseLogTail(*takes == vocabulary::StageArgument::kLogFormat,
                          /*in_stage=*/true);
         break;
+    }
+    if (stage->name == "match") {
+      if (stage->match_all && !stage->match_regex) {
+        Report("flow.form.stage-argument",
+               "'match all' requires a regex literal.", keyword,
+               Severity::kError, Family::kForm);
+      }
+      while (AtWord("offset")) {
+        Advance();
+        if (!At(TokenKind::kString)) {
+          ReportHere("flow.form.stage-argument",
+                     "A span field needs a quoted name.", Family::kForm);
+          break;
+        }
+        std::string name = ParseStringRun();
+        if (!stage->match_offset.empty() || name.empty() || name == "value") {
+          Report("flow.form.stage-argument",
+                 "Offset needs one name distinct from 'value'.", keyword,
+                 Severity::kError, Family::kForm);
+        }
+        stage->match_offset = std::move(name);
+      }
     }
     ParseStageTail(*stage, keyword);
     return stage;
@@ -3255,6 +3417,13 @@ class ParserImpl {
     if (At(TokenKind::kString)) {
       auto literal = Make<syntax::Literal>(token);
       literal->value = syntax::Constant::String(ParseStringRun());
+      return literal;
+    }
+    if (At(TokenKind::kRegex)) {
+      Advance();
+      CheckRegex(token);
+      auto literal = Make<syntax::Literal>(token);
+      literal->value = syntax::Constant::Regex(std::string(token.text));
       return literal;
     }
     if (At(TokenKind::kNumber)) {

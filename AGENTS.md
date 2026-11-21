@@ -15,7 +15,7 @@
   inline** functions, so sharing them costs no link dependency: `a11/utf8.h`
   (`IsContinuation`, `SequenceWidth`, `Utf16Units`, `IsValid`) and
   `a11/percent.h` (`HexDigit`, `Decode`, `DecodeStrict`, `Encode`). That is what
-  lets `a11::flow_lang`, which links nothing but Abseil and nlohmann, use the
+  lets `a11::flow_lang`, which links Abseil, nlohmann and RE2, use the
   same UTF-8 rules as the serializer. Reach for these rather than open-coding a
   lead-byte ladder or a `%xx` loop, and add new ones to
   `cpp/tests/header_canary.cc`. The strict UTF-8 validator has one home,
@@ -53,8 +53,8 @@
       second copy is a copy that falls behind, and the fix is to delete it rather
       than test it. `a11/flow/tests/test_editor_support.py` now holds the *absence*
       of those copies.
-    - The language tooling is `a11::flow_lang`, and it links **nothing but Abseil and
-      nlohmann**. No sockets, no nodes, no OpenSSL. That is what lets it ship as
+    - The language tooling is `a11::flow_lang`, and it links **Abseil, nlohmann and
+      RE2**. No sockets, no nodes, no OpenSSL. That is what lets it ship as
       `a11-flow` (a few megabytes, `A11_BUILD_FLOW_TOOL`) on platforms where the full
       runtime is not built, so keep it that way. The executing half is the separate
       `a11::flow_runtime` (`values.cc`, `runtime.cc`), which does link the node and

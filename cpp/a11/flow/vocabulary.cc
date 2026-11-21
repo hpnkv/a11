@@ -324,9 +324,10 @@ flow logged-downloads {
         "Literal text matches itself. Whitespace runs match flexible spaces "
         "or tabs. `{name}` captures text; typed captures accept `int`, "
         "`number`, `bool`, `word`, `line`, `rest`, `duration`, `time`, and "
-        "`json`. The pattern searches within each value. Unmatched values "
-        "are dropped. A literal pattern exposes captured field names to "
-        "completion. `std::match` returns null for one unmatched value.",
+        "`json`. Regex literals use RE2 and groups such as `(?<name>...)`. "
+        "`match all /.../` emits each nonoverlapping match. "
+        "`offset \"at\"` wraps each capture as `{value: ..., at: ...}` "
+        "with a character offset. Unmatched values are dropped.",
         "lines | match \"{level:word}: {message:line}\" | map it.level -> "
         "levels\n\n"
         R"(Parse log records, retain warnings, and emit their messages.
@@ -828,8 +829,10 @@ flow page-summary {
       {"split",
        {"Split text into a list.", "the text, and a separator",
         "Without a separator, splits on whitespace runs and omits empty "
-        "fields. For comma-separated text this function does not implement "
-        "CSV quoting or escaping.",
+        "fields. A quoted separator is literal; a /regex/ separator uses RE2 "
+        "and retains empty fields. "
+        "For comma-separated text this function does not implement CSV "
+        "quoting or escaping.",
         "std::split(line, \",\") -> fields\n\n"
         R"(Extract the first field from simple comma-delimited rows.
 flow csv-first-field {
@@ -868,12 +871,11 @@ flow sanitized-options {
         R"(std::endswith(piece, [".", "?", "!"]))"}},
       {"match",
        {"Extract named fields from text or return null.",
-        "a pattern and a text value",
-        "Uses the same pattern syntax as the `match` stage. `{name}` "
-        "captures text; `{name:int}` converts the capture to an integer. "
-        "Literal patterns expose captured fields to completion. The `match` "
-        "stage drops unmatched stream values; this function returns null for "
-        "one unmatched value.",
+        "a pattern, text and an optional offset field name",
+        "Quoted templates use `{name}` captures and `{name:int}` conversions. "
+        "Regex literals use RE2 and `(?<name>...)` groups. The first match "
+        "wins; no match returns null. An offset name wraps each capture as "
+        "`{value: ..., NAME: ...}` using character offsets.",
         "who = std::match(\"name={name}\", line)\n\n"
         R"(Extract a typed status code from a request log line.
 flow named-capture {
@@ -881,11 +883,23 @@ flow named-capture {
   result = std::match("status={code:int}", "GET /health status=503")
   result.code -> code
 })"}},
+      {"matches",
+       {"Extract every regex match from text.",
+        "a regex literal, text and an optional offset field name",
+        "Returns a list of nonoverlapping matches in source order. Named "
+        "groups make records; positional groups make lists. An offset name "
+        "wraps each capture with its character offset.",
+        R"(std::matches(/id=(?<id>\w+)/, line, "at"))"}},
+      {"matches_pattern",
+       {"Test whether a regex matches text.", "text, then a regex literal",
+        "Returns a boolean for a match anywhere in the text. Use `match` "
+        "or `matches` when captures are needed.",
+        R"(std::matches_pattern(line, /error|warning/i))"}},
       {"replace",
        {"Replace every occurrence of a text substring.",
-        "a value, a search string and a replacement string",
-        "Search text is literal; `.` and `*` have no pattern meaning. An "
-        "empty search string leaves the value unchanged.",
+        "text, a quoted string or regex literal, and replacement text",
+        "Quoted search text is literal. A /regex/ search uses RE2; `$1` "
+        "and `${name}` insert captures, and `$$` inserts a dollar sign.",
         R"(std::replace(path, "\\", "/") -> posix)"}},
       {"slice",
        {"Extract a range from text, bytes, or a list.",
@@ -1080,6 +1094,13 @@ constexpr WordDoc kNodesDoc = {
 
 const absl::flat_hash_map<std::string_view, WordDoc>& StatementDocs() {
   static const auto* table = new absl::flat_hash_map<std::string_view, WordDoc>{
+      {"const",
+       {"Captures one immutable local value.",
+        "an optional type, name, and value",
+        "Evaluation occurs when execution reaches the declaration; later "
+        "assignment to the name is rejected. A module-level constant can "
+        "also be imported into a flow.",
+        "const kAnswer = take answers"}},
       {"run",
        {"Starts a locally registered action.",
         "an action, its arguments in parentheses, and any modifiers",
@@ -1239,6 +1260,15 @@ const absl::flat_hash_map<std::string_view, WordDoc>& StatementDocs() {
 
 const absl::flat_hash_map<std::string_view, WordDoc>& DeclarationDocs() {
   static const auto* table = new absl::flat_hash_map<std::string_view, WordDoc>{
+      {"const",
+       {"Binds an immutable value.", "an optional type, name, and value",
+        "At module scope the initializer must be a closed value expression "
+        "of literals, lists, records, and other module constants. A module "
+        "constant can be exported and imported. Inside a flow, the value "
+        "is captured once when execution reaches the declaration. The "
+        "binding and its Flow-owned contents cannot be reassigned. Names "
+        "such as kRetryLimit are a convention, not a requirement.",
+        "const int kRetryLimit exported = 3"}},
       {"mod",
        {"Declares a lexical module.", "a name and a declaration block",
         "Modules are private by default. The exported attribute exposes the "
@@ -1498,10 +1528,10 @@ const absl::flat_hash_map<std::string_view, WordDoc>& FieldModifierDocs() {
         "tags: std::list[string] unique"}},
       {"matching",
        {"Require a field's text to match a regular expression.",
-        "a string literal pattern",
-        "The pattern is fixed in the declaration and checked during struct "
-        "validation.",
-        "url: string matching \"^https?://\""}},
+        "an RE2 pattern literal or quoted RE2 pattern",
+        "The pattern is checked when declared and searches anywhere in the "
+        "field's text; anchor it to match the whole value.",
+        "url: string matching /^https?:\\/\\//"}},
       {"one of", kOneOfDoc},
       {"one", kOneOfDoc},
       {"of", kOneOfDoc},
@@ -2197,6 +2227,8 @@ constexpr std::array kBuiltinOrder = {
     std::string_view("endswith"),
     std::string_view("replace"),
     std::string_view("match"),
+    std::string_view("matches"),
+    std::string_view("matches_pattern"),
     std::string_view("slice"),
     std::string_view("to_chunk"),
     std::string_view("from_chunk"),
@@ -2241,14 +2273,15 @@ constexpr std::array kBuiltinOrder = {
 // The verbs first, then the barriers, then the blocks: the order somebody
 // scanning a list of statements finds what they meant.
 constexpr std::array kStatementOrder = {
-    std::string_view("run"),   std::string_view("call"),
-    std::string_view("try"),   std::string_view("skip"),
-    std::string_view("wait"),  std::string_view("close"),
-    std::string_view("abort"), std::string_view("cancel"),
-    std::string_view("fail"),  std::string_view("log"),
-    std::string_view("logf"),  std::string_view("if"),
-    std::string_view("for"),   std::string_view("repeat"),
-    std::string_view("after"), std::string_view("nodes"),
+    std::string_view("const"),  std::string_view("run"),
+    std::string_view("call"),   std::string_view("try"),
+    std::string_view("skip"),   std::string_view("wait"),
+    std::string_view("close"),  std::string_view("abort"),
+    std::string_view("cancel"), std::string_view("fail"),
+    std::string_view("log"),    std::string_view("logf"),
+    std::string_view("if"),     std::string_view("for"),
+    std::string_view("repeat"), std::string_view("after"),
+    std::string_view("nodes"),
 };
 
 // `else` continues an `if`; `parallel` and `max` say how wide a loop or a stage
@@ -2272,15 +2305,16 @@ constexpr std::array kClauseOrder = {
 
 // As a flow is written, top to bottom.
 constexpr std::array kDeclarationOrder = {
-    std::string_view("declare"),  std::string_view("exported"),
-    std::string_view("mod"),      std::string_view("export"),
-    std::string_view("import"),   std::string_view("from"),
-    std::string_view("flow"),     std::string_view("struct"),
-    std::string_view("describe"), std::string_view("in"),
-    std::string_view("out"),      std::string_view("header"),
-    std::string_view("as"),       std::string_view("default"),
-    std::string_view("stream"),   std::string_view("required"),
-    std::string_view("node"),     std::string_view("nodes"),
+    std::string_view("const"),    std::string_view("declare"),
+    std::string_view("exported"), std::string_view("mod"),
+    std::string_view("export"),   std::string_view("import"),
+    std::string_view("from"),     std::string_view("flow"),
+    std::string_view("struct"),   std::string_view("describe"),
+    std::string_view("in"),       std::string_view("out"),
+    std::string_view("header"),   std::string_view("as"),
+    std::string_view("default"),  std::string_view("stream"),
+    std::string_view("required"), std::string_view("node"),
+    std::string_view("nodes"),
 };
 
 // As a field writes them: what it is, then what it may hold, then what it is

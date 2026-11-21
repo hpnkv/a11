@@ -31,10 +31,12 @@
 #include "a11/flow/parser.h"
 #include "a11/flow/pattern.h"
 #include "a11/flow/plan.h"
+#include "a11/flow/regex_literal.h"
 #include "a11/flow/resolve.h"
 #include "a11/flow/syntax.h"
 #include "a11/flow/token.h"
 #include "a11/flow/vocabulary.h"
+#include "a11/internal/regex.h"
 #include "absl/strings/match.h"
 
 namespace a11::flow {
@@ -1356,6 +1358,26 @@ class Completer {
     if (text.empty()) {
       return false;
     }
+    if (text.front() == '\0') {
+      text.remove_prefix(1);
+      const auto expression = RegexExpression(text);
+      if (!expression.ok()) {
+        return false;
+      }
+      const auto regex = a11::internal::CompileRegex(*expression);
+      if (!regex.ok()) {
+        return false;
+      }
+      bool any = false;
+      for (size_t group = 1; group <= regex->CaptureCount(); ++group) {
+        if (!regex->CaptureName(group).empty()) {
+          Add(std::string(regex->CaptureName(group)), ProposalKind::kField, "",
+              "string");
+          any = true;
+        }
+      }
+      return any;
+    }
     const pattern::Compiled compiled = pattern::Compile(text);
     if (!compiled.ok()) {
       return false;
@@ -1388,13 +1410,24 @@ class Completer {
       if (vocabulary::Canonical(tokens_[index].text) != "match") {
         continue;
       }
-      if (tokens_[index + 1].kind != TokenKind::kString) {
+      size_t pattern_index = index + 1;
+      if (tokens_[pattern_index].IsWord() &&
+          vocabulary::Canonical(tokens_[pattern_index].text) == "all") {
+        ++pattern_index;
+      }
+      if (pattern_index >= tokens_.size()) {
+        return "";
+      }
+      if (tokens_[pattern_index].kind == TokenKind::kRegex) {
+        return absl::StrCat(std::string(1, '\0'), tokens_[pattern_index].text);
+      }
+      if (tokens_[pattern_index].kind != TokenKind::kString) {
         return "";
       }
       // The *value*, not the slice: `text` still has its quotes round it, and a
       // stray quote after a `rest` hole makes the pattern one nothing can
       // follow.
-      return tokens_[index + 1].string_value;
+      return tokens_[pattern_index].string_value;
     }
     return "";
   }
@@ -1412,6 +1445,16 @@ class Completer {
     AddNames([](const Symbol& symbol) {
       return symbol.readable && symbol.kind != SymbolKind::kNodeMap;
     });
+    // A module constant can be named before it has occurred in the flow's
+    // body, so it may not yet have a resolved local symbol to offer.
+    for (const auto& constant : parsed().constants) {
+      Add(constant.name.text, ProposalKind::kVariable);
+      proposals_.back().documentation =
+          constant.type.has_value()
+              ? absl::StrCat("Constant of type `", constant.type->ToString(),
+                             "`.")
+              : "Module constant.";
+    }
     AddCallPorts(syntax::PortDirection::kOutput);
   }
 

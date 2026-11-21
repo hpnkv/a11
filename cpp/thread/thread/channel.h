@@ -550,7 +550,9 @@ bool ReadSelectable<T>::Handle(CaseInSelectClause* absl_nonnull reader,
 template <typename T>
 void ReadSelectable<T>::Unregister(CaseInSelectClause* absl_nonnull c) {
   thread::MutexLock lock(&channel->mu_);
-  internal::UnlinkFromList(&channel->waiters_.readers, c);
+  if (c->prev != nullptr) {
+    internal::UnlinkFromList(&channel->waiters_.readers, c);
+  }
 }
 
 template <typename T>
@@ -620,7 +622,9 @@ bool WriteSelectable<T>::Handle(CaseInSelectClause* absl_nonnull writer,
 template <typename T>
 void WriteSelectable<T>::Unregister(CaseInSelectClause* absl_nonnull c) {
   thread::MutexLock lock(&channel->mu_);
-  internal::UnlinkFromList(&channel->waiters_.writers, c);
+  if (c->prev != nullptr) {
+    internal::UnlinkFromList(&channel->waiters_.writers, c);
+  }
 }
 }  // namespace thread::internal
 

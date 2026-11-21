@@ -78,6 +78,60 @@ TEST(FlowValuesTest, ChunkDecodeStateIsLazySharedAndCachesFailures) {
   EXPECT_EQ(bridge.decodes, 2);
 }
 
+TEST(FlowValuesTest, RegexMatchesReturnCaptureValuesAndCharacterOffsets) {
+  const std::vector<Value> arguments = {Value::Regex(R"(/id=(?<id>\w+)/)"),
+                                        Value::String("é id=one id=two"),
+                                        Value::String("at")};
+  auto first = CallBuiltin("match", arguments, nullptr);
+  ASSERT_TRUE(first.ok()) << first.status();
+  ASSERT_NE(first->Get("id"), nullptr);
+  EXPECT_EQ(first->Get("id")->Get("value")->text(), "one");
+  EXPECT_EQ(first->Get("id")->Get("at")->integer(), 5);
+
+  auto all = CallBuiltin("matches", arguments, nullptr);
+  ASSERT_TRUE(all.ok()) << all.status();
+  ASSERT_EQ(all->list_size(), 2u);
+  EXPECT_EQ(all->list_at(0).Get("id")->Get("at")->integer(), 5);
+  EXPECT_EQ(all->list_at(1).Get("id")->Get("at")->integer(), 12);
+  EXPECT_EQ(all->list_at(1).Get("id")->Get("value")->text(), "two");
+}
+
+TEST(FlowValuesTest, PositionalAndOptionalCapturesHaveOwnOffsets) {
+  const std::vector<Value> positional = {
+      Value::Regex(R"(/(a)(b)/)"), Value::String("zab"), Value::String("at")};
+  auto result = CallBuiltin("match", positional, nullptr);
+  ASSERT_TRUE(result.ok()) << result.status();
+  ASSERT_EQ(result->list_size(), 2u);
+  EXPECT_EQ(result->list_at(0).Get("at")->integer(), 1);
+  EXPECT_EQ(result->list_at(1).Get("at")->integer(), 2);
+
+  const std::vector<Value> optional = {
+      Value::Regex(R"(/(?<first>a)(?<second>b)?/)"), Value::String("a"),
+      Value::String("at")};
+  auto absent = CallBuiltin("match", optional, nullptr);
+  ASSERT_TRUE(absent.ok()) << absent.status();
+  EXPECT_TRUE(absent->Get("second")->Get("value")->IsNull());
+  EXPECT_TRUE(absent->Get("second")->Get("at")->IsNull());
+
+  const std::vector<Value> templated = {Value::String("id={id:word}"),
+                                        Value::String("é id=one"),
+                                        Value::String("at")};
+  auto text = CallBuiltin("match", templated, nullptr);
+  ASSERT_TRUE(text.ok()) << text.status();
+  EXPECT_EQ(text->Get("id")->Get("at")->integer(), 5);
+}
+
+TEST(FlowValuesTest, EmptyRegexMatchesAdvanceAcrossUtf8Characters) {
+  const std::vector<Value> arguments = {
+      Value::Regex(R"(/(?:)/)"), Value::String("éa"), Value::String("at")};
+  auto result = CallBuiltin("matches", arguments, nullptr);
+  ASSERT_TRUE(result.ok()) << result.status();
+  EXPECT_EQ(result->list_size(), 3u);
+  EXPECT_EQ(result->list_at(0).Get("match")->Get("at")->integer(), 0);
+  EXPECT_EQ(result->list_at(1).Get("match")->Get("at")->integer(), 1);
+  EXPECT_EQ(result->list_at(2).Get("match")->Get("at")->integer(), 2);
+}
+
 TEST(FlowValuesTest, CompactSlotQueueKeepsOrderAcrossCompactionAndBatch) {
   internal::Slot slot;
   auto bridge = NativeHostBridge();
@@ -116,8 +170,8 @@ absl::StatusOr<Value> EvaluatedIn(std::string_view expression,
   const std::string source = absl::StrCat("flow f {\n  out o: std::json\n  ",
                                           expression, " -> o\n}\n");
   auto parsed = std::make_shared<ParseResult>(Parse(source));
-  if (!parsed->diagnostics.empty()) {
-    return absl::InvalidArgumentError(parsed->diagnostics.front().message);
+  if (const Diagnostic* error = parsed->FirstError(); error != nullptr) {
+    return absl::InvalidArgumentError(error->message);
   }
   const syntax::FlowDeclaration& flow = *parsed->flows.front();
   const auto* pipe = syntax::As<syntax::Pipe>(flow.body.front().get());
@@ -564,6 +618,23 @@ TEST(FlowValues, CallsTheFixedFunctionSet) {
   EXPECT_FALSE(EvaluatedIn(R"(nonesuch("x"))").ok());
   const std::vector<Value> removed = {Value::Null(), Value::Integer(1)};
   EXPECT_FALSE(CallBuiltin("default", removed, nullptr).ok());
+}
+
+TEST(FlowValues, RegexSplitReplaceAndBooleanMatchKeepLiteralForms) {
+  EXPECT_EQ(TextOf(R"(std::join(std::split("a  b", /\s+/), "|"))"), "a|b");
+  EXPECT_EQ(TextOf(R"(std::join(std::split("a  b", "\\s+"), "|"))"),
+            "a  b");
+  EXPECT_EQ(TextOf(R"(std::join(std::split("éa", /(?:)/), "|"))"),
+            "|é|a|");
+  EXPECT_EQ(TextOf(R"(std::replace("ID=12; ID=34", /ID=(\d+)/, "[$1]"))"),
+            "[12]; [34]");
+  EXPECT_EQ(TextOf(R"(std::replace("name=A", /name=(?<value>\w+)/, "${value}$$"))"),
+            "A$");
+  EXPECT_EQ(TextOf(R"(std::replace("a.b", ".", "-"))"), "a-b");
+  EXPECT_EQ(TextOf(R"(std::matches_pattern("warning", /WARN/i))"), "true");
+  EXPECT_EQ(TextOf(R"(std::matches_pattern("ready", /WARN/i))"), "false");
+  EXPECT_FALSE(EvaluatedIn(R"(std::matches_pattern("x", "x"))").ok());
+  EXPECT_FALSE(EvaluatedIn(R"(std::replace("a", /(a)/, "$2"))").ok());
 }
 
 TEST(FlowValues, OptionalProjectionKeepsNullDistinctFromMissing) {

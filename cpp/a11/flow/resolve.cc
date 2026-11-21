@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <optional>
 #include <ranges>
@@ -42,9 +43,11 @@
 #include "a11/flow/emit_json.h"
 #include "a11/flow/pattern.h"
 #include "a11/flow/plan.h"
+#include "a11/flow/regex_literal.h"
 #include "a11/flow/syntax.h"
 #include "a11/flow/temporal.h"
 #include "a11/flow/vocabulary.h"
+#include "a11/internal/regex.h"
 #include "absl/strings/match.h"
 
 namespace a11::flow {
@@ -234,7 +237,8 @@ int NumericWidth(std::string_view type) {
 /// weaker copy of it.
 bool ConstantFits(const syntax::Constant& value, std::string_view type) {
   using Kind = syntax::Constant::Kind;
-  if (type == "any" || type == "json" || value.kind == Kind::kNull) {
+  if (type == "any" || type == "json" || type == "std::json" ||
+      value.kind == Kind::kNull) {
     return true;
   }
   switch (value.kind) {
@@ -247,6 +251,8 @@ bool ConstantFits(const syntax::Constant& value, std::string_view type) {
              type == "duration" || type == "time";
     case Kind::kString:
       return IsTextType(type) || type == "bytes";
+    case Kind::kRegex:
+      return type == "regex" || type == "std::regex";
     case Kind::kDuration:
       return type == "duration";
     case Kind::kList:
@@ -269,10 +275,12 @@ class DtoResolver {
  public:
   DtoResolver(const LineIndex& lines,
               absl::Span<const syntax::DtoDeclarationPtr> declared,
+              absl::Span<const Program::ConstantPlan> constants,
               std::vector<Diagnostic>& diagnostics, CompilationBudget& budget)
       : budget_(budget),
         lines_(lines),
         declared_(declared),
+        constants_(constants),
         diagnostics_(diagnostics) {}
 
   std::vector<DtoPlan> Run() {
@@ -439,6 +447,81 @@ class DtoResolver {
     entry.has_enumeration = field.has_enumeration;
     entry.default_value = field.default_value;
     entry.has_default = field.has_default;
+    const syntax::ConstantLookup lookup =
+        [&](std::string_view name) -> std::optional<syntax::Constant> {
+      for (const auto& constant : constants_) {
+        if (constant.name == name) {
+          return constant.value;
+        }
+      }
+      return std::nullopt;
+    };
+    const auto resolve_bound = [&](const syntax::NodePtr& source,
+                                   syntax::Constant& destination) {
+      if (source == nullptr) {
+        return;
+      }
+      auto value = syntax::ConstantValue(source.get(), &lookup);
+      if (!value.has_value() ||
+          (value->kind != syntax::Constant::Kind::kInteger &&
+           value->kind != syntax::Constant::Kind::kDouble &&
+           value->kind != syntax::Constant::Kind::kDuration)) {
+        Report("flow.form.field-constraint",
+               "A range bound needs a numeric or duration module constant.",
+               source->location, owner);
+      } else {
+        destination = std::move(*value);
+      }
+    };
+    resolve_bound(field.minimum_source, entry.range.minimum);
+    resolve_bound(field.maximum_source, entry.range.maximum);
+    if (field.pattern_source != nullptr) {
+      const auto value =
+          syntax::ConstantValue(field.pattern_source.get(), &lookup);
+      if (!value.has_value() ||
+          (value->kind != syntax::Constant::Kind::kString &&
+           value->kind != syntax::Constant::Kind::kRegex)) {
+        Report("flow.syntax.constant-required",
+               "'matching' needs a module string or regex constant.",
+               field.pattern_source->location, owner);
+      } else {
+        const auto expression = value->kind == syntax::Constant::Kind::kRegex
+                                    ? RegexExpression(value->text)
+                                    : absl::StatusOr<std::string>(value->text);
+        if (!expression.ok() ||
+            !a11::internal::CompileRegex(*expression).ok()) {
+          Report("flow.form.bad-pattern",
+                 "The constant is not a valid RE2 pattern.",
+                 field.pattern_source->location, owner);
+        } else {
+          entry.pattern = *expression;
+          entry.has_pattern = true;
+        }
+      }
+    }
+    if (field.enumeration_source != nullptr) {
+      const auto value =
+          syntax::ConstantValue(field.enumeration_source.get(), &lookup);
+      if (!value.has_value() || value->kind != syntax::Constant::Kind::kList) {
+        Report("flow.form.one-of-not-a-list", "'one of' needs a list constant.",
+               field.enumeration_source->location, owner);
+      } else {
+        entry.enumeration = value->items;
+        entry.has_enumeration = true;
+      }
+    }
+    if (field.default_source != nullptr) {
+      const auto value =
+          syntax::ConstantValue(field.default_source.get(), &lookup);
+      if (!value.has_value()) {
+        Report("flow.syntax.constant-required",
+               "A field default needs a module constant.",
+               field.default_source->location, owner);
+      } else {
+        entry.default_value = *value;
+        entry.has_default = true;
+      }
+    }
     entry.description = field.description;
     entry.location = field.location;
     CheckField(entry, field, owner);
@@ -534,6 +617,7 @@ class DtoResolver {
   CompilationBudget& budget_;
   const LineIndex& lines_;
   absl::Span<const syntax::DtoDeclarationPtr> declared_;
+  absl::Span<const Program::ConstantPlan> constants_;
   std::vector<Diagnostic>& diagnostics_;
   DtoNames names_;
   std::vector<const syntax::DtoDeclaration*> kept_;
@@ -552,6 +636,8 @@ std::string ConstantText(const syntax::Constant& value) {
   switch (value.kind) {
     case syntax::Constant::Kind::kString:
       return absl::StrCat("\"", value.text, "\"");
+    case syntax::Constant::Kind::kRegex:
+      return value.text;
     case syntax::Constant::Kind::kInteger:
       return absl::StrCat(value.integer);
     case syntax::Constant::Kind::kDouble:
@@ -575,6 +661,8 @@ std::string Unparse(const Node* node) {
       switch (value.kind) {
         case syntax::Constant::Kind::kString:
           return absl::StrCat("\"", value.text, "\"");
+        case syntax::Constant::Kind::kRegex:
+          return value.text;
         case syntax::Constant::Kind::kInteger:
           return absl::StrCat(value.integer);
         case syntax::Constant::Kind::kDouble:
@@ -746,7 +834,12 @@ std::string StageBodyLabel(const syntax::Stage& stage) {
       if (stage.text.empty()) {
         return stage.name;
       }
-      return absl::StrCat(stage.name, " \"", stage.text, "\"");
+      return absl::StrCat(
+          stage.name, stage.match_all ? " all " : " ",
+          stage.match_regex ? stage.text : absl::StrCat("\"", stage.text, "\""),
+          stage.match_offset.empty()
+              ? ""
+              : absl::StrCat(" offset \"", stage.match_offset, "\""));
     case vocabulary::StageArgument::kExpression:
     case vocabulary::StageArgument::kStream:
       return absl::StrCat(stage.name, " ", Unparse(stage.argument.get()));
@@ -927,6 +1020,27 @@ class FlowResolver {
       entry.alias = header->alias.text;
       entry.default_value = header->default_value;
       entry.has_default = header->has_default;
+      if (header->default_source != nullptr) {
+        const syntax::ConstantLookup lookup =
+            [&](std::string_view name) -> std::optional<syntax::Constant> {
+          if (const auto* constant = known_.Constant(name);
+              constant != nullptr) {
+            return constant->value;
+          }
+          return std::nullopt;
+        };
+        auto value =
+            syntax::ConstantValue(header->default_source.get(), &lookup);
+        if (!value.has_value()) {
+          Report("flow.syntax.constant-required",
+                 "A header default needs a module constant.",
+                 header->default_source->location, Severity::kError,
+                 Family::kForm);
+        } else {
+          entry.default_value = std::move(*value);
+          entry.has_default = true;
+        }
+      }
       entry.description = header->description;
       entry.location = header->location;
       plan.headers.push_back(std::move(entry));
@@ -943,7 +1057,59 @@ class FlowResolver {
       body_ = builder_->AddBody("root");
       builder_->flow().root = body_;
     }
+    Scope module;
     Scope root;
+    root.parent = &module;
+    const auto bind_constant = [&](std::string name,
+                                   const Program::ConstantPlan& constant) {
+      if (module.names.contains(name)) {
+        return;
+      }
+      Symbol symbol;
+      symbol.kind = SymbolKind::kValue;
+      symbol.name = std::move(name);
+      symbol.location = constant.location;
+      symbol.constant = true;
+      symbol.static_value = constant.value;
+      symbol.value_type = constant.type;
+      if (builder_ != nullptr) {
+        graph::Expr expression;
+        expression.constant = constant.value;
+        graph::Ref ref;
+        ref.kind = graph::RefKind::kExpr;
+        ref.owner = body_;
+        ref.label = symbol.name;
+        ref.expr = builder_->AddExpr(std::move(expression));
+        ref.unary = true;
+        symbol.ref = builder_->AddRef(std::move(ref));
+        if (constant.type.has_value()) {
+          graph::Stage conversion;
+          conversion.name = "coerce";
+          conversion.type = constant.type;
+          symbol.ref = Derive(symbol.ref, std::move(conversion), symbol.name);
+        }
+      }
+      Define(module, std::move(symbol));
+    };
+    for (const auto& [alias, target] : declaration_.constant_aliases) {
+      if (const auto* constant = known_.Constant(target); constant != nullptr) {
+        bind_constant(alias, *constant);
+      }
+    }
+    if (declaration_.constant_aliases.empty()) {
+      for (const auto& statement : declaration_.body) {
+        syntax::VisitSubtree(*statement, [&](const Node& node) {
+          const auto* name = syntax::As<syntax::Name>(&node);
+          if (name == nullptr) {
+            return;
+          }
+          if (const auto* constant = known_.Constant(name->name);
+              constant != nullptr) {
+            bind_constant(name->name, *constant);
+          }
+        });
+      }
+    }
     for (const PortPlan& port : resolved_.plan.ports) {
       const bool input = port.direction == syntax::PortDirection::kInput;
       Symbol symbol;
@@ -1121,6 +1287,9 @@ class FlowResolver {
                           graph::RefId failures = graph::kNone) {
     graph::Stage made;
     made.name = stage.name;
+    made.match_all = stage.match_all;
+    made.match_regex = stage.match_regex;
+    made.match_offset = stage.match_offset;
     made.takes = stage.takes;
     made.tolerant = stage.tolerant;
     made.failures = failures;
@@ -2344,8 +2513,41 @@ class FlowResolver {
       }
       case NodeKind::kRepeat: {
         const auto* repeat = syntax::As<syntax::Repeat>(statement);
-        if (repeat->start != nullptr) {
-          Constant(repeat->start.get());
+        const syntax::ConstantLookup lookup =
+            [&](std::string_view name) -> std::optional<syntax::Constant> {
+          if (auto* symbol = Find(scope, name); symbol != nullptr) {
+            if (symbol->static_value.has_value()) {
+              ++symbol->reads;
+            }
+            return symbol->static_value;
+          }
+          return std::nullopt;
+        };
+        const auto start =
+            repeat->start == nullptr
+                ? std::optional<syntax::Constant>()
+                : syntax::ConstantValue(repeat->start.get(), &lookup);
+        if (repeat->start != nullptr && !start.has_value()) {
+          Report("flow.syntax.constant-required",
+                 "A repeat start needs a statically known value.",
+                 repeat->start->location, Severity::kError, Family::kSyntax);
+        }
+        std::optional<int> maximum = repeat->max_iterations;
+        if (repeat->max_source != nullptr) {
+          const auto value =
+              syntax::ConstantValue(repeat->max_source.get(), &lookup);
+          if (!value.has_value() ||
+              value->kind != syntax::Constant::Kind::kInteger ||
+              value->integer < std::numeric_limits<int>::min() ||
+              value->integer > std::numeric_limits<int>::max()) {
+            Report("flow.syntax.constant-required",
+                   "'repeat max' needs a statically known signed 32-bit "
+                   "integer constant.",
+                   repeat->max_source->location, Severity::kError,
+                   Family::kSyntax);
+          } else {
+            maximum = static_cast<int>(value->integer);
+          }
         }
         StepPlan step;
         step.kind = "repeat";
@@ -2360,13 +2562,9 @@ class FlowResolver {
               builder_->AddBody(absl::StrCat(step.label, ".body"), body_, made);
           graph::Step& one = builder_->step(made);
           one.bodies.push_back(inner_body);
-          one.max_iterations = repeat->max_iterations;
-          if (repeat->start != nullptr) {
-            if (std::optional<syntax::Constant> start =
-                    syntax::ConstantValue(repeat->start.get());
-                start.has_value()) {
-              one.start = *std::move(start);
-            }
+          one.max_iterations = maximum;
+          if (start.has_value()) {
+            one.start = *start;
           }
         }
         const graph::RefId carry_ref =
@@ -2411,7 +2609,7 @@ class FlowResolver {
         loops_.pop_back();
         JoinVariables(scope, {{&inner, inner_body}}, made);
         // Nothing ends it.
-        if (!stopped && !repeat->max_iterations.has_value()) {
+        if (!stopped && !maximum.has_value() && repeat->max_source == nullptr) {
           Report("flow.form.unbounded-repeat",
                  absl::StrCat(
                      "Nothing ends this 'repeat': it has no 'until', no "
@@ -2643,15 +2841,23 @@ class FlowResolver {
       return "";
     }
     const auto value = syntax::ConstantValue(function->args.front().get());
-    return value.has_value() && value->kind == syntax::Constant::Kind::kString
-               ? value->text
-               : "";
+    if (!value.has_value()) {
+      return "";
+    }
+    if (value->kind == syntax::Constant::Kind::kRegex) {
+      return absl::StrCat(std::string(1, '\0'), value->text);
+    }
+    return value->kind == syntax::Constant::Kind::kString ? value->text : "";
   }
 
   static std::string PatternOf(const syntax::Pipeline& pipeline) {
     if (!pipeline.stages.empty()) {
       const syntax::Stage& last = *pipeline.stages.back();
-      return vocabulary::Canonical(last.name) == "match" ? last.text : "";
+      return vocabulary::Canonical(last.name) == "match"
+                 ? (last.match_regex
+                        ? absl::StrCat(std::string(1, '\0'), last.text)
+                        : last.text)
+                 : "";
     }
     return PatternOfExpression(pipeline.source.get());
   }
@@ -2744,6 +2950,12 @@ class FlowResolver {
       return annotated;
     }
     const auto& symbol = resolved_.symbols[previous];
+    if (symbol.constant) {
+      Report("flow.name.constant-reassignment",
+             absl::StrCat("Cannot reassign constant ", Quoted(name.text), "."),
+             name.location);
+      return annotated;
+    }
     if (symbol.kind != SymbolKind::kValue) {
       Report("flow.name.taken",
              absl::StrCat(
@@ -2921,6 +3133,11 @@ class FlowResolver {
   void ResolveDestructuring(const syntax::Bind& bind, Scope& scope,
                             std::vector<StepPlan>& steps) {
     const auto source = ResolveSource(bind.value.get(), scope);
+    if (bind.constant && source.kind != Ref::Kind::kValue) {
+      Report("flow.form.constant-value",
+             "A constant needs one value, not a stream or handle.",
+             bind.location, Severity::kError, Family::kForm);
+    }
     std::vector<syntax::Word> names{bind.name};
     names.insert(names.end(), bind.names.begin(), bind.names.end());
     absl::flat_hash_set<std::string> seen;
@@ -2930,7 +3147,12 @@ class FlowResolver {
         Report("flow.name.taken", "A destructuring pattern repeats a name.",
                name.location);
       }
-      types.push_back(AssignmentType(name, bind.type, scope));
+      if (bind.constant && scope.names.contains(name.text)) {
+        Report("flow.name.taken", "A constant name is already bound here.",
+               name.location);
+      }
+      types.push_back(bind.constant ? bind.type
+                                    : AssignmentType(name, bind.type, scope));
       if (!types.back().has_value()) {
         const Node* member = nullptr;
         if (const auto* list =
@@ -2982,6 +3204,7 @@ class FlowResolver {
       symbol.name = names[index].text;
       symbol.location = names[index].location;
       symbol.kind = SymbolKind::kValue;
+      symbol.constant = bind.constant;
       symbol.readable = true;
       symbol.step = initialized;
       symbol.value_type = types[index];
@@ -3007,8 +3230,26 @@ class FlowResolver {
       return;
     }
     const auto previous = Lookup(scope, bind->name.text);
-    const auto assigned_type = AssignmentType(bind->name, bind->type, scope);
+    if (bind->constant && scope.names.contains(bind->name.text)) {
+      Report("flow.name.taken", "A constant name is already bound here.",
+             bind->name.location);
+    }
+    const auto assigned_type =
+        bind->constant ? bind->type
+                       : AssignmentType(bind->name, bind->type, scope);
     const Node* value = bind->value.get();
+    if (bind->constant &&
+        (value->kind == NodeKind::kCallExpression ||
+         value->kind == NodeKind::kNodeExpression ||
+         value->kind == NodeKind::kWait || value->kind == NodeKind::kClose ||
+         value->kind == NodeKind::kBlock || value->kind == NodeKind::kForEach ||
+         value->kind == NodeKind::kRepeat || value->kind == NodeKind::kPipe)) {
+      Report("flow.form.constant-value",
+             "A constant needs one value, not an action, node, stream, or "
+             "barrier handle.",
+             bind->location, Severity::kError, Family::kForm);
+      return;
+    }
     if (const auto* pipe = syntax::As<syntax::Pipe>(value); pipe != nullptr) {
       const auto step = ResolveTransfer(*pipe, scope, steps);
       builder_->step(step).label = bind->name.text;
@@ -3110,17 +3351,35 @@ class FlowResolver {
       Ref source = ResolveSource(value, scope);
       const bool scalar =
           source.kind == Ref::Kind::kValue || source.kind == Ref::Kind::kStatus;
+      if (bind->constant && !scalar) {
+        Report("flow.form.constant-value",
+               "A constant needs one value, not a stream or handle.",
+               bind->location, Severity::kError, Family::kForm);
+        return;
+      }
       Symbol symbol;
       symbol.name = bind->name.text;
       symbol.location = bind->name.location;
       symbol.kind = scalar ? SymbolKind::kValue : SymbolKind::kInputPort;
+      symbol.constant = bind->constant;
+      if (bind->constant) {
+        const syntax::ConstantLookup lookup =
+            [&](std::string_view name) -> std::optional<syntax::Constant> {
+          if (const auto* prior = Find(scope, name); prior != nullptr) {
+            return prior->static_value;
+          }
+          return std::nullopt;
+        };
+        symbol.static_value = syntax::ConstantValue(value, &lookup);
+      }
       symbol.ref = source.node;
       symbol.writable = false;
       symbol.data_dependency = HasDataDependency(value, scope);
       symbol.shape = bind->type.has_value() ? bind->type->name : source.shape;
       symbol.value_type = assigned_type;
       symbol.pattern = PatternOfExpression(value);
-      if (!symbol.value_type.has_value() && previous != kNoSymbol) {
+      if (!symbol.value_type.has_value() && previous != kNoSymbol &&
+          !bind->constant) {
         symbol.value_type = resolved_.symbols[previous].value_type;
       }
       if (!symbol.value_type.has_value() && scalar) {
@@ -4275,7 +4534,11 @@ class FlowResolver {
         });
       }
       previous_pattern =
-          vocabulary::Canonical(stage->name) == "match" ? stage->text : "";
+          vocabulary::Canonical(stage->name) == "match"
+              ? (stage->match_regex
+                     ? absl::StrCat(std::string(1, '\0'), stage->text)
+                     : stage->text)
+              : "";
       CheckShapeStage(*stage, ref);
       CheckPatternStage(*stage);
       // `failures into errors` names a destination, like a pipe's
@@ -4426,6 +4689,9 @@ class FlowResolver {
   /// with it; this only has to place it.
   void CheckPatternStage(const syntax::Stage& stage) {
     if (vocabulary::Canonical(stage.name) != "match") {
+      return;
+    }
+    if (stage.match_regex) {
       return;
     }
     const pattern::Compiled compiled = pattern::Compile(stage.text);
@@ -4609,6 +4875,9 @@ class FlowResolver {
         case K::kString:
           info.type = "string";
           break;
+        case K::kRegex:
+          info.type = "regex";
+          break;
         case K::kDuration:
           info.type = "duration";
           break;
@@ -4678,7 +4947,7 @@ class FlowResolver {
       } else if (name == "number") {
         info.type = "number";
       } else if (name == "bool" || name == "contains" || name == "startswith" ||
-                 name == "endswith") {
+                 name == "endswith" || name == "matches_pattern") {
         info.type = "bool";
       } else if (name == "upper" || name == "lower" || name == "trim" ||
                  name == "text" || name == "string" || name == "join" ||
@@ -4690,7 +4959,7 @@ class FlowResolver {
                  name == "b64urldecode" || name == "utf8encode") {
         info.type = "bytes";
       } else if (name == "keys" || name == "values" || name == "split" ||
-                 name == "list") {
+                 name == "list" || name == "matches") {
         info.type = "list";
       } else if (name == "option") {
         info.type = "option";
@@ -6298,6 +6567,24 @@ class FlowResolver {
     if (text.empty()) {
       return std::nullopt;
     }
+    if (text.front() == '\0') {
+      text.remove_prefix(1);
+      const auto expression = RegexExpression(text);
+      if (!expression.ok()) {
+        return std::nullopt;
+      }
+      const auto regex = a11::internal::CompileRegex(*expression);
+      if (!regex.ok() || regex->CaptureCount() == 0 ||
+          regex->CaptureName(1).empty()) {
+        return std::nullopt;
+      }
+      Fields found;
+      found.subject = "the regex";
+      for (size_t group = 1; group <= regex->CaptureCount(); ++group) {
+        found.names.emplace_back(regex->CaptureName(group));
+      }
+      return found;
+    }
     const pattern::Compiled compiled = pattern::Compile(text);
     // A pattern that does not read is reported where it is written; nothing is
     // known about what it names, so nothing is checked here. Nor is a
@@ -6608,6 +6895,16 @@ const DtoPlan* absl_nullable Program::Dto(std::string_view name) const {
   return nullptr;
 }
 
+const Program::ConstantPlan* absl_nullable Program::Constant(
+    std::string_view name) const {
+  for (const auto& constant : constants) {
+    if (constant.name == name) {
+      return &constant;
+    }
+  }
+  return nullptr;
+}
+
 const FieldPlan* absl_nullable DtoPlan::Field(
     std::string_view field_name) const {
   for (const FieldPlan& field : fields) {
@@ -6674,12 +6971,181 @@ ResolveResult Resolve(std::string_view source, const ParseResult& parsed,
   result.diagnostics = parsed.diagnostics;
   const LineIndex lines(source);
 
+  absl::flat_hash_map<std::string, const syntax::ConstDeclaration*>
+      declarations;
+  const auto report_constant = [&](std::string_view code, std::string message,
+                                   const syntax::Location& location) {
+    Diagnostic diagnostic;
+    diagnostic.code = std::string(code);
+    diagnostic.family = Family::kForm;
+    diagnostic.severity = Severity::kError;
+    diagnostic.message = std::move(message);
+    diagnostic.range = lines.Between(location.start, location.end);
+    result.diagnostics.push_back(std::move(diagnostic));
+  };
+  for (const auto& constant : parsed.constants) {
+    if (!declarations.emplace(constant.name.text, &constant).second) {
+      report_constant("flow.name.taken",
+                      absl::StrCat("Constant ", Quoted(constant.name.text),
+                                   " is declared twice."),
+                      constant.name.location);
+    }
+  }
+  absl::flat_hash_set<std::string> unknown_dependencies;
+  for (const auto& constant : parsed.constants) {
+    syntax::VisitSubtree(*constant.value, [&](const Node& node) {
+      const auto* name = syntax::As<syntax::Name>(&node);
+      if (name != nullptr && !declarations.contains(name->name)) {
+        report_constant(
+            "flow.name.unknown",
+            absl::StrCat("Unknown constant ", Quoted(name->name), "."),
+            name->location);
+        unknown_dependencies.insert(constant.name.text);
+      }
+    });
+  }
+  absl::flat_hash_map<std::string, syntax::Constant> values;
+  absl::flat_hash_set<std::string> visiting;
+  absl::flat_hash_set<std::string> failed;
+  std::function<std::optional<syntax::Constant>(std::string_view)> evaluate;
+  evaluate = [&](std::string_view name) -> std::optional<syntax::Constant> {
+    const std::string key(name);
+    if (const auto found = values.find(key); found != values.end()) {
+      return found->second;
+    }
+    if (failed.contains(key)) {
+      return std::nullopt;
+    }
+    const auto found = declarations.find(key);
+    if (found == declarations.end()) {
+      return std::nullopt;
+    }
+    if (visiting.size() >= 128) {
+      report_constant("flow.form.constant-depth",
+                      "Constant dependencies exceed the maximum depth of 128.",
+                      found->second->name.location);
+      failed.insert(key);
+      return std::nullopt;
+    }
+    if (!visiting.insert(key).second) {
+      report_constant(
+          "flow.form.constant-cycle",
+          absl::StrCat("Constants form a cycle at ", Quoted(key), "."),
+          found->second->name.location);
+      failed.insert(key);
+      return std::nullopt;
+    }
+    bool failed_dependency = unknown_dependencies.contains(key);
+    const syntax::ConstantLookup lookup = [&](std::string_view dependency) {
+      auto value = evaluate(dependency);
+      failed_dependency |=
+          !value.has_value() && declarations.contains(std::string(dependency));
+      return value;
+    };
+    auto value = syntax::ConstantValue(found->second->value.get(), &lookup);
+    if (!value.has_value()) {
+      if (!failed_dependency && !failed.contains(key)) {
+        report_constant(
+            "flow.form.constant-initializer",
+            "A module constant needs a closed value expression made from "
+            "literals, records, lists, and other module constants.",
+            found->second->name.location);
+      }
+      failed.insert(key);
+    } else {
+      values.emplace(key, *value);
+    }
+    visiting.erase(key);
+    return value;
+  };
+  for (const auto& constant : parsed.constants) {
+    if (!budget->Check()) {
+      break;
+    }
+    auto value = evaluate(constant.name.text);
+    if (!value.has_value()) {
+      continue;
+    }
+    Program::ConstantPlan plan;
+    plan.name = constant.name.text;
+    plan.value = std::move(*value);
+    plan.type = constant.type;
+    if (!plan.type.has_value()) {
+      if (const auto* typed =
+              syntax::As<syntax::TypedValue>(constant.value.get());
+          typed != nullptr) {
+        plan.type = typed->type;
+      }
+    }
+    plan.exported = constant.exported;
+    plan.location = constant.name.location;
+    result.program.constants.push_back(std::move(plan));
+  }
+
   // The shapes first, and all of them: a port may be typed with one, and a
   // shape may name another, so neither declaration order nor the flows can be
   // waited for.
-  result.program.dtos = DtoResolver(lines, absl::MakeConstSpan(parsed.dtos),
-                                    result.diagnostics, *budget)
-                            .Run();
+  result.program.dtos =
+      DtoResolver(lines, absl::MakeConstSpan(parsed.dtos),
+                  absl::MakeConstSpan(result.program.constants),
+                  result.diagnostics, *budget)
+          .Run();
+  // Module constants are evaluated before shapes so declarations can use
+  // them. Validate annotations after shapes have been collected, including
+  // the nested values of lists and records.
+  std::function<bool(const syntax::Constant&, const syntax::TypeExpression&)>
+      fits_type;
+  fits_type = [&](const syntax::Constant& value,
+                  const syntax::TypeExpression& type) -> bool {
+    const std::string_view base =
+        std::string_view(type.name).starts_with("std::")
+            ? std::string_view(type.name).substr(5)
+            : std::string_view(type.name);
+    if (base == "list" || base == "array") {
+      if (value.kind != syntax::Constant::Kind::kList) {
+        return false;
+      }
+      if (type.parameters.empty()) {
+        return true;
+      }
+      return std::all_of(value.items.begin(), value.items.end(),
+                         [&](const auto& item) {
+                           return fits_type(item, type.parameters.front());
+                         });
+    }
+    if (const auto* shape = result.program.Dto(type.name); shape != nullptr) {
+      if (value.kind != syntax::Constant::Kind::kObject) {
+        return false;
+      }
+      for (const auto& field : shape->fields) {
+        if (field.required && !field.has_default &&
+            std::none_of(
+                value.pairs.begin(), value.pairs.end(),
+                [&](const auto& pair) { return pair.first == field.name; })) {
+          return false;
+        }
+      }
+      for (const auto& [name, item] : value.pairs) {
+        if (const auto* field = shape->Field(name);
+            field != nullptr && field->syntax_type.has_value() &&
+            !fits_type(item, *field->syntax_type)) {
+          return false;
+        }
+      }
+      return true;
+    }
+    return ConstantFits(value, base);
+  };
+  for (const auto& constant : result.program.constants) {
+    if (constant.type.has_value() &&
+        !fits_type(constant.value, *constant.type)) {
+      report_constant("flow.form.constant-type",
+                      absl::StrCat("Constant ", Quoted(constant.name),
+                                   " does not fit its declared type ",
+                                   Quoted(constant.type->ToString()), "."),
+                      constant.location);
+    }
+  }
   if (context != nullptr) {
     for (const auto& shape : context->dtos) {
       if (result.program.Dto(shape.name) == nullptr) {

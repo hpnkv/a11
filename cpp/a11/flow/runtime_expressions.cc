@@ -210,6 +210,9 @@ absl::StatusOr<Value> Scope::EvaluateWith(ExprId expr, const Value& it,
     ABSL_RETURN_IF_ERROR(work_->CheckActive());
   }
   const graph::Expr& one = graph().exprs[expr];
+  if (one.constant.has_value()) {
+    return Value::Of(*one.constant);
+  }
   if (one.node == nullptr) {
     return Value::Null();
   }

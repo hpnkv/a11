@@ -110,14 +110,10 @@ int SelectUntil(absl::Time deadline, const CaseArray& cases) {
     selected_case = selector.picked_case_index;
   }
 
-  // Unregister from all events with which we are registered. We know that
-  // all registered case states were Handle()d with enqueue=true.
+  // Unregister every handled case, including the selected one. A notifier may
+  // pick a case before it finishes unlinking it from its wait list.
   for (int i = 0; i < registered_case_states; ++i) {
-    if (internal::CaseInSelectClause* case_state = &case_states[i];
-        case_state->index != selected_case) {
-      // sel.picked was unregistered by the notifier.
-      case_state->GetCase()->selectable->Unregister(case_state);
-    }
+    case_states[i].Unregister();
   }
 
   return expired ? -1 : selected_case;

@@ -65,6 +65,9 @@ SymbolClass ClassOf(SymbolKind kind) {
 
 /// What an editor shows beside a symbol's name.
 std::string DetailOf(const Symbol& symbol) {
+  if (symbol.constant) {
+    return "constant";
+  }
   switch (symbol.kind) {
     case SymbolKind::kCall:
       return symbol.action;
@@ -164,12 +167,16 @@ std::string FieldTable(const DtoPlan& shape) {
 /// every name in the file in the first flow that has a name like it.
 std::vector<size_t> DeclarationStarts(const ParseResult& parsed) {
   std::vector<size_t> starts;
-  starts.reserve(parsed.flows.size() + parsed.dtos.size());
+  starts.reserve(parsed.flows.size() + parsed.dtos.size() +
+                 parsed.constants.size());
   for (const syntax::FlowDeclarationPtr& flow : parsed.flows) {
     starts.push_back(flow->location.start);
   }
   for (const syntax::DtoDeclarationPtr& shape : parsed.dtos) {
     starts.push_back(shape->location.start);
+  }
+  for (const auto& constant : parsed.constants) {
+    starts.push_back(constant.extent.start);
   }
   std::sort(starts.begin(), starts.end());
   return starts;
@@ -1071,6 +1078,18 @@ std::vector<DocumentSymbol> Symbols(std::string_view source,
                                                     budget);
   std::vector<DocumentSymbol> found;
 
+  for (const auto& constant : parsed.constants) {
+    DocumentSymbol one;
+    one.name = constant.name.text;
+    one.kind = SymbolClass::kVariable;
+    one.detail = constant.type.has_value()
+                     ? absl::StrCat("const ", constant.type->ToString())
+                     : "const";
+    one.selection = RangeOf(lines, constant.name.location);
+    one.range = RangeOf(lines, constant.extent);
+    found.push_back(std::move(one));
+  }
+
   // The shapes first, as they are written: a file that declares one usually
   // opens with it, and the outline should read like the file.
   for (const syntax::DtoDeclarationPtr& declaration : parsed.dtos) {
@@ -1155,6 +1174,14 @@ std::vector<DocumentSymbol> Symbols(std::string_view source,
     // to `index`.
     for (const Symbol& symbol : flow.symbols) {
       if (symbol.implicit) {
+        continue;
+      }
+      if (symbol.constant &&
+          std::any_of(parsed.constants.begin(), parsed.constants.end(),
+                      [&](const auto& constant) {
+                        return symbol.location.start ==
+                               constant.name.location.start;
+                      })) {
         continue;
       }
       if (symbol.kind == SymbolKind::kInputPort ||

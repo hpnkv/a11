@@ -103,12 +103,22 @@ Compiled Compile(std::string_view text);
 /// What one hole took: a view into the subject that was matched.
 struct Capture {
   std::string_view text;
+  size_t start = 0;
+  size_t end = 0;
+};
+
+struct MatchResult {
+  size_t start = 0;
+  size_t end = 0;
+  std::vector<Capture> captures;
 };
 
 /// Match `pattern` anywhere in `subject`, taking the earliest fit.
 ///
 /// Nothing when it does not fit at all, which is how a stage knows to drop the
 /// value and a function knows to answer null.
+std::optional<MatchResult> MatchWithSpans(const Pattern& pattern,
+                                          std::string_view subject);
 std::optional<std::vector<Capture>> Match(const Pattern& pattern,
                                           std::string_view subject);
 

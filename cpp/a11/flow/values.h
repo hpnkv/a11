@@ -44,10 +44,15 @@
 #include "a11/flow/syntax.h"
 #include "a11/flow/temporal.h"
 
+namespace a11::internal {
+class Regex;
+}
+
 namespace a11::flow {
 
 class Value;
 class WindowBuffer;
+struct PreparedExpressions;
 
 /// A value only the host knows what to do with.
 ///
@@ -149,6 +154,7 @@ class Value {
     kTypedInteger,
     kTypedFloat,
     kString,
+    kRegex,
     kBytes,
     kList,
     kObject,
@@ -179,6 +185,7 @@ class Value {
   static Value TypedFloat(double value, int bits);
   static Value LegacyNumber(Value value);
   static Value String(std::string value);
+  static Value Regex(std::string value);
   static Value Bytes(data::Bytes value);
   static Value List(std::vector<Value> items);
   static Value List(std::vector<Value> items, std::string_view element_type);
@@ -432,15 +439,30 @@ std::optional<std::int64_t> ExactInt64(const Value& value);
 /// See [pattern::Compile] for the language. A pattern that does not compile is
 /// an `invalid_argument` naming what is wrong with it, because a pattern is a
 /// literal almost every time and a silent no-match would hide a typo in it.
+struct SpanFields {
+  std::string_view offset;
+};
+
 absl::StatusOr<Value> MatchPattern(std::string_view pattern,
-                                   std::string_view subject);
+                                   std::string_view subject,
+                                   SpanFields spans = {});
 
 /// The same, against a pattern already compiled.
 ///
 /// What a stage uses: the pattern is written once in the source and the stream
 /// may be ten thousand values, so compiling it per value would be paying for
 /// the same scan over and over.
-Value MatchCompiled(const pattern::Pattern& pattern, std::string_view subject);
+absl::StatusOr<Value> MatchCompiled(const pattern::Pattern& pattern,
+                                    std::string_view subject,
+                                    SpanFields spans = {});
+absl::StatusOr<Value> MatchRegexLiteral(
+    std::string_view literal, std::string_view subject,
+    const PreparedExpressions* absl_nullable prepared = nullptr,
+    SpanFields spans = {});
+absl::StatusOr<std::vector<Value>> MatchAllRegexLiteral(
+    std::string_view literal, std::string_view subject,
+    const PreparedExpressions* absl_nullable prepared = nullptr,
+    SpanFields spans = {});
 
 /// `AsNumber` as a double, for the places that only want the magnitude.
 double AsDouble(const Value& value);
@@ -531,6 +553,8 @@ std::string StrformatCompiled(const FormatTemplate& format,
 /// Immutable, bounded literal preparation shared by execution activations.
 struct PreparedExpressions {
   absl::flat_hash_map<std::string, pattern::Pattern> patterns;
+  absl::flat_hash_map<std::string, std::shared_ptr<const a11::internal::Regex>>
+      regexes;
   absl::flat_hash_map<std::string, FormatTemplate> formats;
   absl::flat_hash_map<const syntax::Node*, Value> folded;
 };

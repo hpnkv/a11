@@ -104,6 +104,9 @@ struct Stage {
   long long count = 0;
   /// `kString`/`kOptionalString`: the text. Also the field name for `at`.
   std::string text;
+  bool match_all = false;
+  bool match_regex = false;
+  std::string match_offset;
   /// `kExpression`: the expression, with `it` bound. `kNumber`/`kDuration`:
   /// scalar configuration evaluated once per activation, without `it`.
   ExprId expr = kNone;
@@ -374,6 +377,8 @@ struct Body {
 struct Expr {
   bool materialized = false;
   const syntax::Node* absl_nullable node = nullptr;
+  /// A linked module constant, available without a syntax-tree expression.
+  std::optional<syntax::Constant> constant;
   std::vector<std::pair<const syntax::Node* absl_nonnull, RefId>> bound;
 
   struct ReferenceBinding {

@@ -89,6 +89,7 @@ int TokenTypeOf(SemanticKind kind) {
     case SemanticKind::kComment:
       return 0;
     case SemanticKind::kString:
+    case SemanticKind::kRegex:
       return 1;
     case SemanticKind::kStringEscape:
       return 12;

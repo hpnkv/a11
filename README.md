@@ -25,9 +25,8 @@ process.
   at runtime with defined concurrency, draining, deadlines, cancellation, and
   error propagation.
 
-**[Run the first action](#run-your-first-streaming-action)** ·
-**[Try the live research agent][live-demo]** ·
-**[Read the documentation](https://docs.a11.to/)** ·
+**[Run the first action](#run-your-first-streaming-action)** · **[Try the live research agent][live-demo]** ·
+**[Read the documentation](https://docs.a11.to/)** · **[Cite A11](#cite-a11)** ·
 **[Star A11](https://github.com/hpnkv/a11)**
 
 [live-demo]: https://docs.a11.to/guides/deep-research.html#try-the-deployed-agent
@@ -58,7 +57,6 @@ import asyncio
 from collections.abc import AsyncIterator
 
 import a11
-
 
 REGISTRY = a11.ActionRegistry()
 
@@ -108,8 +106,8 @@ duration of the chat with the current directory as its coding workspace.
 
 In a coding chat, `/sandbox unrestricted` grants host filesystem access and
 disables kernel process confinement. `/sandbox workspace-write` or
-`/sandbox read-only` restores confinement. Approval remains a separate setting
-(`/approval suggest|auto`). Sandbox changes affect subsequent tool calls for
+`/sandbox read-only` restores confinement. Approval remains a separate setting (`/approval suggest|auto`). Sandbox
+changes affect subsequent tool calls for
 all clients of that gateway, not already-running processes.
 
 Studio and IDE clients can call the UI-only `configure_coding_agent` action
@@ -368,3 +366,26 @@ while the handler is running and preserves backpressure.
 Configure your project with `-DCMAKE_PREFIX_PATH=/path/to/install` so
 `find_package` locates it. The generated C++ API reference is published
 [alongside the docs](https://docs.a11.to/cpp/).
+
+## Cite A11
+
+Use the release tag or commit used in your paper. Replace the placeholders
+below with its year, full commit hash, and access date.
+
+Free-form reference:
+
+> Helena Pankov (JetBrains; Google DeepMind). *Action Engine (A11)*, version VERSION (commit COMMIT).
+> Software, YEAR. https://a11.to (accessed DATE).
+
+BibTeX:
+
+```bibtex
+@misc{a11_VERSION,
+  author       = {Pankov, Helena},
+  title        = {{Action Engine (A11)}},
+  institution  = {JetBrains; Google DeepMind},
+  year         = {YEAR},
+  howpublished = {\url{https://a11.to}},
+  note         = {Software, version VERSION (commit COMMIT); accessed DATE}
+}
+```

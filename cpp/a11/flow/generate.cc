@@ -386,6 +386,7 @@ contexts:
 @FIELD_MODIFIERS@
             - include: port-types
             - include: strings
+            - include: regex-literals
             - include: literals
             # `1..200`: the range between two bounds.
             - match: '\.\.'
@@ -473,6 +474,7 @@ contexts:
     - include: bare-stages
     - include: operators
     - include: strings
+    - include: regex-literals
     - include: literals
     - include: builtins
     - include: status-codes
@@ -657,6 +659,10 @@ contexts:
       scope: constant.numeric.duration.a11flow
     - match: '\b-?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?\b'
       scope: constant.numeric.a11flow
+
+  regex-literals:
+    - match: '(?<![A-Za-z0-9_$)\]])/(?![ \t])(?:\\.|\[[^\n]*?\]|[^/\\\n])+/[ims]*'
+      scope: string.regexp.a11flow
 
   strings:
     # Match `"""..."""` first so three quotes are not read as an empty string
@@ -982,6 +988,7 @@ class A11FlowLexer(RegexLexer):
             (r"\n", Whitespace),
             include("comment"),
             include("string"),
+            include("regex"),
             (_word(@FLOW@), Keyword.Declaration, "flow-name"),
             (_word(@STRUCT@), Keyword.Declaration, "struct-name"),
             # A port, told from the `in` of `x in y` by what follows it.
@@ -1065,6 +1072,9 @@ class A11FlowLexer(RegexLexer):
             (r'"""', String, "block-string"),
             (r'"', String, "quoted-string"),
         ],
+        "regex": [
+            (r'(?<![A-Za-z0-9_$)\]])/(?![ \t])(?:\\.|\[[^\n]*?\]|[^/\\\n])+/[ims]*', String.Regex),
+        ],
         "block-string": [
             (r'\\.', String.Escape),
             (r'"""', String, "#pop"),
@@ -1110,6 +1120,7 @@ class A11FlowLexer(RegexLexer):
             (_group(FIELD_MODIFIERS), Keyword.Pseudo),
             include("type"),
             include("string"),
+            include("regex"),
             include("literal"),
             # `1..200`: the range between two bounds.
             (r"\.\.", Operator),
@@ -1280,6 +1291,7 @@ constexpr std::string_view kVsCodeTemplate = R"JSON({
       "patterns": [
         {"include": "#comment"},
         {"include": "#string"},
+        {"include": "#regex"},
         {"include": "#duration"},
         {"include": "#number"},
         {"include": "#declaration-name"},
@@ -1320,6 +1332,10 @@ constexpr std::string_view kVsCodeTemplate = R"JSON({
           "patterns": [{"name": "constant.character.escape.a11flow", "match": "\\\\."}]
         }
       ]
+    },
+    "regex": {
+      "name": "string.regexp.a11flow",
+      "match": "@REGEX_PATTERN@"
     },
     "duration": {
       "//": "Longest unit first: a pattern offering `m` before `ms` reads `250ms` as metres.",
@@ -1471,6 +1487,9 @@ constexpr std::string_view kVsCodeInjectionTemplate = R"JSON({
 )JSON";
 
 std::string VsCode() {
+  constexpr std::string_view regex_pattern =
+      R"re((?<![A-Za-z0-9_$)\]])/(?![ \t])(?:\\.|\[[^\n]*?\]|[^/\\\n])+/[ims]*)re";
+  const std::string escaped_regex = nlohmann::json(regex_pattern).dump();
   const std::vector<std::string_view> units = DurationUnits();
   // Every declaration word, and the two spellings of each. `in`/`out` are in
   // the list as well as in the port-type rule above it: the rule that pushes
@@ -1511,6 +1530,8 @@ std::string VsCode() {
   return absl::StrReplaceAll(
       kVsCodeTemplate,
       {
+          {"@REGEX_PATTERN@",
+           escaped_regex.substr(1, escaped_regex.size() - 2)},
           {"@DURATION_UNITS@", absl::StrJoin(units, "|")},
           {"@FLOW_OR_STRUCT@",
            Inline(std::vector<std::string_view>{"flow", "struct"})},
@@ -1548,7 +1569,8 @@ std::string FragmentPattern() {
       R"re(\s+"[^"\n]+"(?:\s+)re", keyword("as"), R"(\s+)", bare, ")?|",
       keyword("from"), R"(\s+)", qualified, R"(\s+)", keyword("import"),
       R"(\s+(?:)", qualified, R"(|\*)|)", keyword("export"), R"(\s+)",
-      qualified, ")");
+      qualified, "|", keyword("const"), R"(\s+)", qualified, R"((?:\s+)",
+      qualified, ")?(?:", attribute, R"()?[ \t]*=)", ")");
 }
 
 std::string VsCodeInjection() {

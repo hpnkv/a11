@@ -1,0 +1,15 @@
+cff-version: 1.2.0
+message: >-
+  Cite the A11 release or commit used in your research. See the Cite A11
+  section of README.md for versioned citation examples.
+type: software
+title: A11
+authors:
+  - given-names: Helena
+    family-names: Pankov
+    affiliation: JetBrains; Google DeepMind
+abstract: >-
+  A streaming action runtime for AI agents, model serving, and multimodal APIs.
+repository-code: https://github.com/hpnkv/a11
+url: https://github.com/hpnkv/a11
+license: Apache-2.0

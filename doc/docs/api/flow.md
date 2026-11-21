@@ -154,6 +154,29 @@ A description may also appear alone on the line below a port, header, or
 `a11 flow fmt` indents a description under its declaration and lines up the
 columns of a run of declarations around it.
 
+## Constants
+
+Use `const [TYPE] name = VALUE` in a flow to capture one scalar value when
+execution reaches the declaration. The name cannot be reassigned. Lists and
+records remain immutable as Flow values; projections do not provide a mutable
+reference to their contents. A module-level declaration can use
+`const [TYPE] name [exported] = VALUE` and can be imported like another public
+member. Module initializers must be closed expressions built from literals,
+lists, records, and other module constants, so they are available when types,
+field constraints, and header defaults are resolved. `kThisLetterCase` is the
+recommended naming style, not a parser rule.
+
+```a11flow
+const kRetryLimit = 3
+struct Job { retries: int 0..kRetryLimit }
+flow main {
+  in proposed: int
+  out result: int
+  const kSelected = proposed
+  kSelected -> result
+}
+```
+
 ## Constructing typed values
 
 A flow can construct a registered type such as `Interaction` or `AudioBuffer`
@@ -665,8 +688,9 @@ default bound.
 Struct field constraints written `matching "pattern"` use RE2 regular
 expressions and search anywhere in the string; use `^` and `$` to anchor a
 whole value. RE2 supports inline flags and Unicode character classes, and
-rejects lookaround and backreferences. Invalid patterns return an
-`INVALID_ARGUMENT` status when the field is validated.
+rejects lookaround and backreferences. `matching /pattern/flags` accepts the
+same regex syntax with optional `i`, `m`, and `s` flags. Both forms are checked
+when the Flow is parsed, so invalid patterns produce a declaration diagnostic.
 
 `match` pulls named fields out of text, as a stage over a stream and as a
 function over one value: `lines | match "name={name} age={age:int}"` turns
@@ -678,6 +702,18 @@ wildcards. A hole stays on its line unless specified otherwise. The stage drops 
 value the pattern does not fit and the function answers null. Where the pattern
 is written out, the fields are known: `it.name` is completed and a typo is
 reported.
+
+Slash-delimited `/.../` literals are RE2 patterns, with optional `i`, `m`, and
+`s` flags. They work with `match /pattern/`, `match all /pattern/`,
+`std::match(/pattern/, text)`, and `std::matches(/pattern/, text)`.
+`std::matches_pattern(text, /pattern/)` asks only whether a match exists.
+`std::split(text, /separator/)` splits at regex matches, and
+`std::replace(text, /pattern/, replacement)` substitutes every match. In a
+regex replacement, `$1` and `${name}` insert captures; `$$` writes `$`.
+Quoted separators and search strings remain literal. Write `/\W+/` for a
+pattern: in `"\W+"`, string decoding removes the backslash and reports a
+warning. Flow uses `and`, `or`, and `not`; diagnostics suggest those forms for
+`&&`, `||`, and `!`.
 
 `try` also goes in front of a **pipe**. It converts a source or destination
 failure into a value instead of ending the flow:

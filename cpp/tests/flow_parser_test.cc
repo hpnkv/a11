@@ -714,8 +714,6 @@ TEST(FlowParser, SaysWhatIsMissingInTheWordsThePythonCompilerUses) {
       {"flow f { in w: number stream\n out o: number\n"
        " w | fold 0, it -> o }",
        "flow.form.fold-name", "names what it carries"},
-      {"flow f { header \"x-a\" default a }", "flow.syntax.constant-required",
-       "Expected a constant value."},
       {"# nothing here\n", "flow.syntax.unexpected",
        "A flow file must declare at least one flow or struct."},
   };
@@ -1538,6 +1536,36 @@ TEST(FlowParser, CommentsTabsAndCrlfPreserveNativeSourceMeaning) {
   const auto formatted = Format(wrapped);
   EXPECT_EQ(ParsedMeaning(flat), ParsedMeaning(formatted.formatted));
   EXPECT_FALSE(Format(formatted.formatted).changed);
+}
+
+TEST(FlowParser, InvalidRegexFlagsAndMixedGroupsAreDiagnostics) {
+  const auto flags = Parse(R"(flow f { x = /a/g })");
+  ASSERT_TRUE(flags.HasErrors());
+  EXPECT_EQ(flags.FirstError()->code, "flow.form.bad-pattern");
+
+  const auto mixed = Parse(R"(flow f { x = /(?<named>a)(b)/ })");
+  ASSERT_TRUE(mixed.HasErrors());
+  EXPECT_EQ(mixed.FirstError()->code, "flow.form.bad-pattern");
+}
+
+TEST(FlowParser, InvalidRegexPatternsFailWhenDeclared) {
+  for (std::string_view source : {
+           R"(flow f { x = /(?=a)a/ })",
+           R"(flow f { out x: string; "a" | match /(?=a)a/ -> x })",
+           R"(struct S { x: string matching /(?=a)a/ })",
+           R"(struct S { x: string matching "(?=a)a" })",
+           R"(struct S { x: string matching ("(?=" "a)a") })",
+       }) {
+    const auto parsed = Parse(source);
+    ASSERT_TRUE(parsed.HasErrors()) << source;
+    EXPECT_EQ(parsed.FirstError()->code, "flow.form.bad-pattern") << source;
+  }
+
+  const auto valid = Parse(R"(struct S {
+  x: string matching /\bRae\b/i
+  y: string matching "(?i)\\bRae\\b"
+})");
+  EXPECT_FALSE(valid.HasErrors()) << absl::StrJoin(Messages(valid), ", ");
 }
 
 }  // namespace

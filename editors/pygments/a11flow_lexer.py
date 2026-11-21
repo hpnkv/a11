@@ -111,8 +111,8 @@ BINDING_VERBS = _keywords("run", "call", "try", "node", "wait", "close")
 
 #: Words that open a statement.
 STATEMENTS = _keywords(
-    "skip", "wait", "close", "abort", "cancel", "fail", "log", "logf",
-    "if", "for", "repeat", "after", "else"
+    "const", "skip", "wait", "close", "abort", "cancel", "fail", "log",
+    "logf", "if", "for", "repeat", "after", "else"
 )
 
 #: Words that stand inside a statement without opening one.
@@ -152,14 +152,14 @@ BUILTINS = _keywords(
     "i64", "i128", "u8", "u16", "u32", "u64", "u128", "f32", "f64",
     "floor", "ceil", "round", "bool", "keys", "values", "join", "split",
     "merge", "contains", "startswith", "endswith", "replace", "match",
-    "slice", "to_chunk", "from_chunk", "strformat", "b64encode",
-    "b64decode", "b64urlencode", "b64urldecode", "utf8encode",
-    "utf8decode", "now", "infinite_future", "infnite_future",
-    "infinite_past", "infinite_duration", "zero_duration", "duration",
-    "time", "seconds", "nanoseconds", "microseconds", "milliseconds",
-    "minutes", "hours", "parse_time", "parse_duration", "integer", "int",
-    "string", "bytes", "object", "list", "boolean", "array", "any",
-    "json", "option", "status", "null"
+    "matches", "matches_pattern", "slice", "to_chunk", "from_chunk",
+    "strformat", "b64encode", "b64decode", "b64urlencode", "b64urldecode",
+    "utf8encode", "utf8decode", "now", "infinite_future",
+    "infnite_future", "infinite_past", "infinite_duration",
+    "zero_duration", "duration", "time", "seconds", "nanoseconds",
+    "microseconds", "milliseconds", "minutes", "hours", "parse_time",
+    "parse_duration", "integer", "int", "string", "bytes", "object",
+    "list", "boolean", "array", "any", "json", "option", "status", "null"
 )
 
 #: The canonical status codes, which is what ``fail`` names.
@@ -204,6 +204,7 @@ class A11FlowLexer(RegexLexer):
             (r"\n", Whitespace),
             include("comment"),
             include("string"),
+            include("regex"),
             (_word("flow"), Keyword.Declaration, "flow-name"),
             (_word("struct"), Keyword.Declaration, "struct-name"),
             # A port, told from the `in` of `x in y` by what follows it.
@@ -287,6 +288,9 @@ class A11FlowLexer(RegexLexer):
             (r'"""', String, "block-string"),
             (r'"', String, "quoted-string"),
         ],
+        "regex": [
+            (r'(?<![A-Za-z0-9_$)\]])/(?![ \t])(?:\\.|\[[^\n]*?\]|[^/\\\n])+/[ims]*', String.Regex),
+        ],
         "block-string": [
             (r'\\.', String.Escape),
             (r'"""', String, "#pop"),
@@ -332,6 +336,7 @@ class A11FlowLexer(RegexLexer):
             (_group(FIELD_MODIFIERS), Keyword.Pseudo),
             include("type"),
             include("string"),
+            include("regex"),
             include("literal"),
             # `1..200`: the range between two bounds.
             (r"\.\.", Operator),

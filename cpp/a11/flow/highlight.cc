@@ -177,6 +177,7 @@ class Classifier {
     switch (At(index_ + 1).kind) {
       case TokenKind::kWord:
       case TokenKind::kString:
+      case TokenKind::kRegex:
       case TokenKind::kNumber:
       case TokenKind::kDuration:
       case TokenKind::kLeftParen:
@@ -246,6 +247,8 @@ class Classifier {
         return SemanticKind::kComment;
       case TokenKind::kString:
         return SemanticKind::kString;
+      case TokenKind::kRegex:
+        return SemanticKind::kRegex;
       case TokenKind::kNumber:
         return SemanticKind::kNumber;
       case TokenKind::kDuration:
@@ -481,8 +484,8 @@ class Classifier {
 
   void Advance(const Token& token, SemanticKind produced) {
     const bool was_after_dot = after_dot_;
-    after_dot_ = token.kind == TokenKind::kDot ||
-                 token.kind == TokenKind::kQuestionDot;
+    after_dot_ =
+        token.kind == TokenKind::kDot || token.kind == TokenKind::kQuestionDot;
     if (token.kind == TokenKind::kComment) {
       // A comment interrupts nothing.
       after_dot_ = was_after_dot;
@@ -679,6 +682,8 @@ std::string_view SemanticKindName(SemanticKind kind) {
       return "comment";
     case SemanticKind::kString:
       return "string";
+    case SemanticKind::kRegex:
+      return "regex";
     case SemanticKind::kStringEscape:
       return "string-escape";
     case SemanticKind::kNumber:
@@ -743,6 +748,7 @@ SemanticKind SemanticKindFromName(std::string_view name) {
   static constexpr SemanticKind kAll[] = {
       SemanticKind::kComment,
       SemanticKind::kString,
+      SemanticKind::kRegex,
       SemanticKind::kStringEscape,
       SemanticKind::kNumber,
       SemanticKind::kDuration,
@@ -825,6 +831,7 @@ void RefinePorts(std::string_view source,
     auto found = at(location.start);
     if (found != semantic.end() && found->start == location.start &&
         found->kind != SemanticKind::kString &&
+        found->kind != SemanticKind::kRegex &&
         found->kind != SemanticKind::kStringEscape) {
       found->kind = kind;
     }
@@ -847,6 +854,7 @@ void RefinePorts(std::string_view source,
              ++token) {
           if (token->kind == SemanticKind::kPunctuation ||
               token->kind == SemanticKind::kString ||
+              token->kind == SemanticKind::kRegex ||
               token->kind == SemanticKind::kStringEscape) {
             continue;
           }

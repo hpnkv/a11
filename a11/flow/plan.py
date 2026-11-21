@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator, Mapping
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from a11._native import flow as _flow
 from a11._native_protocol import attach_protocol
@@ -101,6 +101,28 @@ _FIELD_TYPES: dict[str, Any] = {
 #: declaring the same shape share a model, and a shape that changed is a
 #: different key rather than a stale hit.
 _MODELS: dict[str, Any] = {}
+_DTO_MODEL_BASE: Any = None
+
+
+def _dto_model_base() -> Any:
+    """Return the base for Flow struct models with absent fields preserved."""
+    global _DTO_MODEL_BASE
+    if _DTO_MODEL_BASE is None:
+        import pydantic
+
+        class FlowDtoModel(pydantic.BaseModel):
+            __a11_flow_dto__: ClassVar[bool] = True
+
+            def model_dump(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+                kwargs.setdefault("exclude_unset", True)
+                return super().model_dump(*args, **kwargs)
+
+            def model_dump_json(self, *args: Any, **kwargs: Any) -> str:
+                kwargs.setdefault("exclude_unset", True)
+                return super().model_dump_json(*args, **kwargs)
+
+        _DTO_MODEL_BASE = FlowDtoModel
+    return _DTO_MODEL_BASE
 
 
 def _field_type(described: Mapping[str, Any], shapes: Mapping[str, Any]) -> Any:
@@ -143,7 +165,9 @@ def _model_from_plans(name: str, shapes: Mapping[str, Any]) -> Any:
         return cached
 
     model = pydantic.create_model(
-        name, __doc__=described.get("description") or None
+        name,
+        __base__=_dto_model_base(),
+        __doc__=described.get("description") or None,
     )
     _MODELS[key] = model
 

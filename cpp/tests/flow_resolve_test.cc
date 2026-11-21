@@ -55,6 +55,85 @@ std::string Messages(const ResolveResult& result) {
   return absl::StrJoin(messages, "; ");
 }
 
+TEST(FlowResolve, RegexPatternBuiltinsKeepTheirResultTypes) {
+  const auto result = Check(R"(
+flow main {
+  out fields: list
+  out changed: string
+  out found: bool
+  std::split("a b", /\s+/) -> fields
+  std::replace("a1", /\d/, "2") -> changed
+  std::matches_pattern("a1", /\d/) -> found
+}
+)");
+  EXPECT_EQ(result.FirstError(), nullptr) << Messages(result);
+}
+
+TEST(FlowResolve, ModuleConstantsValidateTypesAndCycles) {
+  EXPECT_EQ(Check(R"(
+const list[int] kLimits = [1, 2]
+struct Window { width: int 1..2 }
+const Window kWindow = {width: 2}
+flow main { out width: int; kWindow.width -> width }
+)")
+                .FirstError(),
+            nullptr);
+  const auto mismatch = Check("const int kCount = \"wrong\"\n");
+  ASSERT_NE(mismatch.FirstError(), nullptr);
+  EXPECT_EQ(mismatch.FirstError()->code, "flow.form.constant-type");
+  EXPECT_NE(Messages(mismatch).find("does not fit"), std::string::npos);
+  const auto cycle = Check("const kA = kB\nconst kB = kA\n");
+  ASSERT_NE(cycle.FirstError(), nullptr);
+  EXPECT_EQ(cycle.FirstError()->code, "flow.form.constant-cycle");
+  EXPECT_NE(Messages(cycle).find("cycle"), std::string::npos);
+  const auto missing = Check("const kA = {item: kMissing}\n");
+  ASSERT_NE(missing.FirstError(), nullptr);
+  EXPECT_EQ(missing.FirstError()->code, "flow.name.unknown");
+  EXPECT_NE(Messages(missing).find("kMissing"), std::string::npos);
+}
+
+TEST(FlowResolve, ModuleConstantsSupplyStaticDeclarationValues) {
+  const auto result = Check(R"(
+mod settings exported {
+  const kMin exported = 1
+  const kMax exported = 4
+  const kDefault exported = "guest"
+}
+struct Window { width: int settings::kMin..settings::kMax }
+flow main {
+  header "x-user" default settings::kDefault
+  out result: int stream
+  repeat n = 0 max settings::kMax {
+    n -> result
+  } until n >= 2
+}
+)");
+  EXPECT_EQ(result.FirstError(), nullptr) << Messages(result);
+  ASSERT_EQ(result.program.dtos.size(), 1u);
+  EXPECT_TRUE(result.program.dtos[0].fields[0].range.has_minimum);
+  EXPECT_EQ(result.program.dtos[0].fields[0].range.minimum.integer, 1);
+  EXPECT_EQ(result.program.dtos[0].fields[0].range.maximum.integer, 4);
+  EXPECT_EQ(result.program.flows[0].headers[0].default_value.text, "guest");
+}
+
+TEST(FlowResolve, ConstantsRejectReassignmentAndDynamicModuleValues) {
+  const auto reassignment = Check(R"(
+flow main {
+  const kValue = 3
+  kValue = 4
+}
+)");
+  ASSERT_NE(reassignment.FirstError(), nullptr);
+  EXPECT_EQ(reassignment.FirstError()->code, "flow.name.constant-reassignment");
+  EXPECT_NE(Messages(reassignment).find("Cannot reassign constant"),
+            std::string::npos);
+  const auto dynamic = Check("const kValue = std::now()\n");
+  ASSERT_NE(dynamic.FirstError(), nullptr);
+  EXPECT_EQ(dynamic.FirstError()->code, "flow.form.constant-initializer");
+  EXPECT_NE(Messages(dynamic).find("closed value expression"),
+            std::string::npos);
+}
+
 std::vector<std::filesystem::path> Corpus() {
   const std::filesystem::path root =
       (std::filesystem::path(A11_CPP_SOURCE_ROOT).parent_path() /
@@ -330,7 +409,9 @@ TEST(FlowResolve, SaysWhatIsWrongInTheWordsThePythonCompilerUses) {
       {"flow f { in a: string\n x = run t(p: a)\n x = run t(p: a) }",
        "flow.name.taken", "is already taken in this scope"},
       {"flow f { in a: string\n repeat s = a {  } until a }",
-       "flow.syntax.constant-required", "Expected a constant value here"},
+       "flow.syntax.constant-required", "statically known value"},
+      {"flow f { header \"x-a\" default a }", "flow.syntax.constant-required",
+       "module constant"},
   };
   for (const Case& one : cases) {
     const ResolveResult result = Check(one.source);

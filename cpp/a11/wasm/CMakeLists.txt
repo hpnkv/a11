@@ -53,19 +53,27 @@ FetchContent_Declare(
   GIT_REPOSITORY https://github.com/nlohmann/json.git
   GIT_TAG v3.12.0
   GIT_SHALLOW TRUE)
-FetchContent_MakeAvailable(abseil-cpp nlohmann_json)
+set(RE2_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(RE2_USE_ICU OFF CACHE BOOL "" FORCE)
+set(RE2_INSTALL OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(re2
+  GIT_REPOSITORY https://github.com/google/re2.git
+  GIT_TAG 2025-11-05
+  GIT_SHALLOW TRUE)
+FetchContent_MakeAvailable(abseil-cpp nlohmann_json re2)
 
 set(A11_CPP_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../..")
 add_subdirectory("${A11_CPP_ROOT}/a11/flow" flow_sources)
 
-add_library(a11_wasm_flow STATIC ${A11_FLOW_LANG_SOURCES})
+add_library(a11_wasm_flow STATIC ${A11_FLOW_LANG_SOURCES}
+  "${A11_CPP_ROOT}/a11/regex.cc")
 target_include_directories(a11_wasm_flow PUBLIC "${A11_CPP_ROOT}")
 target_compile_options(a11_wasm_flow PRIVATE -fno-exceptions)
 target_link_libraries(
   a11_wasm_flow PUBLIC
   absl::status absl::status_macros absl::statusor absl::span
   absl::flat_hash_map absl::flat_hash_set absl::time absl::strings
-  absl::str_format nlohmann_json::nlohmann_json)
+  absl::str_format nlohmann_json::nlohmann_json re2::re2)
 
 add_library(a11_wasm_data STATIC
   "${A11_CPP_ROOT}/a11/actions/schema.cc"
@@ -291,14 +299,6 @@ if(A11_WASM_BUILD_BOOST_PROBE)
   option(A11_WASM_BUILD_ACTION_PROBE "Test native action and Flow runtime" OFF)
   option(A11_WASM_BUILD_NATIVE_RUNTIME "Build native action and Flow module" OFF)
   if(A11_WASM_BUILD_ACTION_PROBE OR A11_WASM_BUILD_NATIVE_RUNTIME)
-    set(RE2_BUILD_TESTING OFF CACHE BOOL "" FORCE)
-    set(RE2_USE_ICU OFF CACHE BOOL "" FORCE)
-    set(RE2_INSTALL OFF CACHE BOOL "" FORCE)
-    FetchContent_Declare(re2
-      GIT_REPOSITORY https://github.com/google/re2.git
-      GIT_TAG 2025-11-05
-      GIT_SHALLOW TRUE)
-    FetchContent_MakeAvailable(re2)
     add_subdirectory("${A11_CPP_ROOT}/a11/actions" actions_sources)
     add_subdirectory("${A11_CPP_ROOT}/a11/service" service_sources)
     add_subdirectory("${A11_CPP_ROOT}/a11/net" net_sources)
@@ -309,7 +309,6 @@ if(A11_WASM_BUILD_BOOST_PROBE)
       "${A11_CPP_ROOT}/a11/exception_guard.cc"
       "${A11_CPP_ROOT}/a11/uuid.cc"
       "${A11_CPP_ROOT}/a11/time.cc"
-      "${A11_CPP_ROOT}/a11/regex.cc"
       "${A11_CPP_ROOT}/a11/obs/trace_context.cc"
       "${A11_CPP_ROOT}/a11/concurrency/boundary.cc"
       "${A11_CPP_ROOT}/a11/concurrency/callback_scheduler.cc"

@@ -220,7 +220,7 @@ class Completer {
       const std::string word = vocabulary::Canonical(token.text);
       return word != "flow" && word != "struct" && word != "declare" &&
              word != "import" && word != "from" && word != "mod" &&
-             word != "export";
+             word != "export" && word != "const";
     }
     return false;
   }
@@ -799,6 +799,25 @@ class Completer {
     }
     // Module declarations are available outside a flow or shape.
     if (open_braces_.empty() || InDeclarationBody("mod")) {
+      if (!line_.empty() &&
+          vocabulary::Canonical(tokens_[line_.front()].text) == "const") {
+        // A module constant initializer is a closed value expression. It may
+        // refer to other constants, but cannot run actions or use flow locals.
+        if (PreviousWord() == "const") {
+          AddTypes();
+        } else if (PreviousIs(TokenKind::kEqual) ||
+                   PreviousIs(TokenKind::kComma) ||
+                   PreviousIs(TokenKind::kLeftBracket) ||
+                   PreviousIs(TokenKind::kLeftBrace) ||
+                   PreviousIs(TokenKind::kColon)) {
+          AddConstants(false);
+          AddModuleConstants();
+        } else if (PreviousIs(TokenKind::kDot)) {
+          ProposeConstantMembers();
+        }
+        return;
+      }
+      Add("const", ProposalKind::kDeclaration, " name = value");
       Add("mod", ProposalKind::kDeclaration, " name { }");
       Add("export", ProposalKind::kDeclaration, " symbol");
       Add("flow", ProposalKind::kDeclaration, " name { }");
@@ -1242,6 +1261,9 @@ class Completer {
       ProposeNamespaceAtCaret(true);
       return;
     }
+    if (ProposeConstantMembers()) {
+      return;
+    }
     if (ProposeExpressionMembers()) {
       return;
     }
@@ -1445,17 +1467,55 @@ class Completer {
     AddNames([](const Symbol& symbol) {
       return symbol.readable && symbol.kind != SymbolKind::kNodeMap;
     });
+    AddModuleConstants();
+    AddCallPorts(syntax::PortDirection::kOutput);
+  }
+
+  void AddModuleConstants() {
     // A module constant can be named before it has occurred in the flow's
     // body, so it may not yet have a resolved local symbol to offer.
     for (const auto& constant : parsed().constants) {
-      Add(constant.name.text, ProposalKind::kVariable);
+      // A declaration cannot initialize itself. The resolver handles forward
+      // references and cycles, but completion should not suggest a cycle.
+      if (!line_.empty() &&
+          vocabulary::Canonical(tokens_[line_.front()].text) == "const" &&
+          std::any_of(line_.begin(), line_.end(), [&](size_t index) {
+            return tokens_[index].start == constant.name.location.start;
+          })) {
+        continue;
+      }
+      const Program::ConstantPlan* plan =
+          resolved_.program.Constant(constant.name.text);
+      const auto type = plan != nullptr
+                            ? std::optional(plan->ValueType())
+                            : constant.type;
+      Add(constant.name.text, ProposalKind::kVariable, "",
+          type.has_value() ? type->ToString() : "");
       proposals_.back().documentation =
-          constant.type.has_value()
-              ? absl::StrCat("Constant of type `", constant.type->ToString(),
+          type.has_value()
+              ? absl::StrCat("Constant of type `", type->ToString(),
                              "`.")
               : "Module constant.";
     }
-    AddCallPorts(syntax::PortDirection::kOutput);
+  }
+
+  bool ProposeConstantMembers() {
+    const Token* base = Previous(1);
+    if (base == nullptr || !base->IsWord()) {
+      return false;
+    }
+    const Program::ConstantPlan* constant =
+        resolved_.program.Constant(base->text);
+    if (constant == nullptr) {
+      return false;
+    }
+    if (constant->value.kind == syntax::Constant::Kind::kObject) {
+      for (const auto& [name, value] : constant->value.pairs) {
+        Add(name, ProposalKind::kField, "",
+            syntax::ConstantKindName(value.kind));
+      }
+    }
+    return true;
   }
 
   /// What has a status: what `wait`, `status`, `cancel`, `close` and `after`

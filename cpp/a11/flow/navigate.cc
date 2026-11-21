@@ -1082,8 +1082,13 @@ std::vector<DocumentSymbol> Symbols(std::string_view source,
     DocumentSymbol one;
     one.name = constant.name.text;
     one.kind = SymbolClass::kVariable;
-    one.detail = constant.type.has_value()
-                     ? absl::StrCat("const ", constant.type->ToString())
+    const Program::ConstantPlan* plan =
+        resolved.program.Constant(constant.name.text);
+    const auto type = plan != nullptr
+                          ? std::optional(plan->ValueType())
+                          : constant.type;
+    one.detail = type.has_value()
+                     ? absl::StrCat("const ", type->ToString())
                      : "const";
     one.selection = RangeOf(lines, constant.name.location);
     one.range = RangeOf(lines, constant.extent);

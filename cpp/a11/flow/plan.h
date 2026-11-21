@@ -204,9 +204,20 @@ struct Program {
   struct ConstantPlan {
     std::string name;
     syntax::Constant value;
+    // An explicit type controls coercion. An inferred type describes the
+    // folded value to language services without changing runtime semantics.
     std::optional<syntax::TypeExpression> type;
     bool exported = false;
     syntax::Location location;
+
+    [[nodiscard]] syntax::TypeExpression ValueType() const {
+      if (type.has_value()) {
+        return *type;
+      }
+      syntax::TypeExpression inferred;
+      inferred.name = syntax::ConstantKindName(value.kind);
+      return inferred;
+    }
   };
 
   std::vector<ConstantPlan> constants;

@@ -1071,7 +1071,7 @@ class FlowResolver {
       symbol.location = constant.location;
       symbol.constant = true;
       symbol.static_value = constant.value;
-      symbol.value_type = constant.type;
+      symbol.value_type = constant.ValueType();
       if (builder_ != nullptr) {
         graph::Expr expression;
         expression.constant = constant.value;

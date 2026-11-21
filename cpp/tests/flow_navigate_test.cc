@@ -90,6 +90,13 @@ void CheckContained(const std::vector<DocumentSymbol>& symbols,
   }
 }
 
+TEST(FlowNavigate, ConstantSymbolsShowInferredTypes) {
+  const auto symbols = Symbols("const kPattern = /hhh/\nconst kCount = 3\n");
+  ASSERT_EQ(symbols.size(), 2);
+  EXPECT_EQ(symbols[0].detail, "const regex");
+  EXPECT_EQ(symbols[1].detail, "const integer");
+}
+
 TEST(FlowNavigate, PredicateStagesAndAfterBlocksDescribeTheirSyntax) {
   const std::string source =
       "flow f { done = {}\n after done { [1] | flatten | take until it == 1 -> "

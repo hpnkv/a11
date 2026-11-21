@@ -83,6 +83,41 @@ TEST(FlowComplete, OffersModuleConstantsAsValueSources) {
   ASSERT_NE(offered, nullptr);
   EXPECT_EQ(offered->kind, ProposalKind::kVariable);
   EXPECT_NE(offered->documentation.find("Constant"), std::string::npos);
+  EXPECT_EQ(offered->type, "int");
+}
+
+TEST(FlowComplete, InfersConstantTypesForCompletion) {
+  const auto* pattern = Find(
+      "const kPattern = /hhh/\nflow f {\n  x = |CARET|", "kPattern");
+  ASSERT_NE(pattern, nullptr);
+  EXPECT_EQ(pattern->type, "regex");
+
+  const auto* number = Find(
+      "const kNumber = 3\nflow f {\n  x = |CARET|", "kNumber");
+  ASSERT_NE(number, nullptr);
+  EXPECT_EQ(number->type, "integer");
+
+  const auto* alias = Find(
+      "const kNumber = 3\nconst kAlias = kNumber\nflow f {\n  x = |CARET|",
+      "kAlias");
+  ASSERT_NE(alias, nullptr);
+  EXPECT_EQ(alias->type, "integer");
+}
+
+TEST(FlowComplete, CompletesConstantDeclarationsAndInitializers) {
+  EXPECT_TRUE(Offers(Names("const |CARET|"), "string"));
+  EXPECT_TRUE(Offers(Names("const kFirst = 3\nconst kSecond = |CARET|"),
+                     "kFirst"));
+  EXPECT_FALSE(Offers(Names("const kFirst = |CARET|"), "kFirst"));
+  const auto* field = Find(
+      "const kRecord = {name: \"a\", count: 2}\n"
+      "const kName = kRecord.|CARET|",
+      "name");
+  ASSERT_NE(field, nullptr);
+  EXPECT_EQ(field->type, "string");
+  EXPECT_TRUE(Offers(Names(
+      "const kRecord = {name: \"a\"}\nflow f {\n  x = kRecord.|CARET|"),
+      "name"));
 }
 
 TEST(FlowComplete, VariablesCarryKnownTypesIntoSuggestions) {
@@ -125,7 +160,7 @@ TEST(FlowComplete, LogfOffersLevelsFormatAndFollowingValues) {
 
 TEST(FlowComplete, OutsideAFlowOffersModuleDeclarations) {
   const std::vector<std::string> declarations = {
-      "mod", "export", "flow", "struct", "declare", "import", "from"};
+      "const", "mod", "export", "flow", "struct", "declare", "import", "from"};
   EXPECT_EQ(Names("|CARET|"), declarations);
   EXPECT_EQ(Names("flow a { }\n|CARET|"), declarations);
 }

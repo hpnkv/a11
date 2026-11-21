@@ -33,12 +33,16 @@ permissions:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       A11_WHEEL_ARCH: x86_64
       A11_DEPS_PREFIX: /tmp/a11-deps
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
       - name: Install build prerequisites
         run: |

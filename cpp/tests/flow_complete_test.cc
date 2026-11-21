@@ -120,6 +120,32 @@ TEST(FlowComplete, CompletesConstantDeclarationsAndInitializers) {
       "name"));
 }
 
+TEST(FlowComplete, FieldModifierValuesOfferModuleConstants) {
+  constexpr std::string_view declarations =
+      "const string kDefaultEmail = \"user@example.com\"\n"
+      "const kPattern = /^[a-z]+$/\n"
+      "const kChoices = [\"one\", \"two\"]\n";
+  const auto* fallback = Find(
+      absl::StrCat(declarations,
+                   "struct Registration { email: string default kD|CARET| }"),
+      "kDefaultEmail");
+  ASSERT_NE(fallback, nullptr);
+  EXPECT_EQ(fallback->type, "string");
+  EXPECT_EQ(fallback->insert, "kDefaultEmail");
+  EXPECT_TRUE(Offers(
+      Names(absl::StrCat(declarations,
+                         "struct Registration { email: string matching |CARET| }")),
+      "kPattern"));
+  EXPECT_TRUE(Offers(
+      Names(absl::StrCat(declarations,
+                         "struct Registration { email: string one of |CARET| }")),
+      "kChoices"));
+  EXPECT_TRUE(Offers(
+      Names(absl::StrCat(declarations,
+                         "flow f { header \"x-email\" default |CARET| }")),
+      "kDefaultEmail"));
+}
+
 TEST(FlowComplete, VariablesCarryKnownTypesIntoSuggestions) {
   const auto* inferred =
       Find("flow f {\n  answer = \"ready\"\n  next = |CARET|", "answer");

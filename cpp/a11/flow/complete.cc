@@ -933,8 +933,13 @@ class Completer {
       return;
     }
     const std::string previous = PreviousWord();
-    // These take an argument, and until it is written nothing else may be.
+    // These modifiers take a closed value. In particular, a field's default,
+    // pattern, or enumeration may name a module constant.
     if (previous == "matching" || previous == "default" || previous == "of") {
+      AddModuleConstants();
+      if (previous == "default") {
+        AddConstants(false);
+      }
       return;
     }
     for (const std::string_view modifier :
@@ -1573,7 +1578,12 @@ class Completer {
     }
     if (word == "header") {
       const std::string previous = PreviousWord();
-      if (previous == "as" || previous == "default") {
+      if (previous == "default") {
+        AddModuleConstants();
+        AddConstants(false);
+        return true;
+      }
+      if (previous == "as") {
         return true;
       }
       if (!LineHas(TokenKind::kString)) {

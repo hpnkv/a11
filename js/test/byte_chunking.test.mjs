@@ -81,7 +81,9 @@ test('byte reassembly enforces duplicate and pending-message bounds', () => {
   const duplicate = reassembler.feed(a[0]);
   assert.equal(isOk(duplicate), false);
   assert.equal(duplicate.code, StatusCode.ALREADY_EXISTS);
-  const exhausted = reassembler.feed(b[0]);
+  assert.equal(reassembler.pendingMessageCount, 0);
+  assert.equal(reassembler.feed(b[0]), null);
+  const exhausted = reassembler.feed(a[0]);
   assert.equal(isOk(exhausted), false);
   assert.equal(exhausted.code, StatusCode.RESOURCE_EXHAUSTED);
 });

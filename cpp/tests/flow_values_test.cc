@@ -600,6 +600,12 @@ TEST(FlowValues, ArithmeticIsThereForTimes) {
 TEST(FlowValues, CallsTheFixedFunctionSet) {
   EXPECT_EQ(TextOf(R"(len("abc"))"), "3");
   EXPECT_EQ(TextOf(R"(upper("ab"))"), "AB");
+  EXPECT_EQ(TextOf(R"(std::casefold("Straße"))"), "strasse");
+  EXPECT_EQ(TextOf(R"(std::casefold("Σς İ K ﬃ"))"), "σσ i̇ k ffi");
+  EXPECT_EQ(TextOf(R"(std::casefold("𐐀"))"), "𐐨");
+  EXPECT_EQ(TextOf(R"(std::casefold(123))"), "123");
+  EXPECT_FALSE(CallBuiltin("casefold", {Value::String("\xC0\xAF")}, nullptr)
+                   .ok());
   EXPECT_EQ(TextOf(R"(trim("  x  "))"), "x");
   EXPECT_EQ(TextOf(R"(join(["a", "b"], "-"))"), "a-b");
   EXPECT_EQ(TextOf(R"(join(split("a b c"), ","))"), "a,b,c");

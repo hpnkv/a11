@@ -285,8 +285,8 @@ escapes. Triple-quoted strings and comments remain intact.
 Prefer list[T] and list(value). list is a prelude alias of std::list; neither
 form requires an import. The qualified spelling remains valid.
 Stages stay unqualified. Functions are qualified: std::len, std::upper,
-std::join, std::match, std::matches, std::matches_pattern, std::strformat, std::now,
-std::duration, std::time.
+std::casefold, std::join, std::match, std::matches, std::matches_pattern,
+std::strformat, std::now, std::duration, std::time.
 Regex literals use /.../ with optional i, m and s flags and RE2 syntax.
 Named captures use (?<name>...). std::match returns the first match;
 std::matches returns a list of nonoverlapping matches. A match stage emits
@@ -297,6 +297,10 @@ accept regex literals; quoted separators and search strings remain literal.
 Regex replacements support $1, ${name}, and $$ for a literal dollar sign.
 std::matches_pattern(text, /pattern/) returns a boolean. A quoted "\\W+"
 is not a regex literal. Use and, or, not rather than &&, ||, !.
+std::casefold(text) applies Unicode 17.0 default full case folding for
+case-insensitive comparison: std::casefold("Straße") is "strasse". It requires
+valid UTF-8; it neither normalizes Unicode nor applies locale-specific rules.
+std::lower and std::upper change ASCII letters only.
 from std import now makes now() available without a prefix.
 std::parse_time(text) and std::parse_duration(text) fail on invalid text;
 std::time(text) and std::duration(text) retain permissive conversions.

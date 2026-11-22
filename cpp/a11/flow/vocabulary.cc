@@ -771,6 +771,12 @@ flow normalized-label {
        {"Convert ASCII letters to uppercase.", "one value",
         "Renders the value as text. Non-ASCII characters are unchanged.",
         "std::upper(code) -> shouted"}},
+      {"casefold",
+       {"Fold Unicode text for case-insensitive comparison.", "one value",
+        "Renders the value as text and applies Unicode 17.0 default full case "
+        "folding. May expand characters (for example, ß becomes ss). Requires "
+        "valid UTF-8; does not normalize Unicode or apply locale rules.",
+        "std::casefold(\"Straße\") == \"strasse\""}},
       {"trim",
        {"Remove leading and trailing whitespace from text.", "one value",
         "Removes spaces, tabs and line breaks. Internal whitespace remains. "
@@ -2198,6 +2204,7 @@ constexpr std::array kBuiltinOrder = {
     std::string_view("len"),
     std::string_view("lower"),
     std::string_view("upper"),
+    std::string_view("casefold"),
     std::string_view("trim"),
     std::string_view("text"),
     std::string_view("number"),

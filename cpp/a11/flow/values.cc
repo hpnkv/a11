@@ -45,6 +45,7 @@
 
 #include "a11/data/serial_tags.h"
 #include "a11/data/serialization.h"
+#include "a11/flow/casefold.h"
 #include "a11/flow/regex_literal.h"
 #include "a11/flow/vocabulary.h"
 #include "a11/internal/regex.h"
@@ -2886,6 +2887,10 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
   }
   if (name == "lower") {
     return Value::String(absl::AsciiStrToLower(AsText(first)));
+  }
+  if (name == "casefold") {
+    ABSL_ASSIGN_OR_RETURN(std::string folded, CasefoldUtf8(AsText(first)));
+    return Value::String(std::move(folded));
   }
   if (name == "upper") {
     return Value::String(absl::AsciiStrToUpper(AsText(first)));

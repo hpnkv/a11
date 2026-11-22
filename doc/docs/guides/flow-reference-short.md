@@ -223,7 +223,8 @@ Brackets mark optional arguments; `v` is a value, `s` text, `xs` a list.
 | Function(s) | Result |
 |---|---|
 | `len(v)` | Length. |
-| `lower(v)`, `upper(v)`, `trim(v)` | Text case / surrounding whitespace. |
+| `lower(v)`, `upper(v)`, `trim(v)` | ASCII case / surrounding whitespace. |
+| `casefold(v)` | Unicode 17.0 full case folding for case-insensitive comparisons; valid UTF-8 required. Can expand characters (`ß` → `ss`); no normalization or locale rules. |
 | `contains(v,x)`, `startswith(s,p)`, `endswith(s,p)` | Membership / prefix / suffix; `p` may be a list of alternatives. |
 | `replace(s,old,new)`, `slice(v,start[,stop])` | Replace all / slice; `old` may be a literal string or `/regex/`. Regex replacements use `$1`, `${name}`, `$$`. Negative slice indices work. |
 | `split(s[,sep])`, `join(xs[,sep])` | Split on whitespace runs, omitting empties, by default / join with empty separator by default. A quoted separator is literal; `/regex/` splits by pattern. |
@@ -273,6 +274,10 @@ expressions, evaluated once per activation outside `it`.
 | `try STAGE [failures into DEST]` | Tolerate item failures; route status-compatible records with `it` and zero-based `seq`, or log. |
 | `STAGE parallel N [unordered]` | Parallel per-item transforms/filters; not reductions, sorting, or stateful prefix predicates. |
 | `run f(args...)`; `call f(args...)` | Whole-stream action adapter; ordinary call modifiers apply. |
+
+For example, `lines | map std::split(it, /\W+/) | flatten | where it == "Rae"
+| count -> count`. Use `and`, `or`, and `not` in predicates; diagnostics point
+to these spellings if `&&`, `||`, or `!` is written.
 
 ## Examples
 

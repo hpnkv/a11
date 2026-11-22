@@ -4949,7 +4949,8 @@ class FlowResolver {
       } else if (name == "bool" || name == "contains" || name == "startswith" ||
                  name == "endswith" || name == "matches_pattern") {
         info.type = "bool";
-      } else if (name == "upper" || name == "lower" || name == "trim" ||
+      } else if (name == "upper" || name == "lower" || name == "casefold" ||
+                 name == "trim" ||
                  name == "text" || name == "string" || name == "join" ||
                  name == "replace" || name == "strformat" ||
                  name == "b64encode" || name == "b64urlencode" ||

@@ -148,13 +148,13 @@ OPERATOR_WORDS = _keywords("and", "or", "not", "in")
 
 #: The language's fixed function set. No user code, ever: a flow stays data.
 BUILTINS = _keywords(
-    "len", "lower", "upper", "trim", "text", "number", "i8", "i16", "i32",
-    "i64", "i128", "u8", "u16", "u32", "u64", "u128", "f32", "f64",
-    "floor", "ceil", "round", "bool", "keys", "values", "join", "split",
-    "merge", "contains", "startswith", "endswith", "replace", "match",
-    "matches", "matches_pattern", "slice", "to_chunk", "from_chunk",
-    "strformat", "b64encode", "b64decode", "b64urlencode", "b64urldecode",
-    "utf8encode", "utf8decode", "now", "infinite_future",
+    "len", "lower", "upper", "casefold", "trim", "text", "number", "i8",
+    "i16", "i32", "i64", "i128", "u8", "u16", "u32", "u64", "u128", "f32",
+    "f64", "floor", "ceil", "round", "bool", "keys", "values", "join",
+    "split", "merge", "contains", "startswith", "endswith", "replace",
+    "match", "matches", "matches_pattern", "slice", "to_chunk",
+    "from_chunk", "strformat", "b64encode", "b64decode", "b64urlencode",
+    "b64urldecode", "utf8encode", "utf8decode", "now", "infinite_future",
     "infnite_future", "infinite_past", "infinite_duration",
     "zero_duration", "duration", "time", "seconds", "nanoseconds",
     "microseconds", "milliseconds", "minutes", "hours", "parse_time",

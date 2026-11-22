@@ -51,6 +51,7 @@ set(A11_FLOW_LANG_SOURCES
 # and none of this, and keeping the two apart is what lets the tooling binary
 # stay small enough to bundle per platform.
 set(A11_FLOW_RUNTIME_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/casefold.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/runtime.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/runtime_calls.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/runtime_destination.cc

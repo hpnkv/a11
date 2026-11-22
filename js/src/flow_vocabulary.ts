@@ -176,6 +176,7 @@ export const FLOW_BUILTINS: readonly string[] = [
   "len",
   "lower",
   "upper",
+  "casefold",
   "trim",
   "text",
   "number",

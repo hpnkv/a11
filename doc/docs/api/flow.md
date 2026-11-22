@@ -715,6 +715,12 @@ pattern: in `"\W+"`, string decoding removes the backslash and reports a
 warning. Flow uses `and`, `or`, and `not`; diagnostics suggest those forms for
 `&&`, `||`, and `!`.
 
+`std::casefold(value)` renders a value as text and applies Unicode 17.0 default
+full case folding. For example, `std::casefold("Straße")` is `"strasse"`, and
+`std::casefold("Σς")` is `"σσ"`. It requires valid UTF-8. Folding can expand a
+character, but does not normalize Unicode or use locale-specific rules.
+`std::lower` and `std::upper` change ASCII letters only.
+
 `try` also goes in front of a **pipe**. It converts a source or destination
 failure into a value instead of ending the flow:
 

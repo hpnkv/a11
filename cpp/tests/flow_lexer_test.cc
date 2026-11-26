@@ -119,6 +119,44 @@ TEST(FlowLexer, SemicolonsInsideStringsAndCommentsStayContent) {
   EXPECT_EQ(result.tokens[4].string_value, "e;f");
 }
 
+TEST(FlowLexer, ByteRawAndUnicodeLiteralsDecodeThroughOneLexer) {
+  const auto result = Lex(
+      R"FLOW(b'\x00\xFF' rb"\x41" r'\t' "\xC3\xA9" "\u{1F600}" b"\u00E9" b'''A\nB''')FLOW");
+  ASSERT_FALSE(result.HasErrors());
+  ASSERT_EQ(result.tokens.size(), 8u);
+  EXPECT_EQ(result.tokens[0].kind, TokenKind::kBytes);
+  EXPECT_EQ(result.tokens[0].string_value, std::string("\0\xff", 2));
+  EXPECT_EQ(result.tokens[1].kind, TokenKind::kBytes);
+  EXPECT_EQ(result.tokens[1].string_value, R"(\x41)");
+  EXPECT_TRUE(result.tokens[1].string_raw);
+  EXPECT_EQ(result.tokens[2].string_value, R"(\t)");
+  EXPECT_EQ(result.tokens[3].string_value, "é");
+  EXPECT_EQ(result.tokens[4].string_value, "😀");
+  EXPECT_EQ(result.tokens[5].string_value, "é");
+  EXPECT_EQ(result.tokens[6].string_value, "A\nB");
+
+  const auto raw_multiline = Lex(R"FLOW(BR"""A\nB""" rb'''C\tD''')FLOW");
+  ASSERT_FALSE(raw_multiline.HasErrors());
+  EXPECT_EQ(raw_multiline.tokens[0].kind, TokenKind::kBytes);
+  EXPECT_EQ(raw_multiline.tokens[0].string_value, R"(A\nB)");
+  EXPECT_EQ(raw_multiline.tokens[1].string_value, R"(C\tD)");
+}
+
+TEST(FlowLexer, InvalidUnicodeAndByteSourcesAreDiagnostics) {
+  EXPECT_EQ(Codes(R"("\xFF")"),
+            std::vector<std::string>{"flow.syntax.invalid-unicode-string"});
+  EXPECT_EQ(Codes(R"("\uD800")"),
+            std::vector<std::string>{"flow.syntax.malformed-escape"});
+  EXPECT_EQ(Codes("b'é'"),
+            std::vector<std::string>{"flow.syntax.non-ascii-byte-literal"});
+  const auto non_ascii = Lex("b'é'");
+  ASSERT_EQ(non_ascii.diagnostics.size(), 1u);
+  EXPECT_EQ(non_ascii.diagnostics[0].range.start.column, 3);
+  EXPECT_EQ(non_ascii.diagnostics[0].range.end.column, 4);
+  EXPECT_EQ(Codes(R"(b"\xGG")"),
+            std::vector<std::string>{"flow.syntax.malformed-escape"});
+}
+
 TEST(FlowLexer, ADashJoinsANameButAnArrowDoesNot) {
   EXPECT_EQ(Dump("for-each"), std::vector<std::string>{"word:for-each"});
   EXPECT_EQ(Dump("a -> b"),
@@ -193,7 +231,8 @@ TEST(FlowLexer, ReadsStringsWithTheirEscapes) {
 }
 
 TEST(FlowLexer, SingleQuotesAllowDoubleQuotesAndEscapedApostrophes) {
-  const auto result = Lex(R"flow('say "hello"' "say 'hello'" 'it\'s here')flow");
+  const auto result =
+      Lex(R"flow('say "hello"' "say 'hello'" 'it\'s here')flow");
   ASSERT_TRUE(result.diagnostics.empty());
   ASSERT_EQ(result.tokens.size(), 4u);
   EXPECT_EQ(result.tokens[0].string_value, "say \"hello\"");

@@ -22,6 +22,7 @@
 #include <vector>
 
 #include <absl/container/flat_hash_set.h>
+#include <absl/strings/escaping.h>
 #include <absl/strings/match.h>
 #include <absl/strings/str_cat.h>
 #include <absl/strings/str_join.h>
@@ -29,6 +30,7 @@
 #include <nlohmann/json.hpp>
 
 #include "a11/flow/contract.h"
+#include "a11/flow/escape.h"
 #include "a11/flow/parser.h"
 #include "a11/flow/syntax.h"
 #include "a11/flow/vocabulary.h"
@@ -53,6 +55,8 @@ nlohmann::json ConstantJson(const Constant& value) {
       return value.number;
     case Constant::Kind::kString:
       return value.text;
+    case Constant::Kind::kBytes:
+      return absl::Base64Escape(value.text);
     case Constant::Kind::kRegex:
       return value.text;
     case Constant::Kind::kDuration:
@@ -88,6 +92,8 @@ std::string ConstantFlow(const Constant& value) {
       return nlohmann::json(value.number).dump();
     case Constant::Kind::kString:
       return nlohmann::json(value.text).dump();
+    case Constant::Kind::kBytes:
+      return absl::StrCat("b\"", EscapeLiteralBody(value.text, true), "\"");
     case Constant::Kind::kRegex:
       return value.text;
     case Constant::Kind::kDuration:

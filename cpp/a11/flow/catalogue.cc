@@ -20,6 +20,7 @@
 #include <utility>
 #include <vector>
 
+#include <absl/strings/escaping.h>
 #include <absl/strings/str_cat.h>
 #include <nlohmann/json.hpp>
 
@@ -171,6 +172,8 @@ nlohmann::json ConstantToJson(const Constant& value) {
       return value.number;
     case Constant::Kind::kString:
       return value.text;
+    case Constant::Kind::kBytes:
+      return nlohmann::json{{"$bytes", absl::Base64Escape(value.text)}};
     case Constant::Kind::kRegex:
       return nlohmann::json{{"$regex", value.text}};
     case Constant::Kind::kDuration:

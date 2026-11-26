@@ -403,6 +403,9 @@ absl::Status Runner::Preflight() {
               case syntax::Constant::Kind::kString:
                 type = "string";
                 break;
+              case syntax::Constant::Kind::kBytes:
+                type = "bytes";
+                break;
               case syntax::Constant::Kind::kRegex:
                 type = "string";
                 break;

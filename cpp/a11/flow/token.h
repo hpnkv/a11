@@ -42,6 +42,8 @@ enum class TokenKind {
   kComment,
   /// A quoted string. `string_value` holds it with escapes resolved.
   kString,
+  /// A quoted byte sequence. `string_value` holds its decoded octets.
+  kBytes,
   /// A slash-delimited regular expression, including its flags.
   kRegex,
   /// A number, integral or not. `number` holds it.
@@ -113,8 +115,10 @@ struct Token {
   int line = 1;
   int column = 1;
 
-  /// A `kString`'s value, with escapes resolved.
+  /// A string or byte literal's value, with escapes resolved.
   std::string string_value;
+  bool string_raw = false;
+  size_t string_prefix_size = 0;
   /// Escape ranges before multiline indentation is removed.
   std::vector<StringEscape> string_escapes;
   /// A `kNumber`'s value. `is_integer` says whether it was written without a

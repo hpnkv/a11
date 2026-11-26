@@ -104,6 +104,7 @@ struct Stage {
   long long count = 0;
   /// `kString`/`kOptionalString`: the text. Also the field name for `at`.
   std::string text;
+  bool text_is_bytes = false;
   bool match_all = false;
   bool match_regex = false;
   std::string match_offset;

@@ -24,6 +24,7 @@ set(A11_FLOW_LANG_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/document.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/diagnostic.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/discover.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/escape.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/emit_json.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/format.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/generate.cc

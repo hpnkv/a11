@@ -153,7 +153,8 @@ BUILTINS = _keywords(
     "f64", "floor", "ceil", "round", "bool", "keys", "values", "join",
     "split", "merge", "contains", "startswith", "endswith", "replace",
     "match", "matches", "matches_pattern", "slice", "to_chunk",
-    "from_chunk", "strformat", "b64encode", "b64decode", "b64urlencode",
+    "from_chunk", "strformat", "escape", "unescape", "unescape_bytes",
+    "hexencode", "hexdecode", "b64encode", "b64decode", "b64urlencode",
     "b64urldecode", "utf8encode", "utf8decode", "now", "infinite_future",
     "infnite_future", "infinite_past", "infinite_duration",
     "zero_duration", "duration", "time", "seconds", "nanoseconds",
@@ -285,10 +286,14 @@ class A11FlowLexer(RegexLexer):
             # Triple quotes first, so three quotes are not read as
             # an empty string followed by a quote. Block strings may contain
             # line breaks.
-            (r'"""', String, "block-string"),
-            (r"'''", String, "single-block-string"),
-            (r'"', String, "quoted-string"),
-            (r"'", String, "single-quoted-string"),
+            (r'(?<![A-Za-z0-9_$])(?i:br|rb|r)"""', String, "raw-block-string"),
+            (r"(?<![A-Za-z0-9_$])(?i:br|rb|r)'''", String, "raw-single-block-string"),
+            (r'(?<![A-Za-z0-9_$])(?i:br|rb|r)"', String, "raw-quoted-string"),
+            (r"(?<![A-Za-z0-9_$])(?i:br|rb|r)'", String, "raw-single-quoted-string"),
+            (r'(?<![A-Za-z0-9_$])(?i:b)?"""', String, "block-string"),
+            (r"(?<![A-Za-z0-9_$])(?i:b)?'''", String, "single-block-string"),
+            (r'(?<![A-Za-z0-9_$])(?i:b)?"', String, "quoted-string"),
+            (r"(?<![A-Za-z0-9_$])(?i:b)?'", String, "single-quoted-string"),
         ],
         "regex": [
             (r'(?<![A-Za-z0-9_$)\]])/(?![ \t])(?:\\.|\[[^\n]*?\]|[^/\\\n])+/[ims]*', String.Regex),
@@ -313,6 +318,30 @@ class A11FlowLexer(RegexLexer):
         ],
         "single-quoted-string": [
             (r'\\.', String.Escape),
+            (r"'", String, "#pop"),
+            (r"[^\\'\n]+", String),
+            (r"\n", Whitespace, "#pop"),
+        ],
+        "raw-block-string": [
+            (r'\\[\s\S]', String),
+            (r'"""', String, "#pop"),
+            (r'[^\\"]+', String),
+            (r'"', String),
+        ],
+        "raw-quoted-string": [
+            (r'\\[\s\S]', String),
+            (r'"', String, "#pop"),
+            (r'[^\\"\n]+', String),
+            (r"\n", Whitespace, "#pop"),
+        ],
+        "raw-single-block-string": [
+            (r'\\[\s\S]', String),
+            (r"'''", String, "#pop"),
+            (r"[^\\']+", String),
+            (r"'", String),
+        ],
+        "raw-single-quoted-string": [
+            (r'\\[\s\S]', String),
             (r"'", String, "#pop"),
             (r"[^\\'\n]+", String),
             (r"\n", Whitespace, "#pop"),

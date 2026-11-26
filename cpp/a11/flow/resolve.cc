@@ -41,6 +41,7 @@
 #include "a11/flow/contract.h"
 #include "a11/flow/diagnostic.h"
 #include "a11/flow/emit_json.h"
+#include "a11/flow/escape.h"
 #include "a11/flow/pattern.h"
 #include "a11/flow/plan.h"
 #include "a11/flow/regex_literal.h"
@@ -251,6 +252,8 @@ bool ConstantFits(const syntax::Constant& value, std::string_view type) {
              type == "duration" || type == "time";
     case Kind::kString:
       return IsTextType(type) || type == "bytes";
+    case Kind::kBytes:
+      return type == "bytes";
     case Kind::kRegex:
       return type == "regex" || type == "std::regex";
     case Kind::kDuration:
@@ -636,6 +639,8 @@ std::string ConstantText(const syntax::Constant& value) {
   switch (value.kind) {
     case syntax::Constant::Kind::kString:
       return absl::StrCat("\"", value.text, "\"");
+    case syntax::Constant::Kind::kBytes:
+      return absl::StrCat("b\"", EscapeLiteralBody(value.text, true), "\"");
     case syntax::Constant::Kind::kRegex:
       return value.text;
     case syntax::Constant::Kind::kInteger:
@@ -661,6 +666,8 @@ std::string Unparse(const Node* node) {
       switch (value.kind) {
         case syntax::Constant::Kind::kString:
           return absl::StrCat("\"", value.text, "\"");
+        case syntax::Constant::Kind::kBytes:
+          return absl::StrCat("b\"", EscapeLiteralBody(value.text, true), "\"");
         case syntax::Constant::Kind::kRegex:
           return value.text;
         case syntax::Constant::Kind::kInteger:
@@ -836,7 +843,10 @@ std::string StageBodyLabel(const syntax::Stage& stage) {
       }
       return absl::StrCat(
           stage.name, stage.match_all ? " all " : " ",
-          stage.match_regex ? stage.text : absl::StrCat("\"", stage.text, "\""),
+          stage.match_regex ? stage.text
+          : stage.text_is_bytes
+              ? absl::StrCat("b\"", EscapeLiteralBody(stage.text, true), "\"")
+              : absl::StrCat("\"", stage.text, "\""),
           stage.match_offset.empty()
               ? ""
               : absl::StrCat(" offset \"", stage.match_offset, "\""));
@@ -1287,6 +1297,7 @@ class FlowResolver {
                           graph::RefId failures = graph::kNone) {
     graph::Stage made;
     made.name = stage.name;
+    made.text_is_bytes = stage.text_is_bytes;
     made.match_all = stage.match_all;
     made.match_regex = stage.match_regex;
     made.match_offset = stage.match_offset;
@@ -4610,6 +4621,10 @@ class FlowResolver {
                            : absl::StrCat("list[", carried.type, "]");
         carried.unary = true;
         carried.cardinality_known = true;
+      } else if (stage->name == "join") {
+        carried.type = stage->text_is_bytes ? "bytes" : "string";
+        carried.unary = true;
+        carried.cardinality_known = true;
       } else if (stage->name == "flatten") {
         carried.unary = false;
         auto type = ParseTypeExpression(carried.type);
@@ -4643,6 +4658,9 @@ class FlowResolver {
   std::string ShapeAfter(const syntax::Stage& stage,
                          const std::string& carried) {
     const std::string name = vocabulary::Canonical(stage.name);
+    if (name == "join" || name == "strformat") {
+      return stage.text_is_bytes ? "bytes" : "string";
+    }
     if (name == "map") {
       // `map Shape{..}` and `map it as Shape` name the output shape. Other map
       // expressions have no statically known shape.
@@ -4875,6 +4893,9 @@ class FlowResolver {
         case K::kString:
           info.type = "string";
           break;
+        case K::kBytes:
+          info.type = "bytes";
+          break;
         case K::kRegex:
           info.type = "regex";
           break;
@@ -4949,18 +4970,31 @@ class FlowResolver {
       } else if (name == "bool" || name == "contains" || name == "startswith" ||
                  name == "endswith" || name == "matches_pattern") {
         info.type = "bool";
-      } else if (name == "upper" || name == "lower" || name == "casefold" ||
-                 name == "trim" ||
-                 name == "text" || name == "string" || name == "join" ||
-                 name == "replace" || name == "strformat" ||
-                 name == "b64encode" || name == "b64urlencode" ||
-                 name == "utf8decode") {
+      } else if (name == "join" || name == "strformat" || name == "replace" ||
+                 name == "lower" || name == "upper" || name == "trim") {
+        const size_t selector = name == "join" ? 1 : 0;
+        const std::string selected =
+            function->args.size() > selector
+                ? DescribeExpression(function->args[selector].get(), scope).type
+                : "";
+        info.type = selected == "bytes" ? "bytes" : "string";
+      } else if (name == "split") {
+        const std::string selected =
+            function->args.empty()
+                ? ""
+                : DescribeExpression(function->args.front().get(), scope).type;
+        info.type = selected == "bytes" ? "list[bytes]" : "list[string]";
+      } else if (name == "casefold" || name == "text" || name == "string" ||
+                 name == "escape" || name == "unescape" ||
+                 name == "hexencode" || name == "b64encode" ||
+                 name == "b64urlencode" || name == "utf8decode") {
         info.type = "string";
       } else if (name == "bytes" || name == "b64decode" ||
-                 name == "b64urldecode" || name == "utf8encode") {
+                 name == "b64urldecode" || name == "utf8encode" ||
+                 name == "unescape_bytes" || name == "hexdecode") {
         info.type = "bytes";
-      } else if (name == "keys" || name == "values" || name == "split" ||
-                 name == "list" || name == "matches") {
+      } else if (name == "keys" || name == "values" || name == "list" ||
+                 name == "matches") {
         info.type = "list";
       } else if (name == "option") {
         info.type = "option";

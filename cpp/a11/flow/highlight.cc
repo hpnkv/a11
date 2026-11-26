@@ -29,6 +29,7 @@
 #include "a11/flow/resolve.h"
 #include "a11/flow/token.h"
 #include "a11/flow/vocabulary.h"
+#include "a11/utf8.h"
 
 namespace a11::flow {
 namespace {
@@ -177,6 +178,7 @@ class Classifier {
     switch (At(index_ + 1).kind) {
       case TokenKind::kWord:
       case TokenKind::kString:
+      case TokenKind::kBytes:
       case TokenKind::kRegex:
       case TokenKind::kNumber:
       case TokenKind::kDuration:
@@ -246,6 +248,7 @@ class Classifier {
       case TokenKind::kComment:
         return SemanticKind::kComment;
       case TokenKind::kString:
+      case TokenKind::kBytes:
         return SemanticKind::kString;
       case TokenKind::kRegex:
         return SemanticKind::kRegex;
@@ -797,14 +800,20 @@ std::vector<SemanticToken> Highlight(absl::Span<const Token> tokens) {
         result.push_back(
             {part.kind, part.start, escape.start, part.line, part.column});
       }
-      result.push_back({SemanticKind::kStringEscape, escape.start, escape.end,
+      const size_t escape_end = std::min(escape.end, tokens[index].end);
+      result.push_back({SemanticKind::kStringEscape, escape.start, escape_end,
                         escape.line, escape.column});
-      part.start = escape.end;
+      part.start = escape_end;
       part.line = escape.line;
-      part.column = escape.column + 2;
-      if (tokens[index].text[escape.end - tokens[index].start - 1] == '\n') {
-        ++part.line;
-        part.column = 1;
+      part.column = escape.column;
+      for (size_t at = escape.start; at < escape_end; ++at) {
+        const char one = tokens[index].text[at - tokens[index].start];
+        if (one == '\n') {
+          ++part.line;
+          part.column = 1;
+        } else if (!utf8::IsContinuation(one)) {
+          ++part.column;
+        }
       }
     }
     if (part.start < part.end) {

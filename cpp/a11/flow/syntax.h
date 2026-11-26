@@ -66,6 +66,7 @@ struct Constant {
     kInteger,
     kDouble,
     kString,
+    kBytes,
     kRegex,
     kDuration,
     kList,
@@ -87,6 +88,7 @@ struct Constant {
   static Constant Integer(long long value);
   static Constant Double(double value);
   static Constant String(std::string value);
+  static Constant Bytes(std::string value);
   static Constant Regex(std::string value);
   static Constant Duration(absl::Duration value);
 
@@ -336,6 +338,7 @@ struct Stage : NodeOf<NodeKind::kStage> {
   bool is_integer = false;
   /// `kString`/`kOptionalString`: the text, with escapes resolved.
   std::string text;
+  bool text_is_bytes = false;
   /// `match all`: emit each nonoverlapping occurrence.
   bool match_all = false;
   bool match_regex = false;

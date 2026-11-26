@@ -1347,6 +1347,14 @@ class ParserImpl {
     return value;
   }
 
+  std::string ParseBytesRun() {
+    std::string value(Advance().string_value);
+    while (At(TokenKind::kBytes) || ContinueToken(TokenKind::kBytes)) {
+      absl::StrAppend(&value, Advance().string_value);
+    }
+    return value;
+  }
+
   // Literal-only arguments use grouping to separate concatenation from the
   // next argument or a declaration's description.
   std::string ParseStringArgument() {
@@ -2256,6 +2264,8 @@ class ParserImpl {
       }
       case TokenKind::kString:
         return syntax::Constant::String(std::string(Advance().string_value));
+      case TokenKind::kBytes:
+        return syntax::Constant::Bytes(std::string(Advance().string_value));
       case TokenKind::kRegex: {
         const Token& token = Advance();
         CheckRegex(token);
@@ -2731,6 +2741,9 @@ class ParserImpl {
           CheckRegex(token);
           stage->match_regex = true;
           stage->text = std::string(token.text);
+        } else if (stage->name == "strformat" && At(TokenKind::kBytes)) {
+          stage->text_is_bytes = true;
+          stage->text = ParseBytesRun();
         } else if (At(TokenKind::kString)) {
           stage->text = ParseStringRun();
         } else {
@@ -2741,7 +2754,10 @@ class ParserImpl {
         }
         break;
       case vocabulary::StageArgument::kOptionalString:
-        if (ContinueToken(TokenKind::kString)) {
+        if (stage->name == "join" && ContinueToken(TokenKind::kBytes)) {
+          stage->text_is_bytes = true;
+          stage->text = ParseBytesRun();
+        } else if (ContinueToken(TokenKind::kString)) {
           stage->text = ParseStringRun();
         }
         break;
@@ -3417,6 +3433,11 @@ class ParserImpl {
     if (At(TokenKind::kString)) {
       auto literal = Make<syntax::Literal>(token);
       literal->value = syntax::Constant::String(ParseStringRun());
+      return literal;
+    }
+    if (At(TokenKind::kBytes)) {
+      auto literal = Make<syntax::Literal>(token);
+      literal->value = syntax::Constant::Bytes(ParseBytesRun());
       return literal;
     }
     if (At(TokenKind::kRegex)) {

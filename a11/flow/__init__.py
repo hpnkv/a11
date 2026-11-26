@@ -128,10 +128,14 @@ FAIL_CODES: tuple[str, ...] = tuple(
 #: A compact language reference for models that write flows. Action schemas
 #: provide the remaining information needed to compose available actions.
 REFERENCE = """A11 Flow composes streaming actions into actions.
-Strings use '...' or "..."; triple quotes of either kind hold line breaks.
-The other quote may appear unescaped. Strings decode \\0, \\a, \\b, \\f,
-\\n, \\r, \\t, \\v, escaped quotes and backslashes. Other escapes yield the
-following character.
+Text uses '...' or "..."; bytes use b'...' or b"...". Triple quotes of
+either kind hold line breaks. Prefix r keeps backslashes literal; br and rb
+combine both modifiers. Escapes include \\0, \\a, \\b, \\e, \\f, \\n, \\r,
+\\t, \\v, quotes, backslashes, octal, \\xHH, \\uHHHH, \\UHHHHHHHH, and
+\\u{H...}. Text must decode to valid UTF-8; byte literals require ASCII
+source and can hold arbitrary escaped octets. Other escapes yield the
+following character. std::escape writes a literal body; std::unescape
+returns text and std::unescape_bytes returns bytes.
 Keywords are lower or UPPER
 case. Statements overlap; data and after dependencies determine execution.
 

@@ -105,6 +105,12 @@ nlohmann::json Tree(std::string_view source) {
   return value;
 }
 
+TEST(FlowFormat, PrefixedLiteralsPreserveTheirValues) {
+  const std::string source =
+      R"(flow f { b'\xFF' -> out; r'\tabc' -> out; br"\x00" -> out })";
+  EXPECT_EQ(Tree(source), Tree(Formatted(source)));
+}
+
 /// The corpus: every flow this repository ships.
 std::vector<std::filesystem::path> Corpus() {
   const std::filesystem::path root =

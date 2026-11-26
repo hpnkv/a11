@@ -50,6 +50,12 @@ std::vector<std::string> Coloured(std::string_view source,
   return out;
 }
 
+TEST(FlowHighlight, EscapesAreOneSpanAndRawBackslashesStayStringContent) {
+  EXPECT_EQ(Coloured(R"(b"\xFF" r'\t')"),
+            (std::vector<std::string>{"string:b\"", "string-escape:\\xFF",
+                                      "string:\"", "string:r'\\t'"}));
+}
+
 TEST(FlowHighlight, OptionalProjectionAndPresentStage) {
   EXPECT_EQ(Coloured("item?.title | present"),
             (std::vector<std::string>{"identifier:item", "punctuation:?.",

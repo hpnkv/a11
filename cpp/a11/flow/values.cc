@@ -46,6 +46,7 @@
 #include "a11/data/serial_tags.h"
 #include "a11/data/serialization.h"
 #include "a11/flow/casefold.h"
+#include "a11/flow/escape.h"
 #include "a11/flow/regex_literal.h"
 #include "a11/flow/vocabulary.h"
 #include "a11/internal/regex.h"
@@ -1314,6 +1315,8 @@ Value Value::Of(const syntax::Constant& constant) {
       return Double(constant.number);
     case syntax::Constant::Kind::kString:
       return String(constant.text);
+    case syntax::Constant::Kind::kBytes:
+      return Bytes(constant.text);
     case syntax::Constant::Kind::kRegex:
       return Regex(constant.text);
     case syntax::Constant::Kind::kDuration:
@@ -2622,6 +2625,10 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
     if (arguments.size() < 2 || arguments.size() > 3) {
       return Invalid("A match needs a pattern, text and optional offset name.");
     }
+    if (first.kind() == Value::Kind::kBytes ||
+        arguments[1].kind() == Value::Kind::kBytes) {
+      return Invalid("Regex matching needs UTF-8 text.");
+    }
     if (arguments.size() == 3) {
       const Value& field = arguments[2];
       if (field.IsNull()) {
@@ -2634,14 +2641,6 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
     }
   }
   if (prepared != nullptr && first.kind() == Value::Kind::kString) {
-    if (name == "strformat") {
-      const auto cached = prepared->formats.find(first.text());
-      if (cached != prepared->formats.end()) {
-        return Value::String(StrformatCompiled(
-            cached->second,
-            arguments.empty() ? arguments : arguments.subspan(1)));
-      }
-    }
     if (name == "match") {
       const auto cached = prepared->patterns.find(first.text());
       if (cached != prepared->patterns.end()) {
@@ -2677,8 +2676,42 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
     return MatchPattern(AsText(first), subject, spans);
   }
   if (name == "strformat") {
-    return Value::String(
-        Strformat(first, arguments.empty() ? arguments : arguments.subspan(1)));
+    if (!first.IsTextlike()) {
+      return Invalid("strformat needs a text or byte format.");
+    }
+    const FormatTemplate* format = nullptr;
+    FormatTemplate local;
+    if (prepared != nullptr) {
+      const auto cached = prepared->formats.find(first.text());
+      if (cached != prepared->formats.end()) {
+        format = &cached->second;
+      }
+    }
+    if (format == nullptr) {
+      local = CompileStrformat(first.text());
+      format = &local;
+    }
+    const auto values = arguments.subspan(1);
+    const bool bytes = first.kind() == Value::Kind::kBytes;
+    for (const FormatPart& part : *format) {
+      if (part.conversion != 's' || part.index >= values.size()) {
+        continue;
+      }
+      const bool argument_bytes =
+          values[part.index].kind() == Value::Kind::kBytes;
+      if ((bytes && !argument_bytes) || (!bytes && argument_bytes)) {
+        return Invalid(
+            "A %s format argument must match the format's text or byte type.");
+      }
+    }
+    std::string written = StrformatCompiled(*format, values);
+    if (bytes) {
+      return Value::Bytes(std::move(written));
+    }
+    if (!utf8::IsValid(written)) {
+      return Invalid("strformat produced invalid UTF-8 text.");
+    }
+    return Value::String(std::move(written));
   }
   if (name == "now") {
     return Value::Time(a11::Now());
@@ -2886,18 +2919,67 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
     }
   }
   if (name == "lower") {
-    return Value::String(absl::AsciiStrToLower(AsText(first)));
+    std::string changed = absl::AsciiStrToLower(AsText(first));
+    return first.kind() == Value::Kind::kBytes
+               ? Value::Bytes(std::move(changed))
+               : Value::String(std::move(changed));
   }
   if (name == "casefold") {
+    if (first.kind() == Value::Kind::kBytes) {
+      return Invalid("casefold needs UTF-8 text; decode bytes first.");
+    }
     ABSL_ASSIGN_OR_RETURN(std::string folded, CasefoldUtf8(AsText(first)));
     return Value::String(std::move(folded));
   }
   if (name == "upper") {
-    return Value::String(absl::AsciiStrToUpper(AsText(first)));
+    std::string changed = absl::AsciiStrToUpper(AsText(first));
+    return first.kind() == Value::Kind::kBytes
+               ? Value::Bytes(std::move(changed))
+               : Value::String(std::move(changed));
   }
   if (name == "trim") {
-    return Value::String(
-        std::string(absl::StripAsciiWhitespace(AsText(first))));
+    std::string changed(absl::StripAsciiWhitespace(AsText(first)));
+    return first.kind() == Value::Kind::kBytes
+               ? Value::Bytes(std::move(changed))
+               : Value::String(std::move(changed));
+  }
+  if (name == "escape") {
+    if (!first.IsTextlike() || arguments.size() != 1) {
+      return Invalid("escape needs one text or byte value.");
+    }
+    const bool bytes = first.kind() == Value::Kind::kBytes;
+    if (!bytes && !utf8::IsValid(first.text())) {
+      return Invalid("escape needs valid UTF-8 text.");
+    }
+    return Value::String(EscapeLiteralBody(first.text(), bytes));
+  }
+  if (name == "unescape" || name == "unescape_bytes") {
+    if (arguments.size() != 1 || first.kind() != Value::Kind::kString) {
+      return Invalid("unescape needs one text value.");
+    }
+    const bool bytes = name == "unescape_bytes";
+    EscapeResult decoded = DecodeLiteralBody(first.text(), bytes, false);
+    if (decoded.failure.has_value()) {
+      return Invalid(decoded.failure->message);
+    }
+    return bytes ? Value::Bytes(std::move(decoded.value))
+                 : Value::String(std::move(decoded.value));
+  }
+  if (name == "hexencode") {
+    if (arguments.size() != 1 || !first.IsTextlike()) {
+      return Invalid("hexencode needs one text or byte value.");
+    }
+    return Value::String(absl::BytesToHexString(first.text()));
+  }
+  if (name == "hexdecode") {
+    if (arguments.size() != 1 || first.kind() != Value::Kind::kString) {
+      return Invalid("hexdecode needs one text value.");
+    }
+    std::string decoded;
+    if (!absl::HexStringToBytes(first.text(), &decoded)) {
+      return Invalid("hexdecode needs complete pairs of hex digits.");
+    }
+    return Value::Bytes(std::move(decoded));
   }
   // Base64, both alphabets, both ways.
   if (name == "b64encode") {
@@ -2962,34 +3044,69 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
     return Value::List(std::move(found));
   }
   if (name == "join") {
-    const std::string separator = AsText(Argument(arguments, 1));
+    const Value& delimiter = Argument(arguments, 1);
+    const bool bytes = delimiter.kind() == Value::Kind::kBytes;
+    const std::string separator = AsText(delimiter);
     if (first.kind() != Value::Kind::kList) {
-      return Value::String(AsText(first));
+      if (bytes && first.kind() != Value::Kind::kBytes) {
+        return Invalid("A byte join needs byte values.");
+      }
+      if (!bytes && first.kind() == Value::Kind::kBytes) {
+        return Invalid("A text join needs text; decode bytes first.");
+      }
+      return bytes ? Value::Bytes(AsText(first)) : Value::String(AsText(first));
     }
     std::vector<std::string> pieces;
     pieces.reserve(first.items().size());
     for (const Value& item : first.items()) {
+      if (bytes && item.kind() != Value::Kind::kBytes) {
+        return Invalid("A byte join needs byte values.");
+      }
+      if (!bytes && item.kind() == Value::Kind::kBytes) {
+        return Invalid("A text join needs text; decode bytes first.");
+      }
       pieces.push_back(AsText(item));
     }
-    return Value::String(absl::StrJoin(pieces, separator));
+    std::string joined = absl::StrJoin(pieces, separator);
+    if (bytes) {
+      return Value::Bytes(std::move(joined));
+    }
+    if (!utf8::IsValid(joined)) {
+      return Invalid("join produced invalid UTF-8 text.");
+    }
+    return Value::String(std::move(joined));
   }
   if (name == "split") {
     const Value& separator = Argument(arguments, 1);
+    const bool bytes = first.kind() == Value::Kind::kBytes;
+    if ((bytes && !separator.IsNull() &&
+         separator.kind() != Value::Kind::kBytes) ||
+        (!bytes && separator.kind() == Value::Kind::kBytes)) {
+      return Invalid(
+          "A split separator must match the input's text or byte type.");
+    }
     const std::string text = AsText(first);
     if (separator.kind() == Value::Kind::kRegex) {
+      if (bytes) {
+        return Invalid("Regex splitting needs UTF-8 text.");
+      }
       return RegexSplit(text, separator.text(), prepared);
     }
     std::vector<Value> pieces;
+    const auto append = [&](std::string_view piece) {
+      pieces.push_back(bytes ? Value::Bytes(std::string(piece))
+                             : Value::String(std::string(piece)));
+    };
     if (Truthy(separator)) {
       for (std::string_view piece : absl::StrSplit(text, AsText(separator))) {
-        pieces.push_back(Value::String(std::string(piece)));
+        append(piece);
       }
     } else {
       // No separator splits on runs of whitespace and keeps nothing empty,
       // which is what `str.split()` with no argument does.
       for (std::string_view piece : absl::StrSplit(
                text, absl::ByAnyChar(" \t\n\r\f\v"), absl::SkipEmpty())) {
-        pieces.push_back(Value::String(std::string(piece)));
+        append(piece);
       }
     }
     return Value::List(std::move(pieces));
@@ -3014,11 +3131,18 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
     return Value::Object(std::move(merged));
   }
   if (name == "contains") {
+    const Value& member = Argument(arguments, 1);
+    if ((first.kind() == Value::Kind::kBytes &&
+         member.kind() != Value::Kind::kBytes) ||
+        (first.kind() == Value::Kind::kString &&
+         member.kind() == Value::Kind::kBytes)) {
+      return Invalid("A substring must match the input's text or byte type.");
+    }
     return Value::Bool(Contains(first, Argument(arguments, 1)));
   }
   if (name == "matches_pattern") {
-    if (arguments.size() != 2 ||
-        arguments[1].kind() != Value::Kind::kRegex) {
+    if (arguments.size() != 2 || arguments[1].kind() != Value::Kind::kRegex ||
+        first.kind() == Value::Kind::kBytes) {
       return Invalid("std::matches_pattern needs text, then a regex literal.");
     }
     ABSL_ASSIGN_OR_RETURN(auto regex,
@@ -3027,6 +3151,23 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
     return Value::Bool(found.has_value());
   }
   if (name == "startswith" || name == "endswith") {
+    const Value& choices = Argument(arguments, 1);
+    const auto matching = [&](const Value& choice) {
+      return first.kind() == Value::Kind::kBytes
+                 ? choice.kind() == Value::Kind::kBytes
+                 : choice.kind() != Value::Kind::kBytes;
+    };
+    if (choices.kind() == Value::Kind::kList) {
+      for (const Value& choice : choices.items()) {
+        if (!matching(choice)) {
+          return Invalid(
+              "A prefix or suffix must match the input's text or byte type.");
+        }
+      }
+    } else if (!matching(choices)) {
+      return Invalid(
+          "A prefix or suffix must match the input's text or byte type.");
+    }
     const std::string text = AsText(first);
     const std::vector<std::string> options = Endings(Argument(arguments, 1));
     const bool front = name == "startswith";
@@ -3039,15 +3180,29 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
     return Value::Bool(false);
   }
   if (name == "replace") {
+    const bool bytes = first.kind() == Value::Kind::kBytes;
+    const Value& old = Argument(arguments, 1);
+    const Value& replacement = Argument(arguments, 2);
+    if (bytes ? old.kind() != Value::Kind::kBytes ||
+                    replacement.kind() != Value::Kind::kBytes
+              : old.kind() == Value::Kind::kBytes ||
+                    replacement.kind() == Value::Kind::kBytes) {
+      return Invalid(
+          "Replacement values must match the input's text or byte type.");
+    }
     std::string text = AsText(first);
-    if (Argument(arguments, 1).kind() == Value::Kind::kRegex) {
+    if (old.kind() == Value::Kind::kRegex) {
+      if (bytes) {
+        return Invalid("Regex replacement needs UTF-8 text.");
+      }
       return RegexReplace(text, Argument(arguments, 1).text(),
                           AsText(Argument(arguments, 2)), prepared);
     }
     const std::string from = AsText(Argument(arguments, 1));
     const std::string to = AsText(Argument(arguments, 2));
     if (from.empty()) {
-      return Value::String(std::move(text));
+      return bytes ? Value::Bytes(std::move(text))
+                   : Value::String(std::move(text));
     }
     std::string out;
     size_t at = 0;
@@ -3061,7 +3216,7 @@ absl::StatusOr<Value> CallBuiltin(std::string_view name,
       at = found + from.size();
     }
     out.append(text, at, std::string::npos);
-    return Value::String(std::move(out));
+    return bytes ? Value::Bytes(std::move(out)) : Value::String(std::move(out));
   }
   if (name == "slice") {
     const auto start =
@@ -3512,6 +3667,9 @@ absl::StatusOr<Value> Coerce(const Value& value,
     return StatusRecord(StatusOfRecord(value));
   }
   if (lowered == "string" || lowered == "text") {
+    if (value.kind() == Value::Kind::kBytes && !utf8::IsValid(value.text())) {
+      return Invalid("Text conversion needs valid UTF-8 bytes.");
+    }
     return Value::String(AsText(value));
   }
   if (lowered == "number") {

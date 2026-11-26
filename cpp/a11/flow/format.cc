@@ -733,7 +733,8 @@ class Formatter {
       size_t width = line_.empty() || breaks_[index] > 0
                          ? static_cast<size_t>(IndentOf(index))
                          : static_cast<size_t>(indent_) + Columns(line_);
-      Token previous = line_.empty() || breaks_[index] > 0 ? Token{} : previous_;
+      Token previous =
+          line_.empty() || breaks_[index] > 0 ? Token{} : previous_;
       for (size_t at = index;
            at < code_.size() && code_[at].start < tail->second.end; ++at) {
         if (previous.kind != TokenKind::kEnd &&
@@ -745,11 +746,11 @@ class Formatter {
       }
       if (width > options_.line_width) {
         for (size_t start : tail->second.modifiers) {
-          const auto modifier = std::lower_bound(
-              code_.begin(), code_.end(), start,
-              [](const Token& candidate, size_t position) {
-                return candidate.start < position;
-              });
+          const auto modifier =
+              std::lower_bound(code_.begin(), code_.end(), start,
+                               [](const Token& candidate, size_t position) {
+                                 return candidate.start < position;
+                               });
           if (modifier != code_.end() && modifier->start == start) {
             breaks_[static_cast<size_t>(modifier - code_.begin())] = 1;
           }
@@ -1587,7 +1588,7 @@ std::string WrapStrings(std::string_view source, const LexResult& lexed,
       depth -= groups.back().value;
       groups.pop_back();
     }
-    if (token.kind != TokenKind::kString ||
+    if (token.kind != TokenKind::kString || token.string_prefix_size != 0 ||
         (token.text.size() >= 3 && token.text[0] == token.text[1] &&
          token.text[1] == token.text[2])) {
       continue;

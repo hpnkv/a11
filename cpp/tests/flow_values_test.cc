@@ -196,6 +196,86 @@ std::string TextOf(std::string_view expression,
   return AsText(*value);
 }
 
+TEST(FlowValues, ByteLiteralKindsReachExpressionEvaluation) {
+  auto value = EvaluatedIn(R"(br'\xff')");
+  ASSERT_TRUE(value.ok()) << value.status();
+  EXPECT_EQ(value->kind(), Value::Kind::kBytes);
+  EXPECT_EQ(value->text(), R"(\xff)");
+
+  value = EvaluatedIn(R"(b'\xff')");
+  ASSERT_TRUE(value.ok()) << value.status();
+  EXPECT_EQ(value->kind(), Value::Kind::kBytes);
+  EXPECT_EQ(value->text(), std::string("\xff", 1));
+}
+
+TEST(FlowValues, EscapeUtilitiesRoundTripTextAndBytes) {
+  auto escaped =
+      CallBuiltin("escape", std::vector<Value>{Value::String("é\n")}, nullptr);
+  ASSERT_TRUE(escaped.ok()) << escaped.status();
+  EXPECT_EQ(escaped->text(), R"(\u00E9\n)");
+  auto text = CallBuiltin("unescape", std::vector<Value>{*escaped}, nullptr);
+  ASSERT_TRUE(text.ok()) << text.status();
+  EXPECT_EQ(text->kind(), Value::Kind::kString);
+  EXPECT_EQ(text->text(), "é\n");
+
+  const Value source = Value::Bytes(std::string("\0\xff", 2));
+  escaped = CallBuiltin("escape", std::vector<Value>{source}, nullptr);
+  ASSERT_TRUE(escaped.ok()) << escaped.status();
+  EXPECT_EQ(escaped->text(), R"(\x00\xFF)");
+  auto bytes =
+      CallBuiltin("unescape_bytes", std::vector<Value>{*escaped}, nullptr);
+  ASSERT_TRUE(bytes.ok()) << bytes.status();
+  EXPECT_EQ(bytes->kind(), Value::Kind::kBytes);
+  EXPECT_EQ(bytes->text(), source.text());
+  EXPECT_FALSE(
+      CallBuiltin("unescape", std::vector<Value>{*escaped}, nullptr).ok());
+
+  auto hex = CallBuiltin("hexencode", std::vector<Value>{source}, nullptr);
+  ASSERT_TRUE(hex.ok()) << hex.status();
+  EXPECT_EQ(hex->text(), "00ff");
+  bytes = CallBuiltin("hexdecode", std::vector<Value>{*hex}, nullptr);
+  ASSERT_TRUE(bytes.ok()) << bytes.status();
+  EXPECT_EQ(bytes->text(), source.text());
+}
+
+TEST(FlowValues, ByteOperationsPreserveByteKinds) {
+  const Value one = Value::Bytes("Ab");
+  const Value two = Value::Bytes("Cd");
+  auto joined = CallBuiltin(
+      "join", std::vector<Value>{Value::List({one, two}), Value::Bytes("-")},
+      nullptr);
+  ASSERT_TRUE(joined.ok()) << joined.status();
+  EXPECT_EQ(joined->kind(), Value::Kind::kBytes);
+  EXPECT_EQ(joined->text(), "Ab-Cd");
+  auto split = CallBuiltin(
+      "split", std::vector<Value>{*joined, Value::Bytes("-")}, nullptr);
+  ASSERT_TRUE(split.ok()) << split.status();
+  ASSERT_EQ(split->list_size(), 2u);
+  EXPECT_EQ(split->list_at(0).kind(), Value::Kind::kBytes);
+  EXPECT_EQ(split->list_at(0).text(), "Ab");
+  auto replaced = CallBuiltin(
+      "replace",
+      std::vector<Value>{*joined, Value::Bytes("-"), Value::Bytes("+")},
+      nullptr);
+  ASSERT_TRUE(replaced.ok()) << replaced.status();
+  EXPECT_EQ(replaced->kind(), Value::Kind::kBytes);
+  EXPECT_EQ(replaced->text(), "Ab+Cd");
+  auto lower = CallBuiltin("lower", std::vector<Value>{*joined}, nullptr);
+  ASSERT_TRUE(lower.ok()) << lower.status();
+  EXPECT_EQ(lower->kind(), Value::Kind::kBytes);
+  EXPECT_EQ(lower->text(), "ab-cd");
+  auto formatted = CallBuiltin(
+      "strformat", std::vector<Value>{Value::Bytes("[%s]"), one}, nullptr);
+  ASSERT_TRUE(formatted.ok()) << formatted.status();
+  EXPECT_EQ(formatted->kind(), Value::Kind::kBytes);
+  EXPECT_EQ(formatted->text(), "[Ab]");
+  EXPECT_FALSE(
+      CallBuiltin("join",
+                  std::vector<Value>{Value::List({one}), Value::String("")},
+                  nullptr)
+          .ok());
+}
+
 TEST(FlowValues, CompactStorageInlinesShortTextAndSharesLongText) {
   EXPECT_LE(sizeof(Value), 64u);
   const auto inside = [](const Value& value) {
@@ -604,8 +684,8 @@ TEST(FlowValues, CallsTheFixedFunctionSet) {
   EXPECT_EQ(TextOf(R"(std::casefold("Σς İ K ﬃ"))"), "σσ i̇ k ffi");
   EXPECT_EQ(TextOf(R"(std::casefold("𐐀"))"), "𐐨");
   EXPECT_EQ(TextOf(R"(std::casefold(123))"), "123");
-  EXPECT_FALSE(CallBuiltin("casefold", {Value::String("\xC0\xAF")}, nullptr)
-                   .ok());
+  EXPECT_FALSE(
+      CallBuiltin("casefold", {Value::String("\xC0\xAF")}, nullptr).ok());
   EXPECT_EQ(TextOf(R"(trim("  x  "))"), "x");
   EXPECT_EQ(TextOf(R"(join(["a", "b"], "-"))"), "a-b");
   EXPECT_EQ(TextOf(R"(join(split("a b c"), ","))"), "a,b,c");
@@ -628,14 +708,13 @@ TEST(FlowValues, CallsTheFixedFunctionSet) {
 
 TEST(FlowValues, RegexSplitReplaceAndBooleanMatchKeepLiteralForms) {
   EXPECT_EQ(TextOf(R"(std::join(std::split("a  b", /\s+/), "|"))"), "a|b");
-  EXPECT_EQ(TextOf(R"(std::join(std::split("a  b", "\\s+"), "|"))"),
-            "a  b");
-  EXPECT_EQ(TextOf(R"(std::join(std::split("éa", /(?:)/), "|"))"),
-            "|é|a|");
+  EXPECT_EQ(TextOf(R"(std::join(std::split("a  b", "\\s+"), "|"))"), "a  b");
+  EXPECT_EQ(TextOf(R"(std::join(std::split("éa", /(?:)/), "|"))"), "|é|a|");
   EXPECT_EQ(TextOf(R"(std::replace("ID=12; ID=34", /ID=(\d+)/, "[$1]"))"),
             "[12]; [34]");
-  EXPECT_EQ(TextOf(R"(std::replace("name=A", /name=(?<value>\w+)/, "${value}$$"))"),
-            "A$");
+  EXPECT_EQ(
+      TextOf(R"(std::replace("name=A", /name=(?<value>\w+)/, "${value}$$"))"),
+      "A$");
   EXPECT_EQ(TextOf(R"(std::replace("a.b", ".", "-"))"), "a-b");
   EXPECT_EQ(TextOf(R"(std::matches_pattern("warning", /WARN/i))"), "true");
   EXPECT_EQ(TextOf(R"(std::matches_pattern("ready", /WARN/i))"), "false");

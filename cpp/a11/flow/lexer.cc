@@ -29,6 +29,7 @@
 #include <cmath>
 
 #include "a11/flow/diagnostic.h"
+#include "a11/flow/escape.h"
 #include "a11/flow/token.h"
 #include "a11/flow/vocabulary.h"
 #include "a11/utf8.h"
@@ -117,8 +118,30 @@ class Lexer {
         continue;
       }
       if (letter == '"' || letter == '\'') {
-        ReadString(letter);
+        ReadString(letter, index_, false, false);
         continue;
+      }
+      if (letter == 'b' || letter == 'B' || letter == 'r' || letter == 'R') {
+        const size_t start = index_;
+        const char lowered = static_cast<char>(letter | 0x20);
+        size_t prefix = 1;
+        bool bytes = lowered == 'b';
+        bool raw = lowered == 'r';
+        if (index_ + 1 < source_.size()) {
+          const char second = static_cast<char>(source_[index_ + 1] | 0x20);
+          if ((second == 'b' && !bytes) || (second == 'r' && !raw)) {
+            bytes = bytes || second == 'b';
+            raw = raw || second == 'r';
+            prefix = 2;
+          }
+        }
+        if (index_ + prefix < source_.size() &&
+            (source_[index_ + prefix] == '"' ||
+             source_[index_ + prefix] == '\'')) {
+          index_ += prefix;
+          ReadString(source_[index_], start, bytes, raw);
+          continue;
+        }
       }
       if (IsDigit(letter) || (letter == '-' && index_ + 1 < source_.size() &&
                               IsDigit(source_[index_ + 1]))) {
@@ -309,48 +332,29 @@ class Lexer {
   }
 
   StringEscape EscapeAt(size_t start) {
-    size_t end = start + 2;
-    while (end < source_.size() && utf8::IsContinuation(source_[end])) {
-      ++end;
+    size_t end = start + EscapeWidth(source_, start);
+    if (start + 1 < source_.size() &&
+        static_cast<unsigned char>(source_[start + 1]) >= 0x80U) {
+      end = std::min(source_.size(),
+                     start + 1 + utf8::SequenceWidth(source_[start + 1]));
     }
     return {start, end, line_, Column(start)};
   }
 
-  static char DecodeEscape(char escaped) {
-    switch (escaped) {
-      case '0':
-        return '\0';
-      case 'a':
-        return '\a';
-      case 'b':
-        return '\b';
-      case 'f':
-        return '\f';
-      case 'n':
-        return '\n';
-      case 'r':
-        return '\r';
-      case 't':
-        return '\t';
-      case 'v':
-        return '\v';
-      default:
-        return escaped;
+  void ReportLiteralFailure(const EscapeResult& decoded, size_t inner_start,
+                            size_t start, size_t end, bool multiline) {
+    if (!decoded.failure.has_value()) {
+      return;
     }
-  }
-
-  /// Escapes resolved, the way a single-line string resolves them.
-  static std::string Unescape(std::string_view text) {
-    std::string value;
-    value.reserve(text.size());
-    for (size_t at = 0; at < text.size(); ++at) {
-      if (text[at] != '\\' || at + 1 >= text.size()) {
-        value.push_back(text[at]);
-        continue;
-      }
-      value.push_back(DecodeEscape(text[++at]));
-    }
-    return value;
+    const auto& failure = *decoded.failure;
+    const char* code = failure.problem == EscapeProblem::kInvalidUtf8
+                           ? "flow.syntax.invalid-unicode-string"
+                       : failure.problem == EscapeProblem::kNonAsciiByte
+                           ? "flow.syntax.non-ascii-byte-literal"
+                           : "flow.syntax.malformed-escape";
+    Report(code, failure.message,
+           multiline ? start : inner_start + failure.start,
+           multiline ? end : inner_start + failure.end);
   }
 
   bool TripleQuoteAt(size_t at, char quote) const {
@@ -359,8 +363,7 @@ class Lexer {
   }
 
   /// A triple-quoted string that may hold line breaks.
-  void ReadMultilineString(char quote) {
-    const size_t start = index_;
+  void ReadMultilineString(char quote, size_t start, bool bytes, bool raw) {
     const int start_line = line_;
     const size_t start_line_start = line_start_;
     index_ += 3;
@@ -370,13 +373,15 @@ class Lexer {
     std::vector<StringEscape> escapes;
     while (index_ < source_.size()) {
       if (source_[index_] == '\\' && index_ + 1 < source_.size()) {
-        WarnSuspiciousEscape(index_);
-        escapes.push_back(EscapeAt(index_));
+        if (!raw) {
+          WarnSuspiciousEscape(index_);
+          escapes.push_back(EscapeAt(index_));
+        }
         if (source_[index_ + 1] == '\n') {
           ++line_;
           line_start_ = index_ + 2;
         }
-        index_ = escapes.back().end;
+        index_ += 2;
         continue;
       }
       if (TripleQuoteAt(index_, quote)) {
@@ -406,58 +411,94 @@ class Lexer {
     const size_t ending_line_start = line_start_;
     line_ = start_line;
     line_start_ = start_line_start;
-    Token& token = Push(TokenKind::kString, start, index_);
-    token.string_value =
-        Unescape(Dedent(source_.substr(inner_start, inner_end - inner_start)));
+    const auto decoded = DecodeLiteralBody(
+        Dedent(source_.substr(inner_start, inner_end - inner_start)), bytes,
+        raw);
+    ReportLiteralFailure(decoded, inner_start, start, index_, true);
+    Token& token =
+        Push(bytes ? TokenKind::kBytes : TokenKind::kString, start, index_);
+    token.string_value = decoded.failure.has_value() ? "" : decoded.value;
+    token.string_raw = raw;
+    token.string_prefix_size = inner_start - start - 3;
     token.string_escapes = std::move(escapes);
     line_ = ending_line;
     line_start_ = ending_line_start;
   }
 
-  void ReadString(char quote) {
+  void ReadString(char quote, size_t start, bool bytes, bool raw) {
     if (TripleQuoteAt(index_, quote)) {
-      return ReadMultilineString(quote);
+      return ReadMultilineString(quote, start, bytes, raw);
     }
-    const size_t start = index_;
+    const int start_line = line_;
+    const size_t start_line_start = line_start_;
     ++index_;
-    std::string value;
+    const size_t inner_start = index_;
+    size_t inner_end = index_;
     std::vector<StringEscape> escapes;
     bool terminated = false;
     while (index_ < source_.size()) {
       const char letter = source_[index_];
       if (letter == '\n') {
+        inner_end = index_;
         break;
       }
       if (letter == quote) {
+        inner_end = index_;
         ++index_;
         terminated = true;
         break;
       }
       if (letter == '\\') {
         if (index_ + 1 < source_.size() && source_[index_ + 1] != '\n') {
-          WarnSuspiciousEscape(index_);
-          escapes.push_back(EscapeAt(index_));
+          if (!raw) {
+            WarnSuspiciousEscape(index_);
+            escapes.push_back(EscapeAt(index_));
+          }
         }
         ++index_;
         if (index_ >= source_.size()) {
+          inner_end = index_;
           break;
         }
-        value.push_back(DecodeEscape(source_[index_]));
+        if (source_[index_] == '\n') {
+          if (raw) {
+            inner_end = index_ - 1;
+            --index_;
+            break;
+          }
+          ++line_;
+          line_start_ = index_ + 1;
+        }
         ++index_;
         continue;
       }
-      value.push_back(letter);
       ++index_;
     }
+    if (!terminated && inner_end == inner_start) {
+      inner_end = index_;
+    }
+    const int ending_line = line_;
+    const size_t ending_line_start = line_start_;
+    line_ = start_line;
+    line_start_ = start_line_start;
     if (!terminated) {
       // Recovery: the string ends where its line does. Anything else -- reading
       // to the next quote three lines down -- swallows real statements.
       Report("flow.syntax.unterminated-string", "Unterminated string.", start,
              index_);
     }
-    Token& token = Push(TokenKind::kString, start, index_);
-    token.string_value = std::move(value);
+    const auto decoded = DecodeLiteralBody(
+        source_.substr(inner_start, inner_end - inner_start), bytes, raw);
+    ReportLiteralFailure(decoded, inner_start, start, index_,
+                         ending_line != start_line);
+    Token& token =
+        Push(bytes ? TokenKind::kBytes : TokenKind::kString, start, index_);
+    token.string_value = decoded.failure.has_value() ? "" : decoded.value;
+    token.string_raw = raw;
+    token.string_prefix_size = inner_start - start - 1;
     token.string_escapes = std::move(escapes);
+    line_ = ending_line;
+    line_start_ = ending_line_start;
   }
 
   void ReadNumber() {
@@ -779,6 +820,8 @@ std::string_view KindName(TokenKind kind) {
       return "comment";
     case TokenKind::kString:
       return "string";
+    case TokenKind::kBytes:
+      return "bytes";
     case TokenKind::kRegex:
       return "regex";
     case TokenKind::kNumber:
@@ -855,43 +898,25 @@ std::string_view KindName(TokenKind kind) {
 
 TokenKind KindFromName(std::string_view name) {
   static constexpr TokenKind kAll[] = {
-      TokenKind::kNewline,
-      TokenKind::kSemicolon,
-      TokenKind::kComment,
-      TokenKind::kString,
-      TokenKind::kRegex,
-      TokenKind::kNumber,
-      TokenKind::kDuration,
-      TokenKind::kWord,
-      TokenKind::kDot,
-      TokenKind::kQuestionDot,
-      TokenKind::kQuestionBracket,
-      TokenKind::kRange,
-      TokenKind::kSpread,
-      TokenKind::kArrow,
-      TokenKind::kCarry,
-      TokenKind::kEqual,
-      TokenKind::kEqualEqual,
-      TokenKind::kBangEqual,
-      TokenKind::kLess,
-      TokenKind::kLessEqual,
-      TokenKind::kGreater,
-      TokenKind::kGreaterEqual,
-      TokenKind::kPlus,
-      TokenKind::kMinus,
-      TokenKind::kPipe,
-      TokenKind::kColon,
-      TokenKind::kScope,
-      TokenKind::kStar,
-      TokenKind::kSlash,
-      TokenKind::kPercent,
-      TokenKind::kComma,
-      TokenKind::kLeftBrace,
-      TokenKind::kRightBrace,
-      TokenKind::kLeftParen,
-      TokenKind::kRightParen,
-      TokenKind::kLeftBracket,
-      TokenKind::kRightBracket,
+      TokenKind::kNewline,      TokenKind::kSemicolon,
+      TokenKind::kComment,      TokenKind::kString,
+      TokenKind::kBytes,        TokenKind::kRegex,
+      TokenKind::kNumber,       TokenKind::kDuration,
+      TokenKind::kWord,         TokenKind::kDot,
+      TokenKind::kQuestionDot,  TokenKind::kQuestionBracket,
+      TokenKind::kRange,        TokenKind::kSpread,
+      TokenKind::kArrow,        TokenKind::kCarry,
+      TokenKind::kEqual,        TokenKind::kEqualEqual,
+      TokenKind::kBangEqual,    TokenKind::kLess,
+      TokenKind::kLessEqual,    TokenKind::kGreater,
+      TokenKind::kGreaterEqual, TokenKind::kPlus,
+      TokenKind::kMinus,        TokenKind::kPipe,
+      TokenKind::kColon,        TokenKind::kScope,
+      TokenKind::kStar,         TokenKind::kSlash,
+      TokenKind::kPercent,      TokenKind::kComma,
+      TokenKind::kLeftBrace,    TokenKind::kRightBrace,
+      TokenKind::kLeftParen,    TokenKind::kRightParen,
+      TokenKind::kLeftBracket,  TokenKind::kRightBracket,
       TokenKind::kEnd,
   };
   for (const TokenKind kind : kAll) {

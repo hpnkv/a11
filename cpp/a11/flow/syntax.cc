@@ -69,6 +69,13 @@ Constant Constant::String(std::string value) {
   return constant;
 }
 
+Constant Constant::Bytes(std::string value) {
+  Constant constant;
+  constant.kind = Kind::kBytes;
+  constant.text = std::move(value);
+  return constant;
+}
+
 Constant Constant::Regex(std::string value) {
   Constant constant;
   constant.kind = Kind::kRegex;
@@ -108,6 +115,8 @@ std::string_view ConstantKindName(Constant::Kind kind) {
       return "number";
     case Constant::Kind::kString:
       return "string";
+    case Constant::Kind::kBytes:
+      return "bytes";
     case Constant::Kind::kRegex:
       return "regex";
     case Constant::Kind::kDuration:

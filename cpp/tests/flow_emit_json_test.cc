@@ -47,6 +47,21 @@ TEST(FlowConstantJson, CarriesDeclarationsAndResolvedValues) {
   EXPECT_EQ(plan["constants"]["kLimit"]["exported"], true);
 }
 
+TEST(FlowConstantJson, ByteConstantsUseBase64InJsonEnvelopes) {
+  constexpr std::string_view source =
+      R"(const bytes raw exported = b'\xFF'
+flow main { out payload: bytes; raw -> payload }
+)";
+  const auto parsed = Parse(source);
+  ASSERT_EQ(parsed.FirstError(), nullptr);
+  const auto syntax = SyntaxToJsonValue(source, parsed);
+  EXPECT_EQ(syntax["constants"][0]["value"]["value"]["$bytes"], "/w==");
+  const auto resolved = Resolve(source, parsed);
+  ASSERT_FALSE(resolved.HasErrors());
+  const auto plan = PlanToJsonValue("<test>", resolved.program);
+  EXPECT_EQ(plan["constants"]["raw"]["value"]["$bytes"], "/w==");
+}
+
 Diagnostic Example() {
   Diagnostic diagnostic;
   diagnostic.code = "flow.sequence.redundant-stage";

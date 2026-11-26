@@ -22,6 +22,7 @@
 
 #include "a11/flow/internal/execution.h"
 #include "a11/nodes/node_map.h"
+#include "a11/utf8.h"
 
 namespace a11::flow::internal {
 
@@ -1084,7 +1085,7 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
     if (stage.count <= 0) {
       return Fail(absl::StrCat("'chunk ", stage.count,
                                "' is not a size; a chunk holds at least one "
-                               "byte."));
+                               "character or byte."));
     }
     const auto size = static_cast<size_t>(stage.count);
     return each([&](const ItemPtr& item) -> absl::Status {
@@ -1097,14 +1098,17 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
       }
       const std::string& text = value.text();
       const bool bytes = value.kind() == Value::Kind::kBytes;
+      if (!bytes && !utf8::IsValid(text)) {
+        return absl::InvalidArgumentError("chunk needs valid UTF-8 text.");
+      }
       size_t at = 0;
       while (at < text.size()) {
         size_t take = std::min(size, text.size() - at);
         if (!bytes) {
-          // Back off to the start of the character this would have split.
-          while (take > 1 && at + take < text.size() &&
-                 utf8::IsContinuation(text[at + take])) {
-            --take;
+          take = 0;
+          for (size_t characters = 0;
+               characters < size && at + take < text.size(); ++characters) {
+            take += utf8::SequenceWidth(text[at + take]);
           }
         }
         std::string piece = text.substr(at, take);
@@ -1287,13 +1291,17 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
     });
   }
   if (name == "join") {
-    std::vector<std::string> pieces;
+    std::vector<Value> pieces;
     ABSL_RETURN_IF_ERROR(each([&](const ItemPtr& item) -> absl::Status {
       ABSL_ASSIGN_OR_RETURN(const Value value, item->Read(&host));
-      pieces.push_back(AsText(value));
+      pieces.push_back(value);
       return absl::OkStatus();
     }));
-    return sink.One(Item::Of(Value::String(absl::StrJoin(pieces, stage.text))));
+    const Value arguments[] = {Value::List(std::move(pieces)),
+                               stage.text_is_bytes ? Value::Bytes(stage.text)
+                                                   : Value::String(stage.text)};
+    ABSL_ASSIGN_OR_RETURN(Value joined, CallBuiltin("join", arguments, &host));
+    return sink.One(Item::Of(std::move(joined)));
   }
   if (name == "strformat") {
     // The one-value shorthand: `| strformat "took %s"` is exactly
@@ -1301,14 +1309,14 @@ absl::Status Scope::ProduceStage(RefId ref, const Sink& sink) {
     // it has. The full builtin is there when more than one value goes in.
     return each([&](const ItemPtr& item) -> absl::Status {
       ABSL_ASSIGN_OR_RETURN(const Value value, item->Read(&host));
-      const Value arguments[] = {value};
-      return sink.One(Item::Of(Value::String([&] {
-        const auto& formats = runner_->prepared().formats;
-        const auto format = formats.find(stage.text);
-        return format == formats.end()
-                   ? Strformat(Value::String(stage.text), arguments)
-                   : StrformatCompiled(format->second, arguments);
-      }())));
+      const Value arguments[] = {stage.text_is_bytes
+                                     ? Value::Bytes(stage.text)
+                                     : Value::String(stage.text),
+                                 value};
+      ABSL_ASSIGN_OR_RETURN(
+          Value formatted,
+          CallBuiltin("strformat", arguments, &host, &runner_->prepared()));
+      return sink.One(Item::Of(std::move(formatted)));
     });
   }
   if (name == "text") {

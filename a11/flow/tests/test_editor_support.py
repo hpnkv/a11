@@ -45,6 +45,22 @@ FLOW_PLUGIN_SOURCE = (
 )
 
 
+def test_invalid_byte_escapes_reach_editor_and_strict_compiler():
+    """An invalid decoded string uses the same diagnostic at both entry points."""
+    from a11 import flow
+    from a11._native import flow as native_flow
+    from a11.flow.diagnostics import FlowSyntaxError
+
+    source = r'flow main { out value: string; "\xFF" -> value }'
+    checked = native_flow.check(source)
+    assert any(
+        item["code"] == "flow.syntax.invalid-unicode-string"
+        for item in checked["diagnostics"]
+    )
+    with pytest.raises(FlowSyntaxError, match="valid UTF-8"):
+        flow.loads(source)
+
+
 def test_the_sublime_syntax_is_what_the_language_generates():
     """Keep the checked-in static grammar synchronized with its generator."""
     from a11._native import flow as native_flow

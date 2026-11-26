@@ -99,7 +99,7 @@ const absl::flat_hash_map<std::string_view, StageArgument>& StageTable() {
           {"text", StageArgument::kNone},
           {"json", StageArgument::kNone},
           {"packb", StageArgument::kNone},
-  };
+      };
   return *table;
 }
 
@@ -369,7 +369,7 @@ flow ordered-prompt {
         "Matches chunk metadata without decoding the payload.",
         "parts | mime \"text/*\" -> readable"}},
       {"strformat",
-       {"Formats each value into a string.", "a format string",
+       {"Formats each value into text or bytes.", "a text or byte format",
         "Equivalent to `| map strformat(\"...\", it)`. Supports `%s`, numeric "
         "conversions such as `%d` and `%.2f`, and `%%` for a literal percent "
         "sign. Use `std::strformat` to format multiple arguments.",
@@ -380,9 +380,10 @@ flow formatted-states {
   ["ready", "busy"] | flatten | strformat "state=%s" -> states
 })"}},
       {"chunk",
-       {"Split text or bytes into values of at most `n` bytes.",
-        "a scalar integer size in bytes, evaluated once",
-        "Text splits only at character boundaries. Other value types pass "
+       {"Split text by Unicode characters and bytes by octets.",
+        "a scalar integer size, evaluated once",
+        "Text chunks hold at most `n` Unicode characters; byte chunks hold "
+        "at most `n` bytes. Other value types pass "
         "through unchanged.",
         "body | chunk 65536 -> upload.parts\n\n"
         R"(Split a long string into bounded text fragments.
@@ -550,8 +551,10 @@ flow paced-feed {
   requests | pace 100ms -> paced
 })"}},
       {"join",
-       {"Join stream values into one string.", "an optional separator string",
-        "Reads upstream to completion and renders each value as text. "
+       {"Join stream values into text or bytes.", "an optional separator",
+        "Reads upstream to completion. A byte separator requires byte values "
+        "and returns bytes; the default and text separators render values as "
+        "text. "
         "`std::join` operates on a list value. `collect | map std::join(it, "
         "separator)` retains the intermediate list; the stage does not.",
         "words | join \", \" -> sentence\n\n"
@@ -758,7 +761,8 @@ flow deadline-budget {
         "if std::len(report) < 12 { fail invalid_argument \"too short\" }"}},
       {"lower",
        {"Convert ASCII letters to lowercase.", "one value",
-        "Renders the value as text. Non-ASCII characters are unchanged. Use "
+        "Preserves byte input as bytes; other values become text. Non-ASCII "
+        "characters are unchanged. Use "
         "`trim` first when leading or trailing whitespace is insignificant.",
         "std::lower(header.value) == \"application/json\"\n\n"
         R"(Trim surrounding whitespace before applying ASCII lowercase.
@@ -769,7 +773,8 @@ flow normalized-label {
 })"}},
       {"upper",
        {"Convert ASCII letters to uppercase.", "one value",
-        "Renders the value as text. Non-ASCII characters are unchanged.",
+        "Preserves byte input as bytes; other values become text. Non-ASCII "
+        "characters are unchanged.",
         "std::upper(code) -> shouted"}},
       {"casefold",
        {"Fold Unicode text for case-insensitive comparison.", "one value",
@@ -778,8 +783,9 @@ flow normalized-label {
         "valid UTF-8; does not normalize Unicode or apply locale rules.",
         "std::casefold(\"Straße\") == \"strasse\""}},
       {"trim",
-       {"Remove leading and trailing whitespace from text.", "one value",
-        "Removes spaces, tabs and line breaks. Internal whitespace remains. "
+       {"Remove leading and trailing ASCII whitespace.", "one value",
+        "Preserves byte input as bytes. Removes spaces, tabs and line breaks. "
+        "Internal whitespace remains. "
         "`lower` and `upper` change ASCII case without trimming.",
         "std::trim(page.title) -> title\n\n"
         R"(Trim surrounding whitespace before applying ASCII lowercase.
@@ -821,10 +827,10 @@ flow names-of-fields {
         "Lists pass through unchanged. Record values follow sorted key order.",
         "std::values(scores) | collect -> all"}},
       {"join",
-       {"Join list elements into one string.", "the list, and a separator",
-        "Renders each element as text. A non-list value is rendered as one "
-        "string. The `join` stage operates on a stream. After `collect`, "
-        "`std::join(it, separator)` receives the complete list as one value.",
+       {"Join list elements into text or bytes.", "the list, and a separator",
+        "A byte separator requires byte elements and returns bytes. An omitted "
+        "separator selects text; byte elements then need explicit decoding. "
+        "The `join` stage operates on a stream.",
         "std::join(std::keys(headers), \", \") -> named\n\n"
         R"(Collect text fragments, then join the resulting list.
 flow page-summary {
@@ -833,10 +839,11 @@ flow page-summary {
     | map std::join(it, ", ") -> summary
 })"}},
       {"split",
-       {"Split text into a list.", "the text, and a separator",
+       {"Split text or bytes into a list of the same kind.",
+        "the value, and an optional separator",
         "Without a separator, splits on whitespace runs and omits empty "
-        "fields. A quoted separator is literal; a /regex/ separator uses RE2 "
-        "and retains empty fields. "
+        "fields. A same-kind quoted separator is literal; a /regex/ separator "
+        "uses RE2 on text and retains empty fields. "
         "For comma-separated text this function does not implement CSV "
         "quoting or escaping.",
         "std::split(line, \",\") -> fields\n\n"
@@ -862,18 +869,21 @@ flow sanitized-options {
 })"}},
       {"contains",
        {"Test whether a value contains a member.", "a container and a member",
-        "Matches a text substring, a list element, or a record key. Other "
+        "Matches a same-kind text or byte substring, a list element, or a "
+        "record key. Other "
         "container types return false.",
         "std::contains(page.text, \"error\")"}},
       {"startswith",
-       {"Test whether text begins with a prefix.",
+       {"Test whether text or bytes begins with a prefix.",
         "a value and one prefix or a list of prefixes",
-        "Renders the value as text. A list succeeds when any prefix matches.",
+        "Prefixes must match the input's text or byte kind. A list succeeds "
+        "when any prefix matches.",
         R"(std::startswith(part.mime, ["text/", "application/json"]))"}},
       {"endswith",
-       {"Test whether text ends with a suffix.",
+       {"Test whether text or bytes ends with a suffix.",
         "a value and one suffix or a list of suffixes",
-        "Renders the value as text. A list succeeds when any suffix matches.",
+        "Suffixes must match the input's text or byte kind. A list succeeds "
+        "when any suffix matches.",
         R"(std::endswith(piece, [".", "?", "!"]))"}},
       {"match",
        {"Extract named fields from text or return null.",
@@ -902,9 +912,9 @@ flow named-capture {
         "or `matches` when captures are needed.",
         R"(std::matches_pattern(line, /error|warning/i))"}},
       {"replace",
-       {"Replace every occurrence of a text substring.",
-        "text, a quoted string or regex literal, and replacement text",
-        "Quoted search text is literal. A /regex/ search uses RE2; `$1` "
+       {"Replace every occurrence of a text or byte substring.",
+        "text or bytes, a same-kind search value, and replacement",
+        "Byte replacement stays bytes. A /regex/ search uses RE2 on text; `$1` "
         "and `${name}` insert captures, and `$$` inserts a dollar sign.",
         R"(std::replace(path, "\\", "/") -> posix)"}},
       {"slice",
@@ -931,10 +941,11 @@ flow title-previews {
         "A value that is already decoded passes through unchanged.",
         "std::from_chunk(it) -> decoded"}},
       {"strformat",
-       {"A string with values written into it.",
+       {"Text or bytes with values written into it.",
         "a format string, and the values it names",
         "printf's conversions: `%s` for anything, `%d` and `%.2f` for numbers, "
-        "`%x` for hexadecimal, `%%` for a literal per cent. `%2$s` picks an "
+        "`%x` for hexadecimal, `%%` for a literal per cent. A byte format "
+        "returns bytes and takes byte values for `%s`. `%2$s` picks an "
         "argument by position, and a duration or an instant may carry its own "
         "format in parentheses, as in `%(%H:%M)s`. A conversion with no "
         "argument for it is left in the output as written, because a visible "
@@ -949,6 +960,29 @@ flow formatted-report {
   failures = 2
   std::strformat("%d requests; %d failed", requests, failures) -> report
 })"}},
+      {"escape",
+       {"Write text or bytes as a Flow literal body.", "one text or byte value",
+        "Returns ASCII text without surrounding quotes. Byte values use "
+        "\\xHH for non-ASCII octets; text uses Unicode escapes.",
+        R"(std::escape(std::b64decode("/w==")) -> written)"}},
+      {"unescape",
+       {"Decode a Flow literal body into UTF-8 text.", "one text value",
+        "Malformed escapes and invalid decoded UTF-8 fail. Use "
+        "unescape_bytes for arbitrary octets.",
+        R"(std::unescape("\\xC3\\xA9") -> text)"}},
+      {"unescape_bytes",
+       {"Decode a Flow literal body into bytes.", "one text value",
+        "Accepts the same escapes as byte literals, including Unicode escapes "
+        "encoded as UTF-8.",
+        R"(std::unescape_bytes("\\xFF") -> raw)"}},
+      {"hexencode",
+       {"Encode text or bytes as lowercase hexadecimal text.",
+        "one text or byte value", "Each input octet becomes two hex digits.",
+        R"(std::hexencode(body) -> written)"}},
+      {"hexdecode",
+       {"Decode hexadecimal text into bytes.", "one text value",
+        "Requires complete pairs of hex digits.",
+        R"(std::hexdecode("00ff") -> raw)"}},
       {"b64encode",
        {"A value as base64 text.", "one value",
         "Produces padded text suitable for a JSON field or header.",
@@ -2240,6 +2274,11 @@ constexpr std::array kBuiltinOrder = {
     std::string_view("to_chunk"),
     std::string_view("from_chunk"),
     std::string_view("strformat"),
+    std::string_view("escape"),
+    std::string_view("unescape"),
+    std::string_view("unescape_bytes"),
+    std::string_view("hexencode"),
+    std::string_view("hexdecode"),
     std::string_view("b64encode"),
     std::string_view("b64decode"),
     std::string_view("b64urlencode"),

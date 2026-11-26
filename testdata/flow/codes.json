@@ -691,10 +691,28 @@
       "summary": "A constant is required in this position."
     },
     {
+      "code": "flow.syntax.invalid-unicode-string",
+      "family": "syntax",
+      "severity": "error",
+      "summary": "A string literal must decode to valid UTF-8."
+    },
+    {
+      "code": "flow.syntax.malformed-escape",
+      "family": "syntax",
+      "severity": "error",
+      "summary": "A string or byte literal has an invalid escape."
+    },
+    {
       "code": "flow.syntax.nesting-too-deep",
       "family": "syntax",
       "severity": "error",
       "summary": "Expression or block nesting exceeds the parser limit."
+    },
+    {
+      "code": "flow.syntax.non-ascii-byte-literal",
+      "family": "syntax",
+      "severity": "error",
+      "summary": "A byte literal needs ASCII source characters."
     },
     {
       "code": "flow.syntax.statement-end",

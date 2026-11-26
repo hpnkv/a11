@@ -894,6 +894,16 @@ Count-taking stages (`first`, `last`, `drop`, `truncate`, `batch`, `window` and
 calculations. A count is evaluated once when its pipeline activates, using the
 surrounding scope. Inside a loop, each activation uses that iteration's values.
 The per-item name `it` belongs to predicates and mappings, rather than counts.
+For `chunk N`, N counts Unicode characters in text and octets in bytes.
+Byte chunks preserve arbitrary payload bytes. Text chunks retain valid UTF-8.
+
+Flow literals accept single, double, and triple quotes. A `b` prefix creates
+bytes; `r` keeps backslashes literal; `br` and `rb` combine both. Text literals
+must decode to valid UTF-8. Byte literals require ASCII source; escapes such
+as `\xFF` can supply any octet. Both kinds accept octal, hexadecimal, and
+Unicode scalar escapes (`\uHHHH`, `\UHHHHHHHH`, `\u{H...}`).
+`std::escape` writes an ASCII literal body, while `std::unescape` and
+`std::unescape_bytes` decode bodies into text and bytes respectively.
 
 ```a11flow
 lines | drop (settings.start - 1) | first settings.count | join "\n" -> snippet

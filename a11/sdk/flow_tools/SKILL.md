@@ -95,8 +95,12 @@ One statement per logical line; incomplete expressions, types, pipelines, and
 modifier tails may continue across lines. Braces delimit scopes; `#` comments. Keywords accept
 lowercase or UPPERCASE. Functions need `std::` unless imported; stages do not.
 Flows join owned work; emitting an output does not finish execution.
-Strings and `"""` strings decode `\0` (NUL), `\a`, `\b`, `\f`, `\n`, `\r`,
-`\t`, `\v`, `\"`, `\'`, and `\\`. Other escapes yield the following character.
+Text literals use `'...'`, `"..."`, or triple quotes; byte literals add `b`.
+`r` makes either kind raw, and `br` or `rb` combines the modifiers. Escapes
+include `\0`, `\a`, `\b`, `\e`, `\f`, `\n`, `\r`, `\t`, `\v`, quotes,
+backslashes, octal bytes, `\xHH`, `\uHHHH`, `\UHHHHHHHH`, and `\u{H...}`.
+Text must decode to valid UTF-8; byte literals require ASCII source and can
+hold arbitrary escaped octets. Other escapes yield the following character.
 Regex literals `/.../` use RE2 with optional `i`, `m`, `s` flags; write
 `/\W+/`, not `"\W+"` (the string loses its backslash). Quoted search and
 separator strings remain literal.
@@ -137,7 +141,7 @@ separator strings remain literal.
 | `export symbol [as alias]`; `struct T [exported] { fields }` | Explicit reexport; record type. Fields: `name: T`, `required` or `default LITERAL_OR_MODULE_CONST` (exclusive), numeric bounds `1..10`, text RE2 regex `matching /pattern/i`, `matching "pattern"`, or a module constant, `one of [...]`, list `unique`. |
 | `m::f`, `a11::sdk::Interaction`; `j.output`, `v.field`, `v[index]` | Static qualification / runtime projection. Registered host types need no import; wire tags retain dotted spelling. |
 | `v?.field`, `v?[key]`; `s \| present` | Safe projection returns `std::option[T]`: missing is absent, present null remains present. Safe chaining unwraps an option base. `present` drops absent options and emits present payloads. |
-| `T{field:e}`; `e as T`; `[e, ...]`; `{key:e, ...other}` | Typed record, cast, list, object/spread. Object fields omit absent options and unwrap present ones. Strings: `'...'`, `"..."`, `'''...'''`, or `"""..."""`. Literals: `true`, `false`, `null`. |
+| `T{field:e}`; `e as T`; `[e, ...]`; `{key:e, ...other}` | Typed record, cast, list, object/spread. Object fields omit absent options and unwrap present ones. Quote forms accept `b`, `r`, `br`, or `rb` prefixes. Literals: `true`, `false`, `null`. |
 | `+`, `-`, `*`, `/`, `%`; `== != < <= > >= in`; `not`, `and`, `or` | Checked numeric arithmetic, comparison/membership, short-circuit logic. `%` requires integers; strict integer `/` requires an exact quotient. Time ± duration, duration ± duration, time − time, unary duration minus, and duration × number in either order are supported. Space subtraction: `a-b` is a name. |
 
 `fail` and `abort` accept these named failure codes: `CANCELLED`, `UNKNOWN`,
@@ -261,7 +265,7 @@ Brackets mark optional arguments; `v` is a value, `s` text, `xs` a list.
 | `casefold(v)` | Unicode 17.0 full case folding for case-insensitive comparisons; valid UTF-8 required. Can expand characters (`ß` → `ss`); no normalization or locale rules. |
 | `contains(v,x)`, `startswith(s,p)`, `endswith(s,p)` | Membership / prefix / suffix; `p` may be a list of alternatives. |
 | `replace(s,old,new)`, `slice(v,start[,stop])` | Replace all / slice; `old` may be a literal string or `/regex/`. Regex replacements use `$1`, `${name}`, `$$`. Negative slice indices work. |
-| `split(s[,sep])`, `join(xs[,sep])` | Split on whitespace runs, omitting empties, by default / join with empty separator by default. A quoted separator is literal; `/regex/` splits by pattern. |
+| `split(s[,sep])`, `join(xs[,sep])` | Text or bytes in, same kind out. Split on whitespace runs by default; join with an empty text separator by default. A byte separator joins byte values. `/regex/` splits text by pattern. |
 | `keys(v)`, `values(v)` | Lists in sorted-key order. |
 | `merge(a,b,...)` | Merge records; later keys win. |
 | `match(pattern,s[,"at"])`, `matches(/regex/,s[,"at"])`, `matches_pattern(s,/regex/)` | Extract one match, every regex match, or a boolean. An offset name wraps each capture as `{value: ..., at: ...}`. Templates support typed holes. |
@@ -271,6 +275,8 @@ Brackets mark optional arguments; `v` is a value, `s` text, `xs` a list.
 | `nanoseconds(x)`, `microseconds(x)`, `milliseconds(x)`, `seconds(x)`, `minutes(x)`, `hours(x)` | A number constructs a duration; a duration returns an integral count truncated toward zero (`seconds(250ms)` → `0`). Text is rejected; invalid input and overflow fail. |
 | `time(v)`, `duration(v)`; `parse_time(s)`, `parse_duration(s)` | Direct temporal conversions accept numeric/temporal values; only the parsers accept text. Declared temporal ports decode wire text at the boundary. |
 | `b64encode(v)`, `b64decode(s)`, `b64urlencode(v)`, `b64urldecode(s)` | Base64 / URL-safe encoding and decoding to bytes. |
+| `escape(v)`, `unescape(s)`, `unescape_bytes(s)` | Write a Flow literal body as ASCII text; decode one to valid UTF-8 text or arbitrary bytes. |
+| `hexencode(v)`, `hexdecode(s)` | Encode text or bytes as lowercase hexadecimal text; decode pairs into bytes. |
 | `utf8encode(s)`, `utf8decode(bytes)` | Text ↔ UTF-8 bytes. |
 | `to_chunk(v[,mimetype])`, `from_chunk(chunk)` | Host-aware encode/decode, preserving payload metadata. |
 | `zip(a,b,...)`, `interleave(a,b,...)` | Lockstep tuple stream / arrival-ordered merged stream. |
@@ -291,7 +297,7 @@ expressions, evaluated once per activation outside `it`.
 | `as T` | Convert each item to T; `try as T failures into dest` routes failed items and continues. |
 | `take while e`; `take until e` | Prefix while true / until true; exclude the boundary item. |
 | `first N`; `last N`; `drop N`; `distinct` | Prefix / suffix / skip / deduplicate. |
-| `truncate N`; `chunk N` | Shorten each value / split text or bytes into ≤N-byte chunks. |
+| `truncate N`; `chunk N` | Shorten each value / split text into at most N Unicode characters per chunk, or bytes into at most N octets. |
 | `batch N`; `window N`; `group e`; `flatten` | Batches / full-width rolling windows / groups closed by e / expand lists. `batch` and `group` flush partial groups at EOF; `window` does not. |
 | `present` | Drop absent `std::option[T]` items and emit present payloads, including null/false/zero/empty values. |
 | `context e before N after M [numbered [base B]]` | Excerpts with N preceding items; each match within M trailing items resets the tail. EOF flushes. Counts: nonnegative int32, evaluated once outside `it`. `numbered`: `{index, value}`, counting every source item from B (default 1). Active excerpts can grow; bound endless sources upstream. |
@@ -300,7 +306,7 @@ expressions, evaluated once per activation outside `it`.
 | `collect`; `consume`; `count` | One list (empty → `[]`) / require exactly one item and EOF / item count (empty → 0). |
 | `sum [e]`; `min [e]`; `max [e]`; `avg [e]` | Aggregate items or projections. Empty: `sum` → 0; `min`/`max`/`avg` → no item (`take` then fails). |
 | `fold INITIAL as acc, e`; `scan INITIAL as acc, e` | Final / every accumulator; INITIAL is a literal, including a record. Empty `fold` yields INITIAL. |
-| `join ["sep"]`; `text`; `strformat "fmt"` | Stream → one string (default separator empty) / each item → text / format each item. |
+| `join ["sep"]`; `text`; `strformat "fmt"` | Stream → one text or byte value (separator selects kind) / each item → text / format each item as text or bytes. |
 | `json`; `packb` | JSON parse/encode / MessagePack representation. |
 | `then s` | Entire first stream, then s. |
 | `timeout D`; `pace D` | Maximum inactivity gap / minimum inter-item interval. |

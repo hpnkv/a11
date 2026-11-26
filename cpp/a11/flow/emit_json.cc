@@ -22,6 +22,7 @@
 #include <vector>
 
 #include <absl/container/flat_hash_set.h>
+#include <absl/strings/escaping.h>
 #include <absl/strings/str_cat.h>
 #include <absl/time/time.h>
 #include <absl/types/span.h>
@@ -270,7 +271,10 @@ nlohmann::json NodeJson(const syntax::Node* node) {
           break;
         case vocabulary::StageArgument::kString:
         case vocabulary::StageArgument::kOptionalString:
-          value["arg"] = stage->text;
+          value["arg"] =
+              stage->text_is_bytes
+                  ? nlohmann::json{{"$bytes", absl::Base64Escape(stage->text)}}
+                  : nlohmann::json(stage->text);
           break;
         case vocabulary::StageArgument::kExpression:
         case vocabulary::StageArgument::kStream:
@@ -998,6 +1002,8 @@ nlohmann::json ConstantToJsonValue(const syntax::Constant& constant) {
       return constant.number;
     case syntax::Constant::Kind::kString:
       return constant.text;
+    case syntax::Constant::Kind::kBytes:
+      return nlohmann::json{{"$bytes", absl::Base64Escape(constant.text)}};
     case syntax::Constant::Kind::kRegex:
       return nlohmann::json{{"$regex", constant.text}};
     case syntax::Constant::Kind::kDuration:

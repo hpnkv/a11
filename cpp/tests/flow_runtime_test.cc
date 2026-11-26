@@ -1964,8 +1964,6 @@ flow pieces {
 }
 
 TEST(FlowRuntimeTest, ChunkDoesNotCutACharacterInHalf) {
-  // Half a code point is not a piece of text anybody can use, so a piece is at
-  // most the size asked for and stops at a character boundary.
   const Outcome outcome = RunFlow(R"(
 flow careful {
   in  whole: string stream
@@ -1980,14 +1978,33 @@ flow careful {
   in  whole: string stream
   out parts: string stream
   body = take (whole)
-  body | chunk 3 -> parts
+  body | chunk 1 -> parts
 }
 )",
                               "careful", {{"whole", {"\"ééé\""}}});
   ASSERT_TRUE(cut.status.ok()) << cut.status;
-  // Each `é` is two bytes, so three bytes takes one whole one and stops.
+  // Each part holds one Unicode character.
   EXPECT_EQ(cut.outputs.at("parts"),
             Values({"\"\\u00e9\"", "\"\\u00e9\"", "\"\\u00e9\""}));
+}
+
+TEST(FlowRuntimeTest, ByteStagesJoinFormatAndChunkWithoutTextConversion) {
+  const Outcome outcome = RunFlow(R"(
+flow byte_stages {
+  out joined: bytes
+  out formatted: bytes
+  out parts: bytes stream
+  [b"\xFF", b"\x00"] | flatten | join b"-" -> joined
+  b"X" | strformat b"[%s]" -> formatted
+  b"\xFF\x00" | chunk 1 -> parts
+}
+)",
+                                  "byte_stages");
+  ASSERT_TRUE(outcome.status.ok()) << outcome.status;
+  EXPECT_EQ(outcome.outputs.at("joined"), Values({std::string("\xff-\0", 3)}));
+  EXPECT_EQ(outcome.outputs.at("formatted"), Values({"[X]"}));
+  EXPECT_EQ(outcome.outputs.at("parts"),
+            Values({std::string("\xff", 1), std::string("\0", 1)}));
 }
 
 TEST(FlowRuntimeTest, ChunkLeavesAloneWhatItCannotCut) {

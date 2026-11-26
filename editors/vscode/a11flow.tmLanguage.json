@@ -37,27 +37,51 @@
     "string": {
       "patterns": [
         {
+          "name": "string.quoted.triple.a11flow",
+          "begin": "(?<![A-Za-z0-9_$])(?i:br|rb|r)\"\"\"",
+          "end": "\"\"\"",
+          "patterns": [{"name": "string.quoted.triple.a11flow", "match": "\\\\[\\s\\S]"}]
+        },
+        {
+          "name": "string.quoted.double.a11flow",
+          "begin": "(?<![A-Za-z0-9_$])(?i:br|rb|r)\"",
+          "end": "\"",
+          "patterns": [{"name": "string.quoted.double.a11flow", "match": "\\\\[\\s\\S]"}]
+        },
+        {
+          "name": "string.quoted.single.block.a11flow",
+          "begin": "(?<![A-Za-z0-9_$])(?i:br|rb|r)'''",
+          "end": "'''",
+          "patterns": [{"name": "string.quoted.single.block.a11flow", "match": "\\\\[\\s\\S]"}]
+        },
+        {
+          "name": "string.quoted.single.a11flow",
+          "begin": "(?<![A-Za-z0-9_$])(?i:br|rb|r)'",
+          "end": "'",
+          "patterns": [{"name": "string.quoted.single.a11flow", "match": "\\\\[\\s\\S]"}]
+        },
+        {
           "//": "A tripled quote holds line breaks and gives back its indentation, which is how every description longer than a line is written.",
           "name": "string.quoted.triple.a11flow",
-          "begin": "\"\"\"",
+          "begin": "(?<![A-Za-z0-9_$])(?i:b)?\"\"\"",
           "end": "\"\"\"",
           "patterns": [{"name": "constant.character.escape.a11flow", "match": "\\\\."}]
         },
         {
           "name": "string.quoted.double.a11flow",
-          "begin": "\"",
+          "begin": "(?<![A-Za-z0-9_$])(?i:b)?\"",
           "end": "\"",
           "patterns": [{"name": "constant.character.escape.a11flow", "match": "\\\\."}]
         },
         {
           "name": "string.quoted.single.block.a11flow",
-          "begin": "'''",
+          "begin": "(?<![A-Za-z0-9_$])(?i:b)?'''",
           "end": "'''",
           "patterns": [{"name": "constant.character.escape.a11flow", "match": "\\\\."}]
         },
         {
           "name": "string.quoted.single.a11flow",
-          "begin": "'",
+          "begin": "(?<![A-Za-z0-9_$])(?i:b)?'",
           "end": "'",
           "patterns": [{"name": "constant.character.escape.a11flow", "match": "\\\\."}]
         }
@@ -94,7 +118,7 @@
     },
     "builtin": {
       "//": "A function only where it is called, which is what tells `text(it)` from the port type of the same name.",
-      "match": "\\b(len|lower|upper|casefold|trim|text|number|i8|i16|i32|i64|i128|u8|u16|u32|u64|u128|f32|f64|floor|ceil|round|bool|keys|values|join|split|merge|contains|startswith|endswith|replace|match|matches|matches_pattern|slice|to_chunk|from_chunk|strformat|b64encode|b64decode|b64urlencode|b64urldecode|utf8encode|utf8decode|now|infinite_future|infnite_future|infinite_past|infinite_duration|zero_duration|duration|time|seconds|nanoseconds|microseconds|milliseconds|minutes|hours|parse_time|parse_duration|integer|int|string|bytes|object|list|boolean|array|any|json|option|status|null|LEN|LOWER|UPPER|CASEFOLD|TRIM|TEXT|NUMBER|I8|I16|I32|I64|I128|U8|U16|U32|U64|U128|F32|F64|FLOOR|CEIL|ROUND|BOOL|KEYS|VALUES|JOIN|SPLIT|MERGE|CONTAINS|STARTSWITH|ENDSWITH|REPLACE|MATCH|MATCHES|MATCHES_PATTERN|SLICE|TO_CHUNK|FROM_CHUNK|STRFORMAT|B64ENCODE|B64DECODE|B64URLENCODE|B64URLDECODE|UTF8ENCODE|UTF8DECODE|NOW|INFINITE_FUTURE|INFNITE_FUTURE|INFINITE_PAST|INFINITE_DURATION|ZERO_DURATION|DURATION|TIME|SECONDS|NANOSECONDS|MICROSECONDS|MILLISECONDS|MINUTES|HOURS|PARSE_TIME|PARSE_DURATION|INTEGER|INT|STRING|BYTES|OBJECT|LIST|BOOLEAN|ARRAY|ANY|JSON|OPTION|STATUS|NULL)(?=\\s*\\()",
+      "match": "\\b(len|lower|upper|casefold|trim|text|number|i8|i16|i32|i64|i128|u8|u16|u32|u64|u128|f32|f64|floor|ceil|round|bool|keys|values|join|split|merge|contains|startswith|endswith|replace|match|matches|matches_pattern|slice|to_chunk|from_chunk|strformat|escape|unescape|unescape_bytes|hexencode|hexdecode|b64encode|b64decode|b64urlencode|b64urldecode|utf8encode|utf8decode|now|infinite_future|infnite_future|infinite_past|infinite_duration|zero_duration|duration|time|seconds|nanoseconds|microseconds|milliseconds|minutes|hours|parse_time|parse_duration|integer|int|string|bytes|object|list|boolean|array|any|json|option|status|null|LEN|LOWER|UPPER|CASEFOLD|TRIM|TEXT|NUMBER|I8|I16|I32|I64|I128|U8|U16|U32|U64|U128|F32|F64|FLOOR|CEIL|ROUND|BOOL|KEYS|VALUES|JOIN|SPLIT|MERGE|CONTAINS|STARTSWITH|ENDSWITH|REPLACE|MATCH|MATCHES|MATCHES_PATTERN|SLICE|TO_CHUNK|FROM_CHUNK|STRFORMAT|ESCAPE|UNESCAPE|UNESCAPE_BYTES|HEXENCODE|HEXDECODE|B64ENCODE|B64DECODE|B64URLENCODE|B64URLDECODE|UTF8ENCODE|UTF8DECODE|NOW|INFINITE_FUTURE|INFNITE_FUTURE|INFINITE_PAST|INFINITE_DURATION|ZERO_DURATION|DURATION|TIME|SECONDS|NANOSECONDS|MICROSECONDS|MILLISECONDS|MINUTES|HOURS|PARSE_TIME|PARSE_DURATION|INTEGER|INT|STRING|BYTES|OBJECT|LIST|BOOLEAN|ARRAY|ANY|JSON|OPTION|STATUS|NULL)(?=\\s*\\()",
       "name": "support.function.builtin.a11flow"
     },
     "port-type": {

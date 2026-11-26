@@ -51,6 +51,7 @@
 #include "a11/exception_guard.h"
 #include "a11/flow/contract.h"
 #include "a11/flow/document.h"
+#include "a11/flow/escape.h"
 #include "a11/flow/file_modules.h"
 #include "a11/flow/internal/editor_documentation.h"
 #include "a11/flow/internal/execution.h"

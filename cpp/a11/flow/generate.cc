@@ -265,7 +265,7 @@ std::string FieldModifierRules() {
 /// -- that `run` pushes a context expecting an action name, that a bare `then`
 /// is a stage only with an operand after it -- and the words are not, because
 /// they are a table that already exists.
-constexpr std::string_view kSublimeTemplate = R"(%YAML 1.2
+constexpr std::string_view kSublimeTemplate = R"sublime(%YAML 1.2
 ---
 # Copyright 2026 The A11 Authors
 #
@@ -667,7 +667,49 @@ contexts:
   strings:
     # Match triple quotes first so three quotes are not read as an empty string
     # followed by a quote. Block strings may contain line breaks.
-    - match: '"""'
+    - match: '(?<![A-Za-z0-9_$])(?i:br|rb|r)"""'
+      scope: punctuation.definition.string.begin.a11flow
+      push:
+        - meta_scope: string.quoted.double.block.a11flow
+        - match: '\\[\s\S]'
+          scope: string.quoted.double.block.a11flow
+        - match: '"""'
+          scope: punctuation.definition.string.end.a11flow
+          pop: true
+    - match: '(?<![A-Za-z0-9_$])(?i:br|rb|r)"'
+      scope: punctuation.definition.string.begin.a11flow
+      push:
+        - meta_scope: string.quoted.double.a11flow
+        - match: '\\[\s\S]'
+          scope: string.quoted.double.a11flow
+        - match: '"'
+          scope: punctuation.definition.string.end.a11flow
+          pop: true
+        - match: '$\n?'
+          scope: invalid.illegal.unterminated-string.a11flow
+          pop: true
+    - match: "(?<![A-Za-z0-9_$])(?i:br|rb|r)'''"
+      scope: punctuation.definition.string.begin.a11flow
+      push:
+        - meta_scope: string.quoted.single.block.a11flow
+        - match: '\\[\s\S]'
+          scope: string.quoted.single.block.a11flow
+        - match: "'''"
+          scope: punctuation.definition.string.end.a11flow
+          pop: true
+    - match: "(?<![A-Za-z0-9_$])(?i:br|rb|r)'"
+      scope: punctuation.definition.string.begin.a11flow
+      push:
+        - meta_scope: string.quoted.single.a11flow
+        - match: '\\[\s\S]'
+          scope: string.quoted.single.a11flow
+        - match: "'"
+          scope: punctuation.definition.string.end.a11flow
+          pop: true
+        - match: '$\n?'
+          scope: invalid.illegal.unterminated-string.a11flow
+          pop: true
+    - match: '(?<![A-Za-z0-9_$])(?i:b)?"""'
       scope: punctuation.definition.string.begin.a11flow
       push:
         - meta_scope: string.quoted.double.block.a11flow
@@ -676,7 +718,7 @@ contexts:
         - match: '"""'
           scope: punctuation.definition.string.end.a11flow
           pop: true
-    - match: '"'
+    - match: '(?<![A-Za-z0-9_$])(?i:b)?"'
       scope: punctuation.definition.string.begin.a11flow
       push:
         - meta_scope: string.quoted.double.a11flow
@@ -688,7 +730,7 @@ contexts:
         - match: '$\n?'
           scope: invalid.illegal.unterminated-string.a11flow
           pop: true
-    - match: "'''"
+    - match: "(?<![A-Za-z0-9_$])(?i:b)?'''"
       scope: punctuation.definition.string.begin.a11flow
       push:
         - meta_scope: string.quoted.single.block.a11flow
@@ -697,7 +739,7 @@ contexts:
         - match: "'''"
           scope: punctuation.definition.string.end.a11flow
           pop: true
-    - match: "'"
+    - match: "(?<![A-Za-z0-9_$])(?i:b)?'"
       scope: punctuation.definition.string.begin.a11flow
       push:
         - meta_scope: string.quoted.single.a11flow
@@ -720,7 +762,7 @@ contexts:
         1: variable.other.member.a11flow
     - match: '{{name}}'
       scope: variable.other.a11flow
-)";
+)sublime";
 
 /// One word as an alternation of its two spellings: `flow|FLOW`.
 std::string One(std::string_view word) {
@@ -1090,10 +1132,14 @@ class A11FlowLexer(RegexLexer):
             # Triple quotes first, so three quotes are not read as
             # an empty string followed by a quote. Block strings may contain
             # line breaks.
-            (r'"""', String, "block-string"),
-            (r"'''", String, "single-block-string"),
-            (r'"', String, "quoted-string"),
-            (r"'", String, "single-quoted-string"),
+            (r'(?<![A-Za-z0-9_$])(?i:br|rb|r)"""', String, "raw-block-string"),
+            (r"(?<![A-Za-z0-9_$])(?i:br|rb|r)'''", String, "raw-single-block-string"),
+            (r'(?<![A-Za-z0-9_$])(?i:br|rb|r)"', String, "raw-quoted-string"),
+            (r"(?<![A-Za-z0-9_$])(?i:br|rb|r)'", String, "raw-single-quoted-string"),
+            (r'(?<![A-Za-z0-9_$])(?i:b)?"""', String, "block-string"),
+            (r"(?<![A-Za-z0-9_$])(?i:b)?'''", String, "single-block-string"),
+            (r'(?<![A-Za-z0-9_$])(?i:b)?"', String, "quoted-string"),
+            (r"(?<![A-Za-z0-9_$])(?i:b)?'", String, "single-quoted-string"),
         ],
         "regex": [
             (r'(?<![A-Za-z0-9_$)\]])/(?![ \t])(?:\\.|\[[^\n]*?\]|[^/\\\n])+/[ims]*', String.Regex),
@@ -1118,6 +1164,30 @@ class A11FlowLexer(RegexLexer):
         ],
         "single-quoted-string": [
             (r'\\.', String.Escape),
+            (r"'", String, "#pop"),
+            (r"[^\\'\n]+", String),
+            (r"\n", Whitespace, "#pop"),
+        ],
+        "raw-block-string": [
+            (r'\\[\s\S]', String),
+            (r'"""', String, "#pop"),
+            (r'[^\\"]+', String),
+            (r'"', String),
+        ],
+        "raw-quoted-string": [
+            (r'\\[\s\S]', String),
+            (r'"', String, "#pop"),
+            (r'[^\\"\n]+', String),
+            (r"\n", Whitespace, "#pop"),
+        ],
+        "raw-single-block-string": [
+            (r'\\[\s\S]', String),
+            (r"'''", String, "#pop"),
+            (r"[^\\']+", String),
+            (r"'", String),
+        ],
+        "raw-single-quoted-string": [
+            (r'\\[\s\S]', String),
             (r"'", String, "#pop"),
             (r"[^\\'\n]+", String),
             (r"\n", Whitespace, "#pop"),
@@ -1363,27 +1433,51 @@ constexpr std::string_view kVsCodeTemplate = R"JSON({
     "string": {
       "patterns": [
         {
+          "name": "string.quoted.triple.a11flow",
+          "begin": "(?<![A-Za-z0-9_$])(?i:br|rb|r)\"\"\"",
+          "end": "\"\"\"",
+          "patterns": [{"name": "string.quoted.triple.a11flow", "match": "\\\\[\\s\\S]"}]
+        },
+        {
+          "name": "string.quoted.double.a11flow",
+          "begin": "(?<![A-Za-z0-9_$])(?i:br|rb|r)\"",
+          "end": "\"",
+          "patterns": [{"name": "string.quoted.double.a11flow", "match": "\\\\[\\s\\S]"}]
+        },
+        {
+          "name": "string.quoted.single.block.a11flow",
+          "begin": "(?<![A-Za-z0-9_$])(?i:br|rb|r)'''",
+          "end": "'''",
+          "patterns": [{"name": "string.quoted.single.block.a11flow", "match": "\\\\[\\s\\S]"}]
+        },
+        {
+          "name": "string.quoted.single.a11flow",
+          "begin": "(?<![A-Za-z0-9_$])(?i:br|rb|r)'",
+          "end": "'",
+          "patterns": [{"name": "string.quoted.single.a11flow", "match": "\\\\[\\s\\S]"}]
+        },
+        {
           "//": "A tripled quote holds line breaks and gives back its indentation, which is how every description longer than a line is written.",
           "name": "string.quoted.triple.a11flow",
-          "begin": "\"\"\"",
+          "begin": "(?<![A-Za-z0-9_$])(?i:b)?\"\"\"",
           "end": "\"\"\"",
           "patterns": [{"name": "constant.character.escape.a11flow", "match": "\\\\."}]
         },
         {
           "name": "string.quoted.double.a11flow",
-          "begin": "\"",
+          "begin": "(?<![A-Za-z0-9_$])(?i:b)?\"",
           "end": "\"",
           "patterns": [{"name": "constant.character.escape.a11flow", "match": "\\\\."}]
         },
         {
           "name": "string.quoted.single.block.a11flow",
-          "begin": "'''",
+          "begin": "(?<![A-Za-z0-9_$])(?i:b)?'''",
           "end": "'''",
           "patterns": [{"name": "constant.character.escape.a11flow", "match": "\\\\."}]
         },
         {
           "name": "string.quoted.single.a11flow",
-          "begin": "'",
+          "begin": "(?<![A-Za-z0-9_$])(?i:b)?'",
           "end": "'",
           "patterns": [{"name": "constant.character.escape.a11flow", "match": "\\\\."}]
         }
@@ -1693,7 +1787,7 @@ std::string BrowserVocabulary() {
       "/** Native string ranges, including incomplete editor input. */\n",
       "export const FLOW_STRING_PATTERN: string = ",
       nlohmann::json(
-          R"pattern("""(?:\\(?:[\s\S]|$)|(?!""")[^\\])*(?:"""|$)|'''(?:\\(?:[\s\S]|$)|(?!''')[^\\])*(?:'''|$)|"(?:\\(?:[^\n]|(?=\n|$))|[^"\\\n])*(?:"|(?=\n|$))|'(?:\\(?:[^\n]|(?=\n|$))|[^'\\\n])*(?:'|(?=\n|$)))pattern")
+          R"pattern((?<![A-Za-z0-9_$])(?:[bB][rR]|[rR][bB]|[bBrR])?(?:"""(?:\\(?:[\s\S]|$)|(?!""")[^\\])*(?:"""|$)|'''(?:\\(?:[\s\S]|$)|(?!''')[^\\])*(?:'''|$)|"(?:\\(?:[^\n]|(?=\n|$))|[^"\\\n])*(?:"|(?=\n|$))|'(?:\\(?:[^\n]|(?=\n|$))|[^'\\\n])*(?:'|(?=\n|$))))pattern")
           .dump(),
       ";\n\n/** Escape spans inside a native string range. */\n",
       "export const FLOW_STRING_ESCAPE_PATTERN: string = ",

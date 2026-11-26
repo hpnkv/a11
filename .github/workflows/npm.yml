@@ -17,6 +17,12 @@ name: Publish TypeScript packages
 on:
   push:
     tags: ["npm-v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Package version to publish from the selected ref
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -28,7 +34,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Validate npm release tag
-        run: python3 scripts/check_release_version.py npm "$GITHUB_REF_NAME"
+        env:
+          A11_RELEASE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            python3 scripts/check_release_version.py npm "npm-v${A11_RELEASE_VERSION}"
+          else
+            python3 scripts/check_release_version.py npm "$A11_RELEASE_VERSION"
+          fi
   wasm:
     needs: validate
     uses: ./.github/workflows/wasm.yml

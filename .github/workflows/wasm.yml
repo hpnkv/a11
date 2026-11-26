@@ -33,8 +33,10 @@ jobs:
         with:
           version: 6.0.13
           actions-cache-folder: emsdk-cache
-      - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y ninja-build cmake
+      - name: Verify build tools
+        run: |
+          cmake --version
+          ninja --version
       - uses: actions/cache@v4
         with:
           path: .cache/boost_1_90_0.tar.bz2

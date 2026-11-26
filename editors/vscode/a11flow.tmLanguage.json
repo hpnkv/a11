@@ -48,6 +48,18 @@
           "begin": "\"",
           "end": "\"",
           "patterns": [{"name": "constant.character.escape.a11flow", "match": "\\\\."}]
+        },
+        {
+          "name": "string.quoted.single.block.a11flow",
+          "begin": "'''",
+          "end": "'''",
+          "patterns": [{"name": "constant.character.escape.a11flow", "match": "\\\\."}]
+        },
+        {
+          "name": "string.quoted.single.a11flow",
+          "begin": "'",
+          "end": "'",
+          "patterns": [{"name": "constant.character.escape.a11flow", "match": "\\\\."}]
         }
       ]
     },
@@ -74,7 +86,7 @@
     },
     "stage": {
       "//": "A word is a stage after a `|`, and the same word may be a function elsewhere.",
-      "match": "(\\|)\\s*(read_with|ref|(?:take|TAKE)\s+(?:while|WHILE)|(?:take|TAKE)\s+(?:until|UNTIL)|first|last|drop|truncate|batch|window|context|as|flatten|present|group|sort|where|map|scan|match|distinct|then|log|logf|mime|strformat|chunk|collect|consume|count|sum|min|max|avg|fold|join|text|json|packb|timeout|pace|READ_WITH|REF|FIRST|LAST|DROP|TRUNCATE|BATCH|WINDOW|CONTEXT|AS|FLATTEN|PRESENT|GROUP|SORT|WHERE|MAP|SCAN|MATCH|DISTINCT|THEN|LOG|LOGF|MIME|STRFORMAT|CHUNK|COLLECT|CONSUME|COUNT|SUM|MIN|MAX|AVG|FOLD|JOIN|TEXT|JSON|PACKB|TIMEOUT|PACE)\\b",
+      "match": "(\\|)\\s*(read_with|ref|(?:take|TAKE)\\s+(?:while|WHILE)|(?:take|TAKE)\\s+(?:until|UNTIL)|first|last|drop|truncate|batch|window|context|as|flatten|present|group|sort|where|map|scan|match|distinct|then|log|logf|mime|strformat|chunk|collect|consume|count|sum|min|max|avg|fold|join|text|json|packb|timeout|pace|READ_WITH|REF|FIRST|LAST|DROP|TRUNCATE|BATCH|WINDOW|CONTEXT|AS|FLATTEN|PRESENT|GROUP|SORT|WHERE|MAP|SCAN|MATCH|DISTINCT|THEN|LOG|LOGF|MIME|STRFORMAT|CHUNK|COLLECT|CONSUME|COUNT|SUM|MIN|MAX|AVG|FOLD|JOIN|TEXT|JSON|PACKB|TIMEOUT|PACE)\\b",
       "captures": {
         "1": {"name": "keyword.operator.pipe.a11flow"},
         "2": {"name": "support.function.stage.a11flow"}
@@ -119,7 +131,7 @@
       }
     },
     "statement": {
-      "match": "\\b(abort|after|base|before|by|call|cancel|close|const|desc|else|fail|(?:failures|FAILURES)\s+(?:into|INTO)|for|id|if|interleave|log|logf|max|nodes|numbered|of|parallel|repeat|run|skip|status|take|try|unordered|until|wait|while|zip|ABORT|AFTER|BASE|BEFORE|BY|CALL|CANCEL|CLOSE|CONST|DESC|ELSE|FAIL|FOR|ID|IF|INTERLEAVE|LOG|LOGF|MAX|NODES|NUMBERED|OF|PARALLEL|REPEAT|RUN|SKIP|STATUS|TAKE|TRY|UNORDERED|UNTIL|WAIT|WHILE|ZIP)\\b",
+      "match": "\\b(abort|after|base|before|by|call|cancel|close|const|desc|else|fail|(?:failures|FAILURES)\\s+(?:into|INTO)|for|id|if|interleave|log|logf|max|nodes|numbered|of|parallel|repeat|run|skip|status|take|try|unordered|until|wait|while|zip|ABORT|AFTER|BASE|BEFORE|BY|CALL|CANCEL|CLOSE|CONST|DESC|ELSE|FAIL|FOR|ID|IF|INTERLEAVE|LOG|LOGF|MAX|NODES|NUMBERED|OF|PARALLEL|REPEAT|RUN|SKIP|STATUS|TAKE|TRY|UNORDERED|UNTIL|WAIT|WHILE|ZIP)\\b",
       "name": "keyword.control.a11flow"
     },
     "modifier": {

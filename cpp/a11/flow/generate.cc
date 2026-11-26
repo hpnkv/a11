@@ -665,7 +665,7 @@ contexts:
       scope: string.regexp.a11flow
 
   strings:
-    # Match `"""..."""` first so three quotes are not read as an empty string
+    # Match triple quotes first so three quotes are not read as an empty string
     # followed by a quote. Block strings may contain line breaks.
     - match: '"""'
       scope: punctuation.definition.string.begin.a11flow
@@ -683,6 +683,27 @@ contexts:
         - match: '\\(?:[nrt"\\]|.)'
           scope: constant.character.escape.a11flow
         - match: '"'
+          scope: punctuation.definition.string.end.a11flow
+          pop: true
+        - match: '$\n?'
+          scope: invalid.illegal.unterminated-string.a11flow
+          pop: true
+    - match: "'''"
+      scope: punctuation.definition.string.begin.a11flow
+      push:
+        - meta_scope: string.quoted.single.block.a11flow
+        - match: '\\(?:[nrt''\\]|.)'
+          scope: constant.character.escape.a11flow
+        - match: "'''"
+          scope: punctuation.definition.string.end.a11flow
+          pop: true
+    - match: "'"
+      scope: punctuation.definition.string.begin.a11flow
+      push:
+        - meta_scope: string.quoted.single.a11flow
+        - match: '\\(?:[nrt''\\]|.)'
+          scope: constant.character.escape.a11flow
+        - match: "'"
           scope: punctuation.definition.string.end.a11flow
           pop: true
         - match: '$\n?'
@@ -1045,7 +1066,7 @@ class A11FlowLexer(RegexLexer):
             # the same name.
             (
                 _group(BARE_STAGES)
-                + r"(?=[^\S\n]+(?:[A-Za-z_$\"(\[{]|[0-9]|-[0-9]))",
+                + r"(?=[^\S\n]+(?:[A-Za-z_$\"'(\[{]|[0-9]|-[0-9]))",
                 Name.Builtin.Pseudo,
             ),
             (_word(@AS@), Keyword, "cast"),
@@ -1066,11 +1087,13 @@ class A11FlowLexer(RegexLexer):
             (r"#[^\n]*", Comment.Single),
         ],
         "string": [
-            # `"""..."""` first, so three quotes are not read as
+            # Triple quotes first, so three quotes are not read as
             # an empty string followed by a quote. Block strings may contain
             # line breaks.
             (r'"""', String, "block-string"),
+            (r"'''", String, "single-block-string"),
             (r'"', String, "quoted-string"),
+            (r"'", String, "single-quoted-string"),
         ],
         "regex": [
             (r'(?<![A-Za-z0-9_$)\]])/(?![ \t])(?:\\.|\[[^\n]*?\]|[^/\\\n])+/[ims]*', String.Regex),
@@ -1087,10 +1110,25 @@ class A11FlowLexer(RegexLexer):
             (r'[^\\"\n]+', String),
             (r"\n", Whitespace, "#pop"),
         ],
+        "single-block-string": [
+            (r'\\.', String.Escape),
+            (r"'''", String, "#pop"),
+            (r"[^\\']+", String),
+            (r"'", String),
+        ],
+        "single-quoted-string": [
+            (r'\\.', String.Escape),
+            (r"'", String, "#pop"),
+            (r"[^\\'\n]+", String),
+            (r"\n", Whitespace, "#pop"),
+        ],
         "flow-name": [
             (r"[^\S\n]+", Whitespace),
             (NAME, Name.Function, "#pop"),
+            (r'"""', String, ("#pop", "block-string")),
+            (r"'''", String, ("#pop", "single-block-string")),
             (r'"', String, ("#pop", "quoted-string")),
+            (r"'", String, ("#pop", "single-quoted-string")),
             default("#pop"),
         ],
         "struct-name": [
@@ -1161,7 +1199,10 @@ class A11FlowLexer(RegexLexer):
         "action-name": [
             (r"[^\S\n]+", Whitespace),
             (NAME + r"(?:\." + NAME + r")*", Name.Function, "#pop"),
+            (r'"""', String, ("#pop", "block-string")),
+            (r"'''", String, ("#pop", "single-block-string")),
             (r'"', String, ("#pop", "quoted-string")),
+            (r"'", String, ("#pop", "single-quoted-string")),
             default("#pop"),
         ],
         # `expr as TYPE`, and the type it names -- which may be a registry tag,
@@ -1173,7 +1214,10 @@ class A11FlowLexer(RegexLexer):
                 Keyword.Type,
                 "#pop",
             ),
+            (r'"""', String, ("#pop", "block-string")),
+            (r"'''", String, ("#pop", "single-block-string")),
             (r'"', String, ("#pop", "quoted-string")),
+            (r"'", String, ("#pop", "single-quoted-string")),
             default("#pop"),
         ],
         "type": [
@@ -1329,6 +1373,18 @@ constexpr std::string_view kVsCodeTemplate = R"JSON({
           "name": "string.quoted.double.a11flow",
           "begin": "\"",
           "end": "\"",
+          "patterns": [{"name": "constant.character.escape.a11flow", "match": "\\\\."}]
+        },
+        {
+          "name": "string.quoted.single.block.a11flow",
+          "begin": "'''",
+          "end": "'''",
+          "patterns": [{"name": "constant.character.escape.a11flow", "match": "\\\\."}]
+        },
+        {
+          "name": "string.quoted.single.a11flow",
+          "begin": "'",
+          "end": "'",
           "patterns": [{"name": "constant.character.escape.a11flow", "match": "\\\\."}]
         }
       ]
@@ -1490,6 +1546,8 @@ std::string VsCode() {
   constexpr std::string_view regex_pattern =
       R"re((?<![A-Za-z0-9_$)\]])/(?![ \t])(?:\\.|\[[^\n]*?\]|[^/\\\n])+/[ims]*)re";
   const std::string escaped_regex = nlohmann::json(regex_pattern).dump();
+  const std::string escaped_stages =
+      nlohmann::json(Inline(vocabulary::Stages())).dump();
   const std::vector<std::string_view> units = DurationUnits();
   // Every declaration word, and the two spellings of each. `in`/`out` are in
   // the list as well as in the port-type rule above it: the rule that pushes
@@ -1509,6 +1567,8 @@ std::string VsCode() {
   std::sort(statements.begin(), statements.end());
   statements.erase(std::unique(statements.begin(), statements.end()),
                    statements.end());
+  const std::string escaped_statements =
+      nlohmann::json(Inline(statements)).dump();
 
   const std::vector<std::string_view> modifiers =
       Split(vocabulary::OrderedModifiers());
@@ -1536,13 +1596,14 @@ std::string VsCode() {
           {"@FLOW_OR_STRUCT@",
            Inline(std::vector<std::string_view>{"flow", "struct"})},
           {"@DIRECTIONS@", Inline(std::vector<std::string_view>{"in", "out"})},
-          {"@STAGES@", Inline(vocabulary::Stages())},
+          {"@STAGES@", escaped_stages.substr(1, escaped_stages.size() - 2)},
           {"@BUILTINS@", Inline(vocabulary::OrderedBuiltins())},
           {"@PORT_AND_FIELD_MODIFIERS@", Inline(port_and_field)},
           {"@DECLARATIONS@", Inline(declarations)},
           {"@WAIT@", One("wait")},
           {"@WAIT_MODES@", Inline(kWaitModes)},
-          {"@STATEMENTS@", Inline(statements)},
+          {"@STATEMENTS@",
+           escaped_statements.substr(1, escaped_statements.size() - 2)},
           {"@MODIFIERS@", Inline(modifiers)},
           {"@STATUS_CODES@", Inline(vocabulary::StatusCodes())},
           {"@LOG_LEVELS@", Inline(vocabulary::LogLevels())},
@@ -1632,7 +1693,7 @@ std::string BrowserVocabulary() {
       "/** Native string ranges, including incomplete editor input. */\n",
       "export const FLOW_STRING_PATTERN: string = ",
       nlohmann::json(
-          R"pattern("""(?:\\(?:[\s\S]|$)|(?!""")[^\\])*(?:"""|$)|"(?:\\(?:[^\n]|(?=\n|$))|[^"\\\n])*(?:"|(?=\n|$)))pattern")
+          R"pattern("""(?:\\(?:[\s\S]|$)|(?!""")[^\\])*(?:"""|$)|'''(?:\\(?:[\s\S]|$)|(?!''')[^\\])*(?:'''|$)|"(?:\\(?:[^\n]|(?=\n|$))|[^"\\\n])*(?:"|(?=\n|$))|'(?:\\(?:[^\n]|(?=\n|$))|[^'\\\n])*(?:'|(?=\n|$)))pattern")
           .dump(),
       ";\n\n/** Escape spans inside a native string range. */\n",
       "export const FLOW_STRING_ESCAPE_PATTERN: string = ",

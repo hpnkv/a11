@@ -1226,6 +1226,7 @@ TEST(FlowFormat, StringSplitsPreserveEscapesWhitespaceAndUnicode) {
        R"("Tabs\tand newlines\n and nul\0 remain escaped when this longer string wraps at spaces.")",
        R"("Repeated   spaces and an escaped\ space retain their exact values after the string wraps.  ")",
        R"("Unicode café 東京 and 😀 remain intact when this sentence wraps across multiple lines.")",
+       R"('Single quotes keep "double quotes" and an escaped apostrophe \' when the sentence wraps.')",
        R"("A first fragment " "and a second fragment form one long string that wraps across lines.")"}) {
     SCOPED_TRACE(literal);
     const auto source = absl::StrCat("flow main {\n log ", literal, "\n}\n");
@@ -1236,6 +1237,18 @@ TEST(FlowFormat, StringSplitsPreserveEscapesWhitespaceAndUnicode) {
               result.formatted);
     EXPECT_NE(result.formatted.find("log (\n"), std::string::npos);
   }
+}
+
+TEST(FlowFormat, AdjacentStringsWithDifferentQuotesKeepTheirValues) {
+  const std::string source = R"(flow main {
+  log 'A "quoted" phrase ' "and an 'apostrophe' continue this long message across several strings."
+}
+)";
+  const auto result = Format(source, {.line_width = 45});
+  ASSERT_EQ(FirstError(result.diagnostics), nullptr);
+  EXPECT_EQ(Tree(source), Tree(result.formatted));
+  EXPECT_EQ(Format(result.formatted, {.line_width = 45}).formatted,
+            result.formatted);
 }
 
 TEST(FlowFormat, StringSplitsRespectCommentsAndExistingBreaks) {

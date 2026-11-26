@@ -458,7 +458,7 @@ contexts:
       scope: string.regexp.a11flow
 
   strings:
-    # Match `"""..."""` first so three quotes are not read as an empty string
+    # Match triple quotes first so three quotes are not read as an empty string
     # followed by a quote. Block strings may contain line breaks.
     - match: '"""'
       scope: punctuation.definition.string.begin.a11flow
@@ -476,6 +476,27 @@ contexts:
         - match: '\\(?:[nrt"\\]|.)'
           scope: constant.character.escape.a11flow
         - match: '"'
+          scope: punctuation.definition.string.end.a11flow
+          pop: true
+        - match: '$\n?'
+          scope: invalid.illegal.unterminated-string.a11flow
+          pop: true
+    - match: "'''"
+      scope: punctuation.definition.string.begin.a11flow
+      push:
+        - meta_scope: string.quoted.single.block.a11flow
+        - match: '\\(?:[nrt''\\]|.)'
+          scope: constant.character.escape.a11flow
+        - match: "'''"
+          scope: punctuation.definition.string.end.a11flow
+          pop: true
+    - match: "'"
+      scope: punctuation.definition.string.begin.a11flow
+      push:
+        - meta_scope: string.quoted.single.a11flow
+        - match: '\\(?:[nrt''\\]|.)'
+          scope: constant.character.escape.a11flow
+        - match: "'"
           scope: punctuation.definition.string.end.a11flow
           pop: true
         - match: '$\n?'

@@ -261,7 +261,7 @@ class A11FlowLexer(RegexLexer):
             # the same name.
             (
                 _group(BARE_STAGES)
-                + r"(?=[^\S\n]+(?:[A-Za-z_$\"(\[{]|[0-9]|-[0-9]))",
+                + r"(?=[^\S\n]+(?:[A-Za-z_$\"'(\[{]|[0-9]|-[0-9]))",
                 Name.Builtin.Pseudo,
             ),
             (_word("as"), Keyword, "cast"),
@@ -282,11 +282,13 @@ class A11FlowLexer(RegexLexer):
             (r"#[^\n]*", Comment.Single),
         ],
         "string": [
-            # `"""..."""` first, so three quotes are not read as
+            # Triple quotes first, so three quotes are not read as
             # an empty string followed by a quote. Block strings may contain
             # line breaks.
             (r'"""', String, "block-string"),
+            (r"'''", String, "single-block-string"),
             (r'"', String, "quoted-string"),
+            (r"'", String, "single-quoted-string"),
         ],
         "regex": [
             (r'(?<![A-Za-z0-9_$)\]])/(?![ \t])(?:\\.|\[[^\n]*?\]|[^/\\\n])+/[ims]*', String.Regex),
@@ -303,10 +305,25 @@ class A11FlowLexer(RegexLexer):
             (r'[^\\"\n]+', String),
             (r"\n", Whitespace, "#pop"),
         ],
+        "single-block-string": [
+            (r'\\.', String.Escape),
+            (r"'''", String, "#pop"),
+            (r"[^\\']+", String),
+            (r"'", String),
+        ],
+        "single-quoted-string": [
+            (r'\\.', String.Escape),
+            (r"'", String, "#pop"),
+            (r"[^\\'\n]+", String),
+            (r"\n", Whitespace, "#pop"),
+        ],
         "flow-name": [
             (r"[^\S\n]+", Whitespace),
             (NAME, Name.Function, "#pop"),
+            (r'"""', String, ("#pop", "block-string")),
+            (r"'''", String, ("#pop", "single-block-string")),
             (r'"', String, ("#pop", "quoted-string")),
+            (r"'", String, ("#pop", "single-quoted-string")),
             default("#pop"),
         ],
         "struct-name": [
@@ -377,7 +394,10 @@ class A11FlowLexer(RegexLexer):
         "action-name": [
             (r"[^\S\n]+", Whitespace),
             (NAME + r"(?:\." + NAME + r")*", Name.Function, "#pop"),
+            (r'"""', String, ("#pop", "block-string")),
+            (r"'''", String, ("#pop", "single-block-string")),
             (r'"', String, ("#pop", "quoted-string")),
+            (r"'", String, ("#pop", "single-quoted-string")),
             default("#pop"),
         ],
         # `expr as TYPE`, and the type it names -- which may be a registry tag,
@@ -389,7 +409,10 @@ class A11FlowLexer(RegexLexer):
                 Keyword.Type,
                 "#pop",
             ),
+            (r'"""', String, ("#pop", "block-string")),
+            (r"'''", String, ("#pop", "single-block-string")),
             (r'"', String, ("#pop", "quoted-string")),
+            (r"'", String, ("#pop", "single-quoted-string")),
             default("#pop"),
         ],
         "type": [

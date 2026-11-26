@@ -1587,15 +1587,21 @@ std::string WrapStrings(std::string_view source, const LexResult& lexed,
       depth -= groups.back().value;
       groups.pop_back();
     }
-    if (token.kind != TokenKind::kString || token.text.starts_with(R"(""")")) {
+    if (token.kind != TokenKind::kString ||
+        (token.text.size() >= 3 && token.text[0] == token.text[1] &&
+         token.text[1] == token.text[2])) {
       continue;
     }
+    const char quote = token.text.front();
     size_t last = index;
     std::string text(token.text.substr(1, token.text.size() - 2));
     while (last + 1 < tokens.size() &&
            tokens[last + 1].kind == TokenKind::kString &&
            tokens[last + 1].line == token.line &&
-           !tokens[last + 1].text.starts_with(R"(""")")) {
+           tokens[last + 1].text.front() == quote &&
+           !(tokens[last + 1].text.size() >= 3 &&
+             tokens[last + 1].text[0] == tokens[last + 1].text[1] &&
+             tokens[last + 1].text[1] == tokens[last + 1].text[2])) {
       ++last;
       text.append(tokens[last].text.substr(1, tokens[last].text.size() - 2));
     }
@@ -1656,7 +1662,9 @@ std::string WrapStrings(std::string_view source, const LexResult& lexed,
         output.push_back('\n');
         output.append(indent, ' ');
       }
-      absl::StrAppend(&output, "\"", parts[part], "\"");
+      output.push_back(quote);
+      output.append(parts[part]);
+      output.push_back(quote);
     }
     if (parentheses) {
       output.push_back('\n');

@@ -137,7 +137,7 @@ separator strings remain literal.
 | `export symbol [as alias]`; `struct T [exported] { fields }` | Explicit reexport; record type. Fields: `name: T`, `required` or `default LITERAL_OR_MODULE_CONST` (exclusive), numeric bounds `1..10`, text RE2 regex `matching /pattern/i`, `matching "pattern"`, or a module constant, `one of [...]`, list `unique`. |
 | `m::f`, `a11::sdk::Interaction`; `j.output`, `v.field`, `v[index]` | Static qualification / runtime projection. Registered host types need no import; wire tags retain dotted spelling. |
 | `v?.field`, `v?[key]`; `s \| present` | Safe projection returns `std::option[T]`: missing is absent, present null remains present. Safe chaining unwraps an option base. `present` drops absent options and emits present payloads. |
-| `T{field:e}`; `e as T`; `[e, ...]`; `{key:e, ...other}` | Typed record, cast, list, object/spread. Object fields omit absent options and unwrap present ones. Strings: `"..."` or triple quotes. Literals: `true`, `false`, `null`. |
+| `T{field:e}`; `e as T`; `[e, ...]`; `{key:e, ...other}` | Typed record, cast, list, object/spread. Object fields omit absent options and unwrap present ones. Strings: `'...'`, `"..."`, `'''...'''`, or `"""..."""`. Literals: `true`, `false`, `null`. |
 | `+`, `-`, `*`, `/`, `%`; `== != < <= > >= in`; `not`, `and`, `or` | Checked numeric arithmetic, comparison/membership, short-circuit logic. `%` requires integers; strict integer `/` requires an exact quotient. Time ± duration, duration ± duration, time − time, unary duration minus, and duration × number in either order are supported. Space subtraction: `a-b` is a name. |
 
 `fail` and `abort` accept these named failure codes: `CANCELLED`, `UNKNOWN`,

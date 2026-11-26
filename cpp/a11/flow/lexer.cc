@@ -116,8 +116,8 @@ class Lexer {
         }
         continue;
       }
-      if (letter == '"') {
-        ReadString();
+      if (letter == '"' || letter == '\'') {
+        ReadString(letter);
         continue;
       }
       if (IsDigit(letter) || (letter == '-' && index_ + 1 < source_.size() &&
@@ -255,7 +255,7 @@ class Lexer {
            start, start + 2, Family::kSyntax, Severity::kWarning);
   }
 
-  /// The value of a `"""..."""` string with source indentation removed.
+  /// The value of a triple-quoted string with source indentation removed.
   ///
   /// The rule, in the order it applies: a first line that is blank goes away,
   /// a last line that is only whitespace goes away with the break above it,
@@ -353,13 +353,13 @@ class Lexer {
     return value;
   }
 
-  /// `"""..."""`: a string that may hold line breaks.
-  ///
-  /// Three quotes rather than allowing a break inside a single-quoted string,
-  /// because a missing quote then costs one line rather than the rest of the
-  /// file
-  /// -- the same reason Python draws the line in the same place.
-  void ReadMultilineString() {
+  bool TripleQuoteAt(size_t at, char quote) const {
+    return at + 2 < source_.size() && source_[at] == quote &&
+           source_[at + 1] == quote && source_[at + 2] == quote;
+  }
+
+  /// A triple-quoted string that may hold line breaks.
+  void ReadMultilineString(char quote) {
     const size_t start = index_;
     const int start_line = line_;
     const size_t start_line_start = line_start_;
@@ -379,7 +379,7 @@ class Lexer {
         index_ = escapes.back().end;
         continue;
       }
-      if (source_.compare(index_, 3, R"(""")") == 0) {
+      if (TripleQuoteAt(index_, quote)) {
         inner_end = index_;
         index_ += 3;
         terminated = true;
@@ -395,7 +395,8 @@ class Lexer {
       // Recovery: it ends where the file does. There is nothing further along
       // to mistake for the rest of it.
       inner_end = index_;
-      Report("flow.syntax.unterminated-string", R"(Unterminated """ string.)",
+      Report("flow.syntax.unterminated-string",
+             absl::StrCat("Unterminated ", std::string(3, quote), " string."),
              start, index_);
     }
     // The token is reported at the line it *started* on, as every other token
@@ -413,9 +414,9 @@ class Lexer {
     line_start_ = ending_line_start;
   }
 
-  void ReadString() {
-    if (source_.compare(index_, 3, R"(""")") == 0) {
-      return ReadMultilineString();
+  void ReadString(char quote) {
+    if (TripleQuoteAt(index_, quote)) {
+      return ReadMultilineString(quote);
     }
     const size_t start = index_;
     ++index_;
@@ -427,7 +428,7 @@ class Lexer {
       if (letter == '\n') {
         break;
       }
-      if (letter == '"') {
+      if (letter == quote) {
         ++index_;
         terminated = true;
         break;

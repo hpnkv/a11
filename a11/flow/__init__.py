@@ -128,8 +128,10 @@ FAIL_CODES: tuple[str, ...] = tuple(
 #: A compact language reference for models that write flows. Action schemas
 #: provide the remaining information needed to compose available actions.
 REFERENCE = """A11 Flow composes streaming actions into actions.
-Ordinary and triple-quoted strings decode \\0, \\a, \\b, \\f, \\n, \\r, \\t,
-\\v, escaped quotes and backslashes. Other escapes yield the following character.
+Strings use '...' or "..."; triple quotes of either kind hold line breaks.
+The other quote may appear unescaped. Strings decode \\0, \\a, \\b, \\f,
+\\n, \\r, \\t, \\v, escaped quotes and backslashes. Other escapes yield the
+following character.
 Keywords are lower or UPPER
 case. Statements overlap; data and after dependencies determine execution.
 
@@ -331,7 +333,7 @@ checks the target invariant. Initializers may not be omitted.
 Strict integer conversions require a whole value in range; signed and unsigned
 arithmetic checks overflow. Strict floats are finite and f32 rounds explicitly.
 Floating literals accept scientific notation such as 1e3 and 2.5E-2.
-Use decimal text with i128/u128 constructors for values beyond literal i64 range.
+Use decimal text with i128/u128 constructors beyond literal i64 range.
 Compatible numeric families support +, -, *, / and integer %. Integer division
 requires an exact quotient. std::floor, std::ceil and std::round preserve
 numeric width; std::round sends halfway values away from zero.
@@ -507,7 +509,8 @@ def run_program(
         registry: An [ActionRegistry][a11.actions.ActionRegistry] whose actions
             the program may call. One is made when omitted.
 
-        frame_cache_bytes: Cached frame capacity per runner; zero disables reuse.
+        frame_cache_bytes: Cached frame capacity per runner; zero disables
+            reuse.
         frame_budget_bytes: Reserved frame capacity across local Flow calls.
             Excludes payloads, fiber stacks, and ordinary containers.
 

@@ -192,10 +192,27 @@ TEST(FlowLexer, ReadsStringsWithTheirEscapes) {
   EXPECT_TRUE(result.diagnostics.empty());
 }
 
+TEST(FlowLexer, SingleQuotesAllowDoubleQuotesAndEscapedApostrophes) {
+  const auto result = Lex(R"flow('say "hello"' "say 'hello'" 'it\'s here')flow");
+  ASSERT_TRUE(result.diagnostics.empty());
+  ASSERT_EQ(result.tokens.size(), 4u);
+  EXPECT_EQ(result.tokens[0].string_value, "say \"hello\"");
+  EXPECT_EQ(result.tokens[1].string_value, "say 'hello'");
+  EXPECT_EQ(result.tokens[2].string_value, "it's here");
+  EXPECT_EQ(result.tokens[2].text, R"('it\'s here')");
+}
+
+TEST(FlowLexer, TripleSingleQuotesHoldLineBreaksAndDedent) {
+  const auto result = Lex("'''\n  say \"hello\"\n  it's here\n  '''");
+  ASSERT_TRUE(result.diagnostics.empty());
+  ASSERT_EQ(result.tokens.size(), 2u);
+  EXPECT_EQ(result.tokens[0].string_value, "say \"hello\"\nit's here");
+}
+
 TEST(FlowLexer, CommonEscapesHaveTheSameValueInBothStringForms) {
   const std::string escapes = R"(\0\a\b\f\n\r\t\v\"\'\\\/\q)";
   const std::string expected = std::string("\0\a\b\f\n\r\t\v\"'\\/q", 13);
-  for (const std::string quote : {"\"", "\"\"\""}) {
+  for (const std::string quote : {"\"", "'", "\"\"\"", "'''"}) {
     const std::string source = quote + escapes + quote;
     const auto result = Lex(source);
     ASSERT_EQ(result.diagnostics.size(), 1u);
@@ -233,6 +250,16 @@ TEST(FlowLexer, AnUnterminatedStringEndsAtItsLine) {
   ASSERT_GE(result.tokens.size(), 3u);
   EXPECT_EQ(result.tokens[0].kind, TokenKind::kString);
   EXPECT_EQ(result.tokens[0].text, "\"unterminated");
+  EXPECT_EQ(result.tokens[1].kind, TokenKind::kNewline);
+  EXPECT_EQ(result.tokens[2].text, "next");
+}
+
+TEST(FlowLexer, AnUnterminatedSingleQuotedStringEndsAtItsLine) {
+  const auto result = Lex("'unterminated\nnext");
+  EXPECT_EQ(Codes("'unterminated\nnext"),
+            std::vector<std::string>{"flow.syntax.unterminated-string"});
+  ASSERT_GE(result.tokens.size(), 3u);
+  EXPECT_EQ(result.tokens[0].text, "'unterminated");
   EXPECT_EQ(result.tokens[1].kind, TokenKind::kNewline);
   EXPECT_EQ(result.tokens[2].text, "next");
 }
